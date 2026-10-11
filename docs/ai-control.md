@@ -893,3 +893,13 @@ Verification:
 The v15 observation contract adds source-bound business theses and durable report
 checkpoints. See [business research loop](business-research-loop.md) for evidence
 reservation, registration, immutable review, company relationships and limits.
+
+### Status read limits
+
+The owner status endpoint selects at most 60 task IDs using global or account-specific
+recency indexes before fetching their result bodies by primary key. Existing databases
+receive the indexes through the control-store schema bootstrap. Status list queries
+have a five-second server execution limit; dashboard connections use a separate pool
+and an eight-second socket timeout. Database timeouts return retryable HTTP 503 without
+fabricating empty tasks or successful AI health. These limits do not change worker
+execution budgets or investment publication rules.

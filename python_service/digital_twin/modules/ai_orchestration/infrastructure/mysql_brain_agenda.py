@@ -330,12 +330,12 @@ class MySQLBrainAgendaStore(MySQLOperationalConnection):
 
     def status(self, account=""):
         with self.connect() as connection:
-            rows = connection.execute("SELECT payload_json FROM ai_brain_cases WHERE (%s='' OR account_id=%s) "
+            rows = connection.execute("SELECT /*+ MAX_EXECUTION_TIME(5000) */ payload_json FROM ai_brain_cases WHERE (%s='' OR account_id=%s) "
                 "ORDER BY status IN ('open','waiting','review-needed','blocked','proposed','planned','tracking','needs-review','data-needed') DESC,updated_at DESC LIMIT 40", (account, account)).fetchall()
             cases = [json.loads(row["payload_json"]) for row in rows]
             if cases:
                 ids = [row["caseId"] for row in cases]
-                events = connection.execute("SELECT case_id,payload_json FROM (SELECT case_id,payload_json,"
+                events = connection.execute("SELECT /*+ MAX_EXECUTION_TIME(5000) */ case_id,payload_json FROM (SELECT case_id,payload_json,"
                     "ROW_NUMBER() OVER (PARTITION BY case_id ORDER BY created_at DESC,event_id DESC) AS rank_in_case "
                     "FROM ai_brain_case_events WHERE case_id IN (" + ",".join(["%s"] * len(ids)) + ")) ranked "
                     "WHERE rank_in_case<=5 ORDER BY case_id,rank_in_case", tuple(ids)).fetchall()

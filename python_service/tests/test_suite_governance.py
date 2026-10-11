@@ -292,7 +292,9 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # Thirteen source-exploration contracts cover API gaps, original question
         # lineage, execution deferral/resume, provenance, PDF/HTML extraction,
         # missing requirements, public-address safety and bounded model/tool work.
-        self.assertLessEqual(total, 2203)
+
+        # AI status: existing-schema index migration, scoped recency and retryable database failure.
+        self.assertLessEqual(total, 2205)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

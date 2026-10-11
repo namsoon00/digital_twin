@@ -8,6 +8,7 @@ from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 
 from digital_twin.infrastructure.mysql_operational_connection import MySQLOperationalConnection
+from digital_twin.infrastructure.mysql_schema_tuning import MySQLIndexDefinition, ensure_mysql_indexes
 from digital_twin.modules.ai_orchestration.domain.planning import bounded, identity, stamp
 from digital_twin.modules.ai_orchestration.domain.execution_input import validate_execution_input
 from digital_twin.modules.ai_orchestration.domain.budget import AIControlBudgetWait, admission_wait, budget_state, budgets_enabled
@@ -20,6 +21,11 @@ from digital_twin.modules.ai_orchestration.domain.execution_resilience import sa
 from digital_twin.modules.ai_orchestration.infrastructure.mysql_runtime import AIRuntimePersistence, RUNTIME_SCHEMA
 from digital_twin.modules.ai_orchestration.domain.observation_recovery import same_regular_observation
 
+
+STATUS_INDEXES = (
+    MySQLIndexDefinition("ai_control_tasks", "ai_control_recent", "`updated_at`, `task_id`"),
+    MySQLIndexDefinition("ai_control_tasks", "ai_control_account_recent", "`account_id`, `updated_at`, `task_id`"),
+)
 
 SCHEMA = (
     EXECUTION_SCHEMA,
@@ -34,7 +40,8 @@ SCHEMA = (
     lease_until VARCHAR(40) NOT NULL DEFAULT '', attempts INT NOT NULL DEFAULT 0,
     payload_json LONGTEXT NOT NULL, result_json LONGTEXT NOT NULL, last_error VARCHAR(100) NOT NULL DEFAULT '',
     created_at VARCHAR(40) NOT NULL, updated_at VARCHAR(40) NOT NULL,
-    INDEX ai_control_due(status, available_at), INDEX ai_control_subject(account_id, symbol, updated_at)
+    INDEX ai_control_due(status, available_at), INDEX ai_control_subject(account_id, symbol, updated_at),
+    INDEX ai_control_recent(updated_at, task_id), INDEX ai_control_account_recent(account_id, updated_at, task_id)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4""",
     """CREATE TABLE IF NOT EXISTS ai_control_calls (
     call_id VARCHAR(64) PRIMARY KEY, workload VARCHAR(64) NOT NULL, status VARCHAR(24) NOT NULL,
@@ -71,6 +78,7 @@ class MySQLAIControlStore(AIRuntimePersistence, AIExecutionPersistence, MySQLOpe
         with self.connect() as connection:
             for sql in SCHEMA:
                 connection.execute(sql)
+            ensure_mysql_indexes(connection, {"ai_control_tasks": STATUS_INDEXES})
 
     @staticmethod
     def insert(connection, job):
@@ -390,17 +398,32 @@ class MySQLAIControlStore(AIRuntimePersistence, AIExecutionPersistence, MySQLOpe
         now = datetime.now(timezone.utc)
         day = now.date().isoformat()
         with self.connect() as connection:
-            rows = connection.execute("SELECT * FROM ai_control_tasks WHERE (%s='' OR account_id=%s) ORDER BY updated_at DESC LIMIT 60", (account_id, account_id)).fetchall()
-            calls = connection.execute("SELECT workload,status,COUNT(*) AS count FROM ai_control_calls WHERE started_at>=%s GROUP BY workload,status", (day,)).fetchall()
-            budget = connection.execute("SELECT used_count FROM ai_control_budget WHERE day_key=%s", (day,)).fetchone()
-            call_budget = connection.execute("SELECT used_count FROM ai_control_budget WHERE day_key=%s", ("calls:" + day,)).fetchone()
-            active = connection.execute("SELECT COUNT(*) AS count FROM ai_control_tasks WHERE status IN ('pending','processing') AND (%s='' OR account_id=%s)", (account_id, account_id)).fetchone()
+            # Sort only a covering index, then fetch at most 60 payloads by PK.
+            # The account/subject index cannot serve cross-symbol recency order.
+            index = "ai_control_account_recent" if account_id else "ai_control_recent"
+            where, params = (" WHERE account_id=%s", (account_id,)) if account_id else ("", ())
+            recent = connection.execute("SELECT /*+ MAX_EXECUTION_TIME(5000) */ task_id FROM ai_control_tasks FORCE INDEX ("
+                + index + ")" + where + " ORDER BY updated_at DESC,task_id DESC LIMIT 60", params).fetchall()
+            rows = []
+            if recent:
+                ids = [row["task_id"] for row in recent]
+                fetched = connection.execute("SELECT /*+ MAX_EXECUTION_TIME(5000) */ task_id,account_id,symbol,"
+                    "capability,status,available_at,attempts,last_error,updated_at,result_json,"
+                    "JSON_UNQUOTE(JSON_EXTRACT(payload_json,'$.name')) AS name "
+                    "FROM ai_control_tasks FORCE INDEX (PRIMARY) WHERE task_id IN (" + ",".join(["%s"] * len(ids)) + ")" + where.replace(" WHERE ", " AND "),
+                    tuple(ids) + params).fetchall()
+                by_id = {row["task_id"]: row for row in fetched}
+                rows = [by_id[task_id] for task_id in ids if task_id in by_id]
+            calls = connection.execute("SELECT /*+ MAX_EXECUTION_TIME(5000) */ workload,status,COUNT(*) AS count FROM ai_control_calls WHERE started_at>=%s GROUP BY workload,status", (day,)).fetchall()
+            budget = connection.execute("SELECT /*+ MAX_EXECUTION_TIME(5000) */ used_count FROM ai_control_budget WHERE day_key=%s", (day,)).fetchone()
+            call_budget = connection.execute("SELECT /*+ MAX_EXECUTION_TIME(5000) */ used_count FROM ai_control_budget WHERE day_key=%s", ("calls:" + day,)).fetchone()
+            active = connection.execute("SELECT /*+ MAX_EXECUTION_TIME(5000) */ COUNT(*) AS count FROM ai_control_tasks WHERE status IN ('pending','processing') AND (%s='' OR account_id=%s)", (account_id, account_id)).fetchone()
             from digital_twin.modules.ai_orchestration.domain.planning import enabled
             health = self.operational_health(connection, now, enabled(self.runtime_settings))
         state = budget_state(self.runtime_settings, (budget or {}).get("used_count", 0), (call_budget or {}).get("used_count", 0), now)
         wait = admission_wait(state)
         return {"tasks": [{"taskId": row["task_id"], "accountId": row["account_id"], "symbol": row["symbol"],
-                           "name": json.loads(row["payload_json"]).get("name", row["symbol"]),
+                           "name": row["name"] if row["name"] is not None else row["symbol"],
                            "capability": row["capability"], "status": row["status"], "nextCheckAt": row["available_at"],
                            "attempts": row["attempts"], "lastError": row["last_error"], "updatedAt": row["updated_at"],
                            "result": json.loads(row["result_json"])} for row in rows],

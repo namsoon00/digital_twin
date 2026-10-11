@@ -232,6 +232,27 @@ class AIControlTests(unittest.TestCase):
         self.assertEqual("snap-1", packet["facts"][0]["sourceSnapshotId"])
         self.assertFalse(packet["requiresMatchedRule"])
 
+    def test_status_database_timeout_is_retryable_without_fabricated_empty_tasks(self):
+        from digital_twin.infrastructure.web.routes.operations import OperationsRoutes
+        import pymysql
+        request = Mock(command="GET")
+        request.share_access.return_value.role = "local-owner"
+        with patch("digital_twin.infrastructure.service_factory.ai_control_status") as status, \
+                patch("digital_twin.infrastructure.operational_error_reporting.report_runtime_error") as report:
+            for code in (1205, 2006, 2013, 3024):
+                status.side_effect = pymysql.err.OperationalError(code, "private database error")
+                OperationsRoutes().route_operations_health(request, "/api/ai-control/status", {})
+                response, payload = request.send_payload.call_args.args
+                self.assertEqual(503, response)
+                self.assertTrue(payload["retryable"])
+                self.assertEqual({"mysql": "unavailable"}, payload["dependencyStatus"])
+                self.assertNotIn("tasks", payload)
+                self.assertNotIn("private", repr(payload))
+            self.assertEqual(4, report.call_count)
+            status.side_effect = ValueError("bad implementation")
+            with self.assertRaises(ValueError):
+                OperationsRoutes().route_operations_health(request, "/api/ai-control/status", {})
+
     def test_private_status_and_invalid_settings_have_no_write_or_read(self):
         from ai_execution_resilience_checks import ExecutionResilienceChecks
         checks = ExecutionResilienceChecks()
@@ -266,6 +287,40 @@ class AIControlStorageTests(unittest.TestCase):
 
     def tearDown(self):
         self.clean()
+
+    def test_status_migrates_indexes_and_preserves_latest_account_results(self):
+        from digital_twin.modules.ai_orchestration.infrastructure.mysql_control import MySQLAIControlStore, STATUS_INDEXES
+        # Exercise an existing database, not only fresh CREATE TABLE definitions.
+        with self.store.connect() as c:
+            for index in STATUS_INDEXES:
+                c.execute("ALTER TABLE ai_control_tasks DROP INDEX " + index.name)
+        self.store = MySQLAIControlStore(self.store.runtime_settings)
+        with self.store.transaction() as c:
+            for number in range(140):
+                account = "status-a" if number % 2 else "status-b"
+                job = {"taskId": "status-%03d" % number, "accountId": account,
+                       "symbol": "SYM-%02d" % (number % 7), "capability": "observe", "name": "Name " + str(number),
+                       "unusedLargePayload": "x" * 16000}
+                self.store.insert(c, job)
+                c.execute("UPDATE ai_control_tasks SET updated_at=%s,result_json=%s WHERE task_id=%s",
+                          ("2026-01-01T00:00:00Z", json.dumps({"ordinal": number}), job["taskId"]))
+        for account in ("", "status-a", "status-b", "no-such-account"):
+            result = self.store.status(account)
+            expected = [n for n in reversed(range(140)) if not account or account == ("status-a" if n % 2 else "status-b")][:60]
+            self.assertEqual(expected, [t["result"]["ordinal"] for t in result["tasks"]])
+            self.assertEqual(["Name " + str(n) for n in expected], [t["name"] for t in result["tasks"]])
+            self.assertTrue(all(t["accountId"] == account for t in result["tasks"]) if account else True)
+        with self.store.connect() as c:
+            for index, where, params in (("ai_control_recent", "", ()),
+                    ("ai_control_account_recent", " WHERE account_id=%s", ("status-a",))):
+                plan = c.execute("EXPLAIN FORMAT=JSON SELECT task_id FROM ai_control_tasks FORCE INDEX (" + index + ")"
+                    + where + " ORDER BY updated_at DESC,task_id DESC LIMIT 60", params).fetchone()
+                plan = json.loads(next(iter(plan.values())))
+                rendered = json.dumps(plan)
+                self.assertIn(index, rendered)
+                self.assertNotIn('"using_filesort": true', rendered)
+                self.assertTrue('"using_index": true' in rendered or '"covering": true' in rendered)
+                self.assertNotIn('"access_type": "sort"', rendered)
 
     def assert_capacity_deferrals_preserve_error_budget_and_reject_stale_lease(self):
         from datetime import datetime, timezone

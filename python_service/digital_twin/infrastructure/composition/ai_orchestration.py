@@ -121,7 +121,9 @@ def ai_control_status(settings=None, account_id=""):
     from digital_twin.infrastructure.settings import runtime_settings
     from digital_twin.modules.ai_orchestration.infrastructure.mysql_control import MySQLAIControlStore
     from digital_twin.modules.ai_orchestration.contracts import CAPABILITIES, enabled
-    configured = settings if settings is not None else runtime_settings()
+    configured = dict(settings if settings is not None else runtime_settings())
+    # Dashboard reads must not inherit long worker socket timeouts or its pool.
+    configured.update(mysqlOperationTimeoutSeconds=8, _mysqlPoolRole="ai-status")
     status = MySQLAIControlStore(configured).status(account_id)
     from digital_twin.modules.ai_orchestration.infrastructure.mysql_brain_agenda import MySQLBrainAgendaStore
     status["brain"] = MySQLBrainAgendaStore(configured).status(account_id)
@@ -148,11 +150,11 @@ def ai_control_status(settings=None, account_id=""):
         from digital_twin.infrastructure.operational_common import MAX_NOTIFICATION_DELIVERY_ATTEMPTS
         with notification_job_store(configured).connect() as connection:
             ids = [publication["jobId"] for publication in publications]
-            rows = connection.execute("SELECT job_id,status,last_error,attempts,retry_at,created_at,message_type,"
+            rows = connection.execute("SELECT /*+ MAX_EXECUTION_TIME(5000) */ job_id,status,last_error,attempts,retry_at,created_at,message_type,"
                 "JSON_EXTRACT(payload_json,'$.context.deliveryRecovery') AS recovery,"
                 "JSON_EXTRACT(payload_json,'$.context.deliveryRetryAfterSeconds') AS retry_after "
                 "FROM notification_jobs WHERE job_id IN (" + ",".join(["%s"] * len(ids)) + ")", tuple(ids)).fetchall()
-            receipts = connection.execute("SELECT job_id,completed_at,JSON_UNQUOTE(JSON_EXTRACT(metadata_json,'$.renderedMessage')) AS body "
+            receipts = connection.execute("SELECT /*+ MAX_EXECUTION_TIME(5000) */ job_id,completed_at,JSON_UNQUOTE(JSON_EXTRACT(metadata_json,'$.renderedMessage')) AS body "
                 "FROM notification_delivery_attempts WHERE status='delivered' AND job_id IN (" + ",".join(["%s"] * len(ids)) + ") "
                 "ORDER BY completed_at DESC", tuple(ids)).fetchall()
         deliveries = {row["job_id"]: row for row in rows}

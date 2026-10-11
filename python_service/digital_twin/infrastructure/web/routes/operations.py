@@ -62,7 +62,20 @@ class OperationsRoutes:
             if request.share_access().role not in {"owner", "local-owner"}:
                 return request.send_payload(403, {"error": "중앙 AI 기록은 소유자만 확인할 수 있습니다."})
             from digital_twin.infrastructure.service_factory import ai_control_status
-            return request.send_payload(200, ai_control_status(account_id=first_query(query, "accountId")), cache_control="no-store")
+            try:
+                payload = ai_control_status(account_id=first_query(query, "accountId"))
+            except Exception as error:
+                from digital_twin.infrastructure.mysql_operational_connection import mysql_error_code
+                if mysql_error_code(error) not in {1205, 2006, 2013, 3024}:
+                    raise
+                from digital_twin.infrastructure.operational_error_reporting import operational_error_reporter, report_runtime_error
+                stage = "HTTP 503 " + path + " · " + str(getattr(error, "orbit_mysql_statement", "mysql read"))
+                report_runtime_error(operational_error_reporter(), "Python web server", error, stage)
+                return request.send_payload(503, {
+                    "status": "unavailable", "error": "AI 상태를 일시적으로 조회할 수 없습니다. 잠시 후 다시 확인해 주세요.",
+                    "retryable": True, "retryAfterSeconds": 5, "dependencyStatus": {"mysql": "unavailable"},
+                }, cache_control="no-store")
+            return request.send_payload(200, payload, cache_control="no-store")
         if path == "/api/operations/health" and request.command == "GET":
             return request.send_payload(200, self.console_operations_health_api_payload(
                 force=request_bool(first_query(query, "refresh"), False),

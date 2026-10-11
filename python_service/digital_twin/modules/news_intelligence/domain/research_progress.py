@@ -235,6 +235,18 @@ def assess_tasks(
             and cited and set(cited + counter).issubset(candidate_ids)
             and review.get("status") in {"addressed", "partial", "unresolved"}
         )
+        rejection_reasons = []
+        if review and not review_valid:
+            if review.get("assessmentFingerprint") != assessment_id:
+                rejection_reasons.append("assessment-fingerprint-mismatch")
+            if not cited:
+                rejection_reasons.append("missing-citations")
+            if not set(cited + counter).issubset(candidate_ids):
+                rejection_reasons.append("ineligible-citations")
+            if not str(review.get("reason") or "").strip():
+                rejection_reasons.append("missing-answer-text")
+            if review.get("status") not in {"addressed", "partial", "unresolved"}:
+                rejection_reasons.append("invalid-review-status")
         selected = [row for row in candidates if row["evidenceId"] in set(cited + counter)] if review_valid else candidates
         missing = missing_requirements(task, selected)
         if review_valid and "missingRequirements" in review:
@@ -256,6 +268,7 @@ def assess_tasks(
             "excludedEvidence": excluded,
             "reason": str(review.get("reason") or "")[:600] if review_valid else "",
             "reviewRejected": bool(review) and not review_valid,
+            "reviewRejectionReasons": rejection_reasons,
             "decisionEligibility": "research-only",
         })
     return assessments

@@ -182,13 +182,11 @@ class InvestmentResearchOrchestrationService:
         if all_tasks_addressed(assessments) and not force:
             return save("cache-satisfied", "requirements-met")
         cooldown = self.cooldown_remaining_minutes(account_id, target.normalized_symbol())
-        if cooldown > 0 and not force and not exploration_resume:
-            statuses.append({"provider": "research-orchestrator", "status": "cooldown", "remainingMinutes": cooldown})
-            return save("research-cooldown", "cooldown")
 
         attempted_requests = {fingerprint(task_contract(row)) for row in tasks()} if exploration_resume else set()
         collection_ids = set()
         exploration_attempted = False
+        review_repair_used = False
         stop_reason = "round-budget-exhausted"
         # There is one review before collection and one after each bounded
         # collection round. A follow-up query must differ from attempted work.
@@ -205,12 +203,36 @@ class InvestmentResearchOrchestrationService:
                 "planningAudit": dict(plan.get("planningAudit") or {}),
                 "taskAssessments": assessments, "evidencePackets": packets,
             })
+            rejected_reviews = [row for row in assessments if row.get("candidateEvidenceIds")
+                and set(row.get("reviewRejectionReasons") or []).intersection(
+                    {"ineligible-citations", "assessment-fingerprint-mismatch"})]
+            if brain.get("documentaryReviewOnly") and rejected_reviews and not review_repair_used:
+                # Keep the failed review, then permit one correction against
+                # this exact packet set. Never repair a citation by substitution.
+                history[-1]["rejectedReviews"] = deepcopy(plan.get("taskReviews") or [])
+                save("processing")
+                review_repair_used = True
+                repair = [{key: row[key] for key in ("taskId", "assessmentFingerprint",
+                    "reviewRejectionReasons", "candidateEvidenceIds")} for row in rejected_reviews]
+                repair_plan = progress_plan(plan, assessments, packets)
+                repair_plan.pop("taskReviews", None)
+                plan, brief = self.plan_collection_work({**brain, "researchPlan": repair_plan,
+                    "researchReviewRepair": repair}, question, target, account_id, brief)
+                assessments = assess_tasks(tasks(), packets, target.normalized_symbol(), assessed_at, plan.get("taskReviews"))
+                history.append({"round": review_round, "phase": "citation-repair", "assessedAt": assessed_at,
+                    "previousRejections": repair, "planningAudit": dict(plan.get("planningAudit") or {}),
+                    "taskAssessments": assessments, "evidencePackets": packets})
             save("processing")
             if all_tasks_addressed(assessments) and (not force or round_count):
                 stop_reason = "requirements-met"
                 break
             if review_round >= round_budget:
                 break
+            # The interval limits source collection, not a review of receipts
+            # already obtained for another question about the same issuer.
+            if not round_count and cooldown > 0 and not force and not exploration_resume:
+                statuses.append({"provider": "research-orchestrator", "status": "cooldown", "remainingMinutes": cooldown})
+                return save("research-cooldown", "cooldown")
             by_id = {row["taskId"]: row for row in assessments}
             pending = [row for row in tasks() if by_id.get(str(row.get("taskId") or ""), {}).get("status") != "addressed"]
             if not pending:

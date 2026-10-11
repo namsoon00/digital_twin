@@ -101,6 +101,8 @@ class MySQLBrainAgendaStore(MySQLOperationalConnection):
 
     def record(self, connection, job, result, children):
         if job["capability"] == "research":
+            if result.get("status") == "research-wait":
+                return self.research_waiting(connection, job, result)
             return self.research_completed(connection, job, result)
         if not result.get("summary"):
             return {"status": "no-assessment"}
@@ -217,6 +219,20 @@ class MySQLBrainAgendaStore(MySQLOperationalConnection):
         connection.execute("UPDATE ai_control_tasks SET available_at=LEAST(available_at,%s),priority=GREATEST(priority,3) "
             "WHERE account_id=%s AND symbol=%s AND capability='observe' AND status='pending' AND attempts=0 "
             "AND JSON_UNQUOTE(JSON_EXTRACT(payload_json,'$.worldId'))=%s", (due, account, symbol, world))
+
+    def research_waiting(self, connection, job, result):
+        key = job.get("brainCaseId")
+        if not key:
+            return {"status": "unlinked-research"}
+        case = self.read(connection, key, job["accountId"], job["symbol"], lock=True)
+        if not case or case["worldId"] != job["worldId"] or case.get("lastResearch", {}).get("taskId") != job["taskId"]:
+            raise ValueError("research wait must own its brain case")
+        if case["status"] not in ACTIVE_CASE_STATES:
+            return {"status": "case-closed", "caseIds": [key]}
+        case.update(status="waiting", nextCheckAt=result["nextCheckAt"], reason=result["explanation"])
+        case["lastResearch"]["result"] = copy.deepcopy(result)
+        self.save(connection, case, job["taskId"], "research-waiting", result)
+        return {"status": "waiting", "caseIds": [key]}
 
     def research_completed(self, connection, job, result):
         key = job.get("brainCaseId")

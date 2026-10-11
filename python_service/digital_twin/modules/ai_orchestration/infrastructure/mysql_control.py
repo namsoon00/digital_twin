@@ -218,7 +218,8 @@ class MySQLAIControlStore(AIRuntimePersistence, AIExecutionPersistence, MySQLOpe
     def fail(self, job, error_kind, terminal=False, result=None):
         capacity_wait = error_kind == "LocalAICapacityUnavailable" and not terminal
         capacity_deferrals = int(job.get("capacityDeferrals", 0))
-        failures = job["attempts"] - int(job.get("budgetDeferrals", 0)) - capacity_deferrals - int(job.get("executionDeferrals", 0))
+        failures = (job["attempts"] - int(job.get("budgetDeferrals", 0)) - capacity_deferrals
+                    - int(job.get("executionDeferrals", 0)) - int(job.get("researchDeferrals", 0)))
         terminal = terminal or (not capacity_wait and failures >= 3)
         status = "failed" if terminal else "pending"
         delay, recovery_delay = retry_delays(job["capability"], error_kind,
@@ -239,6 +240,20 @@ class MySQLAIControlStore(AIRuntimePersistence, AIExecutionPersistence, MySQLOpe
                 self.insert(connection, {**{k: job[k] for k in ("accountId", "symbol", "name", "worldId")},
                     "capability": "observe", "taskId": identity(job["taskId"], "recovery"), "availableAt": next_due})
         return {"status": status if changed else "lease-lost"}
+
+    def defer_research(self, job, wait):
+        if job.get("capability") != "research":
+            raise ValueError("only source research can wait for its collection cooldown")
+        with self.transaction() as connection:
+            changed = connection.execute("UPDATE ai_control_tasks SET status='pending',last_error=%s,available_at=%s,"
+                "result_json=%s,payload_json=JSON_SET(payload_json,'$.researchDeferrals',%s),updated_at=%s,lease_token='',lease_until='' "
+                "WHERE task_id=%s AND status='processing' AND lease_token=%s AND lease_until>=%s",
+                (wait.code, wait.retry_at, json.dumps(wait.result(), ensure_ascii=False),
+                 int(job.get("researchDeferrals", 0)) + 1, stamp(), job["taskId"], job["leaseToken"], stamp())).rowcount
+            agenda = getattr(self, "agenda_writer", None)
+            if changed and agenda:
+                agenda(connection, job, wait.result(), [])
+            return bool(changed)
 
     def defer_budget(self, job, wait):
         # Keep attempt identities immutable for frozen input/call audit. Budget

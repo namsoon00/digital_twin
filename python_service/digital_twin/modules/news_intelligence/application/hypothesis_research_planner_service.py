@@ -78,6 +78,8 @@ class HypothesisResearchPlanningService:
         if review_only:
             context["guardrails"].update(documentaryReviewOnly=True,
                 mayProposeNovelResearchQuestion=False, maximumAdditionalTaskCount=0)
+            if brain.get("researchReviewRepair"):
+                context["reviewRepair"] = brain["researchReviewRepair"]
             if not any(row.get("candidateEvidenceIds") for row in context["researchProgress"].get("tasks", [])):
                 audit = {"status": "awaiting-evidence", "reason": "질문에 사용할 수 있는 출처 자료가 없습니다.",
                          "preservesBaselineTasks": True, "decisionEligibility": "research-only"}

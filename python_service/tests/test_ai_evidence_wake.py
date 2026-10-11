@@ -136,6 +136,17 @@ class EvidenceWakeStorageTests(unittest.TestCase):
         self.assertEqual(1, self.waker.run_once([SUBJECT, second])["tasksWoken"])
         self.event("duplicate-snapshot", occurred_at="2026-10-02T03:00:00Z")
         self.assertEqual(0, self.waker.run_once([SUBJECT, second])["tasksWoken"])
+        self.clean(); self.task()
+        from digital_twin.infrastructure.mysql_operational_events import insert_domain_event_with_connection
+        from digital_twin.shared_kernel.events import DomainEvent
+        with self.control.transaction() as connection:
+            for number in range(101):
+                insert_domain_event_with_connection(connection, DomainEvent(ONTOLOGY_REASONING_COMPLETED, "test",
+                    event_id='ignored-%03d' % number, occurred_at='2026-10-02T00:00:00Z', payload={'status': 'ok'}))
+        self.event('after-ignored', occurred_at='2026-10-02T01:00:00Z')
+        self.assertEqual({'eventsConsumed': 100, 'tasksWoken': 0}, self.waker.run_once([SUBJECT]))
+        self.assertEqual({'eventsConsumed': 2, 'tasksWoken': 1}, self.waker.run_once([SUBJECT]))
+        self.assertEqual({'eventsConsumed': 0, 'tasksWoken': 0}, self.waker.run_once([SUBJECT]))
 
     def test_arrival_during_processing_survives_restart_and_wakes_successor_with_cooldown(self):
         self.task(availableAt="2020-01-01T00:00:00Z")

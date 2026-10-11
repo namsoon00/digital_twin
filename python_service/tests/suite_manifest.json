@@ -25,6 +25,7 @@
     {"file": "test_company_report_reading.py", "tier": "unit", "core": true},
     {"file": "test_documentary_answers.py", "tier": "unit", "core": true},
     {"file": "test_source_exploration.py", "tier": "unit", "core": true},
+    {"file": "test_research_cooldown.py", "tier": "integration", "core": true},
     {"file": "test_question_research_progress.py", "tier": "unit", "core": true},
     {"file": "test_ontology_maintenance_fairness.py", "tier": "unit", "core": true},
     {"file": "test_hypothesis_research_pipeline.py", "tier": "unit", "core": true},

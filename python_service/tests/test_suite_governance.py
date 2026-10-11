@@ -294,7 +294,9 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # missing requirements, public-address safety and bounded model/tool work.
 
         # AI status: existing-schema index migration, scoped recency and retryable database failure.
-        self.assertLessEqual(total, 2205)
+        # Six source-answer recovery contracts cover bounded citation repair,
+        # cached review, cooldown resumption, task/case leases and failure allowance.
+        self.assertLessEqual(total, 2211)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

@@ -25,6 +25,31 @@ def reviewed_run():
 
 
 class DocumentaryAnswerTests(unittest.TestCase):
+    def _assert_final_review_replaces_explorers_earlier_missing_requirements(self):
+        run = reviewed_run()
+        for row in (run['taskAssessments'][0], run['roundHistory'][0]['taskAssessments'][0]):
+            row.update(status='needs-evidence', semanticReviewState='partial', coverageState='incomplete',
+                       missingRequirements=['전년 동기 현금 납세액'])
+        run['executedPlan'] = {'sourceExploration': {'missingRequirements': ['이미 확보한 영업현금흐름', '전년 동기 현금 납세액']}}
+        self.assertEqual(['전년 동기 현금 납세액'], documentary_answer(run, 'sources')['missingRequirements'])
+
+    def _assert_missing_citations_are_distinct_from_a_changed_source_version(self):
+        from digital_twin.modules.news_intelligence.domain.research_progress import assess_tasks
+        task = {'taskId': 'sources', 'question': 'Explain the reported cause', 'sourceTypes': ['official-filing'], 'maxAgeMinutes': 1440}
+        packets = packets_for([evidence()])
+        from digital_twin.modules.decisions.contracts import utc_now_iso
+        now = utc_now_iso()
+        initial = assess_tasks([task], packets, 'AAPL', now)[0]
+        review = {'taskId': 'sources', 'status': 'unresolved', 'assessmentFingerprint': initial['assessmentFingerprint'],
+                  'evidenceIds': [], 'counterEvidenceIds': [], 'reason': '제공된 자료에 질문에 해당하는 설명이 없습니다.'}
+        assessment = assess_tasks([task], packets, 'AAPL', now, [review])[0]
+        self.assertEqual(['missing-citations'], assessment['reviewRejectionReasons'])
+        run = {'taskAssessments': [assessment], 'roundHistory': [{'taskAssessments': [assessment], 'evidencePackets': packets}]}
+        answer = documentary_answer(run, 'sources')
+        self.assertEqual('unavailable', answer['status'])
+        self.assertIn('근거를 인용하지 못했습니다', answer['text'])
+        self.assertNotIn('자료 버전이 맞지 않아', answer['text'])
+
     def test_central_research_returns_answer_without_market_observation_and_cannot_expand_scope(self):
         gateway, runs, advisor = Gateway([[evidence(kind="news")]]), RunStore(), Advisor(expand=True)
         planner = HypothesisResearchPlanningService(advisor)
@@ -55,6 +80,7 @@ class DocumentaryAnswerTests(unittest.TestCase):
         self.assertEqual("research-returned", agenda.save.call_args.args[3])
 
     def test_wrong_task_stale_review_and_uncited_answer_fail_closed(self):
+        self._assert_missing_citations_are_distinct_from_a_changed_source_version()
         good = reviewed_run()
         self.assertEqual("answered", documentary_answer(good, "sources")["status"])
         self.assertEqual("unavailable", documentary_answer(good, "other")["status"])
@@ -65,6 +91,7 @@ class DocumentaryAnswerTests(unittest.TestCase):
             self.assertFalse(result["sources"])
 
     def test_missing_metric_stays_partial_and_no_data_explains_blocker(self):
+        self._assert_final_review_replaces_explorers_earlier_missing_requirements()
         run = reviewed_run()
         for row in (run["taskAssessments"][0], run["roundHistory"][0]["taskAssessments"][0]):
             row.update(status="needs-evidence", semanticReviewState="partial", coverageState="incomplete",
@@ -81,6 +108,37 @@ class DocumentaryAnswerTests(unittest.TestCase):
         from digital_twin.modules.news_intelligence.domain.research_progress import missing_requirements
         self.assertIn("공식 원문 본문 또는 출처가 확인된 보고 수치", missing_requirements(
             {"requiresDocumentBody": True}, [{"evidenceId": "metadata", "evidenceTypes": ["official-filing"]}]))
+
+    def test_citation_repair_rechecks_current_receipts_once_and_retains_rejections(self):
+        from test_question_research_progress import TARGET, task
+        from digital_twin.modules.decisions.contracts import InvestmentQuestion
+        for wrong_field, persistent in (('evidenceIds', False), ('assessmentFingerprint', False), ('evidenceIds', True)):
+            with self.subTest(wrong_field=wrong_field, persistent=persistent):
+                original = Advisor()
+                def review(context):
+                    answer = original.plan(context)
+                    if persistent or len(original.contexts) == 1:
+                        answer['taskReviews'][0][wrong_field] = ['superseded-source'] if wrong_field == 'evidenceIds' else 'old-assessment'
+                    return answer
+                advisor = Mock(); advisor.plan.side_effect = review
+                gateway, runs = Gateway(), RunStore()
+                orchestrator = InvestmentResearchOrchestrationService(EvidenceStore([evidence()]), gateway,
+                    hypothesis_research_planner=HypothesisResearchPlanningService(advisor), research_store=runs)
+                result = orchestrator.run(InvestmentQuestion.create('Did operating cash flow improve?', subject_symbol='AAPL'),
+                    TARGET, {'documentaryReviewOnly': True, 'researchPlan': {'tasks': [task()]}}).to_dict()
+                self.assertEqual(1, sum(row.get('phase') == 'citation-repair' for row in result['roundHistory']))
+                self.assertTrue(result['roundHistory'][0]['rejectedReviews'])
+                self.assertTrue(original.contexts[1]['reviewRepair'])
+                answer = documentary_answer(result, 'cash-flow')
+                if persistent:
+                    self.assertEqual('unavailable', answer['status'])
+                    self.assertFalse(answer['sources'])
+                    self.assertEqual(3, advisor.plan.call_count)
+                else:
+                    self.assertEqual('answered', answer['status'])
+                    self.assertEqual(2, advisor.plan.call_count)
+                    self.assertFalse(gateway.requests)
+                    self.assertEqual(['financial-1'], [row['evidenceId'] for row in answer['sources']])
 
     def test_whole_table_headers_units_and_values_reach_review_packet(self):
         html = '<table><tr><th>USD millions</th><th>Three months 2026</th><th>Three months 2025</th></tr><tr><td>Data center revenue</td><td>120</td><td>100</td></tr></table>'

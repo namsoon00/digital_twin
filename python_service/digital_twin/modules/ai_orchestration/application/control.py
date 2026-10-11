@@ -11,6 +11,7 @@ from digital_twin.modules.ai_orchestration.domain.insight_repair import correcti
 from digital_twin.modules.ai_orchestration.domain.insight_quality import local_quality, accept_review
 from digital_twin.modules.ai_orchestration.domain.observation_wording import OBSERVATION_WORDING_VERSION
 from digital_twin.modules.ai_orchestration.domain.budget import AIControlBudgetWait
+from digital_twin.modules.ai_orchestration.domain.research_wait import AIResearchWait
 from digital_twin.modules.ai_orchestration.domain.execution_resilience import AIExecutionDeferred, AIExecutionError
 from digital_twin.modules.outcomes.contracts import evaluate_observation_conditions
 from digital_twin.modules.ai_orchestration.domain.observation_recovery import observation_resume
@@ -212,6 +213,9 @@ class AIControlService:
         except RetrievalContractFailure as error:
             saved = self.store.fail(job, error.code, terminal=True, result={"failure": error.failure})
             return {"status": saved["status"], "taskId": job["taskId"], "reason": error.code}
+        except AIResearchWait as wait:
+            saved = self.store.defer_research(job, wait)
+            return {**wait.result(), "taskId": job["taskId"], **({} if saved else {"status": "lease-lost"})}
         except AIControlBudgetWait as wait:
             saved = self.store.defer_budget(job, wait)
             return {**wait.result(), "taskId": job["taskId"], **({} if saved else {"status": "lease-lost"})}

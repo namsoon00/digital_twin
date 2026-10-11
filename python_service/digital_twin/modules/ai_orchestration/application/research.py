@@ -4,6 +4,7 @@ from digital_twin.modules.news_intelligence.contracts import NewsCollectionTarge
 from ..domain.planning import identity
 from ..domain.research_request import executable_research_request
 from ..domain.research_return import research_return
+from ..domain.research_wait import AIResearchWait
 
 
 def execute_research(job, research_store, orchestrator_factory):
@@ -11,7 +12,7 @@ def execute_research(job, research_store, orchestrator_factory):
     run_id = "ai-control-" + job["taskId"][:40]
     source_task_id = identity(job["taskId"], "sources")
     existing = research_store.get_run(run_id)
-    if existing and existing.get("status") not in {"queued", "processing", "failed"}:
+    if existing and existing.get("status") not in {"queued", "processing", "failed", "research-cooldown"}:
         return {**research_return(existing, run_id, source_task_id, request), "reused": True}
     question = InvestmentQuestion.create(job["question"], subject_symbol=job["symbol"],
         subject_name=job["name"], account_id=job["accountId"], source="ai-control")
@@ -34,4 +35,8 @@ def execute_research(job, research_store, orchestrator_factory):
         account_id=job["accountId"], run_id=run_id,
         request_context={"aiControlTaskId": job["taskId"], "source": "ai-control", "question": question.to_dict(),
                          "researchRequest": request})
-    return research_return(run.to_dict(), run.run_id, source_task_id, request)
+    payload = run.to_dict()
+    result = research_return(payload, run.run_id, source_task_id, request)
+    if payload.get("status") == "research-cooldown":
+        raise AIResearchWait(payload, result.get("documentaryAnswer"))
+    return result

@@ -60,7 +60,7 @@ function researchAnswerView(result = {}) {
     if (url.protocol !== "https:" || url.username || url.password) return "";
     return `<li><a href="${escape(url.href)}" target="_blank" rel="noopener noreferrer">${escape(source.title || url.hostname)}</a>${source.publishedAt ? ` · 발행 ${escape(date(source.publishedAt))}` : ""}</li>`;
   }).join("");
-  const missing = answer?.missingRequirements?.length ? answer.missingRequirements : exploration?.missingRequirements || [];
+  const missing = answer ? answer.missingRequirements || [] : exploration?.missingRequirements || [];
   return `<details open class="research-answer"><summary>${escape(state[answer?.status] || "자료 탐색 기록")}</summary>${answer?.text ? `<p>${escape(answer.text)}</p>` : ""}${sources ? `<ul>${sources}</ul>` : ""}${missing.length ? `<p>아직 확인하지 못한 항목: ${missing.map(escape).join(" / ")}</p>` : ""}${answer?.blockers?.length ? `<p class="muted">확인 한계: ${answer.blockers.map(escape).join(" / ")}</p>` : ""}${exploration ? `<p class="muted">AI 추가 탐색 · 검색 ${escape(exploration.searchCount ?? 0)}회 · 문서 읽기 ${escape(exploration.readCount ?? 0)}회 · ${escape(stops[exploration.stopReason] || "탐색 상태 확인 필요")}</p>` : ""}<p class="muted">자료 답변과 투자 가설의 검증 결과는 별도로 확인합니다.</p></details>`;
 }
 function brainView(brain = {}) {
@@ -93,7 +93,7 @@ function deliveryProgress(publication) {
   return `${publication.deliveryAttempts != null ? ` · 처리 시도 ${escape(publication.deliveryAttempts)}/${escape(publication.deliveryMaxAttempts)}회` : ""}${publication.deliveryRetryAt ? ` · 다음 재시도 ${escape(date(publication.deliveryRetryAt))}` : ""}`;
 }
 function card(task, scheduling = {}) {
-  const r = task.result || {};
+  const r = task.result?.status === "research-wait" ? {...task.result, reason:task.result.explanation} : task.result || {};
   const diagnostic = r.publication?.diagnostic;
   const development = task.developmentProgress;
   const facts = r.input?.facts || [];

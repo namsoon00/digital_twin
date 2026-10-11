@@ -58,6 +58,39 @@ class Explorer:
 
 
 class SourceExplorationTests(unittest.TestCase):
+    def _assert_original_publication_dates_accept_iso_and_exclude_related_stories(self):
+        from digital_twin.infrastructure.external_api.adapters.issuer_ir import _date
+        for value in ('2026-01-29T16:00:00.000+0900', '2026-01-29T07:00:00Z', '2026-01-29'):
+            self.assertEqual('2026-01-29', _date(value))
+        markup = '<script type="application/ld+json">{"datePublished":"2026-01-29T16:00:00.000+0900"}</script>'
+        self.assertEqual('2026-01-29', publication_metadata(markup)[0])
+        main = '<meta property="article:published_time" content="2026-07-29T09:00:00+09:00">'
+        self.assertEqual('2026-07-29', publication_metadata(main + markup)[0])
+        self.assertFalse(publication_metadata(main + '<meta property="article:published_time" content="2026-07-28">')[0])
+        header = '<article><ul class="post-info"><li><span class="date">July 29, 2026</span></li></ul></article>'
+        related = '<article class="item"><div class="date">April 22, 2026</div></article>'
+        self.assertEqual('2026-07-29', publication_metadata(header + related)[0])
+        self.assertFalse(publication_metadata('<meta property="article:published_time" content="2026-02-31T09:00:00Z">')[0])
+
+    def _assert_exact_official_index_date_can_complete_html_or_pdf_provenance(self):
+        digest = 'ab' * 32
+        candidate = {'url': URL, 'discovery': 'official-page-link', 'discoveredFrom': 'https://investor.nvidia.com/',
+            'parentDocumentHash': digest, 'publishedAt': STAMP, 'publicationProof': {'kind': 'official-index-label',
+                'sourceUrl': 'https://investor.nvidia.com/', 'sourceDocumentHash': digest, 'value': 'NVIDIA results ' + STAMP}}
+        reader = tools_for(HTML.replace(b'article:published_time', b'unknown-date'))
+        self.assertIn('evidence', reader.read(TARGET, candidate, [TASK], 10))
+        for change in ({'discovery': 'web-search-lead'}, {'parentDocumentHash': 'wrong'},
+                       {'discoveredFrom': 'https://example.org/'}, {'publishedAt': '2020-01-01'}):
+            self.assertNotIn('evidence', reader.read(TARGET, {**candidate, **change}, [TASK], 10))
+        conflicting = HTML.replace(STAMP.encode(), b'2026-01-29') + b'<meta property="article:published_time" content="2026-01-28">'
+        self.assertNotIn('evidence', tools_for(conflicting).read(TARGET, candidate, [TASK], 10))
+        pdf = SourceDocumentTools(None, fetch=lambda *_: {'url': URL, 'body': b'%PDF-fixture', 'contentType': 'application/pdf'},
+            pdf_reader=lambda *_: {'pages': [{'page': 1, 'text': 'NVIDIA data center revenue and units. ' * 20}],
+                'pageCount': 1, 'omittedPages': [], 'unreadPageCount': 0})
+        result = pdf.read(TARGET, candidate, [TASK], 10)
+        self.assertEqual(STAMP, result['evidence'].published_at)
+        self.assertEqual('official-index-label', result['evidence'].raw_payload['publicationProof']['kind'])
+
     def test_capacity_wait_resumes_decision_search_or_review_without_refetching_sources(self):
         from digital_twin.infrastructure.local_ai_process_guard import LocalAICapacityUnavailable
         busy = LocalAICapacityUnavailable("fixture capacity wait")
@@ -217,6 +250,8 @@ class SourceExplorationTests(unittest.TestCase):
         self.assertIn("evidence-stale", rejected[0].reasons)
 
     def test_read_preserves_whole_tables_publication_proof_and_page_number(self):
+        self._assert_original_publication_dates_accept_iso_and_exclude_related_stories()
+        self._assert_exact_official_index_date_can_complete_html_or_pdf_provenance()
         # Related-story dates must not replace the original article's visible
         # publication label; two conflicting article dates still fail closed.
         markup = '<title>Report</title><div class="article-date">August 26, 2026</div><div class="date">October 8, 2026</div>'

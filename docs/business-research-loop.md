@@ -175,6 +175,27 @@ accepting the rejected market explanation. Material-state deduplication excludes
 retry clocks. Next-check times use KST and describe eligibility, not completion.
 Existing frozen historical notifications retain their original payloads.
 
+Collection cooldown is a scheduling state. Central research retains the same
+task and case, records `research-wait`, and resumes at the recorded retry time.
+It does not publish an unavailable answer or exhaust the failure allowance.
+The owning question's waiting state and next-check time commit with the deferred
+task, without an answer notification. The web view shows that scheduled wait.
+Any partial answer validated against the current receipts remains visible while
+the remaining collection waits; an unavailable review is not returned as an answer.
+Already collected evidence may still be reviewed during the interval; the
+interval limits another collection, not another question's use of that evidence.
+The final cited review replaces earlier exploration gaps. Reviewers keep required
+coverage within the original question instead of adding optional quantitative
+detail to a qualitative question. Numeric comparison requirements remain intact.
+If a documentary review cites an unavailable receipt or the wrong assessment
+version, one corrective review may read the same current evidence packets. The
+failed review and correction remain in the audit. Another invalid response stays
+unavailable; code never substitutes citation IDs or accepts an uncited answer.
+The pre-task evidence wake consumes at most 100 pending event keys using the
+name/time index before loading bodies. Non-target events also receive a consumed
+receipt so idle cycles do not repeatedly inspect historical JSON; late commits
+remain eligible because completion is tracked by event identity.
+
 Validation: `test_documentary_answers`, `test_ai_continuity_research`,
 `test_question_research_progress`, `test_research_progress`, `test_research_replies`
 and `test_ai_brain_agenda`; live model quality still requires reviewing actual
@@ -236,6 +257,12 @@ for publication dates. A 403, missing parser, empty search, unknown publisher,
 stale report and exhausted budget stay distinct. None proves that the information
 was never publicly disclosed.
 
+Publication parsing accepts ISO timestamps and prefers the article's own metadata
+or header over dates in related-story widgets. Conflicting primary publication
+dates still prevent admission. An exact document link in a previously read
+official index can supply a date only when its issuer host, link label and parent
+document hash are preserved and agree; an AI-provided date is not sufficient.
+
 Collected documents pass the existing evidence governance, source persistence,
 projection events and `IssuerIRDocument` ABox mapping. Only then can they enter
 subsequent investment reasoning. The source answer itself remains research-only.
@@ -251,7 +278,10 @@ describe investigation and source coverage, not prediction accuracy or return.
 Validation: `test_source_exploration` covers the API-miss → search → original
 read → source review → original question → ABox path, trust/freshness rejection,
 PDF decoding, query privacy, private-address/redirect rejection, checkpoint reuse,
-and operation budgets. `ai-source-exploration.test.mjs` covers answer visibility
+publication metadata and operation budgets. `test_research_cooldown` covers cached
+source review during collection waits, durable resumption of the same question,
+lease ownership and preservation of actual failure retries.
+`ai-source-exploration.test.mjs` covers answer visibility
 and unsafe citation links. Current Codex search configuration follows the
 [official configuration documentation](https://learn.chatgpt.com/docs/config-file/config-basic).
 

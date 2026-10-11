@@ -24,7 +24,7 @@ DOCUMENT_EXTENSIONS = (".pdf", ".ppt", ".pptx", ".xls", ".xlsx", ".doc", ".docx"
 IGNORED_EXTENSIONS = (".css", ".js", ".png", ".jpg", ".jpeg", ".gif", ".svg", ".ico", ".woff", ".woff2")
 IGNORED_PATH_PARTS = ("/tag/", "/category/", "/search", "/privacy", "/contact", "/email-alert")
 DATE_PATTERNS = (
-    re.compile(r"\b(20\d{2})[.\-/ ](0?[1-9]|1[0-2])[.\-/ ]([0-2]?\d|3[01])\b"),
+    re.compile(r"\b(20\d{2})[.\-/ ](0?[1-9]|1[0-2])[.\-/ ]([0-2]?\d|3[01])(?=\b|T\d{2}:\d{2})"),
     re.compile(r"\b(20\d{2})(0[1-9]|1[0-2])([0-2]\d|3[01])\b"),
 )
 MONTHS = {name.casefold(): index for index, name in enumerate((

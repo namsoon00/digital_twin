@@ -25,9 +25,13 @@ class _Metadata(HTMLParser):
         self.title, self.in_title, self.dates, self.explicit_dates, self.article_dates = [], False, [], [], []
         self.date_depth, self.date_parts = 0, []
         self.article_date = False
+        self.context = []
 
     def handle_starttag(self, tag, attrs):
         values = dict(attrs)
+        context = " ".join(value for _, value in self.context)
+        if tag not in {"area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source", "track", "wbr"}:
+            self.context.append((tag, values.get("class", "") + " " + values.get("id", "")))
         if tag == "title":
             self.in_title = not self.title  # Later SVG titles describe controls, not this document.
         if tag == "meta" and (values.get("property") or values.get("name") or values.get("itemprop")) in {
@@ -42,7 +46,8 @@ class _Metadata(HTMLParser):
                   and not re.search(r"updated|modified", values.get("class", "") + " " + values.get("id", ""), re.I)):
                 self.date_depth = 1
                 self.article_date = bool(re.search(r"(?:article|release|publication|publish)[-_]date(?:$|\s)",
-                                                   values.get("class", "") + " " + values.get("id", ""), re.I))
+                                                   values.get("class", "") + " " + values.get("id", ""), re.I)
+                    or re.search(r"(?:^|\s)(?:post-info|post-meta|entry-meta|article-header|entry-header|post-header)(?:$|\s)", context, re.I))
 
     def handle_data(self, data):
         if self.in_title:
@@ -51,6 +56,10 @@ class _Metadata(HTMLParser):
             self.date_parts.append(data)
 
     def handle_endtag(self, tag):
+        for index in range(len(self.context) - 1, -1, -1):
+            if self.context[index][0] == tag:
+                del self.context[index:]
+                break
         if tag == "title":
             self.in_title = False
         if tag in {"span", "div"} and self.date_depth:
@@ -63,7 +72,10 @@ class _Metadata(HTMLParser):
 def publication_metadata(markup):
     parser = _Metadata()
     parser.feed(markup)
-    parser.explicit_dates.extend(re.findall(r'"datePublished"\s*:\s*"([^"]+)"', markup))
+    # Article metadata has precedence over JSON for related stories. Conflicting
+    # primary publication clocks still fail closed.
+    if not parser.explicit_dates and not parser.article_dates:
+        parser.explicit_dates.extend(re.findall(r'"datePublished"\s*:\s*"([^"]+)"', markup))
     dated = {}
     for value in parser.explicit_dates or parser.article_dates or parser.dates:
         date = _date(value)
@@ -72,7 +84,8 @@ def publication_metadata(markup):
     if len(dated) == 1:
         date = next(iter(dated))
         return date, {"kind": "original-publication-metadata", "value": dated[date]}, " ".join(parser.title)[:300]
-    return "", {}, " ".join(parser.title)[:300]
+    conflict = {"kind": "conflicting-publication-metadata"} if len(dated) > 1 and (parser.explicit_dates or parser.article_dates) else {}
+    return "", conflict, " ".join(parser.title)[:300]
 
 
 def pdf_pages(data, timeout):
@@ -89,6 +102,20 @@ def pdf_pages(data, timeout):
 
 def _host(url):
     return (urlsplit(url).hostname or "").lower().removeprefix("www.")
+
+
+def index_publication(candidate, hosts):
+    """Only a date on the exact link in an actually read issuer index is proof."""
+    proof = candidate.get("publicationProof") or {}
+    source_url = candidate.get("discoveredFrom", "")
+    digest = candidate.get("parentDocumentHash", "")
+    date = candidate.get("publishedAt", "")
+    if (candidate.get("discovery") == "official-page-link" and _host(source_url) in hosts
+            and proof.get("kind") == "official-index-label" and proof.get("sourceUrl") == source_url
+            and re.fullmatch(r"[a-f0-9]{64}", digest) and proof.get("sourceDocumentHash") == digest
+            and date == _date(proof.get("value")) and parse_datetime(date)):
+        return date, proof
+    return "", {}
 
 
 class SourceDocumentTools:
@@ -137,8 +164,8 @@ class SourceDocumentTools:
             pages = parsed["pages"]
             blocks = [row["text"] for row in pages]
             page_info = {key: parsed[key] for key in ("pageCount", "omittedPages", "unreadPageCount")}
-            if candidate.get("publicationProof") and (linked_pdf or source_bound or issuer_redirect):
-                date, date_proof = candidate.get("publishedAt", ""), candidate["publicationProof"]
+            if linked_pdf or source_bound or issuer_redirect:
+                date, date_proof = index_publication(candidate, hosts)
             document_type = "pdf"
         elif "html" in content_type or "text/plain" in content_type:
             charset = re.search(r"charset=([\w-]+)", content_type)
@@ -149,6 +176,8 @@ class SourceDocumentTools:
             if re.search(r"verify you are human|request rate threshold exceeded|undeclared automated tool|<title>[^<]*(?:access denied|just a moment)", markup, re.I):
                 raise ValueError("document-access-blocked")
             date, date_proof, page_title = publication_metadata(markup)
+            if not date and not date_proof and source_bound and url == candidate["url"]:
+                date, date_proof = index_publication(candidate, hosts)
             title = page_title or title
             blocks = question_document_blocks(markup)
             pages, document_type = [], "html"

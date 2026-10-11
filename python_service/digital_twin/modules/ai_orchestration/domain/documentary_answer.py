@@ -34,11 +34,13 @@ def documentary_answer(run, task_id):
         if item.get("status") in BLOCKERS))[:4]
     excluded = {reason for item in row.get("excludedEvidence", []) for reason in item.get("reasons", [])}
     rejected = {reason for item in run.get("rejectedClaims", []) for reason in item.get("reasons", [])}
-    if "stale-for-task" in excluded or "evidence-stale" in rejected:
-        blockers.append("보고서 발행일이 질문에 설정된 조회 기간 밖입니다. 비교 기간을 포함하도록 조사 조건을 보완해야 합니다.")
+    if not complete and ("stale-for-task" in excluded or "evidence-stale" in rejected):
+        blockers.append("설정된 조회 기간보다 오래된 일부 자료는 이번 답변 근거에서 제외했습니다.")
     if not reviewed:
         if row.get("reviewRejected"):
-            blockers.insert(0, "검토의 인용 또는 자료 버전이 맞지 않아 답변으로 채택하지 않았습니다.")
+            reasons = row.get("reviewRejectionReasons") or []
+            blockers.insert(0, "질문에 답할 근거를 인용하지 못했습니다." if reasons == ["missing-citations"] else
+                "검토의 인용 또는 자료 버전이 맞지 않아 답변으로 채택하지 않았습니다.")
         elif not blockers:
             blockers.append("수집 자료에 대한 유효한 인용 답변을 확보하지 못했습니다.")
     exploration = (run.get("executedPlan") or {}).get("sourceExploration") or {}
@@ -70,6 +72,6 @@ def documentary_answer(run, task_id):
         "authority": "source-review-only", "assessmentFingerprint": str(row.get("assessmentFingerprint") or ""),
         "text": str(row.get("reason") or "")[:600] if reviewed else " ".join(blockers),
         "missingRequirements": list(dict.fromkeys([
-            *(exploration.get("missingRequirements") or [] if not complete else []),
+            *(exploration.get("missingRequirements") or [] if not reviewed else []),
             *(row.get("missingRequirements") or [])]))[:8],
         "blockers": blockers, "sources": sources, "assessedAt": str(row.get("assessedAt") or "")}

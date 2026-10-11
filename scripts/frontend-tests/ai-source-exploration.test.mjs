@@ -25,3 +25,19 @@ test("external source text is escaped and unsafe citation links are omitted", ()
   assert.match(html, /&lt;script&gt;/);
   assert.match(html, /&lt;img/);
 });
+test("the final cited answer replaces earlier exploration gaps, including an empty gap list", () => {
+  const old = {missingRequirements:["이미 확인한 매출"],searchCount:1,readCount:1};
+  const html = render({documentaryAnswer:{status:"answered",text:"공식 매출을 확인했습니다.",missingRequirements:[]},sourceExploration:old});
+  assert.match(html, /자료 답변 확인/);
+  assert.doesNotMatch(html, /아직 확인하지 못한 항목|이미 확인한 매출/);
+  assert.match(render({sourceExploration:old}), /이미 확인한 매출/);
+});
+test("a pending collection interval shows its explanation and retry time without a failure label", () => {
+  const input = {status:"pending",capability:"research",symbol:"TEST",lastError:"research-cooldown",
+    nextCheckAt:"2026-10-11T13:00:00Z",result:{status:"research-wait",reason:"research-cooldown",
+      explanation:"자료 수집 간격을 기다린 뒤 같은 질문의 조사를 이어갑니다."}};
+  const html = vm.runInNewContext(source.slice(0, source.indexOf("async function load(")) + "\ncard(input)", {input,URL});
+  assert.match(html, /같은 질문의 조사를 이어갑니다/);
+  assert.match(html, /다음 확인/);
+  assert.doesNotMatch(html, /research-cooldown|작업에 실패|답변 근거 부족/);
+});

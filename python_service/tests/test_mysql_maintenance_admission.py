@@ -7,6 +7,70 @@ from digital_twin.infrastructure.mysql_realtime_workload_guard import MySQLRealt
 
 
 class MySQLMaintenanceAdmissionTests(unittest.TestCase):
+    def test_cleanup_timeout_does_not_replay_bounded_or_completed_retention(self):
+        from unittest.mock import Mock, patch
+        from digital_twin.infrastructure import cli
+        for include_legacy in (False, True):
+            with self.subTest(include_legacy=include_legacy):
+                error = RuntimeError(2013, "read operation timed out")
+                store, service = Mock(), Mock()
+                store.connect.return_value.__enter__ = Mock(return_value=Mock())
+                store.connect.return_value.__exit__ = Mock(return_value=False)
+                inventory = [{}, error] if include_legacy else [{}]
+                service.run_once.side_effect = None if include_legacy else error
+                service.run_once.return_value = {"deleted": 2}
+                with patch.object(cli, "operational_storage_inventory", side_effect=inventory), \
+                     patch.object(cli, "observe_operational_storage_capacity"), \
+                     patch.object(cli, "MySQLOperationalConnection", return_value=store) as factory, \
+                     patch.object(cli, "apply_mysql_operational_history_retention", return_value={}), \
+                     patch.object(cli, "MySQLMinimalRetentionService", return_value=service), \
+                     patch("digital_twin.modules.outcomes.infrastructure.mysql_decision_calibration_inputs.MySQLDecisionCalibrationInputStore"), \
+                     patch.object(cli.time, "sleep") as sleep, \
+                     self.assertRaises(RuntimeError) as raised:
+                    cli.run_mysql_operational_cleanup({}, include_legacy=include_legacy)
+                self.assertIs(error, raised.exception)
+                self.assertEqual("capacity-refresh" if include_legacy else "minimal-retention",
+                                 error.orbit_maintenance_stage)
+                factory.assert_called_once()
+                service.run_once.assert_called_once()
+                sleep.assert_not_called()
+
+    def test_retention_lock_distinguishes_contention_from_database_failure(self):
+        from unittest.mock import Mock
+        from digital_twin.infrastructure.mysql_minimal_retention import MySQLMinimalRetentionRepository
+        connection = Mock()
+        repository = MySQLMinimalRetentionRepository(connection)
+        for acquired, expected in ((0, False), (1, True)):
+            connection.execute.return_value.fetchone.return_value = {"acquired": acquired}
+            self.assertEqual(expected, repository._acquire_lock())
+        connection.execute.return_value.fetchone.return_value = {"acquired": None}
+        with self.assertRaisesRegex(RuntimeError, "returned NULL"):
+            repository._acquire_lock()
+        error = RuntimeError(2013, "read operation timed out")
+        connection.execute.side_effect = error
+        with self.assertRaises(RuntimeError) as raised:
+            repository._acquire_lock()
+        self.assertIs(error, raised.exception)
+
+    def test_maintenance_alert_preserves_safe_query_and_policy_context(self):
+        from unittest.mock import Mock, patch
+        from digital_twin.infrastructure import schedulers
+        error = RuntimeError(2013, "read operation timed out")
+        error.orbit_mysql_statement = "DELETE monitor_snapshot_history"
+        error.orbit_mysql_elapsed_ms = 10000
+        error.orbit_retention_policy = "snapshotHistory"
+        error.orbit_maintenance_stage = "minimal-retention"
+        scheduler = schedulers.OperationalHistoryRetentionScheduler(Mock(side_effect=error), 60, Mock())
+        with patch.object(schedulers, "install_stop_handlers"), \
+             patch.object(schedulers, "wait_until_running", side_effect=lambda *a: scheduler.stop()), \
+             patch.object(schedulers, "report_runtime_error") as report:
+            scheduler.run_forever()
+        self.assertIs(error, report.call_args.args[2])
+        stage = report.call_args.args[3]
+        for expected in ("stage=minimal-retention", "policy=snapshotHistory",
+                         "mysql=DELETE monitor_snapshot_history", "query=10.0s"):
+            self.assertIn(expected, stage)
+
     def test_failed_lock_does_not_restart_overdue_cleanup_clock(self):
         from contextlib import nullcontext
         from types import SimpleNamespace
@@ -88,8 +152,9 @@ class MySQLMaintenanceAdmissionTests(unittest.TestCase):
         connection = ProgressConnection()
         policy = mysql_minimal_retention_policy({'mysqlMinimalRetentionEnabled': '1'})
         repository = MySQLMinimalRetentionRepository(connection)
-        with patch.object(repository, '_compact_obsolete_world_projection_payloads', side_effect=TimeoutError), self.assertRaises(TimeoutError):
+        with patch.object(repository, '_compact_obsolete_world_projection_payloads', side_effect=TimeoutError), self.assertRaises(TimeoutError) as raised:
             repository.apply(policy)
+        self.assertEqual("worldProjection:obsoletePayload", raised.exception.orbit_retention_policy)
         self.assertEqual('worldProjection:completed', connection.next_policy)
         restarted = MySQLMinimalRetentionRepository(connection)
         def bounded(*args):

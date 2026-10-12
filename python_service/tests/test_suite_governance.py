@@ -301,7 +301,9 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # bounded read reconnects, deletion limits and scheduler error reporting.
         # Data-status delivery explanations independently reject missing
         # receipt baselines and mismatched transition evidence at the final gate.
-        self.assertLessEqual(total, 2220)
+        # Three maintenance failure contracts protect bounded retry, lock-error
+        # visibility and query/policy diagnostics without replaying completed work.
+        self.assertLessEqual(total, 2223)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

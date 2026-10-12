@@ -1537,11 +1537,15 @@ def run_mysql_operational_cleanup(
 ) -> Dict[str, object]:
     """Run one bounded cleanup pass outside the realtime inference path."""
     settings = dict(settings or {})
-    storage_health = operational_storage_inventory(settings)
-    storage_capacity_health = observe_operational_storage_capacity(
-        settings,
-        snapshot=storage_health,
-    )
+    try:
+        storage_health = operational_storage_inventory(settings)
+        storage_capacity_health = observe_operational_storage_capacity(
+            settings,
+            snapshot=storage_health,
+        )
+    except Exception as error:
+        error.orbit_maintenance_stage = "capacity-preflight"
+        raise
     settings = accelerated_mysql_cleanup_settings(settings, storage_health)
     settings["_skipOperationalHistoryRetention"] = True
     # The service manager bootstraps schema before it starts workers.  This
@@ -1557,16 +1561,19 @@ def run_mysql_operational_cleanup(
         max(60, operation_timeout) if include_legacy else min(10, max(5, operation_timeout)))
     if not include_legacy:
         settings["_effectiveMysqlMinimalRetentionMaxRunSeconds"] = "5"
-    # A connection can be dropped after the server-side read timeout.  A
-    # normal pass is idempotent and uses a fresh pooled connection on retry;
-    # explicit compaction is intentionally excluded because it is operator-led.
-    retryable = not optimize and not drop_ephemeral_databases
+    # Only a legacy pass may retry inline on a fresh pooled connection.
+    # Bounded turns yield after failure and resume via the durable policy
+    # cursor on the next scheduled turn. Explicit compaction never retries.
+    retryable = include_legacy and not optimize and not drop_ephemeral_databases
     connection_retries = 0
     deadlock_retries = 0
     while True:
+        stage = "connect"
+        retention_completed = False
         try:
             store = MySQLOperationalConnection(settings)
             with store.connect() as connection:
+                stage = "legacy-retention"
                 result = (
                     apply_mysql_operational_history_retention(
                         connection,
@@ -1582,10 +1589,12 @@ def run_mysql_operational_cleanup(
                         "legacyRetentionSkipped": True,
                     }
                 )
+                stage = "minimal-retention"
                 minimal_retention = MySQLMinimalRetentionService(
                     MySQLMinimalRetentionRepository(connection),
                     settings,
                 ).run_once()
+                retention_completed = True
                 result["minimalRetention"] = minimal_retention
                 result["deleted"] = int(result.get("deleted") or 0) + int(minimal_retention.get("deleted") or 0)
                 result["compacted"] = int(minimal_retention.get("compacted") or 0)
@@ -1599,6 +1608,7 @@ def run_mysql_operational_cleanup(
                 result["policies"] = policies
                 result["compactionCandidates"] = mysql_operational_compaction_tables(result)
                 if optimize:
+                    stage = "physical-compaction"
                     compaction_candidates = mysql_operational_space_reclaim_candidates(
                         connection,
                         minimum_reclaim_mb=int(settings.get("mysqlPhysicalCompactionMinReclaimMb") or 256),
@@ -1621,12 +1631,14 @@ def run_mysql_operational_cleanup(
 
                     clear_mysql_storage_metadata_cache()
                 if drop_ephemeral_databases:
+                    stage = "ephemeral-database-cleanup"
                     result["ephemeralDatabaseCleanup"] = drop_ephemeral_mysql_databases(
                         connection,
                         protected_databases=[str(settings.get("mysqlDatabase") or "")],
                     )
             from digital_twin.modules.outcomes.infrastructure.mysql_decision_calibration_inputs import MySQLDecisionCalibrationInputStore
 
+            stage = "calibration-repair"
             result["decisionCalibrationInputs"] = (
                 MySQLDecisionCalibrationInputStore(settings).repair()
                 if include_legacy else {"status": "deferred", "reason": "bounded-retention-turn"}
@@ -1635,6 +1647,7 @@ def run_mysql_operational_cleanup(
                 result["transientConnectionRetryCount"] = connection_retries
             if deadlock_retries:
                 result["deadlockRetryCount"] = deadlock_retries
+            stage = "capacity-refresh"
             storage_health = operational_storage_inventory(settings)
             storage_capacity_health = observe_operational_storage_capacity(
                 settings,
@@ -1656,7 +1669,11 @@ def run_mysql_operational_cleanup(
             )
             return result
         except Exception as error:
-            if not retryable:
+            error.orbit_maintenance_stage = stage
+            # Autocommitted batches and the durable policy cursor already made
+            # progress. A bounded turn yields to realtime work; a failure after
+            # retention must never replay it just to refresh capacity metadata.
+            if not retryable or retention_completed:
                 raise
             if mysql_is_deadlock(error) and deadlock_retries < mysql_deadlock_retry_count(settings):
                 deadlock_retries += 1
@@ -2021,8 +2038,14 @@ def maintenance_command(args) -> int:
             # Capacity is observable even when queue priority or the realtime
             # lease defers retention. Otherwise critical state can remain stale
             # for hours precisely while inference is blocked by disk pressure.
-            observe_operational_storage_capacity(settings, snapshot=operational_storage_inventory(settings))
-            queue_state = dict(reasoning_queue_probe() or {})
+            stage = "capacity-admission"
+            try:
+                observe_operational_storage_capacity(settings, snapshot=operational_storage_inventory(settings))
+                stage = "queue-admission"
+                queue_state = dict(reasoning_queue_probe() or {})
+            except Exception as error:
+                error.orbit_maintenance_stage = stage
+                raise
             try:
                 pending_count = int(queue_state.get("effectivePendingCount") or 0)
             except (TypeError, ValueError):

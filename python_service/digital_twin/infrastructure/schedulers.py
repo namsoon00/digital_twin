@@ -833,12 +833,23 @@ class OperationalHistoryRetentionScheduler:
                         flush=True,
                     )
             except Exception as error:  # noqa: BLE001 - retention must never stop runtime processing.
-                print("Python operational history maintenance error: " + str(error), flush=True)
+                parts = ["MySQL history retention"]
+                for attribute, label in (("orbit_maintenance_stage", "stage"),
+                                         ("orbit_retention_policy", "policy"),
+                                         ("orbit_mysql_statement", "mysql")):
+                    value = getattr(error, attribute, "")
+                    if value:
+                        parts.append(label + "=" + str(value)[:100])
+                elapsed = getattr(error, "orbit_mysql_elapsed_ms", 0)
+                if elapsed:
+                    parts.append("query=" + str(round(elapsed / 1000.0, 1)) + "s")
+                stage = " · ".join(parts)
+                print("Python operational history maintenance error: " + str(error) + " · " + stage, flush=True)
                 report_runtime_error(
                     self.error_reporter,
                     "Python operational history maintenance worker",
                     error,
-                    "MySQL history retention",
+                    stage,
                 )
             end_at = time.monotonic() + max(1.0, next_interval - (time.monotonic() - started))
             wait_until_running(lambda: self.running, end_at)

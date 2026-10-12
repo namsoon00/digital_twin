@@ -441,7 +441,11 @@ class MySQLMinimalRetentionRepository:
                     "ON DUPLICATE KEY UPDATE next_policy=VALUES(next_policy),updated_at=VALUES(updated_at)",
                     (policy.profile, next_policy, self._iso()))
                 attempted.append(name)
-                result = action(policy, budget, *arguments)
+                try:
+                    result = action(policy, budget, *arguments)
+                except Exception as error:
+                    error.orbit_retention_policy = name
+                    raise
                 changed = _integer(result.get("deleted"))
                 deleted_total += changed
                 compacted += _integer(result.get("compacted"))
@@ -1675,11 +1679,11 @@ class MySQLMinimalRetentionRepository:
         )
 
     def _acquire_lock(self) -> bool:
-        try:
-            row = _fetchone(_execute(self.connection, "SELECT GET_LOCK(%s, 0) AS acquired", (MYSQL_MINIMAL_RETENTION_LOCK_NAME,)))
-            return _integer(_row_value(row, "acquired")) == 1
-        except Exception:
-            return False
+        row = _fetchone(_execute(self.connection, "SELECT GET_LOCK(%s, 0) AS acquired", (MYSQL_MINIMAL_RETENTION_LOCK_NAME,)))
+        acquired = _row_value(row, "acquired")
+        if acquired is None:
+            raise RuntimeError("MySQL retention lock acquisition returned NULL")
+        return _integer(acquired) == 1
 
     def _release_lock(self) -> None:
         try:

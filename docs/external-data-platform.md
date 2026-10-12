@@ -164,3 +164,14 @@ elapsed query/cycle time without SQL values or provider bodies. Database write
 failures do not increment vendor failure counters or overwrite durable completion.
 The collector never retries the whole cycle inline: existing durable leases and
 completed state determine subsequent eligibility, including uncertain commits.
+
+
+The separate operational-history worker also yields after a failed bounded
+retention turn, preserving the durable policy cursor for the next scheduled
+turn. It does not replay completed retention when calibration or capacity
+refresh fails. Retention errors expose the operation stage, policy, safe SQL
+verb/table label and elapsed query time; SQL parameters are never included.
+An unavailable MySQL connection during lock acquisition is an error, while an
+explicit busy-lock response remains a normal deferral. These changes prevent
+retry amplification; they do not establish the root cause of earlier read
+timeouts whose SQL context was not recorded.

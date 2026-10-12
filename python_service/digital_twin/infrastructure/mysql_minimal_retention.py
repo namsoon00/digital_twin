@@ -987,57 +987,59 @@ class MySQLMinimalRetentionRepository:
         return self._result("investment_reasoning_cases", deleted, bytes_deleted)
 
     def _delete_decision_publications(self, policy, budget, cutoff_iso) -> Dict[str, object]:
-        candidates = self._byte_bounded_candidates(
-            "SELECT publication.publication_id, OCTET_LENGTH(publication.payload_json) AS payload_bytes "
-            "FROM `decision_publications` publication "
-            "JOIN `investment_subject_decision_cases` subject "
-            "ON subject.subject_case_id = publication.subject_case_id "
-            "WHERE subject.completed_at <> '' AND subject.completed_at < " + _cutoff_sql()
-            + " ORDER BY subject.completed_at, publication.publication_id LIMIT %s",
-            (cutoff_iso, policy.batch_size),
-            "publication_id",
-            policy,
-            budget,
+        return self._delete_subject_artifacts(
+            "decision_publications", "publication_id", policy, budget, cutoff_iso,
         )
-        deleted, bytes_deleted = self._delete_candidates(
-            "decision_publications",
-            "publication_id",
-            candidates,
-            "1 = 1",
-            (),
-            budget,
-        )
-        return self._result("decision_publications", deleted, bytes_deleted)
 
     def _delete_decision_candidate_snapshots(self, policy, budget, cutoff_iso) -> Dict[str, object]:
+        return self._delete_subject_artifacts(
+            "decision_candidate_snapshots", "candidate_set_id", policy, budget, cutoff_iso,
+        )
+
+    def _delete_subject_artifacts(self, table, identifier, policy, budget, cutoff_iso) -> Dict[str, object]:
+        quoted_table, quoted_id = quote_identifier(table), quote_identifier(identifier)
+        # Join only IDs while finding the oldest eligible subjects. The LIMIT
+        # materializes that small set before any LONGTEXT payload is accessed.
+        # The subject's clock + PK order matches its retention index; ordering
+        # by a child ID instead forces a sort across the joined history.
         candidates = self._byte_bounded_candidates(
-            "SELECT candidate.candidate_set_id, OCTET_LENGTH(candidate.payload_json) AS payload_bytes "
-            "FROM `decision_candidate_snapshots` candidate "
-            "JOIN `investment_subject_decision_cases` subject "
-            "ON subject.subject_case_id = candidate.subject_case_id "
+            "SELECT artifact." + quoted_id + ", OCTET_LENGTH(artifact.payload_json) AS payload_bytes "
+            "FROM (SELECT child." + quoted_id + ", subject.completed_at, subject.subject_case_id "
+            "FROM `investment_subject_decision_cases` subject "
+            "JOIN " + quoted_table + " child ON child.subject_case_id = subject.subject_case_id "
             "WHERE subject.completed_at <> '' AND subject.completed_at < " + _cutoff_sql()
-            + " ORDER BY subject.completed_at, candidate.candidate_set_id LIMIT %s",
+            + " ORDER BY subject.completed_at, subject.subject_case_id LIMIT %s) candidates "
+            "JOIN " + quoted_table + " artifact ON artifact." + quoted_id + " = candidates." + quoted_id
+            + " ORDER BY candidates.completed_at, candidates.subject_case_id",
             (cutoff_iso, policy.batch_size),
-            "candidate_set_id",
+            identifier,
             policy,
             budget,
         )
         deleted, bytes_deleted = self._delete_candidates(
-            "decision_candidate_snapshots",
-            "candidate_set_id",
+            table,
+            identifier,
             candidates,
-            "1 = 1",
-            (),
+            "EXISTS (SELECT 1 FROM `investment_subject_decision_cases` subject "
+            "WHERE subject.subject_case_id = " + quoted_table + ".subject_case_id "
+            "AND subject.completed_at <> '' AND subject.completed_at < " + _cutoff_sql() + ")",
+            (cutoff_iso,),
             budget,
         )
-        return self._result("decision_candidate_snapshots", deleted, bytes_deleted)
+        return self._result(table, deleted, bytes_deleted)
 
     def _delete_subject_decision_cases(self, policy, budget, cutoff_iso) -> Dict[str, object]:
+        children_absent = (
+            "NOT EXISTS (SELECT 1 FROM decision_candidate_snapshots child "
+            "WHERE child.subject_case_id = investment_subject_decision_cases.subject_case_id) "
+            "AND NOT EXISTS (SELECT 1 FROM decision_publications child "
+            "WHERE child.subject_case_id = investment_subject_decision_cases.subject_case_id)"
+        )
         candidates = self._byte_bounded_candidates(
             "SELECT subject_case_id, OCTET_LENGTH(payload_json) AS payload_bytes "
             "FROM `investment_subject_decision_cases` WHERE completed_at <> '' "
             "AND completed_at < " + _cutoff_sql()
-            + " ORDER BY completed_at, subject_case_id LIMIT %s",
+            + " AND " + children_absent + " ORDER BY completed_at, subject_case_id LIMIT %s",
             (cutoff_iso, policy.batch_size),
             "subject_case_id",
             policy,
@@ -1047,7 +1049,7 @@ class MySQLMinimalRetentionRepository:
             "investment_subject_decision_cases",
             "subject_case_id",
             candidates,
-            "completed_at <> '' AND completed_at < " + _cutoff_sql(),
+            "completed_at <> '' AND completed_at < " + _cutoff_sql() + " AND " + children_absent,
             (cutoff_iso,),
             budget,
         )

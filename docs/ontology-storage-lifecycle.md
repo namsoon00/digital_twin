@@ -408,6 +408,14 @@ entry limits. Oversized inputs execute normally without being cached; they are
 never truncated. These are cache admission budgets, not an RSS or swap limit.
 Long-duration observation still needs to establish steady-state process memory.
 
+Subject decision history uses a `(completed_at, subject_case_id)` retention
+index. Candidate snapshots and publications select at most one batch of IDs
+in that order before reading payload sizes; sorting by the child ID would
+reintroduce a joined-history sort. Deletion rechecks the parent's completion
+cutoff, and a parent remains until both child collections have been removed.
+A timed-out child read propagates without deleting that child's data. Shared
+row, byte, and runtime budgets and the existing retention periods still apply.
+
 ## Operational Verification
 
 After a lifecycle change:

@@ -305,7 +305,9 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # visibility and query/policy diagnostics without replaying completed work.
         # Four indexed-retention contracts execute bounded selection, shared byte
         # budgets, state/clock races and current-head preservation.
-        self.assertLessEqual(total, 2227)
+        # Subject retention additionally protects child/parent progress,
+        # concurrent completion changes, byte budgets, and failed child reads.
+        self.assertLessEqual(total, 2230)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

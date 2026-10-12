@@ -553,8 +553,15 @@ class IndexedRetentionExecutionTests(unittest.TestCase):
                         "(snapshot_id TEXT PRIMARY KEY, created_at TEXT, payload_json TEXT)")
         for table in ("statistical_model_signal_heads", "statistical_model_assessment_heads"):
             self.db.execute("CREATE TABLE " + table + " (snapshot_id TEXT)")
+        self.db.execute("CREATE TABLE investment_subject_decision_cases "
+                        "(subject_case_id TEXT PRIMARY KEY, completed_at TEXT, payload_json TEXT)")
+        for table, key in (("decision_candidate_snapshots", "candidate_set_id"),
+                           ("decision_publications", "publication_id")):
+            self.db.execute("CREATE TABLE " + table + " (" + key + " TEXT PRIMARY KEY, "
+                            "subject_case_id TEXT UNIQUE, payload_json TEXT)")
         from digital_twin.infrastructure.mysql_schema_tuning import MYSQL_OPERATIONAL_INDEXES
-        for table in ("investment_reasoning_cases", "statistical_model_signal_snapshots"):
+        for table in ("investment_reasoning_cases", "statistical_model_signal_snapshots",
+                      "investment_subject_decision_cases"):
             for index in MYSQL_OPERATIONAL_INDEXES[table]:
                 self.db.execute("CREATE INDEX " + index.name + " ON " + table + " (" + index.columns_sql + ")")
         self.policy = replace(mysql_minimal_retention_policy({}), batch_size=3)
@@ -581,6 +588,64 @@ class IndexedRetentionExecutionTests(unittest.TestCase):
 
     def remaining(self, table, key):
         return {row[0] for row in self.db.execute("SELECT " + key + " FROM " + table)}
+
+    def seed_subjects(self):
+        for key, completed in (("empty", "2025-01-01"), ("old-1", "2026-01-01"),
+                               ("old-2", "2026-01-02"), ("old-3", "2026-01-03"),
+                               ("old-4", "2026-01-04"), ("active", ""),
+                               ("recent", "2026-10-12")):
+            self.db.execute("INSERT INTO investment_subject_decision_cases VALUES (?,?,?)",
+                            (key, completed, "{}"))
+            if key != "empty":
+                for table in ("decision_candidate_snapshots", "decision_publications"):
+                    self.db.execute("INSERT INTO " + table + " VALUES (?,?,?)", (key, key, "{}"))
+
+    def test_subject_children_expire_in_bounded_batches_without_orphaning(self):
+        self.seed_subjects()
+        # The oldest subject has no children: it must not starve later artifacts.
+        for method in (self.repo._delete_decision_candidate_snapshots, self.repo._delete_decision_publications):
+            result = method(self.policy, self.budget, "2026-10-01")
+            self.assertEqual(3, result["deleted"])
+        self.repo._delete_subject_decision_cases(self.policy, self.budget, "2026-10-01")
+        self.assertIn("old-4", self.remaining("investment_subject_decision_cases", "subject_case_id"))
+        for _ in range(3):
+            self.repo._delete_decision_candidate_snapshots(self.policy, self.budget, "2026-10-01")
+            self.repo._delete_decision_publications(self.policy, self.budget, "2026-10-01")
+            self.repo._delete_subject_decision_cases(self.policy, self.budget, "2026-10-01")
+        for table, key in (("investment_subject_decision_cases", "subject_case_id"),
+                           ("decision_candidate_snapshots", "candidate_set_id"),
+                           ("decision_publications", "publication_id")):
+            self.assertEqual({"active", "recent"}, self.remaining(table, key))
+
+    def test_subject_children_recheck_completion_and_obey_shared_byte_budget(self):
+        self.seed_subjects()
+        self.budget["remainingBytes"] = 2
+        self.before_delete = lambda: self.db.execute(
+            "UPDATE investment_subject_decision_cases SET completed_at='' WHERE subject_case_id='old-1'")
+        result = self.repo._delete_decision_candidate_snapshots(self.policy, self.budget, "2026-10-01")
+        self.assertEqual(0, result["deleted"])
+        self.before_delete = lambda: self.db.execute(
+            "UPDATE investment_subject_decision_cases SET completed_at='2026-10-12' WHERE subject_case_id='old-2'")
+        result = self.repo._delete_decision_publications(self.policy, self.budget, "2026-10-01")
+        self.assertEqual(0, result["deleted"])
+        result = self.repo._delete_decision_candidate_snapshots(self.policy, self.budget, "2026-10-01")
+        self.assertEqual(1, result["deleted"])
+        self.assertEqual(0, self.budget["remainingBytes"])
+        self.assertEqual(0, self.repo._delete_decision_publications(self.policy, self.budget, "2026-10-01")["deleted"])
+
+    def test_subject_parent_rechecks_child_presence_and_child_read_failures_preserve_rows(self):
+        self.seed_subjects()
+        def add_child():
+            self.db.execute("INSERT INTO decision_candidate_snapshots VALUES ('new-child','empty','{}')")
+        self.before_delete = add_child
+        self.assertEqual(0, self.repo._delete_subject_decision_cases(self.policy, self.budget, "2026-10-01")["deleted"])
+        from unittest.mock import patch
+        for method in (self.repo._delete_decision_candidate_snapshots, self.repo._delete_decision_publications):
+            with patch.object(self, "execute", side_effect=RuntimeError("read timeout")):
+                with self.assertRaisesRegex(RuntimeError, "read timeout"):
+                    method(self.policy, self.budget, "2026-10-01")
+        self.assertEqual(7, len(self.remaining("decision_candidate_snapshots", "candidate_set_id")))
+        self.assertEqual(6, len(self.remaining("decision_publications", "publication_id")))
 
     def test_case_ranges_keep_active_recent_and_missing_completion_and_make_progress(self):
         expired = {"COMPLETED", "PUBLISHED", "BLOCKED", "FAILED", "SUPPRESSED", "SUPERSEDED", "EXPIRED", "VALIDATED"}

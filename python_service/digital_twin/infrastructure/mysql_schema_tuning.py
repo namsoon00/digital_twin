@@ -207,6 +207,25 @@ MYSQL_OPERATIONAL_INDEXES: Dict[str, Sequence[MySQLIndexDefinition]] = {
             "`job_status`, `lease_expires_at`, `job_id`",
         ),
     ),
+    "statistical_model_signal_snapshots": (
+        MySQLIndexDefinition(
+            "statistical_model_signal_snapshots",
+            "idx_model_signal_retention",
+            "`created_at`, `snapshot_id`",
+        ),
+    ),
+    "investment_reasoning_cases": (
+        MySQLIndexDefinition(
+            "investment_reasoning_cases",
+            "idx_reasoning_case_retention_completed",
+            "`stage`, `completed_at`, `case_id`",
+        ),
+        MySQLIndexDefinition(
+            "investment_reasoning_cases",
+            "idx_reasoning_case_retention_updated",
+            "`stage`, `updated_at`, `case_id`",
+        ),
+    ),
     "temporal_feature_snapshots": (
         MySQLIndexDefinition(
             "temporal_feature_snapshots",

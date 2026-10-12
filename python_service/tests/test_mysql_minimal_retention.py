@@ -538,5 +538,101 @@ class MySQLMinimalRetentionTests(unittest.TestCase):
         self.assertFalse(any("retrying" in sql or "running" in sql for sql in news_analysis_queries))
 
 
+class IndexedRetentionExecutionTests(unittest.TestCase):
+    """Execute selection and guarded deletion against isolated relational rows."""
+
+    def setUp(self):
+        import sqlite3
+        from dataclasses import replace
+        self.db = sqlite3.connect(":memory:")
+        self.db.row_factory = sqlite3.Row
+        self.db.create_function("OCTET_LENGTH", 1, lambda value: len(value.encode()))
+        self.db.execute("CREATE TABLE investment_reasoning_cases (case_id TEXT PRIMARY KEY, "
+                        "stage TEXT, completed_at TEXT, updated_at TEXT, payload_json TEXT)")
+        self.db.execute("CREATE TABLE statistical_model_signal_snapshots "
+                        "(snapshot_id TEXT PRIMARY KEY, created_at TEXT, payload_json TEXT)")
+        for table in ("statistical_model_signal_heads", "statistical_model_assessment_heads"):
+            self.db.execute("CREATE TABLE " + table + " (snapshot_id TEXT)")
+        from digital_twin.infrastructure.mysql_schema_tuning import MYSQL_OPERATIONAL_INDEXES
+        for table in ("investment_reasoning_cases", "statistical_model_signal_snapshots"):
+            for index in MYSQL_OPERATIONAL_INDEXES[table]:
+                self.db.execute("CREATE INDEX " + index.name + " ON " + table + " (" + index.columns_sql + ")")
+        self.policy = replace(mysql_minimal_retention_policy({}), batch_size=3)
+        self.budget = {"started": time.monotonic(), "maxSeconds": 30,
+                       "remainingBytes": 100, "deletedBytes": 0}
+        self.before_delete = None
+        self.repo = MySQLMinimalRetentionRepository(self)
+
+    def tearDown(self):
+        self.db.close()
+
+    def execute(self, sql, params=()):
+        if sql.startswith("DELETE") and self.before_delete:
+            callback, self.before_delete = self.before_delete, None
+            callback()
+        sql = sql.replace("CAST(%s AS CHAR CHARACTER SET utf8mb4) COLLATE utf8mb4_unicode_ci", "?")
+        cursor = self.db.execute(sql.replace("%s", "?"), params)
+        rows = [dict(row) for row in cursor.fetchall()] if cursor.description else []
+        return Cursor(rowcount=cursor.rowcount, rows=rows)
+
+    def add_case(self, key, stage, completed="2026-01-01", updated="2026-01-01", payload="{}"):
+        self.db.execute("INSERT INTO investment_reasoning_cases VALUES (?,?,?,?,?)",
+                        (key, stage, completed, updated, payload))
+
+    def remaining(self, table, key):
+        return {row[0] for row in self.db.execute("SELECT " + key + " FROM " + table)}
+
+    def test_case_ranges_keep_active_recent_and_missing_completion_and_make_progress(self):
+        expired = {"COMPLETED", "PUBLISHED", "BLOCKED", "FAILED", "SUPPRESSED", "SUPERSEDED", "EXPIRED", "VALIDATED"}
+        for stage in expired:
+            self.add_case(stage, stage)
+        for stage in ("CREATED", "PROCESSING", "UNKNOWN"):
+            self.add_case(stage, stage)
+        self.add_case("no-clock", "COMPLETED", completed="")
+        self.add_case("recent", "FAILED", completed="2026-10-11")
+        self.add_case("boundary", "VALIDATED", updated="2026-10-01")
+        total = 0
+        for _ in range(4):
+            result = self.repo._delete_investment_reasoning_cases(self.policy, self.budget, "2026-10-01")
+            self.assertLessEqual(result["deleted"], 3)
+            total += result["deleted"]
+        self.assertEqual(8, total)
+        self.assertEqual({"CREATED", "PROCESSING", "UNKNOWN", "no-clock", "recent", "boundary"},
+                         self.remaining("investment_reasoning_cases", "case_id"))
+
+    def test_case_delete_rechecks_state_and_clock_after_candidate_selection(self):
+        self.add_case("reactivated", "FAILED")
+        self.add_case("renewed", "VALIDATED")
+        self.add_case("expired", "COMPLETED")
+        def change():
+            self.db.execute("UPDATE investment_reasoning_cases SET stage='PROCESSING' WHERE case_id='reactivated'")
+            self.db.execute("UPDATE investment_reasoning_cases SET updated_at='2026-10-12' WHERE case_id='renewed'")
+        self.before_delete = change
+        result = self.repo._delete_investment_reasoning_cases(self.policy, self.budget, "2026-10-01")
+        self.assertEqual(1, result["deleted"])
+        self.assertEqual({"reactivated", "renewed"}, self.remaining("investment_reasoning_cases", "case_id"))
+
+    def test_case_union_shares_one_byte_budget_across_stages(self):
+        for stage in ("FAILED", "VALIDATED", "EXPIRED"):
+            self.add_case(stage, stage, payload="x" * 40)
+        self.budget["remainingBytes"] = 60
+        result = self.repo._delete_investment_reasoning_cases(self.policy, self.budget, "2026-10-01")
+        self.assertEqual(1, result["deleted"])
+        self.assertEqual(40, result["estimatedBytes"])
+        self.assertEqual(20, self.budget["remainingBytes"])
+
+    def test_signal_index_keeps_both_heads_and_rechecks_new_head_before_delete(self):
+        for key in ("signal-head", "assessment-head", "new-head", "expired", "recent"):
+            self.db.execute("INSERT INTO statistical_model_signal_snapshots VALUES (?,?,?)",
+                            (key, "2026-10-12" if key == "recent" else "2026-01-01", "{}"))
+        self.db.execute("INSERT INTO statistical_model_signal_heads VALUES ('signal-head')")
+        self.db.execute("INSERT INTO statistical_model_assessment_heads VALUES ('assessment-head')")
+        self.before_delete = lambda: self.db.execute("INSERT INTO statistical_model_signal_heads VALUES ('new-head')")
+        result = self.repo._delete_statistical_model_signal_snapshots(self.policy, self.budget, "2026-10-01")
+        self.assertEqual(1, result["deleted"])
+        self.assertEqual({"signal-head", "assessment-head", "new-head", "recent"},
+                         self.remaining("statistical_model_signal_snapshots", "snapshot_id"))
+
+
 if __name__ == "__main__":
     unittest.main()

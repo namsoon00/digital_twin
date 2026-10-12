@@ -948,13 +948,28 @@ class MySQLMinimalRetentionRepository:
 
     def _delete_investment_reasoning_cases(self, policy, budget, cutoff_iso) -> Dict[str, object]:
         statuses = ("COMPLETED", "PUBLISHED", "BLOCKED", "FAILED", "SUPPRESSED", "SUPERSEDED", "EXPIRED")
+        # Each stage has an indexed clock range and its own LIMIT. A single
+        # OR across completed_at/updated_at sorts the entire eligible history
+        # before LIMIT. Merge only bounded IDs, then load selected payload sizes.
+        branches = []
+        parameters = []
+        for index, stage in enumerate(statuses + ("VALIDATED",)):
+            clock = "updated_at" if stage == "VALIDATED" else "completed_at"
+            branches.append(
+                "SELECT case_id, retention_at FROM (SELECT case_id, " + clock
+                + " AS retention_at FROM `investment_reasoning_cases` WHERE stage = %s"
+                + (" AND completed_at <> ''" if stage != "VALIDATED" else "")
+                + " AND " + clock + " < " + _cutoff_sql()
+                + " ORDER BY " + clock + ", case_id LIMIT %s) retention_stage_" + str(index)
+            )
+            parameters.extend((stage, cutoff_iso, policy.batch_size))
         candidates = self._byte_bounded_candidates(
-            "SELECT case_id, OCTET_LENGTH(payload_json) AS payload_bytes "
-            "FROM `investment_reasoning_cases` WHERE ((stage IN ("
-            + _status_placeholders(statuses) + ") AND completed_at <> '' AND completed_at < "
-            + _cutoff_sql() + ") OR (stage = 'VALIDATED' AND updated_at < "
-            + _cutoff_sql() + ")) ORDER BY updated_at, case_id LIMIT %s",
-            statuses + (cutoff_iso, cutoff_iso, policy.batch_size),
+            "SELECT retained.case_id, OCTET_LENGTH(retained.payload_json) AS payload_bytes "
+            "FROM (SELECT case_id, retention_at FROM (" + " UNION ALL ".join(branches)
+            + ") stage_candidates ORDER BY retention_at, case_id LIMIT %s) candidates "
+            "JOIN `investment_reasoning_cases` retained ON retained.case_id = candidates.case_id "
+            "ORDER BY candidates.retention_at, candidates.case_id",
+            tuple(parameters) + (policy.batch_size,),
             "case_id",
             policy,
             budget,

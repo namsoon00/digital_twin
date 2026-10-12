@@ -196,6 +196,24 @@ unresolved reasoning jobs or pending mailbox events. These references are
 rechecked at deletion time. Large snapshot candidate reads are capped at eight
 rows so measuring payload lengths does not scan hundreds of megabytes per turn.
 
+Retention candidate indexes must match the global cleanup scope. Signal snapshot
+history uses `(created_at, snapshot_id)` in addition to its account/model read
+indexes. Both current signal and assessment heads remain protected at selection
+and deletion. Reasoning-case cleanup uses `(stage, completed_at, case_id)` and
+`(stage, updated_at, case_id)`: terminal stages and `VALIDATED` are selected in
+separate bounded ranges, then at most one shared batch of IDs is merged before
+payload lengths are read. The byte budget remains shared across stages. The
+candidate ordering follows the applicable retention clock, oldest first; the
+retention periods and deletion eligibility are unchanged. Every primary-key
+delete rechecks the current stage/clock so a reactivated case is preserved.
+
+Existing installations receive these indexes through schema tuning. For a live
+rollout, add missing indexes with `ALGORITHM=INPLACE, LOCK=NONE` and a short
+metadata-lock timeout before restarting workers; a metadata-lock timeout is a
+deferred migration, not permission to block writers or kill their transactions.
+Verify actual MySQL execution plans and bounded candidate SELECT timings. A
+successful unit test or added index alone does not establish a long-run recovery.
+
 Large immutable JSON tables use native InnoDB `ROW_FORMAT=COMPRESSED` with an
 8 KiB key block on supported local servers. The allowlist is snapshot history,
 verified reasoning sources, statistical signal snapshots and reasoning run

@@ -303,7 +303,9 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # receipt baselines and mismatched transition evidence at the final gate.
         # Three maintenance failure contracts protect bounded retry, lock-error
         # visibility and query/policy diagnostics without replaying completed work.
-        self.assertLessEqual(total, 2223)
+        # Four indexed-retention contracts execute bounded selection, shared byte
+        # budgets, state/clock races and current-head preservation.
+        self.assertLessEqual(total, 2227)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

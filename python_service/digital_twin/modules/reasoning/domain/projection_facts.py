@@ -301,7 +301,8 @@ def graph_for_graph_store_persistence(
     stock_symbols = {str(item.properties.get("symbol") or "").upper() for item in abox_entities
                      if item.entity_id in source_ids and item.kind == "stock"}
     business_ids = {item.entity_id for item in abox_entities
-                    if item.kind in {"company-financial-state", "company-relationship"}
+                    if (item.kind in {"company-financial-state", "company-relationship"}
+                        or (item.kind == "research-evidence" and item.properties.get("historicalDocumentReference")))
                     and str(item.properties.get("symbol") or "").upper() in stock_symbols}
     assertions = {str(entity_by_id[key].properties.get("assertionId") or "") for key in business_ids}
     retained_objects = {id(item) for item in relations}

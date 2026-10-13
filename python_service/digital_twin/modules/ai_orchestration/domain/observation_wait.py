@@ -6,12 +6,14 @@ from .working_retrieval import POLICY
 
 def retry_key(packet, research):
     from .research_review import VERSION as research_review_version
+    from .research_evidence_use import ASSESSMENT_SCOPE_VERSION
     # Source-owned inventory hashes include changes to facts excluded from the
     # initial packet. Self-authored review prose and polling times are not new evidence.
     work = [{key: row[key] for key in ("kind", "caseId", "question", "capability", "status", "thesisId",
              "checkpoints", "researchRequest", "lastResearch", "runId", "developmentProgress") if key in row}
             for row in research]
     return content_hash({"policy": POLICY, "researchReviewPolicy": research_review_version,
+        "researchAssessmentScopePolicy": ASSESSMENT_SCOPE_VERSION,
         "account": packet.get("accountId"), "symbol": packet.get("symbol"),
         "world": packet.get("worldId"), "inventories": {k: v.get("inventoryHash") for k, v in packet.get("coverage", {}).items()},
         "quoteStates": [{k: v.get(k) for k in ("evidenceId", "status", "referenceState", "maxAgeMinutes")}

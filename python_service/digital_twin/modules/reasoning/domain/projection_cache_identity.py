@@ -15,7 +15,7 @@ from dataclasses import dataclass
 
 
 PORTFOLIO_GRAPH_ASSEMBLY_CACHE_CONTRACT_VERSION = (
-    "portfolio-graph-assembly-cache-v23-source-refresh"
+    "portfolio-graph-assembly-cache-v24-question-document-links"
 )
 
 PROJECTION_RUNTIME_CONTEXT_CACHE_CONTRACT_VERSION = (

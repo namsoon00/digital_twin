@@ -155,11 +155,11 @@
     "graph_for_graph_store_persistence": {
       "path": "digital_twin/modules/reasoning/domain/projection_facts.py",
       "owner": "",
-      "bodyHash": "b69b22cbec3f87e7f84000577e6f7cf4e1ee830e7738a337890972319dee0aeb",
+      "bodyHash": "9e944273220682927487da0f061501150db6a64f182262caf1fde8e01ce46603",
       "restore": {
         "list(fallback_rules or [])": "self.rulebox_rules_for_impact()"
       },
-      "reason": "Retain selected-stock business reports and documentary relationship provenance independently of active rule predicates without promoting counterparties into native subjects; test_business_research; docs/business-research-loop.md."
+      "reason": "Retain stock-to-original-question-document observation edges independent of active rule predicates, while preserving current-event ineligibility. Full persistence regression: test_research_judgment_continuity; docs/ai-control.md."
     },
     "decision_episode_projection_context": {
       "path": "digital_twin/modules/reasoning/application/projection_input/decision_memory.py",

@@ -50,6 +50,10 @@ def retrieve_working_evidence(session, packet, history, research, decide, save_i
     documents = session.question_document_index(sources)
     baseline = session.business_baseline(documents)
     packet = {**packet, "businessEvidence": baseline}
+    from ..domain.research_evidence_use import answered_research_scope
+    scope = answered_research_scope(research)
+    if scope:
+        packet["researchAssessmentScope"] = scope
     current = {**packet, **session.select(baseline["factIds"])}
     seen = {x["id"]: x for x in current["facts"]}
     selected = set(seen)

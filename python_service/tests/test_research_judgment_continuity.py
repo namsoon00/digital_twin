@@ -43,13 +43,20 @@ class ResearchJudgmentContinuityTests(unittest.TestCase):
         self.assertFalse(restored.raw_payload["promptEvidenceAdmission"]["decisionEligible"])
         from digital_twin.modules.reasoning.domain.ontology_contracts import PortfolioOntology
         from digital_twin.modules.reasoning.domain.portfolio_ontology_research_concepts import add_research_evidence_concepts
+        from digital_twin.modules.reasoning.domain.ontology_schema import add_entity
+        from digital_twin.modules.reasoning.domain.projection_facts import graph_for_graph_store_persistence
         graph = PortfolioOntology("test")
-        add_research_evidence_concepts(graph, "stock", "thesis", "opinion", "TEST", {},
+        stock = add_entity(graph, "stock", "TEST", "Test", {"symbol": "TEST", "tboxClass": "Stock"})
+        add_research_evidence_concepts(graph, stock, "thesis", "opinion", "TEST", {},
                                       {"researchEvidence": {"TEST": [compact]}})
         node = next(row for row in graph.entities if row.kind == "research-evidence")
         self.assertEqual(ref, node.properties["historicalDocumentReference"])
         self.assertFalse(node.properties["investmentJudgmentEligible"])
         self.assertFalse(node.properties["reasoningEligible"])
+        persisted = graph_for_graph_store_persistence(graph, {"inputRelationTypes": ["HAS_POSITION"]})
+        self.assertIn(node.entity_id, {row.entity_id for row in persisted.entities})
+        self.assertTrue(any(row.source == stock and row.target == node.entity_id
+                            and row.relation_type == "HAS_OBSERVATION" for row in persisted.relations))
         fact = {"symbol": item.symbol, "url": item.url, "judgementEvidenceUsable": False,
                 "historicalDocumentReference": ref}
         self.assertTrue(usable_fact(fact, "historicalDocumentReference.text"))
@@ -132,12 +139,16 @@ class ResearchJudgmentContinuityTests(unittest.TestCase):
         def decide(envelope, _):
             validate_execution_input(envelope)
             self.assertEqual(index, envelope["retrievalContext"]["questionDocumentIndex"])
+            self.assertEqual(["question"], envelope["current"]["researchAssessmentScope"]["caseIds"])
+            self.assertIn("다른 질문", envelope["prompt"])
             return decision("finish", [index[0]["factId"]])
-        memory = [{"kind": "brain-case", "caseId": "question", "latestSourceAnswer": {
+        memory = [{"kind": "brain-case", "caseId": "question", "answerResolution": {"status": "answered"}, "latestSourceAnswer": {
             "sources": [{"evidenceId": item.evidence_id}]}}]
         result = retrieve_working_evidence(captured, captured.packet(), [], memory, decide, lambda _: "input", 262144)
         self.assertEqual("ready", result[0]["retrieval"]["status"])
         self.assertTrue(any(row.get("historicalDocumentReference") for row in result[0]["facts"]))
+        from digital_twin.modules.ai_orchestration.domain.research_evidence_use import answered_research_scope
+        self.assertEqual({}, answered_research_scope([{**memory[0], "answerResolution": {"status": "missing"}}]))
 
     def test_research_review_does_not_approve_rejected_notification(self):
         result = {**plan(), "input": packet(), "executionInputId": "author", "followUpConditions": [],

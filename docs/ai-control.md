@@ -1064,6 +1064,16 @@ graph inventory, and explicitly selects the necessary original facts. Publicatio
 claims using this path must cite the historical reference fields and independently
 pass the normal semantic review. Missing periods remain missing; historical
 statements do not establish current conditions or price causation.
+Persistence retains the selected stock's `HAS_OBSERVATION` edge to verified
+historical question documents even when no active RuleBox rule consumes it.
+Keeping a detached node alone is insufficient for scoped graph inventory reads.
+
+`available-question-assessment-v1` prioritizes source-answered questions by their
+original scope and period. Retrieval may finish when the selected facts support
+at least one such question; unrelated missing quarters, quote freshness or future
+hypotheses must not turn every answer into a global data wait. Questions without
+their own current evidence remain pending. No deferred retrieval is automatically
+promoted, and independent research and notification reviews retain their authority.
 
 New prompt instructions are conditional on the new reference/index contract;
 previous frozen prompts remain byte-identical and replayable. Original question

@@ -198,7 +198,7 @@ class ProjectionHypothesisCalibrationLineageTests(unittest.TestCase):
         )
 
         self.assertIn(
-            "v23-source-refresh",
+            "v24-question-document-links",
             PORTFOLIO_GRAPH_ASSEMBLY_CACHE_CONTRACT_VERSION,
         )
         self.assertEqual(

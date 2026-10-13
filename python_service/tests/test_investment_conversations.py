@@ -15,6 +15,8 @@ from test_independent_reasoning_engine import (
 )
 from digital_twin.modules.notifications.domain.notifications import NotificationJob
 from digital_twin.modules.notifications.domain.investment_conversation import conversation_sources, key
+from digital_twin.modules.notifications.domain.relation_follow_up import delivery_snapshot
+from digital_twin.modules.notifications.domain.delivery_suppression import NotificationDeliverySuppressed
 from digital_twin.modules.notifications.domain.research_thread import ResearchDeliveryDeferred
 from digital_twin.modules.notifications.application.notification.dispatch import NotificationDispatchService
 from digital_twin.modules.notifications.application.notification.intake import NotificationIngressService
@@ -95,6 +97,61 @@ class InvestmentConversationStorageTests(StabilizationDatabaseCase):
 
     def thread(self, value):
         return value.context["notificationConversation"]["threadKey"]
+
+    def relation_packet(self, value, previous=None, data=False):
+        transition = {"transitionId": value.job_id, "lifecycleKey": "price-recovery", "currentState": "observed",
+                      "changeCategory": "data-availability" if data else "relation",
+                      "changeKind": "data-unavailable" if data else "new"}
+        value.context["relationChangeEvidence"] = {
+            "version": "relation-change-evidence-v1", "current": {
+                "symbol": "AAPL", "worldId": "portfolio-world", "accountId": self.account,
+                "hypotheses": [], "transitions": [transition]},
+            "transitions": [transition], "previous": previous or {},
+            "followUp": {"version": "relation-follow-up-v1", "parentJobId":
+                ((previous or {}).get("hypothesisContinuity", {}).get("price-recovery") or {}).get("rootJobId") or ""}}
+        return value
+
+    def test_data_followup_targets_the_hypothesis_receipt_not_the_earlier_quote(self):
+        market = self.register(self.value("marketObservation"), "source-1")
+        original = self.register(self.relation_packet(self.value("investmentInsight", events=["source-1"])))
+        notifier = TelegramNotifier("123:fake", "456")
+        notifier.post_message = Mock(side_effect=[receipt("10"), receipt("11"), receipt("12"), receipt("13")])
+        service = NotificationDispatchService(self.notifications, lambda _: notifier)
+        service.deliver(market, {self.account: object()}, market.text)
+        service.deliver(original, {self.account: object()}, original.text)
+        self.assertEqual(10, notifier.post_message.call_args.args[0]["reply_parameters"]["message_id"])
+        snapshot = delivery_snapshot(original.context["relationChangeEvidence"], original.job_id, self.account)
+        snapshot.update(receiptJobId=original.job_id, deliveredAt="2026-10-13T01:00:00Z")
+        followup = self.register(self.relation_packet(self.value("investmentInsight", snapshot="new-graph"), snapshot, data=True))
+        with self.notifications.transaction() as connection:
+            connection.execute("DELETE FROM notification_jobs WHERE job_id=%s", (original.job_id,))
+        restarted = MySQLNotificationJobStore(self.settings)
+        NotificationDispatchService(restarted, lambda _: notifier).deliver(followup, {self.account: object()}, followup.text)
+        self.assertEqual(11, notifier.post_message.call_args.args[0]["reply_parameters"]["message_id"])
+        recovery = self.register(self.relation_packet(self.value("investmentInsight", snapshot="restored-graph"), snapshot, data=True))
+        other_destination = TelegramNotifier("123:fake", "999")
+        other_destination.post_message = Mock(return_value=receipt("99"))
+        with self.assertRaises(NotificationDeliverySuppressed):
+            NotificationDispatchService(restarted, lambda _: other_destination).deliver(recovery, {self.account: object()}, recovery.text)
+        other_destination.post_message.assert_not_called()
+
+    def test_success_snapshot_retains_followup_state_but_failed_receipt_does_not_seed_it(self):
+        original = self.register(self.relation_packet(self.value("investmentInsight")))
+        original.context["deliverySubjectGroupKey"] = "subject-test"
+        notifier = TelegramNotifier("123:fake", "456")
+        notifier.post_message = Mock(return_value=receipt("21"))
+        NotificationDispatchService(self.notifications, lambda _: notifier).deliver(original, {self.account: object()}, original.text)
+        probe = self.value("investmentInsight")
+        with self.notifications.connect() as connection, patch(
+                "digital_twin.modules.notifications.infrastructure.mysql_notification_jobs.notification_subject_group_key", return_value="subject-test"):
+            saved = self.notifications.relation_delivery_snapshot_with_connection(connection, probe)
+        self.assertEqual(original.job_id, saved["receiptJobId"])
+        self.assertEqual(original.job_id, saved["hypothesisContinuity"]["price-recovery"]["rootJobId"])
+        with self.notifications.transaction() as connection:
+            connection.execute("UPDATE notification_delivery_attempts SET status='failed' WHERE job_id=%s", (original.job_id,))
+        with self.notifications.connect() as connection, patch(
+                "digital_twin.modules.notifications.infrastructure.mysql_notification_jobs.notification_subject_group_key", return_value="subject-test"):
+            self.assertEqual({}, self.notifications.relation_delivery_snapshot_with_connection(connection, probe))
 
     def test_market_relation_ai_followup_share_verified_root_across_restart_and_retention(self):
         market = self.register(self.value("marketObservation"), "source-1")

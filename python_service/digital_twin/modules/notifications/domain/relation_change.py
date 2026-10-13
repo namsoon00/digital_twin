@@ -6,6 +6,7 @@ from typing import Mapping
 from digital_twin.modules.decisions.contracts import is_graph_backed_relation_context
 from digital_twin.modules.model_registry.contracts import relation_lifecycle_transition_contract
 from digital_twin.modules.notifications.domain.relation_observation_proof import capture_model_proof
+from digital_twin.modules.notifications.domain.relation_follow_up import follow_up_policy, source_issues
 
 
 VERSION = "relation-change-evidence-v1"
@@ -67,6 +68,7 @@ def relation_change_authority(context):
         # state to every hypothesis in a multi-hypothesis observation.
         transition["hypothesisIds"] = strings(snapshot.get("hypothesisIds") or item.get("hypothesisIds"))
         transition["sourceRuleIds"] = strings(snapshot.get("sourceRuleIds") or item.get("sourceRuleIds"))
+        transition["dataIssues"] = source_issues(relation, item)
         transitions.append(transition)
     return transitions
 
@@ -160,6 +162,8 @@ def relation_change_snapshot(context):
     fetched_at = facts.get("sourceFetchedAt") if selected_quote else price_source.get("fetchedAt")
     return {
         "version": VERSION, "symbol": symbol,
+        "accountId": str(case.get("accountId") or context.get("accountId") or ""),
+        "worldId": str(relation.get("worldId") or case.get("worldId") or ""),
         "market": str(subject.get("market") or facts.get("market") or ""),
         "sourceAboxSnapshotId": str(case.get("sourceAboxSnapshotId") or graph.get("sourceAboxSnapshotId") or relation.get("sourceAboxSnapshotId") or ""),
         "inferenceGenerationId": str(case.get("inferenceGenerationId") or relation.get("inferenceGenerationId") or graph.get("inferenceGenerationId") or ""),
@@ -186,16 +190,15 @@ def relation_change_snapshot(context):
 def relation_change_evidence(context, baseline=None, *, require_recovery_receipt=True):
     current = relation_change_snapshot(context)
     previous = deepcopy(mapping(baseline))
-    if previous.get("symbol") != current["symbol"]:
+    if (previous.get("symbol") != current["symbol"]
+            or any(previous.get(key) and current.get(key) and previous[key] != current[key] for key in ("accountId", "worldId"))):
         previous = {}
     previous_ids = {row.get("transitionId") for row in rows(previous.get("transitions"))}
     transitions = [row for row in current["transitions"] if row["transitionId"] not in previous_ids]
-    transitions = [row for row in transitions if row.get("changeCategory") != "data-availability"
-                   or mapping(mapping(previous.get("dataAvailability")).get(row.get("lifecycleKey"))).get("state")
-                   != mapping(row.get("dataAvailabilityChange")).get("currentState")]
-    if require_recovery_receipt:
-        transitions = [row for row in transitions if row.get("changeKind") != "data-restored"
-                       or mapping(mapping(previous.get("dataAvailability")).get(row.get("lifecycleKey"))).get("state") == "unavailable"]
+    receipt_scope = bool(current.get("worldId") and previous.get("worldId") == current["worldId"]
+                         and current.get("accountId") and previous.get("accountId") == current["accountId"])
+    transitions, suppressed, follow_up = follow_up_policy(
+        transitions, previous if receipt_scope else {}, require_receipt=require_recovery_receipt)
     changes = {}
     for kind in ("hypotheses", "rules", "facts"):
         before = {row["id"]: row for row in rows(previous.get(kind))}
@@ -205,9 +208,10 @@ def relation_change_evidence(context, baseline=None, *, require_recovery_receipt
                          for key in dict.fromkeys([*after, *before])]
     return {"version": VERSION, "authority": "typedb-hypothesis-lifecycle", "eligible": bool(transitions),
             "reason": " · ".join(str(row.get("changeLabel") or row.get("reason") or "관계 상태 변경") for row in transitions)
-            if transitions else "룰박스 관계의 새 의미 변화가 없어 웹 이력에만 저장합니다.",
+            if transitions else (suppressed[0]["reason"] if suppressed else "룰박스 관계의 새 의미 변화가 없어 웹 이력에만 저장합니다."),
             "baselineAvailable": bool(previous), "baselineDeliveredAt": previous.get("deliveredAt") or "",
-            "current": current, "previous": previous, "transitions": transitions, "changes": changes}
+            "current": current, "previous": previous, "transitions": transitions, "changes": changes,
+            "followUp": follow_up, "suppressedTransitions": suppressed}
 
 
 def relation_change_summary(packet):

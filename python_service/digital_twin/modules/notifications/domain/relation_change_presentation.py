@@ -8,7 +8,7 @@ from digital_twin.modules.notifications.domain.relation_observation_language imp
 from digital_twin.modules.notifications.domain.relation_observation_proof import model_evidence_paragraphs
 
 
-PRESENTATION_VERSION = "readable-relation-change-v7"
+PRESENTATION_VERSION = "readable-relation-change-v8"
 
 CHANGE = {
     "observed": "조건이 새로 확인됐습니다.",
@@ -136,24 +136,53 @@ def transition_hypotheses(transition, hypotheses):
 def transition_sentence(transition, hypotheses):
     if transition.get("changeCategory") == "reassessment":
         return "분석 조건을 재평가했습니다. 새 시세 변동이나 시장의 악화·개선이 확인됐다는 뜻은 아닙니다."
-    if transition.get("changeCategory") == "data-availability":
-        change = transition.get("dataAvailabilityChange") or {}
-        return str(change.get("summary") or "자료의 사용 가능 상태가 바뀌었습니다.")
     linked = transition_hypotheses(transition, hypotheses)
     topics = unique(hypothesis_words(h)[0] for h in linked)
     topic = " · ".join(topics)
     prefix = "‘" + topic + "’에 대해서는 " if topic else ""
+    if transition.get("changeCategory") == "data-availability":
+        sources = "·".join(unique(row.get("label") for row in items(transition.get("dataIssues")))) or "원천"
+        return prefix + (sources + " 자료를 다시 사용할 수 있습니다." if transition.get("changeKind") == "data-restored"
+                         else "유효한 " + sources + " 자료를 확인하지 못해 근거 유지 여부를 확인할 수 없습니다.")
     state = transition.get("currentState")
     if state == "observed" and transition.get("previousState") in {"invalidated", "expired"}:
         return prefix + "이전에 해제되거나 만료됐던 조건이 다시 확인됐습니다."
     return prefix + CHANGE.get(state, "연결된 근거가 달라졌습니다.")
 
 
+def model_input_change_rows(comparison):
+    """Explain actual stored model inputs, without inventing raw rule thresholds."""
+    if comparison.get("comparison") != "verified":
+        return []
+    older, newer = comparison.get("previous") or {}, comparison.get("current") or {}
+    before, after = older.get("modelInputWindows") or {}, newer.get("modelInputWindows") or {}
+    fields = (("recentReturn", "후반 등락률", "%"), ("priceReturn", "전체 등락률", "%"),
+              ("drawdown", "고점 대비 등락률", "%"), ("velocityChange", "앞 구간 대비 후반 등락률 변화", "%p"))
+    result = []
+    for window in sorted(set(before) & set(after)):
+        old, new = before[window], after[window]
+        if not isinstance(old, dict) or not isinstance(new, dict):
+            continue
+        # Zero-filled short windows are not measured market changes.
+        if any((numeric(row.get("sampleCount")) or 0) < 2 or row.get("stale") is True for row in (old, new)):
+            continue
+        for field, label, unit in fields:
+            previous_value, current_value = numeric(old.get(field)), numeric(new.get(field))
+            if previous_value is None or current_value is None or previous_value == current_value:
+                continue
+            result.append("규칙에 사용한 " + str(window).replace("D", "일") + " 구간 " + label + ": 직전 분석 "
+                          + decimal(previous_value * 100, signed=True) + unit + " → 이번 "
+                          + decimal(current_value * 100, signed=True) + unit)
+            if len(result) == 2:
+                return result
+    return result
+
+
 def delivery_cause_rows(packet, currency):
     """Explain only the conditions attached to the admitted transition."""
     current, previous = packet.get("current") or {}, packet.get("previous") or {}
     facts, before = snapshot_facts(current), snapshot_facts(previous)
-    result = []
+    result, measurements = [], []
     for transition in items(packet.get("transitions")):
         if transition.get("changeCategory") == "data-availability":
             change = transition.get("dataAvailabilityChange") or {}
@@ -181,6 +210,11 @@ def delivery_cause_rows(packet, currency):
                 text += " (확률 아님)"
                 result.append(text)
                 explained_rules.add(comparison.get("ruleId"))
+                source_before = (older.get("sourceObservation") or {}).get("observedAt")
+                source_after = (newer.get("sourceObservation") or {}).get("observedAt")
+                if source_before or source_after:
+                    result.append("모델 입력의 원천 기준: 직전 분석 " + clock(source_before) + " → 이번 " + clock(source_after))
+            result.extend(model_input_change_rows(comparison))
             if comparison.get("comparison") == "unavailable":
                 result.append(label + ": 현재 자료 미확인 · 조건 해제로 해석하지 않습니다.")
             if transition.get("changeCategory") == "reassessment":
@@ -218,10 +252,17 @@ def delivery_cause_rows(packet, currency):
                     row = FIELDS[field][0] + ": 이전 알림 " + measurement(field, before[field], currency) + " → 이번 " + measurement(field, actual, currency)
                     if condition.get("expectedValue") is not None:
                         row += " · 판정 기준 " + condition_clause(field, str(condition.get("operator") or "="), condition["expectedValue"], currency)
-                    result.append(row)
+                    source_stage = ("ccnl" if field == "tradeStrength" else "investor" if field.endswith("NetVolume")
+                                    else "orderbook" if field == "bidAskImbalance" else "volume" if "Volume" in field or field == "volumeRatio" else "price")
+                    stamp = condition.get("observedAt") or (current.get("observedAt") if source_stage == "price"
+                                                            else stage(current, source_stage).get("sourceAsOf"))
+                    if stamp:
+                        row += " · 확인 " + clock(stamp)
+                    measurements.append(row)
     if not result and packet.get("transitions"):
-        result.append("연결된 규칙의 성립 상태가 바뀌었습니다. 아래에 현재 조건과 확인값을 함께 표시합니다.")
-    return unique(result)[:6]
+        if not measurements:
+            result.append("가설의 성립 상태 변화는 확인됐지만, 그 변화를 일으킨 측정값의 전후 비교는 저장되지 않았습니다.")
+    return unique([*measurements, *result])[:6]
 
 
 def hypothesis_sections(hypotheses, rules, facts, currency, snapshot):
@@ -308,6 +349,10 @@ def market_sentence(current, currency):
 
 
 def readable_relation_change(packet):
+    transitions = items(packet.get("transitions"))
+    if transitions and all(row.get("changeCategory") == "data-availability" for row in transitions):
+        from digital_twin.modules.notifications.domain.relation_follow_up_presentation import data_follow_up_summary
+        return data_follow_up_summary(packet)
     current, previous = packet.get("current") or {}, packet.get("previous") or {}
     facts = snapshot_facts(current)
     currency = str(facts.get("currency") or ("USD" if current.get("market") == "US" else "KRW"))
@@ -316,7 +361,7 @@ def readable_relation_change(packet):
     # previous authored claim only for naming the change, never as current proof.
     named = hypotheses + [h for h in items(previous.get("hypotheses")) if h.get("id") not in {h.get("id") for h in hypotheses}]
     changes = unique(transition_sentence(row, named) for row in items(packet.get("transitions")))
-    lead = " ".join(part for part in (market_sentence(current, currency), " ".join(changes[:3]) or "새로운 근거 변화 없이 현재 기록을 확인합니다.") if part)
+    lead = " ".join(part for part in (" ".join(changes[:3]) or "새로운 근거 변화 없이 현재 기록을 확인합니다.", market_sentence(current, currency)) if part)
     market = {key: (title, rows) for key, title, rows in market_snapshot_sections(current, previous)}
     quote = [*market["current-price"][1], *market["price-trend"][1]]
     changed_ids = {h.get("id") for transition in items(packet.get("transitions"))
@@ -324,8 +369,8 @@ def readable_relation_change(packet):
     # Presentation order follows the notification's changes, never a Python
     # investment ranking. Otherwise an unchanged claim can hide the changed one.
     displayed = sorted(hypotheses, key=lambda h: h.get("id") not in changed_ids)
-    if displayed and all(h.get("state") in {"blocked", "invalidated", "expired", "rejected"} for h in displayed):
-        lead += " 현재 연결된 가설은 모두 판단 근거로 사용이 보류돼 있습니다. 아래에서 가설이 나온 수치와 제한 사유를 함께 확인합니다."
+    if changed_ids:
+        displayed = [h for h in displayed if h.get("id") in changed_ids]
     stories = hypothesis_sections(displayed, rules, facts, currency, current)
     if not stories:
         stories = [("hypotheses", "이번에 확인한 내용", ["연결된 가설 설명이 기록되지 않았습니다.",
@@ -342,7 +387,9 @@ def readable_relation_change(packet):
     notes.append("확인 시점·출처: " + clock(current.get("observedAt")) + " · " + source)
     notes.append("전체 근거: 가설 " + str(len(hypotheses)) + "개 · 규칙 " + str(len(rules)) + "개 · 측정 항목 " + str(len(current.get("facts") or [])) + "개")
     notes.append("다음 알림: 근거에 새로운 변화가 생기면 발송 간격을 확인해 알려드립니다.")
+    parent = (packet.get("followUp") or {}).get("parentJobId")
     return {"lead": lead, "sections": [
+        *(([("previous-alert", "이전 알림의 후속 변화", ["원본 알림 N-" + parent[:8].upper()])]) if parent else []),
         ("delivery-cause", "이번 알림이 온 이유 · 규칙 데이터", delivery_cause_rows(packet, currency)),
         *stories,
         ("holding", "내 보유 상황 · 시세 등락과 구분", [" · ".join(market["holding"][1])] if market["holding"][1] else []),

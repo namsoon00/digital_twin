@@ -7,6 +7,9 @@ from contextlib import nullcontext
 
 from digital_twin.modules.notifications.domain.message_types import AI_OBSERVATION_DIAGNOSTIC, ONTOLOGY_REASONING_QUEUE, is_operations_delivery_message_type
 from digital_twin.modules.notifications.domain.notifications import NotificationJob
+from digital_twin.modules.notifications.domain.relation_follow_up import delivery_snapshot
+from digital_twin.modules.notifications.domain.delivery_suppression import NotificationDeliverySuppressed
+from digital_twin.modules.notifications.domain.investment_conversation import relation_parent_job_id
 
 
 class NotificationDispatchService:
@@ -45,6 +48,13 @@ class NotificationDispatchService:
         investment = ((context.get("notificationConversation") or {}).get("version") == "investment-conversation-v1"
                       and not context.get("notificationReplayPreserveOriginal"))
         threaded = (research or investment) and getattr(notifier, "supports_research_replies", False) is True
+        changes = (context.get("relationChangeEvidence") or {}).get("transitions") or []
+        if (job.message_type == "investmentInsight" and changes
+                and all(row.get("changeCategory") == "data-availability" for row in changes)
+                and not ((context.get("transportDelivery") or {}).get("checkpoint") or {}).get("messageIds")
+                and not context.get("notificationReplayPreserveOriginal")
+                and (not threaded or not relation_parent_job_id(job))):
+            raise NotificationDeliverySuppressed("원본 알림에 답글로 연결할 수 없어 자료 안내는 웹 이력에 남깁니다.")
         thread = getattr(self.queue, "research_delivery_thread" if research else "investment_delivery_thread", None)
         with thread(job, notifier.destination_fingerprint) if threaded else nullcontext() as reply_id:
             self._send(job, notifier, message, audience, channel, context, reply_id, threaded)
@@ -92,7 +102,7 @@ class NotificationDispatchService:
         if relation_change.get("version") and relation_change.get("current"):
             # The receipt outlives the large job payload. Preserve the exact
             # last-delivered facts for the next customer comparison.
-            rendered_audit["relationChangeSnapshot"] = relation_change["current"]
+            rendered_audit["relationChangeSnapshot"] = delivery_snapshot(relation_change, job.job_id, job.account_id)
             rendered_audit["relationChangeSubjectKey"] = context.get("deliverySubjectGroupKey") or ""
         if hasattr(self.queue, "start_delivery_attempt"):
             attempt_id = self.queue.start_delivery_attempt(

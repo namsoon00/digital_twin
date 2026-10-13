@@ -307,7 +307,10 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # budgets, state/clock races and current-head preservation.
         # Subject retention additionally protects child/parent progress,
         # concurrent completion changes, byte budgets, and failed child reads.
-        self.assertLessEqual(total, 2230)
+        # Twelve source follow-up contracts cover receipt-scoped interruption /
+        # recovery, quiet expiry, ambiguous parents, compact explanations,
+        # actual clocks and model inputs, and destination-safe retained replies.
+        self.assertLessEqual(total, 2242)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

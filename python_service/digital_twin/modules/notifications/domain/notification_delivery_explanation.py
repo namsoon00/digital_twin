@@ -389,11 +389,12 @@ def _context_observation_cause(context: Mapping[str, object]) -> CustomerDeliver
             return None
         transition = transitions[0]
         if transition.get("changeCategory") == "data-availability":
+            from digital_twin.modules.notifications.domain.relation_follow_up_presentation import data_follow_up_summary, data_follow_up_label
             change = _mapping(transition.get("dataAvailabilityChange"))
             return _cause(
                 "verified-data-availability-transition", "readiness-transition",
-                change.get("summary") or "자료의 사용 가능 상태가 바뀌었습니다.",
-                label="자료 상태 변화", previous_value=change.get("previousState"),
+                data_follow_up_summary(packet)["lead"],
+                label=data_follow_up_label(transitions), previous_value=change.get("previousState"),
                 current_value=change.get("currentState"), observed_at=transition.get("occurredAt"),
                 source_references=[row["transitionId"] for row in transitions],
                 basis="typedb-hypothesis-data-availability",

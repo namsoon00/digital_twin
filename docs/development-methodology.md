@@ -600,3 +600,13 @@ queued events. Open-market data outages retain separate operational/data-status
 reporting. This replaces the earlier permission to send same-source reassessments;
 it is not a global market-hours gate on independent news, filings or AI research.
 See `docs/relationship-change-notifications.md` for the versioned contract.
+
+Owner-approved notification follow-up correction (2026-10-13): source interruption
+and restoration notices require a specifically identified input and a successful
+original hypothesis notification in the same account/subject/world/lifecycle.
+They reply to that original, once per delivered availability transition. Closure,
+unidentified source problems and timer-only expiry remain in web/audit history.
+Successful receipts carry compact hypothesis continuity across intervening alerts;
+raw availability in an unrelated snapshot is not a delivered interruption notice.
+This is notification policy and presentation, not new investment inference or a
+change to graph-authored thresholds. See the same relationship-notification document.

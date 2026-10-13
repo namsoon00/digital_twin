@@ -31,6 +31,8 @@ def independent_fixture(queue=None, material=True, account_id="main", data_chang
     case.candidate_set = replace(case.candidate_set, account_id=account_id)
     context = context_observation(case)
     relation = context["ontologyRelationContext"]
+    context["accountId"] = account_id
+    relation["worldId"] = "world:fixture"
     basis = {"owner": "market-hypothesis", "ruleKind": "predictive", "decisionEligibility": "action-candidate", "requiresHypothesis": True}
     for row in [*relation["activeRules"], *relation["matchedRules"], *relation["graphStoreInference"]["relations"], *relation["graphStoreInference"]["traces"]]:
         row["knowledgeBasis"] = dict(basis)
@@ -38,8 +40,14 @@ def independent_fixture(queue=None, material=True, account_id="main", data_chang
         relation["hypothesisLifecycle"] = {}
     if data_change:
         restored = data_change == "restored"
+        relation["observationProfiles"] = {"flow": {
+            "judgementEvidenceUsable": restored, "freshnessStatus": "fresh" if restored else "stale",
+            "sourceAsOf": "2026-10-01T00:00:00Z", "freshnessAgeMinutes": 1 if restored else 20,
+            "maxAgeMinutes": 5, "marketSessionStatus": "open", "observationSource": "Fixture feed"}}
         relation["hypothesisLifecycle"]["transitions"][0].update(
             currentState="maintained", previousState="maintained", materialChange=False,
+            occurredAt="2026-10-01T00:01:00Z" if restored else "2026-10-01T00:20:00Z",
+            record={"snapshot": {"policy": {"requiredFreshnessDomains": ["flow"]}}},
             dataAvailabilityChange={"kind": "data-restored" if restored else "data-unavailable",
                                     "previousState": "unavailable" if restored else "usable",
                                     "currentState": "usable" if restored else "unavailable",
@@ -64,6 +72,8 @@ def readable_fixture():
     context = context_observation(case)
     context["displayTarget"] = "예시종목 / MSTR"
     relation = context["ontologyRelationContext"]
+    context["accountId"] = "main"
+    relation["worldId"] = "world:fixture"
     relation["subject"]["market"] = "KR"
     facts = relation["facts"]
     facts.update({"currency": "KRW", "market": "KR", "currentPrice": 11000, "priceChangeRate": 2.5,
@@ -107,6 +117,19 @@ def readable_fixture():
     return context
 
 
+def delivered_baseline(context, unavailable=False):
+    from digital_twin.modules.notifications.domain.relation_follow_up import VERSION
+    prior = relation_change_evidence(context, require_recovery_receipt=False)["current"]
+    key = prior["transitions"][0]["lifecycleKey"]
+    prior.update(deliveredAt="2026-09-30T23:40:00Z", receiptJobId="previous-receipt", transitions=[],
+                 followUpVersion=VERSION, hypothesisContinuity={key: {
+                     "rootJobId": "original-relation", "lastJobId": "previous-receipt", "lastState": "maintained",
+                     "unavailabilityNotified": unavailable,
+                     "hypotheses": [{"id": "h1", "expectedOutcome": "반등이 유지되지 못하고 이전 위험 경로로 복귀", "ruleIds": []}],
+                 }})
+    return prior
+
+
 class IndependentTypeDBTests(unittest.TestCase):
     def test_same_source_reassessment_is_archived_without_customer_delivery(self):
         result, queue, handoff, _ = independent_fixture(reassessment=True)
@@ -121,7 +144,7 @@ class IndependentTypeDBTests(unittest.TestCase):
         job = next(iter(queue.jobs.values()))
         self.assertTrue(independent_typedb_publication(job.context))
         # The production receipt/cadence check freezes this before rendering.
-        job.context["relationChangeEvidence"] = relation_change_evidence(job.context)
+        job.context["relationChangeEvidence"] = relation_change_evidence(job.context, delivered_baseline(job.context))
         runner = NotificationQueueRunner(Mock(), Mock(), Mock())
         self.assertTrue(runner.apply_customer_delivery_explanation_gate(job))
         explanation = job.context["customerDeliveryExplanation"]
@@ -130,8 +153,10 @@ class IndependentTypeDBTests(unittest.TestCase):
         self.assertFalse(job.context.get("investmentNotificationTransition"))
         runner.queue.mark_suppressed.assert_not_called()
         text = typedb_observation_telegram_message(job.context)
-        self.assertIn("자료 상태", text)
-        self.assertIn("체결 자료의 유효기간", text)
+        self.assertIn("체결·매수·매도 흐름 확인 중단", text)
+        self.assertIn("허용 경과 시간 5분", text)
+        self.assertIn("원천 확인 후 20분", text)
+        self.assertNotIn("현재 전체 데이터", text)
         self.assertNotIn("근거가 이전 분석보다", text)
         self.assertIn("이번 알림이 온 이유", text)
 
@@ -144,10 +169,7 @@ class IndependentTypeDBTests(unittest.TestCase):
         # missing successful receipt still suppresses actual delivery.
         queued["relationChangeEvidence"] = relation_change_evidence(queued, {})
         self.assertEqual("suppress", context_observation_delivery_decision(queued)["decision"])
-        prior = deepcopy(queued["relationChangeEvidence"]["current"])
-        key = prior["transitions"][0]["lifecycleKey"]
-        prior["transitions"] = []
-        prior["dataAvailability"] = {key: {"state": "unavailable"}}
+        prior = delivered_baseline(queued, unavailable=True)
         queued["relationChangeEvidence"] = relation_change_evidence(queued, prior)
         self.assertEqual("send", context_observation_delivery_decision(queued)["decision"])
         job = next(iter(queue.jobs.values()))
@@ -156,25 +178,16 @@ class IndependentTypeDBTests(unittest.TestCase):
         self.assertEqual("valid", job.context["customerDeliveryExplanation"]["validation"]["state"])
         self.assertEqual("usable", job.context["customerDeliveryExplanation"]["primaryCause"]["currentValue"])
         runner.queue.mark_suppressed.assert_not_called()
-        context = readable_fixture()
-        relation = context["ontologyRelationContext"]
-        transition = relation["hypothesisLifecycle"]["transitions"][0]
-        transition.update(currentState="maintained", previousState="maintained", materialChange=False,
-                          dataAvailabilityChange={"kind": "data-restored", "previousState": "unavailable", "currentState": "usable"})
-        self.assertFalse(relation_change_evidence(context)["eligible"])
-        previous = deepcopy(context["relationChangeEvidence"]["previous"])
-        previous["dataAvailability"] = {transition["lifecycleKey"]: {"state": "unavailable"}}
-        self.assertTrue(relation_change_evidence(context, previous)["eligible"])
-        previous["dataAvailability"][transition["lifecycleKey"]]["state"] = "usable"
-        self.assertFalse(relation_change_evidence(context, previous)["eligible"])
+        self.assertFalse(relation_change_evidence(queued)["eligible"])
+        self.assertTrue(relation_change_evidence(queued, prior)["eligible"])
+        next(iter(prior["hypothesisContinuity"].values()))["unavailabilityNotified"] = False
+        self.assertFalse(relation_change_evidence(queued, prior)["eligible"])
 
     def test_data_status_explanation_rejects_missing_or_mismatched_proof(self):
         _, queue, _, _ = independent_fixture(data_change="restored")
         context = next(iter(queue.jobs.values())).context
-        prior = relation_change_evidence(context)["current"]
-        key = prior["transitions"][0]["lifecycleKey"]
-        prior["transitions"] = []
-        prior["dataAvailability"] = {key: {"state": "unavailable"}}
+        prior = delivered_baseline(context, unavailable=True)
+        key = next(iter(prior["hypothesisContinuity"]))
         context["relationChangeEvidence"] = relation_change_evidence(context, prior)
         explanation = build_customer_delivery_explanation(
             message_type="investmentInsight", source_event_name="investment.inference_episode_completed", context=context,
@@ -197,7 +210,7 @@ class IndependentTypeDBTests(unittest.TestCase):
                 if invalidation == "missing-receipt":
                     changed["relationChangeEvidence"] = {}
                 elif invalidation == "already-usable":
-                    previous["dataAvailability"][key]["state"] = "usable"
+                    previous["hypothesisContinuity"][key]["unavailabilityNotified"] = False
                 elif invalidation == "already-delivered":
                     previous["transitions"] = deepcopy(changed["relationChangeEvidence"]["transitions"])
                 elif invalidation == "wrong-generation":
@@ -328,10 +341,9 @@ class IndependentTypeDBTests(unittest.TestCase):
         self.assertNotIn("위험이 해소", text)
         sections = {s["key"]: s for s in doc["sections"]}
         self.assertIn("외부 시장", sections["hypotheses"]["title"], "the changed hypothesis is shown first")
-        first_text, second_text = " ".join(sections["hypotheses-2"]["rows"]), " ".join(sections["hypotheses"]["rows"])
-        self.assertIn("하락 속도가 빨라지는지", first_text)
-        self.assertIn("현재 판단 근거로 사용 보류", first_text)
-        self.assertNotIn("외부 충격", first_text)
+        second_text = " ".join(sections["hypotheses"]["rows"])
+        self.assertNotIn("hypotheses-2", sections, "unchanged hypotheses stay in full evidence, not the change narrative")
+        self.assertEqual(2, len(packet["current"]["hypotheses"]))
         self.assertIn("외부 충격이 줄거나", second_text)
         self.assertIn("결과 5건", second_text)
         self.assertNotIn("현재 판단 근거로 사용 보류", second_text)
@@ -341,6 +353,7 @@ class IndependentTypeDBTests(unittest.TestCase):
         from digital_twin.modules.notifications.domain.notification_templates import NotificationTemplate, render_notification
         context["relationChangeEvidence"]["current"]["hypotheses"][1]["state"] = "blocked"
         context["relationChangeEvidence"]["current"]["hypotheses"][1]["qualification"] = dict(first["qualification"])
+        context["relationChangeEvidence"]["transitions"].append({**deepcopy(packet["transitions"][0]), "hypothesisIds": ["h1"]})
         job = NotificationJob.create("preview", message_type="investmentInsight", context=context)
         rendered = NotificationRenderingService(template_renderer=lambda j: render_notification(NotificationTemplate.default("investmentInsight"), j.context)).render(job)
         self.assertEqual(2, rendered.count("현재 판단 근거로 사용 보류"))

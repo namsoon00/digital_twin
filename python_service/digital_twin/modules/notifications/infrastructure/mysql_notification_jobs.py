@@ -2148,7 +2148,8 @@ class MySQLNotificationJobStore(InvestmentConversationStore, ResearchThreadStore
     def relation_delivery_snapshot_with_connection(self, connection, job):
         """Successful receipt scoped to account and subject, surviving job retention."""
         row = connection.execute(
-            "SELECT completed_at, JSON_EXTRACT(metadata_json, '$.relationChangeSnapshot') AS snapshot "
+            "SELECT job_id, completed_at, JSON_EXTRACT(metadata_json, '$.relationChangeSnapshot') AS snapshot, "
+            "JSON_UNQUOTE(JSON_EXTRACT(metadata_json, '$.notificationConversation.worldId')) AS world_id "
             "FROM notification_delivery_attempts WHERE status='delivered' AND job_id != %s "
             "AND JSON_UNQUOTE(JSON_EXTRACT(metadata_json, '$.accountId')) = %s "
             "AND JSON_UNQUOTE(JSON_EXTRACT(metadata_json, '$.relationChangeSubjectKey')) = %s "
@@ -2159,6 +2160,10 @@ class MySQLNotificationJobStore(InvestmentConversationStore, ResearchThreadStore
         baseline = _json_loads(row.get("snapshot"), {}) if row else {}
         if baseline:
             baseline["deliveredAt"] = str(row["completed_at"])
+            baseline["receiptJobId"] = str(row["job_id"])
+            baseline["accountId"] = job.account_id
+            if not baseline.get("worldId") and row.get("world_id"):
+                baseline["worldId"] = str(row["world_id"])
         return baseline
 
     def evaluate_job_with_connection(self, connection, job: NotificationJob):

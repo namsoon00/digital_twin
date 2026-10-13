@@ -131,7 +131,8 @@ def notification_kind(message_type: str, context: Mapping = None) -> Notificatio
         packet = mapping(values.get("relationChangeEvidence"))
         changes = packet.get("transitions") or []
         if changes and all(mapping(row).get("changeCategory") == "data-availability" for row in changes):
-            return NOTIFICATION_KINDS["data-status"]
+            from digital_twin.modules.notifications.domain.relation_follow_up_presentation import data_follow_up_label
+            return NotificationKind("data-status", data_follow_up_label(changes), "↪")
         rules = mapping(context_value(values, "ontologyRelationContext"))
         if not rules and not mode and requested != "relation-change":
             return NOTIFICATION_KINDS["notice"]

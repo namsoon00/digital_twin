@@ -48,10 +48,16 @@ function businessView(result) {
   const candidates = relationships.map(row => `<p><strong>${escape(row.counterparty?.name)}</strong>${row.counterparty?.symbol ? ` · ${escape(row.counterparty.symbol)}` : " · 상장 종목 식별 필요"}<br>${escape(relationLabels[row.relationType] || row.relationType)} · ${row.direction === "inbound" ? "상대 기업 → 분석 기업" : "분석 기업 → 상대 기업"}<br><small>공시 ${escape(date(row.publishedAt))} · 최초 확인 ${escape(date(row.firstKnownAt))}<br>현재 관계의 지속 여부와 매출 노출은 추가 확인이 필요합니다.</small></p><blockquote>${escape(row.excerpt)}</blockquote>`).join("");
   return `${business ? `<details open class="business-research"><summary>사업 가설과 장기 확인</summary><p>${escape(business.coverageNote)}</p>${theses}${reviews}${(business.reviews || []).map(row => `<p>가설 검토: ${escape(row.reason)}</p>`).join("")}</details>` : ""}${candidates ? `<details open><summary>연결 기업 · 추가 조사 후보</summary>${candidates}</details>` : ""}`;
 }
+function researchRecoveryView(recovery) {
+  if (!recovery || recovery.version !== "source-recovery-v1") return "";
+  const issues = (recovery.issues || []).map(item => `<li><strong>${escape(item.label)}</strong>${item.host ? ` · ${escape(item.host)}` : ""}<br>${escape(item.explanation)}</li>`).join("");
+  const progress = recovery.progress;
+  return `<details class="research-recovery"><summary>조사 중 확인한 문제와 대응 방법</summary>${issues ? `<ul>${issues}</ul>` : "<p>기록된 수집 실패가 없습니다.</p>"}${recovery.omittedIssueCount ? `<p class="muted">앞선 문제 ${escape(recovery.omittedIssueCount)}건은 상세 실행 기록에서 확인할 수 있습니다.</p>` : ""}${progress?.measured ? `<p class="muted">집중 추출 ${escape(progress.extractionCount)}회 · 새로 읽은 본문 ${escape(progress.newPassageCount)}개<br>집중 추출은 문서 읽기 횟수에 포함됩니다. 본문 확보만으로 답변 완료를 뜻하지 않습니다.</p>` : ""}<p class="muted">조사 당시의 실행 기록입니다. 자료 미공개나 현재 장애를 확정하는 정보가 아닙니다.</p></details>`;
+}
 function researchAnswerView(result = {}) {
   const answer = result.documentaryAnswer;
   const exploration = result.sourceExploration;
-  if (!answer && !exploration) return "";
+  if (!answer && !exploration && !result.sourceRecovery) return "";
   const state = {answered:"자료 답변 확인",partial:"일부 항목 확인",unavailable:"답변 근거 부족"};
   const stops = {"ai-finished":"답변 검토로 전달", "step-budget-exhausted":"이번 탐색 횟수 소진", "time-budget-exhausted":"이번 탐색 시간 소진", "context-budget-exhausted":"자료 용량 한도 도달", "exploration-model-failed":"탐색 판단 실행 실패", "execution-deferred":"AI 실행 대기 · 기록을 보존해 재개"};
   const sources = (answer?.sources || []).map(source => {
@@ -61,7 +67,7 @@ function researchAnswerView(result = {}) {
     return `<li><a href="${escape(url.href)}" target="_blank" rel="noopener noreferrer">${escape(source.title || url.hostname)}</a>${source.publishedAt ? ` · 발행 ${escape(date(source.publishedAt))}` : ""}</li>`;
   }).join("");
   const missing = answer ? answer.missingRequirements || [] : exploration?.missingRequirements || [];
-  return `<details open class="research-answer"><summary>${escape(state[answer?.status] || "자료 탐색 기록")}</summary>${answer?.text ? `<p>${escape(answer.text)}</p>` : ""}${sources ? `<ul>${sources}</ul>` : ""}${missing.length ? `<p>아직 확인하지 못한 항목: ${missing.map(escape).join(" / ")}</p>` : ""}${answer?.blockers?.length ? `<p class="muted">확인 한계: ${answer.blockers.map(escape).join(" / ")}</p>` : ""}${exploration ? `<p class="muted">AI 추가 탐색 · 검색 ${escape(exploration.searchCount ?? 0)}회 · 문서 읽기 ${escape(exploration.readCount ?? 0)}회 · ${escape(stops[exploration.stopReason] || "탐색 상태 확인 필요")}</p>` : ""}<p class="muted">자료 답변과 투자 가설의 검증 결과는 별도로 확인합니다.</p></details>`;
+  return `<details open class="research-answer"><summary>${escape(state[answer?.status] || "자료 탐색 기록")}</summary>${answer?.text ? `<p>${escape(answer.text)}</p>` : ""}${sources ? `<ul>${sources}</ul>` : ""}${missing.length ? `<p>아직 확인하지 못한 항목: ${missing.map(escape).join(" / ")}</p>` : ""}${answer?.blockers?.length ? `<p class="muted">확인 한계: ${answer.blockers.map(escape).join(" / ")}</p>` : ""}${exploration ? `<p class="muted">AI 추가 탐색 · 검색 ${escape(exploration.searchCount ?? 0)}회 · 문서 읽기 ${escape(exploration.readCount ?? 0)}회 · ${escape(stops[exploration.stopReason] || "탐색 상태 확인 필요")}</p>` : ""}${researchRecoveryView(result.sourceRecovery)}<p class="muted">자료 답변과 투자 가설의 검증 결과는 별도로 확인합니다.</p></details>`;
 }
 function brainView(brain = {}) {
   brainCases = brain.cases || [];

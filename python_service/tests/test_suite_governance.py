@@ -319,7 +319,8 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # criteria, bounded retries, atomic leases and idempotent receipt recovery.
         # Four real task-dispatch contracts protect restart fairness, expired
         # leases, cooldown/budget rollback and concurrent account-scoped queues.
-        self.assertLessEqual(total, 2267)
+        # Relation causes, exact historical boundaries, named qualification and investor amount units.
+        self.assertLessEqual(total, 2272)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

@@ -1,4 +1,5 @@
 import json
+import math
 import time
 import urllib.error
 import urllib.parse
@@ -486,6 +487,9 @@ def stage_coverage(
         "providerUpdateCurrent",
         "nextProviderUpdateAt",
         "validUntil",
+        "amountUnit",
+        "sourceAmountUnit",
+        "amountNormalizationVersion",
     ]:
         if measurement_metadata.get(key) not in (None, ""):
             payload[key] = measurement_metadata.get(key)
@@ -1172,12 +1176,12 @@ class KISMarketSignalProvider:
     def cached_signal(self, symbol: str) -> Dict[str, object]:
         try:
             payload = self.quote_cache.load(KIS_CACHE_PROVIDER, KIS_CACHE_ACCOUNT_ID, symbol)
-            return {} if has_unvalidated_websocket_stage(payload or {}) else payload
+            return {} if has_unvalidated_websocket_stage(payload or {}) else investor_amount_cache_contract(payload)
         except Exception:
             return {}
 
     def is_cache_fresh(self, payload: Dict[str, object]) -> bool:
-        if not payload:
+        if not payload or payload.get("investorAmountRefreshRequired"):
             return False
         updated_at = parse_iso(payload.get("updatedAt"))
         if not updated_at:
@@ -1666,6 +1670,9 @@ class KISMarketSignalProvider:
             final_metadata = {
                 "isEstimate": False,
                 "validUntil": investor_final_valid_until(self.now()),
+                "amountUnit": "KRW",
+                "sourceAmountUnit": "million-KRW",
+                "amountNormalizationVersion": "kis-investor-amount-krw-v1",
             }
             coverage["investor"] = stage_coverage(
                 "investor",
@@ -2505,6 +2512,31 @@ def normalize_ccnl(items: List[Dict[str, object]]) -> Dict[str, object]:
     return signal
 
 
+def investor_amount_cache_contract(payload):
+    """Do not reuse pre-unit-contract amounts when a provider refresh fails.
+
+    This changes a copy used for new collection, never a historical receipt.
+    Keep observed volumes and quotes; an old amount cannot acquire a unit merely
+    because a new formatter is deployed.
+    """
+    if not isinstance(payload, dict):
+        return {}
+    keys = {"foreignNetAmount", "institutionNetAmount", "individualNetAmount"}
+    coverage = payload.get("marketSignalCoverage") or {}
+    investor = coverage.get("investor") or {}
+    if (investor.get("amountUnit") == "KRW"
+            and investor.get("amountNormalizationVersion") == "kis-investor-amount-krw-v1") or not any(k in payload for k in keys):
+        return payload
+    safe = {k: v for k, v in payload.items() if k not in keys}
+    safe["investorAmountRefreshRequired"] = True
+    stage = {**investor, "amountUnit": "unknown"}
+    for field in ("fields", "observedFields", "nonZeroFields"):
+        if isinstance(stage.get(field), list):
+            stage[field] = [k for k in stage[field] if k not in keys]
+    safe["marketSignalCoverage"] = {**coverage, "investor": stage}
+    return safe
+
+
 def normalize_investor(items: List[Dict[str, object]]) -> Dict[str, object]:
     if not items:
         return {}
@@ -2518,19 +2550,31 @@ def normalize_investor(items: List[Dict[str, object]]) -> Dict[str, object]:
     foreign_buy = optional_number(latest, ["frgn_shnu_vol"])
     foreign_sell = optional_number(latest, ["frgn_seln_vol"])
     foreign_net = optional_number(latest, ["frgn_ntby_qty"])
-    foreign_net_amount = optional_number(latest, ["frgn_ntby_tr_pbmn"])
+    def amount_krw(key):
+        raw = latest.get(key)
+        if raw in (None, "") or isinstance(raw, bool):
+            return None
+        try:
+            amount = float(str(raw).replace(",", "")) * 1_000_000
+            return amount if math.isfinite(amount) else None
+        except (TypeError, ValueError, OverflowError):
+            return None
+
+    foreign_net_amount = amount_krw("frgn_ntby_tr_pbmn")
     institution_buy = optional_number(latest, ["orgn_shnu_vol"])
     institution_sell = optional_number(latest, ["orgn_seln_vol"])
     institution_net = optional_number(latest, ["orgn_ntby_qty"])
-    institution_net_amount = optional_number(latest, ["orgn_ntby_tr_pbmn"])
+    institution_net_amount = amount_krw("orgn_ntby_tr_pbmn")
     individual_buy = optional_number(latest, ["prsn_shnu_vol"])
     individual_sell = optional_number(latest, ["prsn_seln_vol"])
     individual_net = optional_number(latest, ["prsn_ntby_qty"])
-    individual_net_amount = optional_number(latest, ["prsn_ntby_tr_pbmn"])
+    individual_net_amount = amount_krw("prsn_ntby_tr_pbmn")
     return {
         "foreignBuyVolume": foreign_buy,
         "foreignSellVolume": foreign_sell,
         "foreignNetVolume": optional_investor_net_volume(foreign_net, foreign_buy, foreign_sell),
+        # FHKST01010900 trade amounts are million KRW. Convert at ingestion;
+        # shares are already shares, and intraday estimates provide no amounts.
         "foreignNetAmount": foreign_net_amount,
         "institutionBuyVolume": institution_buy,
         "institutionSellVolume": institution_sell,

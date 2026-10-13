@@ -105,7 +105,10 @@ def investor_rows(snapshot):
         if net is not None:
             parts.append(("순매수 " if net > 0 else "순매도 " if net < 0 else "순매수·매도 차이 ") + decimal(abs(net), 0) + "주")
         if amount is not None:
-            parts.append(("순매수 금액 " if amount >= 0 else "순매도 금액 ") + decimal(abs(amount), 0) + ("원" if currency == "KRW" else " " + currency))
+            if source.get("amountUnit") == currency:
+                parts.append(("순매수 금액 " if amount >= 0 else "순매도 금액 ") + decimal(abs(amount), 0) + ("원" if currency == "KRW" else " " + currency))
+            else:
+                parts.append("순매수·매도 금액: 단위 미확인")
         if buy is not None:
             parts.append("매수 " + decimal(buy, 0) + "주")
         if sell is not None:

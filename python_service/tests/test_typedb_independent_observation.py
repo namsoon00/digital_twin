@@ -240,7 +240,7 @@ class IndependentTypeDBTests(unittest.TestCase):
         previous = context["relationChangeEvidence"]["previous"]
         context["relationChangeEvidence"] = relation_change_evidence(context, previous)
         text = typedb_observation_telegram_message(context)
-        self.assertIn("이번 알림이 온 이유", text)
+        self.assertIn("이번에 달라진 근거", text)
         self.assertIn("이전 알림 -1.25% → 이번 +0.8%", text)
         self.assertIn("판정 기준 20일 평균 가격 대비 0% 초과", text)
 
@@ -284,7 +284,7 @@ class IndependentTypeDBTests(unittest.TestCase):
         for value in ("살펴볼 가설", "반등이 이어지지 않을 가능성", "11,000원", "+2.5%", "10,000원 → 11,000원", "외국인: 순매도 500주",
                       "기관: 순매수·매도 차이 0주", "개인: 아직 집계 전", "장중 누적 추정", "10/02 10:00 KST", "10/02 10:10 KST",
                       "체결강도 120", "매수 체결 6,000주", "매수 대기 500주", "매도 대기 600주", "110,000,000원", "계좌 비중 2.5%",
-                      "분석 신호의 조건이 확인되면서", "규칙의 입력 수치", "아직 검증 중", "확인한 결과 1건", "60분 · 1일", "0.5% 이상 하락",
+                      "살펴보는 가설입니다", "규칙의 입력 수치", "아직 검증 중", "확인한 결과 1건", "60분 · 1일", "0.5% 이상 하락",
                       "20일 평균 가격보다 1.25% 낮음"):
             self.assertIn(value, text)
         for value in ("long machine statement", "조건값 미보존", "매수 0주", "매도 0주", "100%", "0분 뒤", "/api/private", "계좌 정책 0 —"):
@@ -368,6 +368,7 @@ class IndependentTypeDBTests(unittest.TestCase):
         source["participantStatus"]["individual"] = "available"
         source["observedFields"] += ["foreignBuyVolume", "foreignSellVolume", "individualNetVolume", "institutionNetAmount"]
         facts.update(foreignBuyVolume=200, foreignSellVolume=700, institutionNetAmount=0)
+        source["amountUnit"] = "KRW"
         rows = investor_rows(relation_change_evidence(context)["current"])
         self.assertIn("외국인: 순매도 500주 · 매수 200주 · 매도 700주", rows)
         self.assertTrue(any("개인: 순매수·매도 차이 0주" in row for row in rows))

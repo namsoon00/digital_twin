@@ -166,7 +166,7 @@ class RelationMarketTrackingTests(unittest.TestCase):
         proof["sourceTemporalWindows"][0].update(tradeStrengthEnd=97.35, volumeRatioEnd=.72)
         context["ontologyRelationContext"]["facts"]["profitLoss"] = -7.13
         text = freeze_and_render(context)
-        self.assertIn("이 기간 데이터에 저장된 마지막 값은 체결강도 97.35, 거래량 비율 0.72배", text)
+        self.assertIn("마지막 체결강도 97.35, 거래량 비율 0.72배", text)
         self.assertIn("평가손익 -$7.13", text)
 
     def test_followup_display_requires_registration_and_verified_transition_with_progress(self):

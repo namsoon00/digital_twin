@@ -8,6 +8,7 @@ from unittest.mock import Mock, patch
 from digital_twin.infrastructure.kis_market_signals import (
     KISMarketSignalProvider,
     merge_fresh_websocket_stages,
+    normalize_investor, investor_amount_cache_contract,
 )
 from digital_twin.infrastructure.kis_realtime_ws import (
     CCNL_COLUMNS, ORDERBOOK_COLUMNS, KIS_TR_CCN_PRICE, KIS_TR_ORDERBOOK,
@@ -46,6 +47,58 @@ def frame(values, count=1, tr_id=KIS_TR_CCN_PRICE):
 
 
 class KISRealtimeIntegrityTests(unittest.TestCase):
+    def test_daily_investor_amounts_normalize_once_and_unknown_cache_units_require_refresh(self):
+        values = normalize_investor([{"frgn_ntby_qty": "-6752", "frgn_ntby_tr_pbmn": "-155",
+                                      "orgn_ntby_qty": "0", "orgn_ntby_tr_pbmn": "0",
+                                      "prsn_ntby_qty": "9205", "prsn_ntby_tr_pbmn": "212"}])
+        self.assertEqual(-155_000_000, values["foreignNetAmount"])
+        self.assertEqual(0, values["institutionNetAmount"])
+        self.assertEqual(212_000_000, values["individualNetAmount"])
+        for raw in (None, "", "bad", "nan", "inf", True):
+            with self.subTest(raw=raw):
+                self.assertIsNone(normalize_investor([{"frgn_ntby_tr_pbmn": raw}])["foreignNetAmount"])
+        legacy = {"currentPrice": 23100, "foreignNetAmount": -155, "foreignNetVolume": -6752,
+                  "marketSignalCoverage": {"investor": {"fields": ["foreignNetAmount", "foreignNetVolume"]}}}
+        before = deepcopy(legacy)
+        safe = investor_amount_cache_contract(legacy)
+        self.assertEqual(before, legacy)
+        self.assertNotIn("foreignNetAmount", safe)
+        self.assertEqual(-6752, safe["foreignNetVolume"])
+        self.assertFalse(KISMarketSignalProvider(quote_cache=MemoryQuotes()).is_cache_fresh(safe))
+        current = {**values, "marketSignalCoverage": {"investor": {
+            "amountUnit": "KRW", "amountNormalizationVersion": "kis-investor-amount-krw-v1"}}}
+        self.assertEqual(current, investor_amount_cache_contract(current))
+
+    def test_daily_amount_unit_survives_collection_and_customer_snapshot(self):
+        from test_typedb_independent_observation import readable_fixture
+        from digital_twin.modules.notifications.domain.relation_change import relation_change_evidence
+        from digital_twin.modules.notifications.domain.observation_market_snapshot import investor_rows
+        provider = KISMarketSignalProvider(settings={"kisFundamentalEstimatesEnabled": "0"}, quote_cache=MemoryQuotes(),
+                                           now_provider=lambda: datetime(2026, 10, 13, 9, 10, tzinfo=timezone.utc))
+        provider.fetch_access_token = Mock(return_value="test-only")
+        provider.fundamental_estimates_for_signal = Mock(return_value={})
+        provider.save_signal("000660", {"foreignNetAmount": -155, "foreignNetVolume": -6752,
+                                       "updatedAt": "2026-10-13T09:10:00Z"})
+        self.assertTrue(provider.cached_signal("000660")["investorAmountRefreshRequired"])
+        raw = {"stck_bsop_date": "20261013", "frgn_ntby_qty": "-6752", "frgn_ntby_tr_pbmn": "-155"}
+        provider.fetch_stage = Mock(side_effect=lambda symbol, stage, *args: [raw] if stage == "investor-final" else {})
+        signal = provider.fetch_symbol_signal("000660")
+        self.assertEqual(-155_000_000, signal["foreignNetAmount"])
+        provider.save_signal("000660", signal)
+        self.assertNotIn("investorAmountRefreshRequired", provider.cached_signal("000660"))
+        self.assertTrue(provider.is_cache_fresh(provider.cached_signal("000660")))
+        coverage = signal["marketSignalCoverage"]["investor"]
+        self.assertEqual("KRW", coverage["amountUnit"])
+        context = readable_fixture()
+        context["ontologyRelationContext"]["facts"].update(
+            foreignNetAmount=signal["foreignNetAmount"], foreignNetVolume=-6752,
+            marketSignalCoverage={"investor": coverage})
+        current = relation_change_evidence(context)["current"]
+        self.assertIn("순매도 금액 155,000,000원", str(investor_rows(current)))
+        current["marketSignalCoverage"]["investor"].pop("amountUnit")
+        self.assertIn("금액: 단위 미확인", str(investor_rows(current)))
+        self.assertNotIn("155,000,000원", str(investor_rows(current)))
+
     def test_idle_receive_keeps_connection_and_accepts_next_tick(self):
         for timeout in (TimeoutError, socket.timeout):
             with self.subTest(timeout=timeout):

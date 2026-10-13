@@ -71,18 +71,18 @@ def window_name(value):
     return "장중 구간" if value == "SESSION" else "저장된 관측 구간"
 
 
-def window_paragraph(window, currency):
+def window_paragraph(window, currency, *, compact=False):
     """All returns are source measurements, not inferred causes or probabilities."""
     label = window_name(window.get("windowKey"))
     samples = numeric(window.get("sampleCount"))
-    intro = label + ("에 저장된 가격 " + decimal(samples, 0) + "건" if samples is not None else "의 가격 기록")
+    intro = label + ((" · 가격 " if compact else "에 저장된 가격 ") + decimal(samples, 0) + "건" if samples is not None else "의 가격 기록")
     start, end = numeric(window.get("startPrice")), numeric(window.get("currentPrice"))
     change = numeric(window.get("priceChangePct"))
     text = intro
     if start is not None and end is not None and start > 0 and end > 0:
-        text += "을 보면 가격은 " + price_money(start, currency) + " → " + price_money(end, currency)
+        text += (": " if compact else "을 보면 가격은 ") + price_money(start, currency) + " → " + price_money(end, currency)
         text += " (구간 등락 " + decimal(change, signed=True) + "%)" if change is not None else ""
-        text += "로 기록됐습니다."
+        text += "." if compact else "로 기록됐습니다."
     elif change is not None:
         text += "을 보면 구간 등락률은 " + decimal(change, signed=True) + "%입니다."
     else:
@@ -98,7 +98,7 @@ def window_paragraph(window, currency):
         if value is not None:
             measurements.append(name + " " + decimal(value, signed=True) + unit)
     if measurements:
-        text += " " + ", ".join(measurements) + "입니다."
+        text += " " + ", ".join(measurements) + ("." if compact else "입니다.")
     flow = []
     for key, name, unit in (("tradeStrengthEnd", "체결강도", ""), ("volumeRatioEnd", "거래량 비율", "배")):
         value = numeric(window.get(key))
@@ -106,14 +106,14 @@ def window_paragraph(window, currency):
         if value is not None and value > 0:
             flow.append(name + " " + decimal(value) + unit)
     if flow:
-        text += " 이 기간 데이터에 저장된 마지막 값은 " + ", ".join(flow) + "입니다."
-    text += " 기간 자료 기준은 " + clock(window.get("knowledgeCutoffAt")) + "입니다."
+        text += (" 마지막 " if compact else " 이 기간 데이터에 저장된 마지막 값은 ") + ", ".join(flow) + ("." if compact else "입니다.")
+    text += (" 기준 " if compact else " 기간 자료 기준은 ") + clock(window.get("knowledgeCutoffAt")) + ("." if compact else "입니다.")
     if window.get("hasSufficientHistory") is not True:
         text += " 필요한 기간 관측이 충분히 확보됐는지는 미확인입니다." if window.get("hasSufficientHistory") is None else " 필요한 기간 관측이 부족한 참고 수치입니다."
     return text
 
 
-def model_evidence_paragraphs(rules, symbol, currency):
+def model_evidence_paragraphs(rules, symbol, currency, *, compact=False):
     result, seen, windows = [], set(), 0
     relative_assets = []
     for rule in rules:
@@ -129,7 +129,7 @@ def model_evidence_paragraphs(rules, symbol, currency):
                     continue
                 windows += 1
                 if windows <= 3:
-                    result.append(window_paragraph(window, str(window.get("currency") or currency)))
+                    result.append(window_paragraph(window, str(window.get("currency") or currency), compact=compact))
             for identity in condition.get("modelEvidenceIds") or []:
                 prefix = "stock:" + symbol + "|HAS_RELATIVE_PERFORMANCE|relative-performance-observation:" + symbol + ":"
                 if identity.startswith(prefix):

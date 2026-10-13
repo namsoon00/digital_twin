@@ -138,9 +138,9 @@ class RuleBoxDecisionBriefTests(unittest.TestCase):
     def test_rendered_message_explains_policy_delta_price_boundary_and_pending_judgement(self):
         context = fixture()
         text = message(context)
-        for value in ("현재 판단", "추가매수는 현재 판단 대상에서 제외", "검토할 대응은 일부 축소", "손실 관리 기준 -15%",
+        for value in ("현재 판단", "관리 원칙: 추가매수 제한", "일부 축소 검토 보류", "손실 관리 기준 -15%",
                       "기준보다 손실 3%p", "이전 알림에서도", "손실이 2%p 확대", "설정 상한 45%", "상한 이내",
-                      "-15% 초과", "8,500원", "검증 기준을 아직 충족하지 못", "추가 확인 요청은 보유 유지 의견으로 계산하지"):
+                      "-15% 초과", "8,500원", "운영 검증 미충족", "반등 확인이나 추가매수 허용을 뜻하지"):
             self.assertIn(value, text)
         for value in ("세부값 미기록 이하", "AI 가설 비교 필요", "확률 100%", "매도를 권장합니다"):
             self.assertNotIn(value, text)
@@ -175,6 +175,66 @@ class RuleBoxDecisionBriefTests(unittest.TestCase):
         self.assertEqual(receipt, context["relationChangeEvidence"]["previous"])
         self.assertEqual(frozen, packet)
         self.assertEqual([], context["investmentSubjectDecisionCase"]["executionEligibleHypothesisIds"])
+
+    def test_previous_loss_requires_the_original_literal_operator_and_boundary(self):
+        from digital_twin.modules.notifications.domain.rulebox_decision_presentation import decision_brief_presentation
+        for old_limit, old_operator, old_pnl, continued in ((-20, "<=", -16, False), (-15, "<", -15, False),
+                                                          (-15, "<", -16, True), (-15, "<=", -15, True)):
+            with self.subTest(limit=old_limit, operator=old_operator, pnl=old_pnl):
+                packet = fixture()["relationChangeEvidence"]
+                for snapshot, limit in ((packet["current"], -15), (packet["previous"], old_limit)):
+                    condition = next(r for r in snapshot["rules"] if r["id"] == "rule:policy")["conditions"][0]
+                    condition.update(expectedValue=limit, operator=old_operator,
+                                     resolvedThreshold={"field": "", "value": limit, "source": "authored-literal"})
+                next(f for f in packet["previous"]["facts"] if f["id"] == "profitLossRate")["value"] = old_pnl
+                text = str(decision_brief_presentation(packet))
+                self.assertEqual(continued, "이전 알림에서도 손실 기준을 벗어난" in text)
+        packet["previous"]["rules"] = []
+        self.assertNotIn("이전 알림에서도 손실 기준을 벗어난", str(decision_brief_presentation(packet)))
+
+    def test_pending_candidates_name_each_hypothesis_and_its_frozen_qualification(self):
+        context = fixture()
+        first = context["ontologyRelationContext"]["hypothesisSet"]["hypotheses"][0]
+        first.update(expectedOutcome="현재 추세가 약화되거나 반대 방향으로 전환", qualification={
+            "status": "observed", "decisiveOutcomeCount": 6, "directionalHitRate": .5,
+            "directionalHitRateConfidence95": {"lower": .18},
+            "policy": {"activeFloor": 12, "activeMinHitRate": .6, "activeMinLowerConfidence": .4}})
+        second = deepcopy(first)
+        second.update(hypothesisId="h2", expectedOutcome="반등이 유지되지 못하고 이전 위험 경로로 복귀")
+        context["ontologyRelationContext"]["hypothesisSet"]["hypotheses"].append(second)
+        context["investmentSubjectDecisionCase"]["eligibleHypothesisIds"].append("h2")
+        text = message(context)
+        for value in ("가격 흐름 변화 가능성: 운영 검증 미충족", "반등 실패 가능성: 운영 검증 미충족",
+                      "6건 / 운영 기준 12건 이상", "과거 적중률 50% / 기준 60% 이상", "적중률 하한 18% / 기준 40% 이상"):
+            self.assertIn(value, text)
+        self.assertEqual(2, text.count("6건 / 운영 기준 12건 이상"))
+        self.assertNotIn("0건·6건", text)
+        first["qualification"].pop("policy")
+        second["qualification"].pop("policy")
+        first["claimContract"].pop("qualificationPolicy", None)
+        second["claimContract"].pop("qualificationPolicy", None)
+        self.assertNotIn("운영 기준 12건", message(context))
+
+    def test_new_rule_is_the_delivery_cause_not_an_existing_loss_breach(self):
+        context = fixture()
+        t = context["ontologyRelationContext"]["hypothesisLifecycle"]["transitions"][0]
+        t.update(currentState="strengthened", previousState="maintained", materialChange=True,
+                 sourceRuleIds=["rule:linked", "rule:policy"],
+                 evidenceDelta={"addedRuleIds": ["rule:linked"], "addedSupportingEvidenceKeys": ["new-support"]},
+                 changeBasis={"category": "market-change", "ruleComparisons": [{
+                     "ruleId": "rule:linked", "label": "예시종목 · 보유 종목 + 장중 하락 가속 -> 재점검 · 모델 신호",
+                     "comparison": "verified", "previous": {}, "current": {"score": 1, "minimumScore": .7,
+                     "modelInputWindows": {"1D": {"sampleCount": 4, "priceReturn": -.02, "recentReturn": -.01,
+                                                 "latestObservedAt": "2026-10-02T01:10:00Z"}}}}]})
+        text = message(context)
+        doc = context["customerInvestmentDocument"]
+        self.assertIn("‘장중 하락 속도가 빨라짐’ 규칙이 가설의 지지 근거에 추가", doc["lead"])
+        cause = next(s for s in doc["sections"] if s["key"] == "delivery-cause")
+        self.assertNotIn("평가 수익률", str(cause))
+        self.assertIn("1일 -2% (4건)", str(cause))
+        self.assertNotIn("직전 분석 미보존 → 이번 1", text)
+        self.assertIn("손실이 2%p 확대", text)
+        self.assertEqual("passed", context["customerInvestmentDocumentQuality"]["status"])
 
 
 if __name__ == "__main__":

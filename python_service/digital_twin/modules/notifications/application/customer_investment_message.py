@@ -20,7 +20,7 @@ def render_customer_investment_document(
     prose = document.role == "typedb-observation" and any(section.key == "trading" for section in document.sections)
     if document.lead:
         decision = any(section.key == "decision-review" for section in document.sections)
-        parts.extend(["", "<b>현재 판단</b>" if decision else "<b>종합해서 보면</b>" if prose else "<b>한눈에 보기</b>", ("" if prose else "• ") + html.escape(document.lead, quote=False)])
+        parts.extend(["", "<b>이번 변화와 현재 판단</b>" if decision else "<b>종합해서 보면</b>" if prose else "<b>한눈에 보기</b>", ("" if prose else "• ") + html.escape(document.lead, quote=False)])
     for section in document.sections:
         if not section.rows:
             continue

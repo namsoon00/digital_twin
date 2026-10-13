@@ -9,7 +9,7 @@ from digital_twin.modules.notifications.domain.relation_observation_proof import
 from digital_twin.modules.notifications.domain.rulebox_decision_presentation import decision_brief_presentation, threshold
 
 
-PRESENTATION_VERSION = "readable-relation-change-v9"
+PRESENTATION_VERSION = "readable-relation-change-v10"
 
 CHANGE = {
     "observed": "조건이 새로 확인됐습니다.",
@@ -179,6 +179,50 @@ def model_input_change_rows(comparison):
     return result
 
 
+def rule_change_sentence(transition, comparison):
+    label = str(comparison.get("label") or "연결 규칙").replace("->", "→")
+    # Show the authored condition name, not the stock prefix or bridge suffix.
+    if "→" in label:
+        label = label.split("→", 1)[0].split(" · ")[-1].strip()
+    if label.startswith("보유 종목 + "):
+        label = label[len("보유 종목 + "):]
+    delta = transition.get("evidenceDelta") or {}
+    rule_id = comparison.get("ruleId")
+    changes = [r for r in items(transition.get("evidenceChanges")) if (r.get("evidence") or {}).get("ruleId") == rule_id]
+    roles = {r.get("role") for r in changes}
+    role = "반대 근거" if roles == {"counter"} else "지지 근거" if roles == {"support"} else "판단 근거"
+    if not roles and delta.get("addedSupportingEvidenceKeys") and not delta.get("addedCounterEvidenceKeys"):
+        role = "지지 근거"
+    if rule_id in (delta.get("addedRuleIds") or []):
+        meaning = "규칙이 가설의 " + role + "에 추가됐습니다."
+    elif rule_id in (delta.get("removedRuleIds") or []):
+        meaning = "규칙이 가설의 " + role + "에서 빠졌습니다."
+    elif comparison.get("comparison") == "unavailable":
+        meaning = "규칙의 현재 자료를 확인하지 못했습니다. 조건 해제와 구분해야 합니다."
+    elif transition.get("currentState") == "invalidated":
+        meaning = "규칙으로 뒷받침하던 조건이 더 이상 충족되지 않습니다."
+    else:
+        meaning = "규칙의 근거 변화가 확인됐습니다."
+    return "‘" + label + "’ " + meaning
+
+
+def current_input_rows(comparison):
+    """Missing prior input is not a zero or a newly crossed price boundary."""
+    current = comparison.get("current") or {}
+    groups = {}
+    for window, row in (current.get("modelInputWindows") or {}).items():
+        if not isinstance(row, dict) or (numeric(row.get("sampleCount")) or 0) < 2 or row.get("stale"):
+            continue
+        value = numeric(row.get("priceReturn"))
+        if value is not None:
+            at = clock(row.get("latestObservedAt") or current.get("observedAt"))
+            groups.setdefault(at, []).append(str(window).replace("D", "일") + " " + decimal(value * 100, signed=True)
+                                              + "% (" + decimal(row.get("sampleCount"), 0) + "건)")
+    return ["규칙에 제공된 기간별 등락: " + " · ".join(values[:4]) + " · 기준 " + at
+            + (" · 나머지 기간 입력은 상세 근거에 보존" if len(values) > 4 else "")
+            for at, values in list(groups.items())[:2]]
+
+
 def delivery_cause_rows(packet, currency):
     """Explain only the conditions attached to the admitted transition."""
     current, previous = packet.get("current") or {}, packet.get("previous") or {}
@@ -193,16 +237,25 @@ def delivery_cause_rows(packet, currency):
         if transition.get("changeCategory") == "reassessment":
             result.append(str(basis.get("reason") or "분석에 사용한 기간·입력 구성이 달라졌습니다."))
         comparisons = items(basis.get("ruleComparisons"))
+        changed_rule_ids = {row.get("ruleId") for row in comparisons}
+        changed_rule_ids.update((row.get("evidence") or {}).get("ruleId") for row in items(transition.get("evidenceChanges")))
+        changed_rule_ids.update((transition.get("evidenceDelta") or {}).get("addedRuleIds") or [])
+        changed_rule_ids.update((transition.get("evidenceDelta") or {}).get("removedRuleIds") or [])
+        changed_rule_ids.discard(None)
         explained_rules = set()
         for comparison in comparisons:
             older, newer = comparison.get("previous") or {}, comparison.get("current") or {}
             old_score, new_score = numeric(older.get("score")), numeric(newer.get("score"))
             label = comparison.get("label") or "연결 규칙"
-            # Keep names human-readable without dropping which rule changed.
-            if "→" in label:
-                label = label.split("→", 1)[1].split(" · ", 1)[0].strip()
-            if old_score is not None or new_score is not None:
-                text = label + ": 모델 점수 직전 분석 " + (decimal(old_score, 8) if old_score is not None else "미보존")
+            result.append(rule_change_sentence(transition, comparison))
+            explained_rules.add(comparison.get("ruleId"))
+            input_changes = model_input_change_rows(comparison)
+            result.extend(input_changes)
+            if not older:
+                result.extend(current_input_rows(comparison))
+                result.append("이 규칙의 이전 입력값이 저장되지 않아 수치의 전후 비교는 미제공합니다.")
+            elif old_score is not None and old_score != new_score and not input_changes:
+                text = "모델 점수 직전 분석 " + decimal(old_score, 8)
                 current_score = ("원천 조건 불성립으로 점수 미생성" if newer.get("status") == "not-supported" else "미확인")
                 text += " → 이번 " + (decimal(new_score, 8) if new_score is not None else current_score)
                 minimum = numeric(newer.get("minimumScore", older.get("minimumScore")))
@@ -210,14 +263,10 @@ def delivery_cause_rows(packet, currency):
                     text += " · 규칙 기준 " + decimal(minimum, 2) + " 이상"
                 text += " (확률 아님)"
                 result.append(text)
-                explained_rules.add(comparison.get("ruleId"))
                 source_before = (older.get("sourceObservation") or {}).get("observedAt")
                 source_after = (newer.get("sourceObservation") or {}).get("observedAt")
                 if source_before or source_after:
                     result.append("모델 입력의 원천 기준: 직전 분석 " + clock(source_before) + " → 이번 " + clock(source_after))
-            result.extend(model_input_change_rows(comparison))
-            if comparison.get("comparison") == "unavailable":
-                result.append(label + ": 현재 자료 미확인 · 조건 해제로 해석하지 않습니다.")
             if transition.get("changeCategory") == "reassessment":
                 for window in ("5D", "20D"):
                     old_window = (older.get("modelInputWindows") or {}).get(window) or {}
@@ -245,6 +294,8 @@ def delivery_cause_rows(packet, currency):
         for rule in items(current.get("rules")):
             if rule.get("id") not in (transition.get("sourceRuleIds") or []):
                 continue
+            if changed_rule_ids and rule.get("id") not in changed_rule_ids:
+                continue
             for condition in items(rule.get("conditions")):
                 field, actual = condition.get("field"), condition.get("observedValue")
                 if field not in FIELDS or actual is None or isinstance(actual, (dict, list)):
@@ -266,14 +317,14 @@ def delivery_cause_rows(packet, currency):
     if not result and packet.get("transitions"):
         if not measurements:
             result.append("가설의 성립 상태 변화는 확인됐지만, 그 변화를 일으킨 측정값의 전후 비교는 저장되지 않았습니다.")
-    return unique([*measurements, *result])[:6]
+    return unique([*result, *measurements])[:6]
 
 
 def hypothesis_sections(hypotheses, rules, facts, currency, snapshot):
     sections = []
     for index, hypothesis in enumerate(hypotheses[:3]):
         topic, claim = hypothesis_words(hypothesis)
-        statement = "이 가설은 ‘" + claim.rstrip(". ") + "’을 살펴봅니다."
+        statement = "‘" + claim.rstrip(". ") + "’을 살펴보는 가설입니다."
         selected = linked_rules(hypothesis, rules)
         conditions = unique(value for rule in selected for value in rule_conditions(rule, facts, currency))
         # These are linked model inputs, not Python-authored thresholds or
@@ -294,8 +345,6 @@ def hypothesis_sections(hypotheses, rules, facts, currency, snapshot):
             if label in conditions:
                 matched.append(sentence)
                 conditions.remove(label)
-        if matched:
-            statement += " " + " 및 ".join(matched) + "이 확인되면서 연결된 가설입니다."
         explanation = "규칙의 비교 기준과 실제 값은 " + "; ".join(conditions) + "입니다." if conditions else ""
         if fields:
             readings = []
@@ -308,12 +357,15 @@ def hypothesis_sections(hypotheses, rules, facts, currency, snapshot):
             explanation += " 이 가설을 연결한 규칙의 입력 수치는 " + ", ".join(readings) + "입니다."
         if investor_fields.intersection(fields):
             explanation += " 투자자별 집계는 " + source_note(snapshot, "investor") + " 기준입니다."
-        proof = model_evidence_paragraphs(selected, str(snapshot.get("symbol") or ""), currency)
+        proof = model_evidence_paragraphs(selected, str(snapshot.get("symbol") or ""), currency, compact=True)
         # Keep all limitations even when several windows share this claim.
         # Document normalization has an eight-row limit per section.
         rows = [statement]
-        evidence = " ".join([explanation.strip(), *proof]).strip()
-        rows.append(evidence or "규칙에 사용된 세부 측정값이 저장되지 않아 가설이 나온 배경을 수치로 확인하기는 어렵습니다.")
+        # A window is one coherent observation. Avoid a page-long paragraph
+        # joining daily, multi-day and session measurements with different clocks.
+        bounded_proof = proof[:2] + ([" ".join(proof[2:])] if len(proof) > 2 else [])
+        rows.extend([value for value in [explanation.strip(), *bounded_proof] if value]
+                    or ["규칙에 사용된 세부 측정값이 저장되지 않아 가설이 나온 배경을 수치로 확인하기는 어렵습니다."])
         checks = validation_rows(hypothesis, currency)
         if checks:
             rows.append(". ".join(checks) + ".")
@@ -321,7 +373,12 @@ def hypothesis_sections(hypotheses, rules, facts, currency, snapshot):
         count = numeric(qualification.get("decisiveOutcomeCount"))
         status = {"shadow": "아직 검증 중", "observed": "관찰 결과 축적 중", "limited-active": "제한된 범위에서 검증 중",
                   "active": "저장된 검증 기준 충족", "quarantined": "검증 결과 재점검 중"}.get(qualification.get("status"), "검증 상태 미기록")
-        validation = "검증 상태: " + status + (" · 확인한 결과 " + decimal(count, 0) + "건" if count is not None else "") + ". 조건이 맞았다는 사실과 이후 예측이 맞았는지는 구분해야 합니다."
+        validation = "검증 상태: " + status + (" · 확인한 결과 " + decimal(count, 0) + "건" if count is not None else "") + "."
+        pending_ids = {h.get("id") for row in (snapshot.get("decisionBrief") or {}).get("candidates", [])
+                       for h in row.get("hypotheses", []) if not h.get("executionEligible")
+                       and (snapshot.get("decisionBrief") or {}).get("qualificationPending")}
+        if hypothesis.get("id") in pending_ids:
+            validation = ""  # The named qualification and remaining criteria are above.
         if hypothesis.get("state") in {"blocked", "invalidated", "expired", "rejected"}:
             validation += " 현재 판단 근거로 사용 보류 상태입니다."
         reasons = unique(rule.get("freshnessGateReason") for rule in selected if rule.get("evidenceUsableForJudgement") is False)
@@ -367,8 +424,12 @@ def readable_relation_change(packet):
     changes = unique(transition_sentence(row, named) for row in items(packet.get("transitions")))
     lead = " ".join(part for part in (" ".join(changes[:3]) or "새로운 근거 변화 없이 현재 기록을 확인합니다.", market_sentence(current, currency)) if part)
     decision = decision_brief_presentation(packet)
+    causes = delivery_cause_rows(packet, currency)
     if decision:
-        lead = decision["lead"] + " " + market_sentence(current, currency)
+        headline = causes[0] if causes and causes[0].startswith("‘") else " ".join(changes[:2])
+        lead = " ".join(value for value in (headline, decision["lead"], market_sentence(current, currency)) if value)
+        if causes and causes[0] == headline:
+            causes = causes[1:]
     market = {key: (title, rows) for key, title, rows in market_snapshot_sections(current, previous)}
     quote = [*market["current-price"][1], *market["price-trend"][1]]
     changed_ids = {h.get("id") for transition in items(packet.get("transitions"))
@@ -389,7 +450,7 @@ def readable_relation_change(packet):
         notes.append("추가 가설 " + str(len(hypotheses) - 3) + "개는 상세 근거에서 확인")
     if current.get("evidenceComparisonPartial"):
         notes.append("일부 근거의 의미를 연결하지 못해 전후 비교가 제한됩니다. 해당 근거의 개수는 강화·약화 판정에 사용하지 않았습니다.")
-    notes.append("관리 원칙의 제한과 행동 후보를 구분해 표시했습니다. 가설의 조건 확인은 예측 적중이나 최종 매매 확정을 뜻하지 않습니다."
+    notes.append("가설 검증 수치는 과거 결과이며 이번 예측의 성공 확률이 아닙니다."
                  if decision else "가설은 검증할 설명이며 매수·매도 의견이 아닙니다.")
     source = " + ".join(value.split(" /api/")[0].strip() for value in str(current.get("source") or "출처 미기록").split(" + "))
     notes.append("확인 시점·출처: " + clock(current.get("observedAt")) + " · " + source)
@@ -398,7 +459,7 @@ def readable_relation_change(packet):
     parent = (packet.get("followUp") or {}).get("parentJobId")
     return {"lead": lead, "sections": [
         *(([("previous-alert", "이전 알림의 후속 변화", ["원본 알림 N-" + parent[:8].upper()])]) if parent else []),
-        ("delivery-cause", "이번 알림이 온 이유 · 규칙 데이터", delivery_cause_rows(packet, currency)),
+        ("delivery-cause", "이번에 달라진 근거 · 규칙 데이터", causes),
         *decision.get("sections", []),
         *stories,
         ("holding", "내 보유 상황 · 시세 등락과 구분", [" · ".join(market["holding"][1])] if market["holding"][1] else []),

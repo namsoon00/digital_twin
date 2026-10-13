@@ -1067,6 +1067,9 @@ statements do not establish current conditions or price causation.
 Persistence retains the selected stock's `HAS_OBSERVATION` edge to verified
 historical question documents even when no active RuleBox rule consumes it.
 Keeping a detached node alone is insufficient for scoped graph inventory reads.
+The frozen question document index also grants `read_fact` access to originals
+omitted from the initial byte reservation. Indexed IDs are not selectable or
+authoritative until their actual read succeeds and enters the audited working set.
 
 `available-question-assessment-v1` prioritizes source-answered questions by their
 original scope and period. Retrieval may finish when the selected facts support

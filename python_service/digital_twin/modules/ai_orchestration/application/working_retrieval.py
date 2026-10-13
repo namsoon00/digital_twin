@@ -60,6 +60,9 @@ def retrieve_working_evidence(session, packet, history, research, decide, save_i
     active = deepcopy(seen)
     tools = ObservationReadTools(session, history, research)
     tools.admit(current)
+    # The frozen index grants read access, not evidence selection. Unread IDs
+    # remain outside seen and must be read before the author can use them.
+    tools.known.update({row["factId"]: row["category"] for row in documents})
     continuity = continuity_memory(history, research)
     context = {"catalog": session.catalog(), "continuity": continuity, "reportIndex": session.report_index(),
                "questionDocumentIndex": documents,

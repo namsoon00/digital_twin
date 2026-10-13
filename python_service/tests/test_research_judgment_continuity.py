@@ -3,7 +3,7 @@ import copy
 import gzip
 import json
 import unittest
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 from ai_insight_fixtures import packet, plan
 from digital_twin.modules.news_intelligence.domain.investment_research import ResearchEvidence, research_evidence_from_payload
@@ -149,6 +149,31 @@ class ResearchJudgmentContinuityTests(unittest.TestCase):
         self.assertTrue(any(row.get("historicalDocumentReference") for row in result[0]["facts"]))
         from digital_twin.modules.ai_orchestration.domain.research_evidence_use import answered_research_scope
         self.assertEqual({}, answered_research_scope([{**memory[0], "answerResolution": {"status": "missing"}}]))
+        # A document omitted from the initial byte reservation remains directly
+        # readable through the frozen index, but cannot be selected before reading.
+        baseline = captured.business_baseline(index)
+        baseline["factIds"].remove(index[0]["factId"])
+        baseline["omittedByBudget"].append(index[0]["factId"])
+        calls = []
+        def read_indexed(envelope, _):
+            validate_execution_input(envelope)
+            known = {row["factId"] for row in envelope["retrievalContext"]["knownFacts"]}
+            calls.append(envelope)
+            if len(calls) == 1:
+                self.assertNotIn(index[0]["factId"], known)
+                selectable = envelope["outputSchema"]["properties"]["selectedFactIds"]["items"]["enum"]
+                self.assertNotIn(index[0]["factId"], selectable)
+                return {**decision("read", []), "requests": [{"tool": "read_fact",
+                    "category": index[0]["category"], "factId": index[0]["factId"]}]}
+            self.assertIn(index[0]["factId"], known)
+            return decision("finish", [index[0]["factId"]])
+        with patch.object(captured, "business_baseline", return_value=baseline):
+            result = retrieve_working_evidence(captured, captured.packet(), [], memory,
+                read_indexed, lambda _: "indexed-input", 262144)
+        self.assertEqual("ready", result[0]["retrieval"]["status"])
+        self.assertEqual(0, result[0]["retrieval"]["corrections"])
+        self.assertEqual(2, len(calls))
+        self.assertEqual(index[0]["factId"], result[3][0]["reads"][0]["result"]["facts"][0]["id"])
 
     def test_research_review_does_not_approve_rejected_notification(self):
         result = {**plan(), "input": packet(), "executionInputId": "author", "followUpConditions": [],

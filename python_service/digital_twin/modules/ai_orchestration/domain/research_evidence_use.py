@@ -2,6 +2,7 @@
 import hashlib
 
 ASSESSMENT_SCOPE_VERSION = "available-question-assessment-v1"
+QUESTION_DOCUMENT_READ_VERSION = "question-document-read-v1"
 
 
 def answered_research_scope(research):

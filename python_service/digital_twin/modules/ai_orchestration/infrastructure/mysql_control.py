@@ -22,6 +22,7 @@ from digital_twin.modules.ai_orchestration.infrastructure.mysql_runtime import A
 from digital_twin.modules.ai_orchestration.domain.observation_recovery import same_regular_observation
 from ..domain.task_dispatch import SCOPE as DISPATCH_SCOPE, dispatched
 from .mysql_task_dispatch import AITaskDispatchPersistence
+from .mysql_diagnostic_progress import DiagnosticProgressPersistence, SCHEMA as DIAGNOSTIC_SCHEMA
 
 
 STATUS_INDEXES = (
@@ -30,6 +31,7 @@ STATUS_INDEXES = (
 )
 
 SCHEMA = (
+    *DIAGNOSTIC_SCHEMA,
     EXECUTION_SCHEMA,
     RUNTIME_SCHEMA,
     """CREATE TABLE IF NOT EXISTS ai_control_call_metrics (
@@ -74,7 +76,7 @@ SCHEMA = (
 )
 
 
-class MySQLAIControlStore(AITaskDispatchPersistence, AIRuntimePersistence, AIExecutionPersistence, MySQLOperationalConnection):
+class MySQLAIControlStore(DiagnosticProgressPersistence, AITaskDispatchPersistence, AIRuntimePersistence, AIExecutionPersistence, MySQLOperationalConnection):
     def __init__(self, settings=None):
         super().__init__(settings)
         with self.connect() as connection:

@@ -45,9 +45,12 @@ class NotificationDispatchService:
         # Unverified drafts must never fall back to an account's destination.
         notifier = factory(None if job.message_type == AI_OBSERVATION_DIAGNOSTIC else accounts.get(job.account_id))
         research = job.message_type == "researchProgress"
+        diagnostic = job.message_type == AI_OBSERVATION_DIAGNOSTIC and bool(context.get("aiDiagnosticProgress"))
         investment = ((context.get("notificationConversation") or {}).get("version") == "investment-conversation-v1"
                       and not context.get("notificationReplayPreserveOriginal"))
-        threaded = (research or investment) and getattr(notifier, "supports_research_replies", False) is True
+        threaded = (research or investment or diagnostic) and getattr(notifier, "supports_research_replies", False) is True
+        if diagnostic and not threaded:
+            raise NotificationDeliverySuppressed("원본 초안에 답글로 연결할 수 있는 전송기가 필요합니다.")
         changes = (context.get("relationChangeEvidence") or {}).get("transitions") or []
         if (job.message_type == "investmentInsight" and changes
                 and all(row.get("changeCategory") == "data-availability" for row in changes)
@@ -55,7 +58,7 @@ class NotificationDispatchService:
                 and not context.get("notificationReplayPreserveOriginal")
                 and (not threaded or not relation_parent_job_id(job))):
             raise NotificationDeliverySuppressed("원본 알림에 답글로 연결할 수 없어 자료 안내는 웹 이력에 남깁니다.")
-        thread = getattr(self.queue, "research_delivery_thread" if research else "investment_delivery_thread", None)
+        thread = getattr(self.queue, "diagnostic_delivery_thread" if diagnostic else "research_delivery_thread" if research else "investment_delivery_thread", None)
         with thread(job, notifier.destination_fingerprint) if threaded else nullcontext() as reply_id:
             self._send(job, notifier, message, audience, channel, context, reply_id, threaded)
 
@@ -99,6 +102,8 @@ class NotificationDispatchService:
             diagnostic = context.get("aiObservationDiagnostic") or {}
             rendered_audit["aiObservationDiagnostic"] = {
                 key: diagnostic.get(key) for key in ("version", "taskId", "symbol", "reasons", "executionInputId")}
+            if context.get("aiDiagnosticProgress"):
+                rendered_audit["aiDiagnosticProgress"] = context["aiDiagnosticProgress"]
         if relation_change.get("version") and relation_change.get("current"):
             # The receipt outlives the large job payload. Preserve the exact
             # last-delivered facts for the next customer comparison.
@@ -116,7 +121,8 @@ class NotificationDispatchService:
             current["transportDelivery"] = {**progress, "message": message, "checkpoint": checkpoint}
             job.context = current
             if threaded:
-                save = (self.queue.save_research_delivery_progress if job.message_type == "researchProgress"
+                save = (self.queue.save_diagnostic_delivery_progress if current.get("aiDiagnosticProgress")
+                        else self.queue.save_research_delivery_progress if job.message_type == "researchProgress"
                         else self.queue.save_investment_delivery_progress)
                 save(job, notifier.destination_fingerprint, checkpoint)
             else:

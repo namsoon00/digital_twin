@@ -46,6 +46,8 @@ def validate_narrative(result):
 class AIControlPublication:
     def __init__(self, settings, control_store, notification_store, subjects):
         self.settings, self.control, self.notifications, self.subjects = settings, control_store, notification_store, subjects
+        from .ai_diagnostic_progress import AIDiagnosticProgress
+        self.diagnostic_progress = AIDiagnosticProgress(control_store, notification_store)
 
     def retire_legacy_work(self):
         if not legacy_route_retired(self.settings):
@@ -99,11 +101,18 @@ class AIControlPublication:
 
     def publish(self, connection, task, result):
         result["quoteSelectionVersion"] = QUOTE_SELECTION_VERSION
+        result["diagnosticVersion"] = "ai-observation-diagnostic-v2"
         reason = publication_block(result) or quality_block(result) or self.review_block(task["taskId"], result, connection=connection)
         if reason:
             publication = {"status": "recorded", "reason": reason}
             diagnostic = observation_diagnostic(result, task["taskId"], reason)
             if diagnostic:
+                ancestor = self.control.diagnostic_ancestor(connection, task)
+                if ancestor and self.diagnostic_progress.receipt(connection, ancestor["root_job_id"],
+                        task["accountId"], ancestor["root_task_id"], AI_OBSERVATION_DIAGNOSTIC):
+                    publication["diagnostic"] = {"status": "follow-up", "rootJobId": ancestor["root_job_id"],
+                        "reason": "원본 초안의 후속 안내에서 재검토 결과를 전달합니다."}
+                    return publication
                 job_id = identity("ai-control-diagnostic", task["taskId"])[:48]
                 body = render_ai_observation_diagnostic(diagnostic, debug_number=notification_debug_number(job_id))
                 context = {"messageType": AI_OBSERVATION_DIAGNOSTIC, "accountId": task["accountId"],
@@ -112,6 +121,8 @@ class AIControlPublication:
                 job = NotificationJob(job_id=job_id, account_id=task["accountId"], account_label="",
                     message_type=AI_OBSERVATION_DIAGNOSTIC, text=body, context=context, dedupe_key=job_id)
                 accepted = self.notifications.enqueue_with_connection(connection, job)
+                if accepted:
+                    self.control.register_diagnostic_followup(connection, job_id, task, result)
                 publication["diagnostic"] = {"status": "queued" if accepted else "suppressed", "jobId": job_id,
                                              "reason": "검증 미통과 초안을 운영 채널로 보냅니다." if accepted else job.last_error}
             return publication
@@ -213,6 +224,8 @@ class AIControlPublication:
             yield
 
     def check_diagnostic_delivery(self, job, message):
+        if (job.context or {}).get("aiDiagnosticProgress"):
+            return self.diagnostic_progress.check_delivery(job, message)
         task_id = (job.context or {}).get("aiControlTaskId", "")
         with self.control.connect() as connection:
             row = connection.execute("SELECT status,account_id,symbol,result_json FROM ai_control_tasks WHERE task_id=%s", (task_id,)).fetchone()

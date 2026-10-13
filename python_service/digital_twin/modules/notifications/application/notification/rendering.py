@@ -68,6 +68,10 @@ class NotificationRenderingService:
             job.text = render_research_progress(job.context["researchProgress"])
             return job.text
         if job.message_type == "aiObservationDiagnostic":
+            if (job.context or {}).get("aiDiagnosticProgress"):
+                from digital_twin.modules.notifications.application.ai_observation_diagnostic import render_diagnostic_progress
+                job.text = render_diagnostic_progress(job.context["aiDiagnosticProgress"], debug_number=notification_debug_number(job.job_id))
+                return job.text
             from digital_twin.modules.notifications.application.ai_observation_diagnostic import render_ai_observation_diagnostic
             job.text = render_ai_observation_diagnostic(job.context["aiObservationDiagnostic"],
                 debug_number=notification_debug_number(job.job_id))

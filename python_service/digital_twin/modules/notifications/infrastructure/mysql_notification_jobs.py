@@ -69,9 +69,10 @@ def notification_list_presentation_join() -> str:
 
 from .research_threads import ResearchThreadStore
 from .investment_conversations import InvestmentConversationStore
+from .diagnostic_threads import DiagnosticThreadStore
 
 
-class MySQLNotificationJobStore(InvestmentConversationStore, ResearchThreadStore, MySQLOperationalConnection):
+class MySQLNotificationJobStore(DiagnosticThreadStore, InvestmentConversationStore, ResearchThreadStore, MySQLOperationalConnection):
     _article_delivery_ledger_backfill_lock = Lock()
     _article_delivery_ledger_backfill_ready = set()
 

@@ -790,6 +790,37 @@ follow-up conditions, decision outcomes or notification quota. The final transpo
 guard compares the exact diagnostic body with the completed task. An unavailable
 operations transport remains a visible delivery failure, without account fallback.
 
+Diagnostic v2 includes both `validationRepair` (format/required-field correction)
+and `repair` (narrative correction). A successful format correction does not mean
+final publication passed. Existing v1 bodies remain reproducible byte-for-byte.
+
+The notification worker reconciles durable `ai_observation_diagnostic_followups`
+cursors against exact observe `next`, `wait`, `unchanged`, `recovery` successors
+and explicitly persisted `replacementTaskId` coalescing links. Every hop checks
+account, symbol and world; ticker similarity alone never establishes ancestry.
+Each cycle handles at most 20 originals and 24 hops per original, without model
+calls. Immutable `ai_observation_diagnostic_events`, the reply outbox and the
+cursor commit together. Transaction failure leaves the cursor retryable. A later
+rejected draft in a delivered original's lineage produces a follow-up status
+instead of another independent diagnostic. Its full draft stays in the AI task.
+
+Replies distinguish reviewing, missing-data wait, still rejected, validated but
+awaiting delivery, actual delivery, delivery block, retry and closure. Repeated
+unchanged waits and timer-only changes do not create another reply. Completion
+requires the successor's verified normal-AI transport receipt; validation alone
+cannot close it. Delivery is to the successful original's operations destination
+and message ID, preserving partial-send checkpoints and exact body verification.
+No original receipt, changed destination or broken scope means no standalone or
+account-channel fallback. Normal AI receipt memory, quotas, cooldowns and follow-up
+conditions are unchanged. Retained receipts can anchor replies after the original
+job is purged; missing AI lineage closes only the internal cursor as unavailable,
+never as a successful correction. Reconciliation failures enter worker run details.
+
+For existing diagnostics the reconciler examines the latest 30 completed jobs
+within seven days and adopts the newest verified original per account/symbol/world
+without an existing case. It still requires persisted successor ancestry and does
+not resend originals or trigger analysis merely to populate a reply.
+
 - `/ai-control.html`: owner-only data, recent analyses, dated facts, schedules,
   process counts, enable switch and daily limits; linked from Operations.
 - `GET /api/ai-control/status`: bounded owner-only task and call summary.

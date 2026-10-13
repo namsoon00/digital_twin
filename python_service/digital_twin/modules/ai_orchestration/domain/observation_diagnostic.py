@@ -17,8 +17,8 @@ def observation_diagnostic(result, task_id, reason):
     quote_fields = ("currentPrice", "currency", "changeRate", "ma5", "ma20", "ma60",
                     "sourceAsOf", "asOf", "observationSource", "sourceName", "provider", "source",
                     "dataState", "freshnessStatus")
-    return {
-        "version": "ai-observation-diagnostic-v1", "taskId": task_id,
+    diagnostic = {
+        "version": result.get("diagnosticVersion", "ai-observation-diagnostic-v1"), "taskId": task_id,
         "accountId": packet.get("accountId", ""), "symbol": packet.get("symbol", ""),
         "name": packet.get("name", ""), "capturedAt": packet.get("capturedAt", ""),
         "observedAt": result.get("observedAt", ""), "executionInputId": result.get("executionInputId", ""),
@@ -33,3 +33,7 @@ def observation_diagnostic(result, task_id, reason):
         "notificationReason": result["notification"].get("reason", ""),
         "quote": {key: deepcopy(quote[key]) for key in quote_fields if key in quote},
     }
+    if diagnostic["version"] == "ai-observation-diagnostic-v2":
+        diagnostic["validationRepair"] = deepcopy(result.get("validationRepair") or {})
+        diagnostic["nextCheckMinutes"] = result.get("nextCheckMinutes")
+    return diagnostic

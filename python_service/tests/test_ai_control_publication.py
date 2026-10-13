@@ -181,6 +181,8 @@ class CentralPublicationStorageTests(unittest.TestCase):
 
     def clean(self):
         with self.control.transaction() as connection:
+            connection.execute("DELETE FROM ai_observation_diagnostic_events WHERE root_job_id IN (SELECT root_job_id FROM ai_observation_diagnostic_followups WHERE account_id=%s)", (SUBJECT["accountId"],))
+            connection.execute("DELETE FROM ai_observation_diagnostic_followups WHERE account_id=%s", (SUBJECT["accountId"],))
             connection.execute("DELETE FROM notification_delivery_attempts WHERE job_id IN (SELECT job_id FROM notification_jobs WHERE account_id=%s)", (SUBJECT["accountId"],))
             connection.execute("DELETE FROM notification_jobs WHERE account_id=%s", (SUBJECT["accountId"],))
             connection.execute("DELETE FROM ai_control_tasks")

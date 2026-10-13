@@ -233,4 +233,5 @@ def build_notification_queue_runner(dry_run: bool = False, lane: str = "all") ->
         link_base_resolver=ActiveShareNotificationLinkResolver(),
         delivery_comparison_refresher=delivery_comparison_refresher,
         delivery_guard=publication.delivery_guard,
+        diagnostic_followup_reconciler=publication.diagnostic_progress.run_once,
     )

@@ -41,3 +41,10 @@ test("a pending collection interval shows its explanation and retry time without
   assert.match(html, /다음 확인/);
   assert.doesNotMatch(html, /research-cooldown|작업에 실패|답변 근거 부족/);
 });
+test("source answer completion and further research stay visible when a market draft is rejected", () => {
+  const input = {answerResolution:{status:"answered"},questionContract:{target:"현금흐름",period:"2026년 2분기",answerCriterion:"공식 공시"},
+    researchPlan:{reason:"남은 자료 확인",resumeWhen:"공식 공시 발행"},reviewBlocker:{errors:["<script>문장 문제</script>"]}};
+  const html = vm.runInNewContext(source.slice(0, source.indexOf("async function request(")) + "\nresearchWorkView(input)", {input,URL});
+  for (const text of ["자료 답변 완료", "2026년 2분기", "공식 공시 발행", "투자 관찰 문장 검토 문제", "별도 상태"]) assert.ok(html.includes(text), text);
+  assert.doesNotMatch(html, /<script>/);
+});

@@ -106,6 +106,9 @@ def freeze_execution_input(packet, history, research, max_prompt_bytes=DEFAULT_P
 
 
 def validate_execution_input(envelope):
+    from . import research_work
+    if envelope.get("promptVersion") == research_work.PROMPT_VERSION:
+        return research_work.validate_input(envelope)
     if envelope.get("promptVersion") == working_retrieval.VERSION:
         if envelope.get("protocolVersion") != EXECUTION_INPUT_PROTOCOL:
             raise EvidenceContractError("unsupported AI execution input")

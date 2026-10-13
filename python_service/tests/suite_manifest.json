@@ -1,5 +1,6 @@
 {
   "tests": [
+    {"file": "test_research_work.py", "tier": "integration", "core": true},
     {"file": "test_rulebox_decision_brief.py", "tier": "contract", "core": true},
     {"file": "test_relation_followups.py", "tier": "contract", "core": true},
     {"file": "test_investment_conversations.py", "tier": "integration", "core": true},

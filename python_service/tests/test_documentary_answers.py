@@ -181,7 +181,8 @@ class DocumentaryAnswerTests(unittest.TestCase):
         self.assertIsNone(research_progress(value, event("research-returned", "retry")))
         value["reviewBlocker"] = {"reason": "관찰 품질 미달", "errors": ["비교 근거 부족"]}
         blocked = research_progress(value, event("review-deferred"))
-        self.assertIn("비교 근거 부족", render_research_progress(blocked))
+        self.assertIsNone(blocked, "draft validation remains in the audit, not repeated research notifications")
+        self.assertIn("비교 근거 부족", value["reviewBlocker"]["errors"])
         value["nextCheckAt"] = "2026-10-12T00:00:00Z"
         self.assertIsNone(research_progress(value, event("review-deferred", "retry")))
         self.assertEqual("waiting", value["status"])

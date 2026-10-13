@@ -314,7 +314,10 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # candidate-versus-check semantics and frozen policy/price boundaries.
         # Subject quote selection covers shared presentation/receipt identity
         # and rejects non-quotes without waiving citation or freshness checks.
-        self.assertLessEqual(total, 2254)
+        # Nine research-work regressions cover independent source completion,
+        # frozen planning, scoped merges, graph outages, thesis expiry, original
+        # criteria, bounded retries, atomic leases and idempotent receipt recovery.
+        self.assertLessEqual(total, 2263)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

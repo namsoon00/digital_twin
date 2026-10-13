@@ -19,7 +19,7 @@ from digital_twin.modules.ai_orchestration.domain.validation_diagnostic import t
 
 
 class AIControlService:
-    def __init__(self, store, subjects, evidence, planner, researcher, research_memory, settings=None, delivery_memory=None, reviewer=None, development_memory=None, brain_memory=None, brain_waker=None, read_planner=None, evidence_waker=None, read_round_budget=None, company_memory=None):
+    def __init__(self, store, subjects, evidence, planner, researcher, research_memory, settings=None, delivery_memory=None, reviewer=None, development_memory=None, brain_memory=None, brain_waker=None, read_planner=None, evidence_waker=None, read_round_budget=None, company_memory=None, research_plan_memory=None):
         self.store, self.subjects, self.evidence = store, subjects, evidence
         self.planner, self.researcher, self.research_memory = planner, researcher, research_memory
         self.settings = dict(settings or {})
@@ -32,6 +32,7 @@ class AIControlService:
         self.evidence_waker = evidence_waker or (lambda subjects: None)
         self.read_round_budget = read_round_budget or (lambda: 3)
         self.company_memory = company_memory or (lambda account, symbol, cutoff: {})
+        self.research_plan_memory = research_plan_memory or self.brain_memory
 
     def run_once(self):
         self.store.record_runtime_pulse()
@@ -198,6 +199,27 @@ class AIControlService:
                                          "taskId": identity(job["taskId"], question), "availableAt": stamp()})
                     due = (datetime.now(timezone.utc) + timedelta(minutes=result["nextCheckMinutes"])).isoformat().replace("+00:00", "Z")
                     children.append({**self.subject(job), "capability": "observe", "watchQuestions": result["questions"], "taskId": identity(job["taskId"], "next"), "availableAt": due})
+                elif job["capability"] == "research-plan":
+                    # Operational source planning has no dependency on graph
+                    # readiness, narrative novelty or notification acceptance.
+                    stage = "research-planning"
+                    self.store.execution_wait()
+                    from ..domain.research_work import freeze, validate_plan as validate_research_plan, needs_research_plan
+                    memories = list(self.research_plan_memory(job["accountId"], job["symbol"], job["worldId"]))
+                    cases = [row for row in memories if row.get("kind") == "brain-case" and needs_research_plan(row)]
+                    for row in cases:
+                        row["planDue"] = row.get("nextCheckAt", "") <= stamp()
+                    envelope = freeze(job, cases, job.get("researchGaps", []),
+                                      self.settings.get("aiObservationPromptMaxBytes", 256 * 1024))
+                    if not any(row.get("planDue") for row in cases) and not envelope["gaps"]:
+                        result, children = {"status": "research-plan-obsolete"}, []
+                    else:
+                        input_id = self.store.save_execution_input(job, envelope)
+                        if not input_id:
+                            return {"status": "lease-lost", "taskId": job["taskId"]}
+                        plan = validate_research_plan(self.planner(envelope, input_id), envelope)
+                        result = {"status": "research-planned", "researchPlan": plan, "executionInputId": input_id}
+                        children = []
                 elif job["capability"] == "research":
                     stage = "research"
                     result = self.researcher(job)
@@ -247,5 +269,10 @@ class AIControlService:
                   "resumption": observation_resume(job, packet)}
         child = {**self.subject(job), "capability": "observe", "watchQuestions": job.get("watchQuestions", []),
                  "taskId": identity(job["taskId"], "wait"), "availableAt": outcome["retryAt"]}
-        saved = self.store.complete(job, result, [child])
+        children = [child]
+        if status != "unchanged-wait" and outcome.get("status") == "data-wait" and outcome.get("requirements"):
+            children.append({**self.subject(job), "capability": "research-plan", "priority": 3,
+                "taskId": identity("research-gap-v1", job["accountId"], job["symbol"], job["worldId"], outcome["retryKey"]),
+                "researchGaps": list(outcome["requirements"])[:4], "availableAt": stamp()})
+        saved = self.store.complete(job, result, children)
         return {"status": status if saved else "lease-lost", "taskId": job["taskId"]}

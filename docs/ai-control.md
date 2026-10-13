@@ -7,6 +7,47 @@ contexts; runtime composition injects their capabilities into the controller.
 
 ## Running behavior
 
+The `research-work-v1` workflow separates three states: cited source-answer
+completion (`answerResolution`), further research (`researchPlan`), and investment
+hypothesis disposition (`hypothesisResolution`). An answered documentary artifact
+completes the source-answer requirement even when the market explanation is rejected.
+The case can remain `review-needed` for hypothesis disposition; that does not retract
+the source answer. Neither state grants empirical or trading qualification.
+
+The existing central worker and leased queue execute `research-plan` jobs using
+`independent-research-plan-v1` frozen inputs. They require scoped question memory,
+not market ABox readiness, a completed narrative, or notification approval. The AI
+chooses a missing-evidence search, a concrete wait condition, or a capability blocker.
+Partial answers retain their original citations, unmet requirements and up to three
+prior cited answers in working memory; full history remains in tasks and case events.
+Current questions acquire immutable target/period/answer-criterion contracts.
+Merging requires already identical contracts in the same account/subject/world and
+preserves the retired question with `mergedInto`. Unknown periods cannot be merged.
+An incomplete internal read can enqueue a bounded gap-planning job. At most one new
+question is allowed, with the existing twelve-active-question limit and contract
+deduplication. This is operational research planning, not graph investment inference.
+
+New source plans allow at most six lifetime collection attempts per question and
+two per search intent; the legacy observation-author path retains its three-attempt
+limit. At or beyond three attempts, the new planner must change the search intent.
+There is still a six-hour collection interval, active-task coalescing, frozen lease
+and case revision checks, and the global AI call/task budget. Repeated unchanged
+plans back off up to seven days; exhaustion is recorded, not converted into success.
+Source receipt reconciliation is idempotent and requires the completed task's exact
+answer, account, subject, world and original question link. It neither replays old
+notifications nor rewrites historical market judgments.
+
+Timer-based agenda wakeups cannot advance an observation created after the old
+case deadline. New source/development results may still wake an owning observation.
+Market draft quality failures stay in web/audit history rather than generating
+repeated research-progress pushes. The owner page at `/ai-control.html` displays
+source-answer counts, question contracts, missing work and resumption conditions.
+
+Business thesis expiry is enforced independently of AI review, including theses
+with no checkpoints. At the deadline the thesis leaves active memory and tracking;
+the original contract and first observed metric outcomes remain immutable. Expiry
+is not a negative market judgment. A new tracking period needs a new thesis contract.
+
 Publication selects a positive finite `stock` quote whose symbol matches the
 frozen observation subject. A `currentPrice` on relative valuation, a market
 proxy, or another subject is not that quote. Citation and source-clock gates

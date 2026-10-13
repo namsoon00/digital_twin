@@ -1,4 +1,5 @@
 """Execute the captured question-specific intent through the source owner."""
+import json
 from digital_twin.modules.decisions.contracts import InvestmentQuestion
 from digital_twin.modules.news_intelligence.contracts import NewsCollectionTarget
 from ..domain.planning import identity
@@ -25,6 +26,12 @@ def execute_research(job, research_store, orchestrator_factory):
         "sourceTypes": collection_sources, "queryTerms": request.get("queryTerms", []),
         "requiresDocumentBody": documentary,
         "maxAgeMinutes": request.get("maxAgeMinutes", 1440), "decisionRelevance": "supporting"}
+    if job.get("questionContract"):
+        from ..domain.research_work import validate_contract
+        validate_contract(job["questionContract"])
+        # Purpose is already part of the source owner's immutable assessment
+        # fingerprint and model input. Keep the original question intact.
+        task["purpose"] = "원래 질문의 대상·기간·완료 기준을 모두 확인합니다: " + json.dumps(job["questionContract"], ensure_ascii=False, sort_keys=True)
     orchestrator = orchestrator_factory()
     # Keep the authored collection scope, but allow the source owner to review
     # the collected answer independently of market-observation quality gates.

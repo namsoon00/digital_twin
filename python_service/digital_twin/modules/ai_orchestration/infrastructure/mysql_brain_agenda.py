@@ -100,6 +100,9 @@ class MySQLBrainAgendaStore(MySQLOperationalConnection):
                 raise ValueError("question resolution changed after input capture")
 
     def record(self, connection, job, result, children):
+        if job["capability"] == "research-plan":
+            from .mysql_research_work import record_plan
+            return record_plan(self, connection, job, result, children)
         if job["capability"] == "research":
             if result.get("status") == "research-wait":
                 return self.research_waiting(connection, job, result)
@@ -189,7 +192,10 @@ class MySQLBrainAgendaStore(MySQLOperationalConnection):
 
     @staticmethod
     def schedule_research(connection, case, job, result, children, now):
-        fingerprint = evidence_change_identity(result["input"], [])
+        if case.get("answerResolution", {}).get("status") == "answered":
+            case.update(reason="원래 질문의 자료 답변을 확보했습니다. 투자 가설 연결 여부는 별도로 검토합니다.", nextCheckAt=later(now, 1440))
+            return
+        fingerprint = (result.get("researchBasis") or evidence_change_identity(result["input"], []))
         previous = case.get("lastResearch", {})
         from ..domain.research_request import research_intent_identity
         intent = research_intent_identity(case.get("researchRequest"))
@@ -197,28 +203,42 @@ class MySQLBrainAgendaStore(MySQLOperationalConnection):
         previous_intent = previous.get("requestFingerprint") or research_intent_identity(
             json.loads(row["payload_json"]).get("researchRequest") if row else case.get("researchRequest"))
         retryable = previous.get("result", {}).get("status") in {"failed", "research-cooldown"}
+        ceiling = 6 if result.get("researchBasis") else 3
+        attempts = case.get("researchIntentAttempts", {}).get(intent, 0)
         reason = ("기존 조사가 진행 중입니다." if row and row["status"] in {"pending", "processing"} else
-                  "조사 횟수 한도에 도달해 추가 자료나 기능 검토가 필요합니다." if case["researchAttempts"] >= 3 else
+                  "조사 횟수 한도에 도달해 추가 자료나 기능 검토가 필요합니다." if case["researchAttempts"] >= ceiling or attempts >= 2 else
+                  "기존 조사 한도를 사용했습니다. 다른 출처나 구체적으로 달라진 조사 계획이 필요합니다." if result.get("researchBasis") and case["researchAttempts"] >= 3 and previous_intent == intent else
                   "같은 근거로 조사를 반복하지 않고 새 자료를 기다립니다." if previous.get("inputFingerprint") == fingerprint and previous_intent == intent and not retryable else
                   "조사 재시도 간격을 기다립니다." if previous.get("requestedAt") and later(previous["requestedAt"], 360) > now else "")
         if reason:
-            case.update(status="blocked" if case["researchAttempts"] >= 3 else "waiting", reason=reason,
-                        nextCheckAt=later(now, 1440 if case["researchAttempts"] >= 3 else 360))
+            exhausted = case["researchAttempts"] >= ceiling or attempts >= 2
+            case.update(status="blocked" if exhausted else "waiting", reason=reason,
+                        nextCheckAt=max(case.get("nextCheckAt", ""), later(now, 10080 if exhausted else 360)))
             return
         task_id = identity(case["caseId"], "research", case["researchAttempts"] + 1)
+        answer = previous.get("result", {}).get("documentaryAnswer")
+        if answer and answer.get("sources"):
+            memories = case.setdefault("answerMemory", [])
+            if not any(row.get("taskId") == previous.get("taskId") for row in memories):
+                memories.append({"taskId": previous["taskId"], "answer": copy.deepcopy(answer)})
+                case["answerMemory"] = memories[-3:]
         children.append({**{key: job[key] for key in ("accountId", "symbol", "worldId", "name")},
             "taskId": task_id, "capability": "research", "question": case["question"], "brainCaseId": case["caseId"],
             "researchRequest": copy.deepcopy(case.get("researchRequest", {})),
+            **({"questionContract": copy.deepcopy(case["questionContract"])} if case.get("questionContract") else {}),
             "priority": 5, "availableAt": now})
         case.update(status="waiting", researchAttempts=case["researchAttempts"] + 1,
             lastResearch={"taskId": task_id, "requestedAt": now, "inputFingerprint": fingerprint, "requestFingerprint": intent},
             reason="원래 질문에 연결된 원문 조사를 예약했습니다.")
+        case.setdefault("researchIntentAttempts", {})[intent] = attempts + 1
+        case["nextCheckAt"] = later(now, 360)
 
     @staticmethod
-    def wake_observation(connection, account, symbol, world, due):
+    def wake_observation(connection, account, symbol, world, due, changed=True):
         connection.execute("UPDATE ai_control_tasks SET available_at=LEAST(available_at,%s),priority=GREATEST(priority,3) "
             "WHERE account_id=%s AND symbol=%s AND capability='observe' AND status='pending' AND attempts=0 "
-            "AND JSON_UNQUOTE(JSON_EXTRACT(payload_json,'$.worldId'))=%s", (due, account, symbol, world))
+            "AND JSON_UNQUOTE(JSON_EXTRACT(payload_json,'$.worldId'))=%s "
+            "AND (%s OR created_at<=%s)", (due, account, symbol, world, bool(changed), due))
 
     def research_waiting(self, connection, job, result):
         key = job.get("brainCaseId")
@@ -257,16 +277,20 @@ class MySQLBrainAgendaStore(MySQLOperationalConnection):
                        or answer.get("authority") != "source-review-only"):
             raise ValueError("documentary answer must belong to the original source task")
         if answer:
-            case["reason"] = "자료 답변 검토 결과를 반환했습니다. 투자 가설 판단은 별도로 진행합니다."
+            case["reason"] = "원래 질문의 자료 답변을 확보했습니다. 투자 가설 판단은 별도로 진행합니다." if answer.get("status") == "answered" else "확인한 답변을 보존하고 부족한 항목의 추가 조사 계획을 확인합니다."
             case.pop("reviewBlocker", None)
+            from ..domain.research_work import answer_resolution
+            case["answerResolution"] = answer_resolution(result, job["taskId"])
+            case["latestSourceAnswer"] = copy.deepcopy(answer)
         self.save(connection, case, job["taskId"], "research-returned", case["lastResearch"])
-        self.wake_observation(connection, job["accountId"], job["symbol"], job["worldId"], case["nextCheckAt"])
+        if not answer or answer.get("status") == "answered" or result.get("changedEvidenceCount", 0):
+            self.wake_observation(connection, job["accountId"], job["symbol"], job["worldId"], case["nextCheckAt"])
         return {"status": "review-needed", "caseIds": [case["caseId"]]}
 
     def failed(self, connection, job, error_kind):
         if job.get("brainCaseId"):
             self.research_completed(connection, job, {"status": "failed", "stopReason": error_kind})
-        elif job["capability"] == "observe":
+        elif job["capability"] in {"observe", "research-plan"}:
             now = stamp()
             recovery_minutes = retry_delays(job["capability"], error_kind, 3)[1] // 60
             rows = connection.execute("SELECT payload_json FROM ai_brain_cases WHERE account_id=%s AND symbol=%s AND kind IN ('question','business-thesis') "
@@ -275,6 +299,8 @@ class MySQLBrainAgendaStore(MySQLOperationalConnection):
                 (job["accountId"], job["symbol"], job["worldId"], now)).fetchall()
             for row in rows:
                 case = json.loads(row["payload_json"])
+                if job["capability"] == "research-plan" and not self.source_work_pending(case):
+                    continue
                 case.update(nextCheckAt=later(now, recovery_minutes), reason="관찰 처리가 반복 실패해 복구 시점에 과제를 다시 확인합니다.")
                 self.save(connection, case, job["taskId"], "review-failed", {"errorKind": error_kind})
 
@@ -301,12 +327,15 @@ class MySQLBrainAgendaStore(MySQLOperationalConnection):
             ids.append(key)
         return ids
 
-    def memory(self, account, symbol, world=None):
+    def memory(self, account, symbol, world=None, research_only=False):
         now = stamp()
         with self.connect() as connection:
             rows = connection.execute("SELECT payload_json FROM ai_brain_cases WHERE account_id=%s AND symbol=%s AND kind='question' "
                 "AND (%s IS NULL OR JSON_UNQUOTE(JSON_EXTRACT(payload_json,'$.worldId'))=%s) "
-                "AND status IN ('open','waiting','review-needed','blocked') ORDER BY next_check_at,created_at,case_id LIMIT 5", (account, symbol, world, world)).fetchall()
+                "AND status IN ('open','waiting','review-needed','blocked') "
+                + ("AND JSON_UNQUOTE(JSON_EXTRACT(payload_json,'$.capability'))='research' "
+                   "AND COALESCE(JSON_UNQUOTE(JSON_EXTRACT(payload_json,'$.answerResolution.status')),'')<>'answered' " if research_only else "")
+                + "ORDER BY next_check_at,created_at,case_id LIMIT 5", (account, symbol, world, world)).fetchall()
             feedback = connection.execute("SELECT payload_json FROM ai_brain_cases WHERE account_id=%s AND symbol=%s AND kind='service-feedback' "
                 "ORDER BY updated_at DESC LIMIT 3", (account, symbol)).fetchall()
             from .mysql_business_research import business_memories
@@ -316,11 +345,15 @@ class MySQLBrainAgendaStore(MySQLOperationalConnection):
             case = json.loads(row["payload_json"])
             origin = case["origin"]
             records.append({**{key: case[key] for key in ("caseId", "accountId", "symbol", "worldId", "question", "capability", "status", "revision", "nextCheckAt", "completionCriterion", "reason")},
-                "kind": "brain-case", "reviewDue": case["nextCheckAt"] <= now,
+                "kind": "brain-case", "reviewDue": case["nextCheckAt"] <= now and (research_only or not self.source_work_pending(case)),
                 "origin": {key: origin[key] for key in ("taskId", "executionInputId", "capturedAt", "summary", "hypothesis", "counterEvidence", "quality")},
                 "lastAssessment": case.get("lastAssessment", {}), "lastResearch": case.get("lastResearch", {}),
                 "researchAttempts": case["researchAttempts"], "development": case.get("development", {}),
                 "researchRequest": case.get("researchRequest", {}),
+                "questionContract": case.get("questionContract", {}), "answerResolution": case.get("answerResolution", {}),
+                "researchPlan": case.get("researchPlan", {}),
+                "answerMemory": case.get("answerMemory", []),
+                "latestSourceAnswer": case.get("latestSourceAnswer", {}), "mergedQuestions": case.get("mergedQuestions", []),
                 "hypothesisResolution": case.get("hypothesisResolution", {}),
                 "developmentProgress": case.get("developmentProgress", {}),
                 "authority": "historical-work-status-only"})
@@ -330,22 +363,38 @@ class MySQLBrainAgendaStore(MySQLOperationalConnection):
                             "kind": "service-feedback", "ownerReview": case.get("ownerReview", {}), "authority": "unverified-proposal"})
         return records
 
+    @staticmethod
+    def source_work_pending(case):
+        from ..domain.research_work import needs_research_plan
+        return needs_research_plan(case)
+
     def wake_due(self, subjects):
         scopes = {(item["accountId"], item["symbol"], item["worldId"]) for item in subjects}
         if not scopes:
             return
         with self.transaction() as connection:
+            from .mysql_research_work import reconcile_and_schedule
+            reconcile_and_schedule(self, connection, subjects)
             rows = connection.execute("SELECT account_id,symbol,JSON_UNQUOTE(JSON_EXTRACT(payload_json,'$.worldId')) AS world_id,"
                 "MIN(next_check_at) AS due FROM ai_brain_cases WHERE kind IN ('question','business-thesis') "
                 "AND status IN ('open','waiting','review-needed','blocked','tracking','needs-review','data-needed') AND next_check_at<=%s "
+                "AND NOT (kind='question' AND COALESCE(JSON_UNQUOTE(JSON_EXTRACT(payload_json,'$.capability')),'')='research' "
+                "AND COALESCE(JSON_UNQUOTE(JSON_EXTRACT(payload_json,'$.answerResolution.status')),'')<>'answered') "
                 "AND (account_id,symbol,JSON_UNQUOTE(JSON_EXTRACT(payload_json,'$.worldId'))) IN ("
                 + ",".join(["(%s,%s,%s)"] * len(scopes)) + ") GROUP BY account_id,symbol,world_id",
                 (stamp(), *(value for scope in sorted(scopes) for value in scope))).fetchall()
             for row in rows:
-                self.wake_observation(connection, row["account_id"], row["symbol"], row["world_id"], row["due"])
+                self.wake_observation(connection, row["account_id"], row["symbol"], row["world_id"], row["due"], changed=False)
 
     def status(self, account=""):
         with self.connect() as connection:
+            metrics = connection.execute("SELECT /*+ MAX_EXECUTION_TIME(5000) */ COUNT(*) AS questions,"
+                "SUM(JSON_UNQUOTE(JSON_EXTRACT(payload_json,'$.answerResolution.status'))='answered') AS sourceAnswered,"
+                "SUM(JSON_UNQUOTE(JSON_EXTRACT(payload_json,'$.answerResolution.status'))='partial') AS sourcePartial,"
+                "SUM(JSON_UNQUOTE(JSON_EXTRACT(payload_json,'$.answerResolution.status'))='unavailable') AS sourceUnavailable,"
+                "SUM(JSON_EXTRACT(payload_json,'$.researchPlan') IS NOT NULL) AS planned,"
+                "SUM(JSON_EXTRACT(payload_json,'$.mergedInto') IS NOT NULL) AS merged "
+                "FROM ai_brain_cases WHERE kind='question' AND (%s='' OR account_id=%s)", (account, account)).fetchone()
             rows = connection.execute("SELECT /*+ MAX_EXECUTION_TIME(5000) */ payload_json FROM ai_brain_cases WHERE (%s='' OR account_id=%s) "
                 "ORDER BY status IN ('open','waiting','review-needed','blocked','proposed','planned','tracking','needs-review','data-needed') DESC,updated_at DESC LIMIT 40", (account, account)).fetchall()
             cases = [json.loads(row["payload_json"]) for row in rows]
@@ -358,6 +407,7 @@ class MySQLBrainAgendaStore(MySQLOperationalConnection):
                 for case in cases:
                     case["history"] = [json.loads(row["payload_json"]) for row in events if row["case_id"] == case["caseId"]][:5]
         return {"goals": list(GOALS), "cases": cases, "scope": "최근 및 진행 중인 과제 최대 40건",
+                "researchMetrics": {key: int(value or 0) for key, value in metrics.items()},
                 "qualification": "AI 답변과 개선 제안은 실증된 성과가 아닙니다."}
 
     def review_feedback(self, payload):

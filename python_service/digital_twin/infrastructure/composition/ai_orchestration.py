@@ -114,7 +114,8 @@ def build_ai_control_service(settings=None):
     return AIControlService(store, subjects, evidence, planner, researcher, research_memory, configured,
                             delivery_memory=publication.memory, reviewer=planner, development_memory=development.memory,
                             brain_memory=agenda.memory, brain_waker=wake_brain, read_planner=planner,
-                            evidence_waker=evidence_wake.run_once, read_round_budget=store.retrieval_round_budget, company_memory=company_memory)
+                            evidence_waker=evidence_wake.run_once, read_round_budget=store.retrieval_round_budget, company_memory=company_memory,
+                            research_plan_memory=lambda account, symbol, world: agenda.memory(account, symbol, world, research_only=True))
 
 
 def ai_control_status(settings=None, account_id=""):
@@ -178,7 +179,7 @@ def ai_control_status(settings=None, account_id=""):
             "notificationPolicy": {"cooldownMinutes": 180, "invalidationCooldownMinutes": 60, "dailySubjectLimit": 2, "dailyAccountLimit": 8},
             "enabled": enabled(configured),
             "configuredEnabled": str(configured.get("aiControlEnabled", "true")).lower() not in {"false", "0", "off"},
-            "capabilities": CAPABILITIES,
+            "capabilities": {**CAPABILITIES, "research-plan": "자료 답변과 부족한 항목을 보고 추가 조사 방법과 재개 조건을 정합니다."},
             **status}
 
 

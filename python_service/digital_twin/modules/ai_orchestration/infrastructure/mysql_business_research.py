@@ -3,7 +3,7 @@ from copy import deepcopy
 from datetime import timedelta
 import json
 
-from ..domain.business_research import ACTIVE, clock, thesis_case
+from ..domain.business_research import ACTIVE, clock, thesis_case, thesis_expired, expire_thesis
 
 
 def record_business(connection, job, result, read, save, now):
@@ -14,6 +14,11 @@ def record_business(connection, job, result, read, save, now):
         if (not case or case.get("kind") != "business-thesis" or case["worldId"] != job["worldId"]
                 or case["revision"] != review["expectedRevision"] or case["status"] not in ACTIVE):
             raise ValueError("business contract changed after capture")
+        if thesis_expired(case, now):
+            expired = expire_thesis(case, now)
+            save(connection, expired, job["taskId"], "business-expired", expired["expiry"])
+            receipt["deferred"].append({"thesisId": case["caseId"], "reason": "confirmation-window-expired"})
+            continue
         # Evaluations were captured before the author call and independently reviewed.
         memory = next((row for row in result["input"].get("businessThesisMemory", []) if row["caseId"] == case["caseId"]), {})
         case["observations"] = deepcopy(memory.get("observations", case.get("observations", [])))
@@ -58,9 +63,25 @@ def business_memories(connection, account, symbol, world, now):
     records = []
     for row in rows:
         case = json.loads(row["payload_json"])
+        if thesis_expired(case, now):
+            continue
         records.append({**{key: deepcopy(case[key]) for key in ("caseId", "accountId", "symbol", "worldId", "kind", "status",
             "revision", "contract", "createdAt", "expiresAt", "nextCheckAt", "observations")},
             "origin": {key: deepcopy(case["origin"][key]) for key in ("taskId", "executionInputId", "capturedAt", "sourceQuestions") if key in case["origin"]},
             "lastReview": {key: deepcopy(value) for key, value in case.get("lastReview", {}).items() if key != "observations"}, "reviewDue": case["nextCheckAt"] <= now,
             "authority": "historical-context-only", "qualification": "not-empirically-qualified"})
     return records
+
+
+def expire_business(store, connection, account, symbol, world, now):
+    rows = connection.execute("SELECT payload_json FROM ai_brain_cases WHERE account_id=%s AND symbol=%s "
+        "AND kind='business-thesis' AND status IN ('tracking','needs-review','data-needed') "
+        "AND JSON_UNQUOTE(JSON_EXTRACT(payload_json,'$.worldId'))=%s ORDER BY case_id LIMIT 2 FOR UPDATE",
+        (account, symbol, world)).fetchall()
+    expired = 0
+    for row in rows:
+        case = expire_thesis(json.loads(row["payload_json"]), now)
+        if case:
+            store.save(connection, case, "", "business-expired", case["expiry"])
+            expired += 1
+    return expired

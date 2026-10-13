@@ -248,7 +248,7 @@ class BrainAgendaStorageTests(unittest.TestCase):
         self.assertEqual(assessment, frozen["researchResults"][0]["lastResearch"]["result"]["questionAssessment"])
         self.assertEqual(research["researchRequest"], memory["researchRequest"])
         self.assertEqual("review-needed", memory["status"])
-        self.assertTrue(memory["reviewDue"])
+        self.assertFalse(memory["reviewDue"], "source planning owns incomplete documentary questions")
         raw = {**plan(), "questions": [QUESTION], "caseReviews": [review_case(memory, "answered")], "serviceFeedback": []}
         follow, evaluated, next_jobs = self.observation(raw, seed=False)
         self.assertTrue(self.control.complete(follow, evaluated, next_jobs))
@@ -285,11 +285,11 @@ class BrainAgendaStorageTests(unittest.TestCase):
             self.control.insert(c, other)
         self.assertTrue(self.control.complete(research, {"status": "completed"}, []))
 
-        def check_only_owner_woken():
+        def check_only_owner_woken(capability="observe"):
             with self.control.connect() as c:
-                rows = c.execute("SELECT task_id,available_at,priority FROM ai_control_tasks WHERE status='pending'").fetchall()
+                rows = c.execute("SELECT task_id,capability,available_at,priority FROM ai_control_tasks WHERE status='pending'").fetchall()
             foreign = next(row for row in rows if row["task_id"] == other["taskId"])
-            owner = next(row for row in rows if row["task_id"] != other["taskId"])
+            owner = next(row for row in rows if row["task_id"] != other["taskId"] and row["capability"] == capability)
             self.assertEqual(due, foreign["available_at"])
             self.assertEqual(0, foreign["priority"])
             self.assertLessEqual(owner["available_at"], stamp())
@@ -299,7 +299,7 @@ class BrainAgendaStorageTests(unittest.TestCase):
         with self.control.transaction() as c:
             c.execute("UPDATE ai_control_tasks SET available_at=%s,priority=0 WHERE status='pending'", (due,))
         self.brain.wake_due([self.subject, {**self.subject, "worldId": "another-world"}])
-        check_only_owner_woken()
+        check_only_owner_woken("research-plan")
 
     def test_failed_research_wakes_review_and_rejected_assessment_cannot_close_or_spin(self):
         task, result, children = self.observation()
@@ -312,6 +312,8 @@ class BrainAgendaStorageTests(unittest.TestCase):
         self.control.fail(research, "TimeoutError")
         memory = next(row for row in self.brain.memory("control-test", "TEST") if row["kind"] == "brain-case")
         self.assertEqual("failed", memory["lastResearch"]["result"]["status"])
+        with self.control.transaction() as c:
+            self.brain.wake_observation(c, self.subject["accountId"], "TEST", self.subject["worldId"], stamp())
         raw = {**plan(), "questions": [], "caseReviews": [review_case(memory, "answered")], "serviceFeedback": []}
         follow, rejected, next_jobs = self.observation(raw, seed=False)
         rejected["quality"]["status"] = "rejected"

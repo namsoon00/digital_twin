@@ -197,6 +197,9 @@ def assert_research_admission(t):
         case = t.brain.read(c, research["brainCaseId"], t.subject["accountId"], "TEST", lock=True)
         case["lastResearch"]["requestedAt"] = later(stamp(), -361)
         t.brain.save(c, case, research["taskId"], "test-retry-due")
+        # A source failure no longer wakes the market author. Explicitly make
+        # this observation due to exercise its separate quality gate.
+        t.brain.wake_observation(c, t.subject["accountId"], "TEST", t.subject["worldId"], stamp())
     memory = next(row for row in t.brain.memory(t.subject["accountId"], "TEST") if row["kind"] == "brain-case")
     raw = {**plan(), "questions": [], "caseReviews": [review_case(memory, "research")],
            "questionResolutions": [resolution(memory, "defer", -1)]}

@@ -194,7 +194,7 @@ def checkpoint_observation(check, packet, registered_at, expires_at):
               "status": "awaiting-report", "qualification": "metric-observation-only"}
     if not all((registered, captured, expires)) or captured < registered:
         return {**result, "status": "invalid-clock"}
-    if captured > expires:
+    if captured >= expires:
         return {**result, "status": "expired-unobserved"}
     candidates = []
     for current in financial_metrics(packet):
@@ -234,6 +234,23 @@ def evaluate_thesis(case, packet):
         results.append(deepcopy(old) if old.get("status") in {"direction-observed", "direction-not-observed"}
                        else checkpoint_observation(check, packet, case["createdAt"], case["expiresAt"]))
     return results
+
+
+def thesis_expired(case, now):
+    deadline, current = clock(case.get("expiresAt")), clock(now)
+    return bool(deadline and current and current >= deadline)
+
+
+def expire_thesis(case, now):
+    if case.get("status") not in ACTIVE or not thesis_expired(case, now):
+        return None
+    expired = deepcopy(case)
+    expired.update(status="expired", nextCheckAt="", expiredAt=now,
+                   reason="가설의 확인 기간이 끝나 현재 추적을 종료했습니다. 기존 결과는 보존하며 다시 확인하려면 새 기준으로 등록해야 합니다.")
+    expired["observations"] = evaluate_thesis(case, {"capturedAt": now, "facts": []})
+    expired["expiry"] = {"deadline": case["expiresAt"], "qualification": "not-empirically-qualified",
+                         "hadCheckpoints": bool(case["contract"]["checkpoints"])}
+    return expired
 
 
 def thesis_case(job, result, thesis, now):

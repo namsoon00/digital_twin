@@ -43,7 +43,9 @@ def research_progress(case, event):
         else:
             category, state, label = "collection", "returned", "연구 자료 갱신 · 답변 검토 대기"
     elif stage == "review-deferred" and case.get("reviewBlocker"):
-        category, state, label = "review-blocker", case["reviewBlocker"], "가설 판단 보류 · 원인 확인"
+        # Draft validation is an operational incident, not a new research
+        # finding. Keep it in the case/event audit without repeated customer pushes.
+        return None
     elif stage == "development-returned":
         progress = case.get("developmentProgress", {})
         category, state, label = "development", [progress.get("status"), [

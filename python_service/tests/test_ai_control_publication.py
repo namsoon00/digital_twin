@@ -1,12 +1,14 @@
 """Cutover, grounded publication and receipt-backed delivery regressions."""
 from datetime import datetime, timedelta, timezone
+from copy import deepcopy
+from itertools import permutations
 import os
 from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
 
 from digital_twin.modules.ai_orchestration.domain.planning import identity, stamp, validate_plan
-from digital_twin.modules.ai_orchestration.domain.publication import publication_block, repeat_block
+from digital_twin.modules.ai_orchestration.domain.publication import publication_block, repeat_block, quote_from, QUOTE_SELECTION_VERSION
 from digital_twin.modules.ai_orchestration.domain.observation_diagnostic import observation_diagnostic
 from digital_twin.modules.ai_orchestration.domain.insight_quality import local_quality
 from digital_twin.infrastructure.transactions.ai_control_publication import AIControlPublication, validate_narrative
@@ -23,6 +25,71 @@ from ai_insight_fixtures import observation, persist_review
 
 
 class CentralPublicationPolicyTests(unittest.TestCase):
+    def test_subject_quote_is_shared_by_admission_rendering_diagnostics_and_receipts(self):
+        from digital_twin.modules.notifications.application.ai_observation_message import render_ai_observation
+        from digital_twin.modules.notifications.domain.observation_price_basis import price_basis_for_result
+        result = observation()
+        stock = result["input"]["facts"][0]
+        stock["maxAgeMinutes"] = 15
+        valuation = {**stock, "id": "valuation", "kind": "relative-valuation", "currentPrice": 999}
+        proxy = {**stock, "id": "proxy", "kind": "market-proxy-observation", "currentPrice": 777}
+        foreign = {**stock, "id": "other-stock", "symbol": "OTHER", "currentPrice": 555}
+        result["quoteSelectionVersion"] = QUOTE_SELECTION_VERSION
+        for facts in permutations([valuation, proxy, foreign, stock]):
+            with self.subTest(order=[row["id"] for row in facts]):
+                result["input"]["facts"] = list(facts)
+                before = deepcopy(result)
+                self.assertEqual(stock, quote_from(result["input"]))
+                self.assertEqual("", publication_block(result))
+                body = render_ai_observation(result)
+                self.assertIn("현재가: 100원", body)
+                for price in (999, 777, 555):
+                    self.assertNotIn("현재가: " + str(price) + "원", body)
+                self.assertEqual(stock["id"], price_basis_for_result(result, result["observedAt"])["evidenceId"])
+                self.assertEqual(100, observation_diagnostic(result, "task", "검토 대기")["quote"]["currentPrice"])
+                self.assertEqual(before, result)
+        # Existing queued/partial deliveries keep their original body contract.
+        result["input"]["facts"] = [valuation, stock]
+        del result["quoteSelectionVersion"]
+        self.assertIn("현재가: 999원", render_ai_observation(result))
+        self.assertEqual(999, observation_diagnostic(result, "task", "검토 대기")["quote"]["currentPrice"])
+        # Newly published drafts persist the version before the outbox is built.
+        publication = AIControlPublication({}, Mock(), Mock(), lambda: [])
+        publication.review_block = Mock(return_value="")
+        with patch("digital_twin.infrastructure.transactions.ai_control_publication.quality_block", return_value=""):
+            self.assertEqual("queued", publication.publish(Mock(), {**SUBJECT, "taskId": "task"}, result)["status"])
+        job = publication.notifications.enqueue_with_connection.call_args.args[1]
+        self.assertEqual(QUOTE_SELECTION_VERSION, job.context["aiControlObservation"]["quoteSelectionVersion"])
+        self.assertIn("100원", job.text)
+        self.assertNotIn("999원", job.text)
+
+    def test_quote_selection_never_waives_missing_citation_price_or_time_checks(self):
+        for mutation in ("uncited", "missing", "foreign", "missing-symbol", "stale", "old", "future",
+                         "bad-clock", None, True, 0, -1, float("nan"), float("inf"), "invalid"):
+            with self.subTest(mutation=mutation):
+                result = observation()
+                stock = result["input"]["facts"][0]
+                decoy = {**stock, "id": "valuation", "kind": "relative-valuation"}
+                result["input"]["facts"] = [decoy, stock]
+                result["evidenceIds"].append("valuation")
+                if mutation == "uncited":
+                    result["evidenceIds"].remove(stock["id"])
+                elif mutation == "missing":
+                    result["input"]["facts"] = [decoy]
+                elif mutation == "foreign":
+                    stock["symbol"] = "OTHER"
+                elif mutation == "missing-symbol":
+                    del result["input"]["symbol"]
+                elif mutation == "stale":
+                    stock["freshnessStatus"] = "stale"
+                elif mutation in ("old", "future"):
+                    stock["sourceAsOf"] = (datetime.now(timezone.utc) + timedelta(days=-2 if mutation == "old" else 2)).isoformat()
+                elif mutation == "bad-clock":
+                    stock["sourceAsOf"] = "invalid"
+                else:
+                    stock["currentPrice"] = mutation
+                self.assertTrue(publication_block(result))
+
     def test_silence_stays_internal_but_rejected_send_drafts_are_diagnostic(self):
         result = observation()
         self.assertEqual("", publication_block(result))
@@ -140,11 +207,18 @@ class CentralPublicationStorageTests(unittest.TestCase):
         draft['input']['facts'][0]['maxAgeMinutes'] = 15
         draft['wordingVersion'] = OBSERVATION_WORDING_VERSION
         draft['followUpConditions'][0]['description'] = '중기 약세가 이어진다고 볼 근거가 약해집니다.'
+        draft['input']['facts'].insert(0, {**draft['input']['facts'][0],
+            'id': 'relative-valuation', 'kind': 'relative-valuation', 'currentPrice': 999})
+        from digital_twin.modules.reasoning.domain.observation_evidence import select_evidence
+        facts, draft['input']['coverage'] = select_evidence(draft['input']['facts'])
+        draft['input']['facts'] = sorted(facts, key=lambda row: row['kind'] == 'stock')
         task, result, job = self.publish(draft)
+        self.assertEqual(QUOTE_SELECTION_VERSION, result['quoteSelectionVersion'])
         self.assertEqual({}, self.publication.memory(job.account_id, "TEST"))
         renderer = NotificationRenderingService(context_enricher=Mock(side_effect=AssertionError("must not enrich")))
         message = renderer.render(job)
         self.assertIn("최근 관측 가격: 100원", message)
+        self.assertNotIn("999원", message)
         self.assertIn("평가 손익률: -9.09%", message)
         self.assertIn('현재가가 20일 평균 가격 초과로 전환 → 중기 약세가 이어진다고 볼 근거가 약해집니다.', message)
         notifier = Mock(supports_delivery_checkpoints=False)
@@ -159,6 +233,8 @@ class CentralPublicationStorageTests(unittest.TestCase):
         baseline = self.publication.memory(job.account_id, "TEST")
         self.assertEqual(job.job_id, baseline["jobId"])
         self.assertEqual(100, baseline["facts"][0]["currentPrice"])
+        self.assertEqual('quote-1', baseline['renderedPriceBasis']['evidenceId'])
+        self.assertEqual('quote-1', baseline['deliveryPriceBasis']['evidenceId'])
         self.assertEqual({}, self.publication.memory("another", "TEST"))
         # Simulate a pre-contract receipt that kept only a compact price tuple.
         # The actual completed task remains the only source of missing fields.

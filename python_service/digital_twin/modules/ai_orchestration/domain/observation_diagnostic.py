@@ -1,7 +1,7 @@
 """A rejected send candidate is inspectable, never a delivered investment insight."""
 from copy import deepcopy
 
-from digital_twin.modules.ai_orchestration.domain.publication import quote_from
+from digital_twin.modules.ai_orchestration.domain.publication import quote_from, legacy_quote_from, QUOTE_SELECTION_VERSION
 
 
 def observation_diagnostic(result, task_id, reason):
@@ -12,7 +12,8 @@ def observation_diagnostic(result, task_id, reason):
     review = quality.get("review") if isinstance(quality.get("review"), dict) else {}
     review_sections = review.get("sections") if isinstance(review.get("sections"), dict) else {}
     repair = result.get("repair") or {}
-    quote = quote_from(packet)
+    quote = (quote_from(packet) if result.get("quoteSelectionVersion") == QUOTE_SELECTION_VERSION
+             else legacy_quote_from(packet))
     quote_fields = ("currentPrice", "currency", "changeRate", "ma5", "ma20", "ma60",
                     "sourceAsOf", "asOf", "observationSource", "sourceName", "provider", "source",
                     "dataState", "freshnessStatus")

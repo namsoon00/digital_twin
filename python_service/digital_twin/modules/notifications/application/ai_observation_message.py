@@ -2,6 +2,7 @@
 from datetime import datetime, timezone
 import math
 from digital_twin.modules.ai_orchestration.contracts import OBSERVATION_METRICS, OBSERVATION_WORDING_VERSION, resolve_observation_ref
+from digital_twin.modules.ai_orchestration.contracts import observation_subject_quote, QUOTE_SELECTION_VERSION
 from digital_twin.modules.reasoning.contracts import quote_clock_assessment
 from digital_twin.modules.notifications.domain.observation_price_basis import PRICE_PRESENTATION_VERSION, observation_price_basis
 from zoneinfo import ZoneInfo
@@ -44,7 +45,9 @@ def metric(fact, field):
 
 def render_ai_observation(result, *, sent_at="", debug_number=""):
     packet = result["input"]
-    quote = next((row for row in packet["facts"] if figure(row.get("currentPrice")) and float(row["currentPrice"]) > 0), {})
+    # Persisted jobs without this version retain their original rendered bytes.
+    quote = (observation_subject_quote(packet) if result.get("quoteSelectionVersion") == QUOTE_SELECTION_VERSION
+             else next((row for row in packet["facts"] if figure(row.get("currentPrice")) and float(row["currentPrice"]) > 0), {}))
     assessment = {}
     if "quoteAssessment" in packet or result.get("pricePresentationVersion") == PRICE_PRESENTATION_VERSION:
         current = quote_clock_assessment(packet["facts"], sent_at or result["observedAt"])

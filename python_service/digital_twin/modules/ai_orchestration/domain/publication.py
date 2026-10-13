@@ -8,6 +8,7 @@ RETIRED_REASON = "기존 규칙 기반 투자 알림 경로가 종료되었습�
 COOLDOWN_MINUTES = 180
 DAILY_SUBJECT_LIMIT = 2
 DAILY_ACCOUNT_LIMIT = 8
+QUOTE_SELECTION_VERSION = "subject-stock-quote-v1"
 
 
 def legacy_route_retired(settings):
@@ -25,6 +26,28 @@ def instant(value):
 
 
 def quote_from(packet):
+    """Select the subject's source quote, never a valuation or proxy price.
+
+    Keep evidence order and validity gates separate: an uncited or stale quote
+    cannot be replaced by another fact merely to make publication pass.
+    """
+    symbol = packet.get("symbol")
+    if not symbol:
+        return {}
+    for fact in packet.get("facts", []):
+        if fact.get("kind") != "stock" or fact.get("symbol") != symbol:
+            continue
+        try:
+            price = fact.get("currentPrice")
+            if not isinstance(price, bool) and math.isfinite(float(price)) and float(price) > 0:
+                return fact
+        except (TypeError, ValueError):
+            pass
+    return {}
+
+
+def legacy_quote_from(packet):
+    """Reproduce an already queued diagnostic, without changing its payload."""
     for fact in packet.get("facts", []):
         try:
             if math.isfinite(float(fact.get("currentPrice"))) and float(fact["currentPrice"]) > 0:

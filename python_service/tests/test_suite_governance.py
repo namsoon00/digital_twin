@@ -312,7 +312,9 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # actual clocks and model inputs, and destination-safe retained replies.
         # RuleBox decision briefs separately verify scope, empirical authority,
         # candidate-versus-check semantics and frozen policy/price boundaries.
-        self.assertLessEqual(total, 2252)
+        # Subject quote selection covers shared presentation/receipt identity
+        # and rejects non-quotes without waiving citation or freshness checks.
+        self.assertLessEqual(total, 2254)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

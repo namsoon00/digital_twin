@@ -7,6 +7,16 @@ contexts; runtime composition injects their capabilities into the controller.
 
 ## Running behavior
 
+Publication selects a positive finite `stock` quote whose symbol matches the
+frozen observation subject. A `currentPrice` on relative valuation, a market
+proxy, or another subject is not that quote. Citation and source-clock gates
+still apply to the selected stock; selection cannot substitute an uncited or
+stale quote to pass those gates. New publications persist
+`quoteSelectionVersion=subject-stock-quote-v1`, shared by admission, rendered
+price, diagnostics and delivery price-basis metadata. Existing unversioned
+queued messages retain their original rendering contract. Historical rejected
+observations are not automatically replayed or sent.
+
 The managed `ai-control watch` worker discovers live portfolio/watchlist subjects
 from persisted monitoring snapshots. It seeds one durable observation chain per
 account and symbol. A matching RuleBox rule or a decision candidate is **not** a

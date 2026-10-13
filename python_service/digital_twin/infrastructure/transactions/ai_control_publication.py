@@ -7,7 +7,7 @@ from contextlib import contextmanager
 import json
 
 from digital_twin.modules.ai_orchestration.domain.planning import enabled, identity, stamp
-from digital_twin.modules.ai_orchestration.domain.publication import MESSAGE_TYPE, RETIRED_REASON, legacy_route_retired, publication_block, repeat_block
+from digital_twin.modules.ai_orchestration.domain.publication import MESSAGE_TYPE, RETIRED_REASON, QUOTE_SELECTION_VERSION, legacy_route_retired, publication_block, repeat_block
 from digital_twin.modules.ai_orchestration.domain.insight_quality import quality_block
 from digital_twin.modules.ai_orchestration.domain.insight_memory import receipt_facts, restore_legacy_receipt
 from digital_twin.modules.ai_orchestration.domain.observation_diagnostic import observation_diagnostic
@@ -98,6 +98,7 @@ class AIControlPublication:
         return restore_legacy_receipt(receipt, json.loads(row["result_json"])) if row else receipt
 
     def publish(self, connection, task, result):
+        result["quoteSelectionVersion"] = QUOTE_SELECTION_VERSION
         reason = publication_block(result) or quality_block(result) or self.review_block(task["taskId"], result, connection=connection)
         if reason:
             publication = {"status": "recorded", "reason": reason}

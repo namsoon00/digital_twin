@@ -1,5 +1,6 @@
 """Purpose and labels for dated observation prices, independent of send switches."""
 from digital_twin.modules.reasoning.contracts import quote_clock_assessment
+from digital_twin.modules.ai_orchestration.contracts import observation_subject_quote, QUOTE_SELECTION_VERSION
 
 
 PRICE_PRESENTATION_VERSION = "observation-price-basis-v1"
@@ -36,7 +37,8 @@ def observation_price_basis(quote, assessment):
 
 def price_basis_for_result(result, checked_at):
     packet = result["input"]
-    quote = next((row for row in packet["facts"] if row.get("kind") == "stock"), {})
+    quote = (observation_subject_quote(packet) if result.get("quoteSelectionVersion") == QUOTE_SELECTION_VERSION
+             else next((row for row in packet["facts"] if row.get("kind") == "stock"), {}))
     assessment = quote_clock_assessment(packet["facts"], checked_at)
     row = next((row for row in assessment["quotes"] if row["evidenceId"] == quote.get("id")), {})
     return observation_price_basis(quote, row)

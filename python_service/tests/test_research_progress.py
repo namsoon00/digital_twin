@@ -63,7 +63,10 @@ class ResearchProgressTests(unittest.TestCase):
 
     def test_frozen_escaped_body_account_routing_and_user_setting(self):
         value = case(); value["question"] = '<script>alert("x")</script>'
+        value["name"] = "테스트 <기업>"
         notice = research_progress(value, event())
+        value["name"] = "변경된 이름"
+        self.assertEqual("테스트 <기업>", notice["name"])
         queue = Mock(); queue.enqueue_with_connection.return_value = True
         publisher = ResearchProgressPublication(queue)
         connection = object()
@@ -74,6 +77,12 @@ class ResearchProgressTests(unittest.TestCase):
         self.assertEqual("event-1", job.source_event_id)
         self.assertNotIn("<script>", job.text)
         self.assertIn("&lt;script&gt;", job.text)
+        self.assertIn("연구 진행 · 테스트 &lt;기업&gt; (TEST)</b>", job.text)
+        for name in (None, "", "  ", "TEST"):
+            legacy = {**notice, "name": name}
+            if name is None:
+                legacy.pop("name")
+            self.assertIn("연구 진행 · TEST</b>", render_research_progress(legacy))
         from digital_twin.modules.notifications.application.notification.rendering import NotificationRenderingService
         renderer = NotificationRenderingService(context_enricher=Mock(side_effect=AssertionError("no new facts")))
         self.assertEqual(job.text, renderer.render(job))

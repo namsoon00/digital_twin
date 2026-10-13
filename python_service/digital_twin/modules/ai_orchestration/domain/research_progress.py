@@ -62,6 +62,7 @@ def research_progress(case, event):
     return {
         "version": "research-progress-v1", "eventId": event["eventId"],
         **{key: case[key] for key in ("caseId", "accountId", "symbol", "worldId")},
+        "name": case.get("name", ""),
         "taskId": event["taskId"], "revision": event["revision"], "at": event["at"],
         "stage": stage, "status": status, "label": label, "question": case.get("question", ""),
         "reason": case.get("reason", ""), "nextCheckAt": case.get("nextCheckAt", ""),

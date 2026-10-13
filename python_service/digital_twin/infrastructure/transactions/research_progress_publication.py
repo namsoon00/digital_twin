@@ -18,6 +18,7 @@ class ResearchProgressPublication:
             message_type="researchProgress", text=body, dedupe_key=job_id,
             source_event_id=event["eventId"], source_event_name="ai_research.progress_recorded", context={
                 "accountId": event["accountId"], "symbol": event["symbol"],
+                "name": event.get("name", ""),
                 "messageType": "researchProgress", "researchProgress": event,
                 "notificationContent": {"kind": "research-progress", "body": body}})
         accepted = self.notifications.enqueue_with_connection(connection, job)

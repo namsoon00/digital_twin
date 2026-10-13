@@ -11,7 +11,10 @@ def render_research_progress(value):
             return "표현 검토가 필요한 내용은 연구 기록에 보관했습니다."
         return escape(value[:limit], quote=False)
 
-    lines = ["<b>🔬 연구 진행 · " + text(value["symbol"], 64) + "</b>",
+    symbol = str(value["symbol"]).strip()
+    name = str(value.get("name") or "").strip()
+    subject = text(name, 160) + " (" + text(symbol, 64) + ")" if name and name != symbol else text(symbol, 64)
+    lines = ["<b>🔬 연구 진행 · " + subject + "</b>",
              text(value["label"]), "", "<b>연구 질문</b>", text(value["question"])]
     answer = value.get("documentaryAnswer") or {}
     if answer:

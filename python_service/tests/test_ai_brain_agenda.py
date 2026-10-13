@@ -188,8 +188,23 @@ class BrainAgendaStorageTests(unittest.TestCase):
         self.assertEqual("pending", saved[0]["status"])
         payload = json.loads(saved[0]["payload_json"])
         progress = payload["context"]["researchProgress"]
+        self.assertEqual(self.subject["name"], progress["name"])
+        self.assertIn(self.subject["name"] + " (" + self.subject["symbol"] + ")", saved[0]["text"])
         with self.control.connect() as connection:
             stored = connection.execute("SELECT case_id FROM ai_brain_case_events WHERE event_id=%s", (progress["eventId"],)).fetchone()
+            # Legacy display recovery must not rewrite a past case or borrow
+            # another account's label, even with a bad stored task reference.
+            connection.execute("UPDATE ai_brain_cases SET payload_json=JSON_REMOVE(payload_json,'$.name')")
+            from digital_twin.modules.ai_orchestration.infrastructure.mysql_brain_subjects import fill_case_names
+            original = self.brain.read(connection, progress["caseId"], account, self.subject["symbol"])
+            for key in ("accountId", "symbol", "worldId"):
+                wrong = {**original, key: "other-scope"}
+                fill_case_names(connection, [wrong])
+                self.assertNotIn("name", wrong)
+        visible = self.brain.status()["cases"]
+        self.assertTrue(all(row["name"] == self.subject["name"] for row in visible))
+        with self.control.connect() as connection:
+            self.assertNotIn("name", self.brain.read(connection, progress["caseId"], account, self.subject["symbol"]))
         self.assertEqual(progress["caseId"], stored["case_id"])
         from types import SimpleNamespace
         from digital_twin.modules.notifications.public import NotificationQueueRunner

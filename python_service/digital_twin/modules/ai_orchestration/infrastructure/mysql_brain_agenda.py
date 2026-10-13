@@ -12,6 +12,7 @@ from digital_twin.modules.ai_orchestration.domain.brain_management import (
 from digital_twin.modules.ai_orchestration.domain.execution_input import validate_execution_input, PROMPT_VERSION, REPAIR_PROMPT_VERSION
 from digital_twin.modules.ai_orchestration.domain.insight_quality import local_quality
 from digital_twin.modules.ai_orchestration.domain.recovery import retry_delays
+from .mysql_brain_subjects import fill_case_names
 
 
 SCHEMA = (
@@ -47,6 +48,7 @@ class MySQLBrainAgendaStore(MySQLOperationalConnection):
         return json.loads(row["payload_json"]) if row else None
 
     def save(self, connection, case, task_id, stage, details=None):
+        fill_case_names(connection, [case], task_id)
         now = stamp()
         case["revision"] += 1
         case["updatedAt"] = now
@@ -398,6 +400,7 @@ class MySQLBrainAgendaStore(MySQLOperationalConnection):
             rows = connection.execute("SELECT /*+ MAX_EXECUTION_TIME(5000) */ payload_json FROM ai_brain_cases WHERE (%s='' OR account_id=%s) "
                 "ORDER BY status IN ('open','waiting','review-needed','blocked','proposed','planned','tracking','needs-review','data-needed') DESC,updated_at DESC LIMIT 40", (account, account)).fetchall()
             cases = [json.loads(row["payload_json"]) for row in rows]
+            fill_case_names(connection, cases)
             if cases:
                 ids = [row["caseId"] for row in cases]
                 events = connection.execute("SELECT /*+ MAX_EXECUTION_TIME(5000) */ case_id,payload_json FROM (SELECT case_id,payload_json,"

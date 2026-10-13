@@ -6,7 +6,7 @@ const { once } = require('node:events');
 const { frontendDependency } = require('./frontend-toolchain.cjs');
 const root = path.resolve(__dirname, '../public');
 const brain = {goals:['미해결 질문을 근거로 재검토합니다.'],cases:[
- {caseId:'question',accountId:'owner',symbol:'TEST',status:'review-needed',question:'오래된 원래 질문을 다시 확인합니다.',researchAttempts:1,
+ {caseId:'question',accountId:'owner',symbol:'TEST',name:'테스트 <기업>',status:'review-needed',question:'오래된 원래 질문을 다시 확인합니다.',researchAttempts:1,
   hypothesisResolution:{disposition:'experiment',reason:'원래 질문의 반증을 격리 실험으로 확인합니다.'},
   developmentProgress:{status:'completed',resultStatus:'review-required',cases:[{status:'needs-revision',blockedReason:'흡수력 자료가 부족합니다. <script>bad</script>',dataShapeErrors:['causal-path-character-array']}]},
   origin:{capturedAt:'2026-01-01T00:00:00Z',hypothesis:'처음의 설명 <script>bad</script>',evidence:[{id:'old-fact',value:10}]},
@@ -30,7 +30,7 @@ result.businessResearch = {coverageNote:'공식 매출을 확인했으나 현금
  checkpoints:[{metric:'revenue',meaning:'다음 해 같은 기간 매출을 확인합니다.',baseline:{periodEnd:'2025-12-31',value:100,basis:{currency:'USD'}}}]}]};
 result.input.facts.push({kind:'company-relationship',counterparty:{name:'연결 기업 <script>bad</script>',symbol:''},relationType:'SUPPLIES_TO',direction:'inbound',
  publishedAt:'2026-02-01',firstKnownAt:'2026-03-01T00:00:00Z',excerpt:'Our suppliers include Example Devices.'});
-brain.cases.push({kind:'business-thesis',caseId:'business',symbol:'TEST',status:'tracking',contract:result.businessResearch.theses[0],
+brain.cases.push({kind:'business-thesis',caseId:'business',symbol:'TEST',name:'테스트 <기업>',status:'tracking',contract:result.businessResearch.theses[0],
  createdAt:'2026-03-01T00:00:00Z',expiresAt:'2027-08-01T00:00:00Z',reason:'후속 공시를 확인해 원래 설명을 다시 검토합니다.',
  observations:[{status:'direction-not-observed',current:{periodEnd:'2026-12-31',value:90,basis:{currency:'USD'}}}],
  origin:{evidence:[{title:'공시 원문 <script>bad</script>'}]},history:[]});
@@ -63,6 +63,8 @@ const server = http.createServer((req,res) => {
    assert.equal(await page.locator('.business-research script').count(), 0);
    assert.match(await page.locator('#brain').innerText(), /등록한 지표 방향과 다름/);
    assert.equal(await page.locator('#brain script').count(), 0);
+   assert.match(await page.locator('#brain h3').first().innerText(), /테스트 <기업> \(TEST\)/);
+   assert.match(await page.locator('#brain h3').last().innerText(), /테스트 <기업> \(TEST\) · 사업 가설/);
    await page.locator('.business-research').screenshot({path:'/tmp/orbit-business-panel-'+width+'.png'});
    assert.match(await page.locator('#overview').innerText(),/기록 공백은 정확한 중단 시간이나 AI 실패 횟수를 뜻하지 않습니다/);
    assert.match(await page.locator('#overview').innerText(),/이번 구간에서 판단 저장 미확인/);

@@ -406,6 +406,7 @@ def build_company_change_report(
             "unchanged": "직전 보고서와 연결된 AI 해석의 핵심 내용이 같습니다.",
         }.get(transition, "같은 기준으로 비교할 검증된 해석이 없어 관점의 강화·약화를 판정하지 않았습니다."))
     report["researchRecord"] = _mapping(payload.get("companyResearchRecord"))
+    report["preparation"] = _mapping(payload.get("companyPreparation"))
     report["sections"] = reading_sections(report["reading"]) + [research_record_section(report["researchRecord"])] + changes_section + company_evidence_sections(evidence)
     report["sections"].extend(section for section in assessment_sections if section["key"] != "changes")
     insight = report["reading"]["insight"]

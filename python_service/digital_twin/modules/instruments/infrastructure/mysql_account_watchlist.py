@@ -7,9 +7,10 @@ from digital_twin.modules.instruments.infrastructure.account_watchlist import mu
 
 
 class MySQLAccountWatchlistRepository(MySQLOperationalConnection):
-    def __init__(self, settings, account_reader: WatchlistAccountReader):
+    def __init__(self, settings, account_reader: WatchlistAccountReader, refresh_recorder=None):
         super().__init__(settings)
         self.account_reader = account_reader
+        self.refresh_recorder = refresh_recorder
 
     def load_saved(self):
         return self.account_reader.load_saved()
@@ -23,4 +24,7 @@ class MySQLAccountWatchlistRepository(MySQLOperationalConnection):
 
     def mutate_watchlist(self, account_id, action, symbols):
         with self.transaction() as connection:
-            return mutate_watchlist(connection, account_id, action, symbols, utc_now())
+            updated, event = mutate_watchlist(connection, account_id, action, symbols, utc_now())
+            if event and self.refresh_recorder:
+                self.refresh_recorder(connection, event)
+            return updated, event

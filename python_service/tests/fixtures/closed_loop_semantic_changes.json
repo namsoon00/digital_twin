@@ -563,7 +563,7 @@
       "hash": "4531fa5b3a2f562d80199c0a2ae7fd3864082d5784c4e1288c22376541c5cf19",
       "reason": "Replace append-and-supersede pending work with one durable latest-state mailbox owner per deployment and scope while preserving all source lineage; test_independent_reasoning_engine and test_integrated_load."
     },
-    "modules/news_intelligence/infrastructure/mysql_research_evidence.py::MySQLResearchEvidenceStore": {"hash": "84146927a853efd4e4805114db2195b093518a9ebc53e65eb8c4a1cb9dec8ab0", "reason": "Add a bounded active filing lookup prioritizing original source IDs from open questions, preserving all existing write and event transactions. test_research_evidence_store; test_research_judgment_continuity; docs/ai-control.md."},
+    "modules/news_intelligence/infrastructure/mysql_research_evidence.py::MySQLResearchEvidenceStore": {"hash": "a2295397ba48837d5da6a86710f343d510de16a2e341d1c67a4176b5139f043b", "reason": "Add bounded active original-source lookups and a latest-four verified issuer-document lookup for holding/watchlist relationship backfill; preserve existing write and event transactions. test_research_evidence_store; test_research_judgment_continuity; test_company_preparation; docs/ai-control.md; docs/business-research-loop.md."},
     "modules/reasoning/infrastructure/mysql_engine_runtime.py::MySQLReasoningEngineRegistryStore": {
       "hash": "670bef0c97f7142c87f98b034e845cf89e1376850dbf78862d96c2450bc570db",
       "reason": "Commit both release statuses, active/delivery ownership and adoption/rollback receipt atomically under a version guard; test_ontology_evolution."

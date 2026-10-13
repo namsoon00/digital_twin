@@ -326,7 +326,10 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # exact projection, invalid sources, frozen reads, review proof and atomic agenda persistence.
         # Ten rule-scoped readiness regressions: independent hypotheses, native
         # proof gaps, source/model distinctions and receipt-backed final reasons.
-        self.assertLessEqual(total, 2298)
+        # Eleven shared company-preparation contracts protect holding/watchlist
+        # scope, receipt-backed stages, source clocks, bounded restart recovery,
+        # the normal two-slot pool, and atomic monitor/TypeDB queue handoffs.
+        self.assertLessEqual(total, 2309)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

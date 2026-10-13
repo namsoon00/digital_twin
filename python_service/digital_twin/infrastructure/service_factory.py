@@ -17,6 +17,8 @@ _EXPORTS = {'ActiveDeploymentWorldProjectionSink': ('digital_twin.infrastructure
                                             'active_versioned_reasoning_queue_state'),
  'build_ai_inference_queue_runner': ('digital_twin.infrastructure.composition.decisions',
                                      'build_ai_inference_queue_runner'),
+ 'build_company_preparation': ('digital_twin.infrastructure.composition.company_preparation',
+                                'build_company_preparation'),
  'build_decision_action_planning_service': ('digital_twin.infrastructure.composition.portfolio',
                                             'build_decision_action_planning_service'),
  'build_decision_episode_reconciliation_service': ('digital_twin.infrastructure.composition.decisions',

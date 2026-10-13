@@ -1,5 +1,6 @@
 {
   "tests": [
+    {"file": "test_company_preparation.py", "tier": "integration", "core": true},
     {"file": "test_ai_diagnostic_progress.py", "tier": "integration", "core": true},
     {"file": "test_ai_task_dispatch.py", "tier": "integration", "core": true},
     {"file": "test_research_work.py", "tier": "integration", "core": true},

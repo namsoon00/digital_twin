@@ -57,6 +57,7 @@ class InstrumentValuationQueryService:
         report_history_store=None,
         report_insight_reader=None,
         report_research_reader=None,
+        preparation_reader=None,
     ):
         self.monitor_store = monitor_store
         self.valuation_service = valuation_service or ValuationModelService()
@@ -64,6 +65,7 @@ class InstrumentValuationQueryService:
         self.report_history_store = report_history_store
         self.report_insight_reader = report_insight_reader
         self.report_research_reader = report_research_reader
+        self.preparation_reader = preparation_reader
 
     def query(self, query: InstrumentValuationQuery) -> Dict[str, object]:
         request = query.normalized()
@@ -407,6 +409,11 @@ class InstrumentValuationQueryService:
                 payload["companyResearchRecord"] = self.report_research_reader(account_id, request.symbol)
             except (OSError, RuntimeError, TypeError, ValueError):
                 payload["companyResearchRecord"] = {}
+        if callable(self.preparation_reader):
+            try:
+                payload["companyPreparation"] = self.preparation_reader(account_id, source_symbol)
+            except Exception:
+                payload["companyPreparation"] = {"status": "unavailable", "label": "진행 상태 조회 실패", "stages": []}
         payload["companyChangeReport"] = build_company_change_report(
             payload,
             self._previous_delivered_company_change_report(account_id, source_symbol),

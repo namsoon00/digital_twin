@@ -4,8 +4,6 @@ from digital_twin.infrastructure import operational_store as stores
 from digital_twin.infrastructure.operational_error_reporting import operational_error_reporter
 from digital_twin.infrastructure.operational_error_reporting import report_runtime_error
 from digital_twin.infrastructure.service_factory import build_account_watchlist_service
-from digital_twin.infrastructure.service_factory import build_market_data_collection_runner
-from digital_twin.infrastructure.service_factory import build_monitor_runner
 from digital_twin.infrastructure.service_factory import build_symbol_universe_service
 from digital_twin.infrastructure.settings import runtime_settings
 from digital_twin.infrastructure.web.common import configured
@@ -25,20 +23,6 @@ from digital_twin.modules.instruments.public import seed_symbol
 from typing import Dict
 from typing import List
 import threading
-
-
-WATCHLIST_REFRESH_LOCK = threading.Lock()
-
-
-WATCHLIST_REFRESH_STATE: Dict[str, object] = {
-    "running": False,
-    "pending": False,
-    "accountIds": set(),
-    "symbols": set(),
-    "lastStatus": "idle",
-    "lastError": "",
-    "lastFinishedAt": "",
-}
 
 
 SYMBOL_UNIVERSE_REFRESH_LOCK = threading.Lock()
@@ -64,68 +48,12 @@ SYMBOL_UNIVERSE_REFRESH_STATE: Dict[str, object] = {
 }
 
 
-def watchlist_refresh_status() -> Dict[str, object]:
-    with WATCHLIST_REFRESH_LOCK:
-        return {
-            "status": "queued" if WATCHLIST_REFRESH_STATE["running"] else str(WATCHLIST_REFRESH_STATE["lastStatus"]),
-            "running": bool(WATCHLIST_REFRESH_STATE["running"]),
-            "pending": bool(WATCHLIST_REFRESH_STATE["pending"]),
-            "accountIds": sorted(WATCHLIST_REFRESH_STATE["accountIds"]),
-            "symbols": sorted(WATCHLIST_REFRESH_STATE["symbols"]),
-            "lastError": str(WATCHLIST_REFRESH_STATE["lastError"]),
-            "lastFinishedAt": str(WATCHLIST_REFRESH_STATE["lastFinishedAt"]),
-        }
-
-
-def run_watchlist_refresh_pipeline() -> None:
-    while True:
-        with WATCHLIST_REFRESH_LOCK:
-            account_ids = set(WATCHLIST_REFRESH_STATE["accountIds"])
-            symbols = set(WATCHLIST_REFRESH_STATE["symbols"])
-            WATCHLIST_REFRESH_STATE["accountIds"] = set()
-            WATCHLIST_REFRESH_STATE["symbols"] = set()
-            WATCHLIST_REFRESH_STATE["pending"] = False
-            WATCHLIST_REFRESH_STATE["lastStatus"] = "running"
-            WATCHLIST_REFRESH_STATE["lastError"] = ""
-        try:
-            settings = runtime_settings()
-            build_market_data_collection_runner(settings=settings).run_once(force=True)
-            registry = stores.account_reader(settings)
-            accounts = [account for account in registry.load() if not account_ids or account.account_id in account_ids]
-            if accounts:
-                build_monitor_runner(accounts, settings=settings).run_once(
-                    force=False,
-                    symbol_filter=symbols,
-                    holdings_snapshot_requested=False,
-                )
-            with WATCHLIST_REFRESH_LOCK:
-                WATCHLIST_REFRESH_STATE["lastStatus"] = "completed"
-        except Exception as error:  # noqa: BLE001 - the saved watchlist must remain usable when a vendor is unavailable.
-            report_runtime_error(operational_error_reporter(), "Watchlist refresh", error, "watchlist refresh pipeline")
-            with WATCHLIST_REFRESH_LOCK:
-                WATCHLIST_REFRESH_STATE["lastStatus"] = "failed"
-                WATCHLIST_REFRESH_STATE["lastError"] = str(error)[:300]
-        with WATCHLIST_REFRESH_LOCK:
-            WATCHLIST_REFRESH_STATE["lastFinishedAt"] = now()
-            if WATCHLIST_REFRESH_STATE["pending"]:
-                continue
-            WATCHLIST_REFRESH_STATE["running"] = False
-            return
-
-
 def request_watchlist_refresh(account_id: str, symbol: str, _action: str) -> Dict[str, object]:
-    should_start = False
-    with WATCHLIST_REFRESH_LOCK:
-        WATCHLIST_REFRESH_STATE["accountIds"].add(str(account_id or ""))
-        if symbol:
-            WATCHLIST_REFRESH_STATE["symbols"].add(str(symbol).upper())
-        WATCHLIST_REFRESH_STATE["pending"] = True
-        if not WATCHLIST_REFRESH_STATE["running"]:
-            WATCHLIST_REFRESH_STATE["running"] = True
-            should_start = True
-    if should_start:
-        threading.Thread(target=run_watchlist_refresh_pipeline, name="watchlist-refresh", daemon=True).start()
-    return watchlist_refresh_status()
+    # The repository committed this request together with membership and its
+    # event. Returning a receipt never launches collection inside the web server.
+    return {"status": "queued", "durable": True, "accountIds": [account_id],
+            "symbols": [symbol] if symbol else [], "pipeline": "monitor-snapshot-typedb-ai",
+            "analysisCompleted": False}
 
 
 def account_watchlist_service() -> AccountWatchlistService:

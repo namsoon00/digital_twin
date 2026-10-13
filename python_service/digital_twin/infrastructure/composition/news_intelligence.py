@@ -84,6 +84,7 @@ def build_source_exploration_service(settings=None):
 
 
 def build_investment_research_queue_runner(settings=None) -> InvestmentResearchQueueRunner:
+    from digital_twin.infrastructure.composition.company_preparation import build_company_preparation
     from digital_twin.infrastructure import operational_store as stores
     from digital_twin.infrastructure.composition.model_registry import build_hypothesis_proposal_service
     from digital_twin.infrastructure.settings import runtime_settings
@@ -94,6 +95,7 @@ def build_investment_research_queue_runner(settings=None) -> InvestmentResearchQ
     research_store = stores.investment_research_store(configured_settings)
     return InvestmentResearchQueueRunner(
         store=research_store,
+        preparation_service=build_company_preparation(configured_settings),
         orchestrator=build_investment_research_orchestrator(configured_settings, research_store),
         hypothesis_proposal_runner=HypothesisProposalQueueRunner(
             research_store,

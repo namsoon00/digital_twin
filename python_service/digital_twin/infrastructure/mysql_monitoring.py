@@ -339,20 +339,8 @@ class MySQLMonitorAccountJobStore:
         requested_priority = max(0, min(100, int(priority or 10)))
         with self.transaction() as connection:
             with connection.cursor() as cursor:
-                cursor.execute(
-                    """
-                    INSERT INTO monitor_account_jobs (
-                        account_id, status, priority, next_run_at, locked_by, locked_until,
-                        attempts, last_started_at, last_finished_at, last_error, updated_at
-                    ) VALUES (%s, 'pending', %s, %s, '', '', 0, '', '', '', %s)
-                    ON DUPLICATE KEY UPDATE
-                        status = CASE WHEN status = 'processing' THEN status ELSE 'pending' END,
-                        priority = LEAST(priority, VALUES(priority)),
-                        next_run_at = VALUES(next_run_at),
-                        updated_at = VALUES(updated_at)
-                    """,
-                    (clean_account_id, requested_priority, stamp, stamp),
-                )
+                from digital_twin.modules.market_data.infrastructure.monitor_refresh import record_monitor_refresh
+                record_monitor_refresh(cursor.execute, clean_account_id, stamp, requested_priority)
         return {
             "requested": True,
             "scheduledAt": stamp,

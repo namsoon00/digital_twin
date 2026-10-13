@@ -41,9 +41,13 @@ def account_reader(settings: Dict[str, str] = None):
 def account_watchlist_repository(settings: Dict[str, str] = None):
     from digital_twin.modules.accounts.infrastructure.mysql_watchlist_account_reader import MySQLWatchlistAccountReader
     from digital_twin.modules.instruments.infrastructure.mysql_account_watchlist import MySQLAccountWatchlistRepository
+    from digital_twin.infrastructure.transactions.watchlist_refresh import record_watchlist_refresh
 
     configured = configured_settings(settings)
-    return MySQLAccountWatchlistRepository(configured, MySQLWatchlistAccountReader(configured))
+    # Schema setup is outside the membership transaction. The normal manager
+    # bootstraps this existing queue; standalone commands use its same guard.
+    monitor_account_job_store(configured)
+    return MySQLAccountWatchlistRepository(configured, MySQLWatchlistAccountReader(configured), record_watchlist_refresh)
 
 
 def app_store(settings: Dict[str, str] = None):

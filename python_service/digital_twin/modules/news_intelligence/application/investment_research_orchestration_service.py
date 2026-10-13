@@ -645,14 +645,22 @@ class InvestmentResearchQueueRunner:
         store,
         orchestrator: InvestmentResearchOrchestrationService,
         hypothesis_proposal_runner=None,
+        preparation_service=None,
     ):
         self.store = store
         self.orchestrator = orchestrator
         self.hypothesis_proposal_runner = hypothesis_proposal_runner
+        self.preparation_service = preparation_service
         self.last_results: List[Dict[str, object]] = []
 
     def run_once(self, limit: int = 5) -> Dict[str, object]:
         self.last_results = []
+        preparation = {"status": "not-configured"}
+        if self.preparation_service is not None:
+            try:
+                preparation = self.preparation_service.run_once()
+            except Exception as error:
+                preparation = {"status": "failed", "errorKind": type(error).__name__}
         runs = self.store.claim_queued_runs(limit) if self.store and hasattr(self.store, "claim_queued_runs") else []
         for queued in runs:
             try:
@@ -690,6 +698,7 @@ class InvestmentResearchQueueRunner:
             "queuedCount": self.store.queued_count() if self.store and hasattr(self.store, "queued_count") else 0,
             "results": self.last_results,
             "hypothesisProposalAutomation": proposal_result,
+            "companyPreparation": preparation,
         }
 
     def status(self) -> Dict[str, object]:

@@ -1442,6 +1442,16 @@ class MySQLResearchEvidenceStore(MySQLOperationalConnection):
             rows = self._latest_rows(connection, conditions, params, page_size, 0)
         return [research_evidence_from_row(row) for row in rows]
 
+    def relationship_documents(self, symbol):
+        """Target only current cached issuer documents, never the whole archive."""
+        with self.connect() as connection:
+            rows = connection.execute(
+                "SELECT * FROM research_evidence WHERE symbol=%s AND lifecycle_state='active' "
+                "AND kind IN ('filing','disclosure','issuer-ir') AND JSON_EXTRACT(payload_json,'$.documentVerified')=true "
+                "AND JSON_TYPE(JSON_EXTRACT(payload_json,'$.officialDocumentText'))='STRING' "
+                "ORDER BY published_at DESC,evidence_id DESC LIMIT 4", (symbol,)).fetchall()
+        return [research_evidence_from_row(row) for row in rows]
+
     def latest_page(self, symbol: str = "", kind: str = "", limit: int = 50, offset: int = 0, query: str = "", include_inactive: bool = False) -> Tuple[List[ResearchEvidence], int]:
         conditions, params = self._latest_conditions(
             symbol=symbol,

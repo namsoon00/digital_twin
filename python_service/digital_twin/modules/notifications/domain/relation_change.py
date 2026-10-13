@@ -3,7 +3,7 @@
 from copy import deepcopy
 from typing import Mapping
 
-from digital_twin.modules.decisions.contracts import is_graph_backed_relation_context
+from digital_twin.modules.decisions.contracts import is_graph_backed_relation_context, rulebox_decision_brief, resolved_rule_threshold
 from digital_twin.modules.model_registry.contracts import relation_lifecycle_transition_contract
 from digital_twin.modules.notifications.domain.relation_observation_proof import capture_model_proof
 from digital_twin.modules.notifications.domain.relation_follow_up import follow_up_policy, source_issues
@@ -122,6 +122,7 @@ def relation_change_snapshot(context):
                 "matchedByTypeDB", "observedAt", "source", "freshnessStatus", "judgementEvidenceUsable",
             ) if isinstance(condition.get(key), (str, int, float, bool, list, dict))}
             captured["expectedValue"] = deepcopy(condition.get("expectedValue", condition.get("value")))
+            captured["resolvedThreshold"] = resolved_rule_threshold(captured, facts)
             measured = mapping(condition.get("matchedTargetProperties"))
             captured.update(capture_model_proof(measured, symbol))
             captured["modelSignalMatched"] = bool(measured.get("contractMatched") or condition.get("matchedByModelSignalInterpretationPolicy"))
@@ -134,6 +135,7 @@ def relation_change_snapshot(context):
                            "evidenceUsableForJudgement": item.get("evidenceUsableForJudgement", existing.get("evidenceUsableForJudgement")),
                            "freshnessGateReason": str(item.get("freshnessGateReason") or existing.get("freshnessGateReason") or ""),
                            "nextChecks": strings(item.get("nextChecks")) or existing.get("nextChecks", []),
+                           "invalidationContract": deepcopy(mapping(item.get("ruleInvalidationContract"))) or existing.get("invalidationContract", {}),
                            "claimContract": deepcopy(mapping(item.get("claimContract"))) or existing.get("claimContract", {})}
     fact_rows = []
     for key, value in facts.items():
@@ -173,6 +175,7 @@ def relation_change_snapshot(context):
         "capturedAt": str(source.get("generatedAt") or ""),
         "source": str(facts.get("quoteSource") or facts.get("apiSource") or ""),
         "dataState": str(mapping(relation.get("decisionState")).get("dataState") or "미기록"),
+        "decisionBrief": rulebox_decision_brief(context),
         "hypotheses": hypotheses, "rules": list(rules.values()), "facts": fact_rows,
         "marketSignalCoverage": {name: {key: deepcopy(value[key]) for key in coverage_keys if key in value}
                                  for name, value in coverage.items() if isinstance(value, Mapping)},

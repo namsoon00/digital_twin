@@ -585,6 +585,15 @@ The notification is sent through the configured local notifier, usually the acco
 
 ## Central AI orchestration
 
+Owner-approved RuleBox decision explanation (2026-10-13): the decisions-owned
+`rulebox-decision-brief-v1` is a scoped read model of existing graph restrictions,
+candidates and evidence requests. Notifications consume it through the decisions
+contract and freeze it with their evidence. A deferred check or constrained HOLD
+must not be presented as positive holding support. Explain same-snapshot policy
+parameters and qualification limits; do not select a trade, grant execution
+authority, reopen the retired AI route or alter immutable engine releases.
+See `docs/relationship-change-notifications.md` for the presentation contract.
+
 `ai_orchestration` owns independent observation/research work, model execution accounting,
 recurring plans and scoped research memory. Domain prompts, evidence verification and
 publication authority remain in their owning modules. See [Central AI control](ai-control.md).

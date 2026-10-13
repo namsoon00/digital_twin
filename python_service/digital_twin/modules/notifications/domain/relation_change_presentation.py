@@ -6,9 +6,10 @@ from digital_twin.modules.notifications.domain.observation_market_snapshot impor
 from digital_twin.modules.notifications.domain.alert_formatting import price_money
 from digital_twin.modules.notifications.domain.relation_observation_language import hypothesis_words, next_check_words
 from digital_twin.modules.notifications.domain.relation_observation_proof import model_evidence_paragraphs
+from digital_twin.modules.notifications.domain.rulebox_decision_presentation import decision_brief_presentation, threshold
 
 
-PRESENTATION_VERSION = "readable-relation-change-v8"
+PRESENTATION_VERSION = "readable-relation-change-v9"
 
 CHANGE = {
     "observed": "조건이 새로 확인됐습니다.",
@@ -76,9 +77,9 @@ def rule_conditions(rule, facts, currency):
         elif condition.get("modelSignalMatched"):
             result.append("분석 신호 조건 확인")
         elif field in FIELDS and not isinstance(actual, (dict, list)):
-            expected = condition.get("expectedValue")
-            threshold = condition_clause(field, str(condition.get("operator") or "="), expected, currency) if expected is not None else FIELDS[field][0] + " 기준값 미기록"
-            result.append(threshold + " / 확인값 " + measurement(field, actual, currency))
+            expected = threshold(condition, facts).get("value")
+            clause = condition_clause(field, str(condition.get("operator") or "="), expected, currency) if expected is not None else FIELDS[field][0] + " 기준값 미기록"
+            result.append(clause + " / 확인값 " + measurement(field, actual, currency))
         elif condition.get("label"):
             result.append(str(condition["label"]) + (" · 조건 확인" if condition.get("matchedByTypeDB") or condition.get("matched") else " · 세부값 미기록"))
     return unique(result)
@@ -250,8 +251,11 @@ def delivery_cause_rows(packet, currency):
                     continue
                 if field in before and before[field] != actual:
                     row = FIELDS[field][0] + ": 이전 알림 " + measurement(field, before[field], currency) + " → 이번 " + measurement(field, actual, currency)
-                    if condition.get("expectedValue") is not None:
-                        row += " · 판정 기준 " + condition_clause(field, str(condition.get("operator") or "="), condition["expectedValue"], currency)
+                    expected = threshold(condition, snapshot_facts(current)).get("value")
+                    if expected is not None:
+                        row += " · 판정 기준 " + condition_clause(field, str(condition.get("operator") or "="), expected, currency)
+                    elif condition.get("expectedValue") is not None:
+                        row += " · 실제 적용 기준값 미보존"
                     source_stage = ("ccnl" if field == "tradeStrength" else "investor" if field.endswith("NetVolume")
                                     else "orderbook" if field == "bidAskImbalance" else "volume" if "Volume" in field or field == "volumeRatio" else "price")
                     stamp = condition.get("observedAt") or (current.get("observedAt") if source_stage == "price"
@@ -362,6 +366,9 @@ def readable_relation_change(packet):
     named = hypotheses + [h for h in items(previous.get("hypotheses")) if h.get("id") not in {h.get("id") for h in hypotheses}]
     changes = unique(transition_sentence(row, named) for row in items(packet.get("transitions")))
     lead = " ".join(part for part in (" ".join(changes[:3]) or "새로운 근거 변화 없이 현재 기록을 확인합니다.", market_sentence(current, currency)) if part)
+    decision = decision_brief_presentation(packet)
+    if decision:
+        lead = decision["lead"] + " " + market_sentence(current, currency)
     market = {key: (title, rows) for key, title, rows in market_snapshot_sections(current, previous)}
     quote = [*market["current-price"][1], *market["price-trend"][1]]
     changed_ids = {h.get("id") for transition in items(packet.get("transitions"))
@@ -382,7 +389,8 @@ def readable_relation_change(packet):
         notes.append("추가 가설 " + str(len(hypotheses) - 3) + "개는 상세 근거에서 확인")
     if current.get("evidenceComparisonPartial"):
         notes.append("일부 근거의 의미를 연결하지 못해 전후 비교가 제한됩니다. 해당 근거의 개수는 강화·약화 판정에 사용하지 않았습니다.")
-    notes.append("가설은 검증할 설명이며 매수·매도 의견이 아닙니다.")
+    notes.append("관리 원칙의 제한과 행동 후보를 구분해 표시했습니다. 가설의 조건 확인은 예측 적중이나 최종 매매 확정을 뜻하지 않습니다."
+                 if decision else "가설은 검증할 설명이며 매수·매도 의견이 아닙니다.")
     source = " + ".join(value.split(" /api/")[0].strip() for value in str(current.get("source") or "출처 미기록").split(" + "))
     notes.append("확인 시점·출처: " + clock(current.get("observedAt")) + " · " + source)
     notes.append("전체 근거: 가설 " + str(len(hypotheses)) + "개 · 규칙 " + str(len(rules)) + "개 · 측정 항목 " + str(len(current.get("facts") or [])) + "개")
@@ -391,6 +399,7 @@ def readable_relation_change(packet):
     return {"lead": lead, "sections": [
         *(([("previous-alert", "이전 알림의 후속 변화", ["원본 알림 N-" + parent[:8].upper()])]) if parent else []),
         ("delivery-cause", "이번 알림이 온 이유 · 규칙 데이터", delivery_cause_rows(packet, currency)),
+        *decision.get("sections", []),
         *stories,
         ("holding", "내 보유 상황 · 시세 등락과 구분", [" · ".join(market["holding"][1])] if market["holding"][1] else []),
         ("current-price", "현재 전체 데이터 · 시세와 가격 흐름", quote),

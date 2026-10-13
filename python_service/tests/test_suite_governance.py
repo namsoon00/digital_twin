@@ -310,7 +310,9 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # Twelve source follow-up contracts cover receipt-scoped interruption /
         # recovery, quiet expiry, ambiguous parents, compact explanations,
         # actual clocks and model inputs, and destination-safe retained replies.
-        self.assertLessEqual(total, 2242)
+        # RuleBox decision briefs separately verify scope, empirical authority,
+        # candidate-versus-check semantics and frozen policy/price boundaries.
+        self.assertLessEqual(total, 2252)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

@@ -3,6 +3,7 @@
 from copy import deepcopy
 from datetime import datetime
 from digital_twin.modules.model_registry.domain.statistical_signals.contracts import signal_strength_floor
+from digital_twin.modules.model_registry.domain.hypothesis_data_readiness import source_check, summary
 
 
 VERSION = "hypothesis-change-basis-v2"
@@ -84,32 +85,9 @@ def source_refresh_decision(before, current, rule_ids):
             stamp = stamp or mapping(current.get("quote")).get("sourceAsOf")
             prior_stamp = prior_stamp or mapping(before.get("quote")).get("sourceAsOf")
         now_clock, old_clock = clock(stamp), clock(prior_stamp)
-        closed = profile.get("marketSessionStatus") == "closed"
-        unavailable = (not new or new.get("status") == "untested" or new.get("unknownConditionIds")
-                       or new.get("freshnessCompatible") is False
-                       or new.get("eligibilityStatus") == "ineligible"
-                       or profile.get("judgementEvidenceUsable") is False
-                       or profile.get("freshnessStatus") in {"stale", "unavailable", "expired"}
-                       or now_clock is None)
-        if unavailable:
-            status = "awaiting-source" if closed else "unavailable"
-        elif old_clock is not None and now_clock <= old_clock:
-            status = "awaiting-source"
-        elif before and old_clock is None:
-            status = "awaiting-source"  # Establish a baseline without claiming a change.
-        elif not before and closed:
-            status = "awaiting-source"
-        else:
-            status = "ready"
-        checks.append({"ruleId": rule_id, "domain": domain, "status": status,
-                       "sourceAsOf": stamp or "", "previousSourceAsOf": prior_stamp or "",
-                       "marketSessionStatus": profile.get("marketSessionStatus") or "unknown"})
-    blocked = [row for row in checks if row["status"] != "ready"]
-    status = ("unavailable" if any(row["status"] == "unavailable" for row in blocked)
-              else "awaiting-source" if blocked else "ready")
-    return {"version": "hypothesis-source-refresh-v1", "status": status, "rules": checks,
-            "reason": ("필요한 원천 자료를 사용할 수 없어 새 판단을 보류합니다." if status == "unavailable"
-                       else "새 거래 자료가 없어 마지막 판단과 기준 시각을 유지합니다." if blocked else "")}
+        checks.append(source_check(rule_id, domain, old, new, profile, stamp, prior_stamp,
+                                   now_clock, old_clock, bool(before)))
+    return summary(checks)
 
 
 def compare_change_basis(before, current, rule_ids, *, removed=False, require_model_proof=False):

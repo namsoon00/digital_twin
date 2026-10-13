@@ -39,6 +39,17 @@ def source_issues(relation, transition):
         elif signal.startswith("flow-"):
             domains.add("flow")
     restored = mapping(transition.get("dataAvailabilityChange")).get("kind") == "data-restored"
+    availability = mapping(snapshot.get("dataAvailability"))
+    if availability.get("version") == "hypothesis-data-readiness-v1" and not restored:
+        # New packets preserve the actual failing input. A fresh quote beside
+        # missing model proof is not a quote interruption, nor a flow outage.
+        return [{**deepcopy(row), "label": SOURCE_LABELS[row["domain"]],
+                 "ageMinutes": source_age(row.get("sourceAsOf"), transition.get("occurredAt")),
+                 "source": str(row.get("source") or "").split(" /api/")[0]}
+                for row in availability.get("issues") or []
+                if isinstance(row, dict) and row.get("sourceProblem") is True
+                and row.get("domain") in SOURCE_LABELS
+                and (not rule_ids or row.get("ruleId") in rule_ids)]
     result = []
     for domain in sorted(value for value in domains if value in SOURCE_LABELS):
         profile = mapping(mapping(relation.get("observationProfiles")).get(domain))
@@ -107,7 +118,9 @@ def follow_up_policy(transitions, previous, *, require_receipt):
         elif data:
             issues = row.get("dataIssues") or []
             if not issues:
-                reason = "어떤 원천 자료를 확인하지 못했는지 특정할 수 없어 웹 이력에 저장합니다."
+                detail = mapping(row.get("judgementReadiness")).get("reason")
+                reason = ("판단 보류: " + detail + " 웹 이력에 저장합니다." if detail else
+                          "어떤 원천 자료를 확인하지 못했는지 특정할 수 없어 웹 이력에 저장합니다.")
             elif all(issue.get("marketSessionStatus") == "closed" for issue in issues):
                 reason = "휴장에 따른 자료 갱신 대기는 알리지 않습니다."
             elif require_receipt:

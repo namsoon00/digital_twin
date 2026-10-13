@@ -235,7 +235,11 @@ class NotificationAdmissionPolicy:
                 "참고 관계를 만든 정확한 뉴스 원문을 연결하지 못해 사용자 알림을 보내지 않습니다.",
             )
         elif observation and not (job.context.get("relationChangeEvidence") or {}).get("eligible"):
-            decision.mark_suppressed("unchanged_rulebox_relation", "룰박스 관계의 새 의미 변화가 없어 웹 이력에만 저장합니다.")
+            packet = job.context.get("relationChangeEvidence") or {}
+            decision.mark_suppressed(
+                packet.get("nonDeliveryReasonCode") or "unchanged_rulebox_relation",
+                packet.get("reason") or "룰박스 관계의 새 의미 변화가 없어 웹 이력에만 저장합니다.",
+            )
         return decision
 
     def apply_result(
@@ -283,10 +287,13 @@ class NotificationAdmissionPolicy:
             "cooldown": "state_cooldown",
         }
         state_reason_code = state_reason_codes.get(str(decision.state_decision or ""), "")
-        if decision.state_suppressed and state_reason_code:
+        semantic_suppression = decision.suppression_reason in {
+            "rule_evidence_unavailable", "relation_followup_not_deliverable",
+        }
+        if decision.state_suppressed and state_reason_code and not semantic_suppression:
             decision.suppression_reason = state_reason_code
             decision.gate_reason = str(decision.state_reason or decision.gate_reason or "")
-        elif decision.similarity_suppressed:
+        elif decision.similarity_suppressed and not semantic_suppression:
             decision.suppression_reason = "similar_repeat"
             decision.gate_reason = str(decision.similarity_reason or decision.gate_reason or "")
         context = dict(job.context or {})

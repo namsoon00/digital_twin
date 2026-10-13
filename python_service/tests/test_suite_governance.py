@@ -324,7 +324,9 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # Three source-recovery extraction, checkpoint and central-memory contracts.
         # Five original-document and independent research-review regressions:
         # exact projection, invalid sources, frozen reads, review proof and atomic agenda persistence.
-        self.assertLessEqual(total, 2287)
+        # Ten rule-scoped readiness regressions: independent hypotheses, native
+        # proof gaps, source/model distinctions and receipt-backed final reasons.
+        self.assertLessEqual(total, 2297)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

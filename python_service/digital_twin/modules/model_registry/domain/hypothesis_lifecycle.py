@@ -23,6 +23,7 @@ from digital_twin.modules.model_registry.domain.hypothesis_evidence_comparison i
 from digital_twin.modules.model_registry.domain.hypothesis_change_basis import (
     lifecycle_observation_basis, compare_change_basis, legacy_observation_basis, source_refresh_decision, clock,
 )
+from digital_twin.modules.model_registry.domain.hypothesis_data_readiness import merge_availability, held_availability
 
 
 HYPOTHESIS_LIFECYCLE_VERSION = "typedb-hypothesis-lifecycle-v7"
@@ -967,7 +968,7 @@ def _retain_source_judgement(previous, refresh, stamp):
         if row.get("sourceAsOf") and not row.get("previousSourceAsOf"):
             baseline.setdefault(row["ruleId"], row["sourceAsOf"])
     change = {}
-    availability = {"state": "unavailable", "reasons": [refresh["reason"]]}
+    availability = held_availability(refresh)
     if refresh["status"] == "unavailable":
         change = availability_change(notice_baseline, availability)
         refresh["notificationAvailability"] = availability
@@ -1023,10 +1024,9 @@ def record_for_snapshot(
         changed_rule_ids.update(snapshot.source_rule_ids)
     refresh = _refresh_for_snapshot(previous, snapshot.observation_basis,
                                     changed_rule_ids or snapshot.source_rule_ids)
-    if refresh["rules"] and snapshot.data_availability.get("state") == "unavailable":
-        closed = all(row["marketSessionStatus"] == "closed" for row in refresh["rules"])
-        refresh = {**refresh, "status": "awaiting-source" if closed else "unavailable",
-                   "reason": "판단에 필요한 자료가 갱신될 때까지 마지막 판단을 유지합니다."}
+    if snapshot.data_availability.get("state") == "unavailable":
+        refresh = merge_availability(refresh, snapshot.data_availability)
+    refresh.update(checkedAt=stamp, inferenceGenerationId=snapshot.inference_generation_id)
     if previous and refresh["status"] != "ready":
         return _retain_source_judgement(previous, refresh, stamp)
     removed = any(material_delta_values(delta, key) for key in (
@@ -1102,7 +1102,7 @@ def record_for_snapshot(
         return replace(record, state="maintained", material_change=False, last_observed_at="",
                        snapshot={**snapshot.to_dict(), "judgementRefresh": {
                                      **refresh, "notificationAvailability": snapshot.data_availability},
-                                 "dataAvailability": {"state": "unavailable", "reasons": [refresh["reason"]]}}), None
+                                 "dataAvailability": held_availability(refresh)}), None
     changed = not previous or previous.state != record.state or record.material_change or bool(data_change) or change_basis.get("category") == "reassessment"
     if not changed:
         return record, None
@@ -1157,6 +1157,7 @@ def record_for_absent_snapshot(
     prior = HypothesisLifecycleSnapshot.from_dict(previous.snapshot)
     if current_basis is not None:
         refresh = _refresh_for_snapshot(previous, current_basis, prior.source_rule_ids)
+        refresh["checkedAt"] = stamp
         if refresh["status"] != "ready":
             return _retain_source_judgement(previous, refresh, stamp)
     change_basis = compare_change_basis(

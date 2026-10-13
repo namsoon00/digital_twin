@@ -265,6 +265,128 @@ class HypothesisLifecycleTests(unittest.TestCase):
             "requiredStrengthBand": "strong", "freshnessCompatible": True, "eligibilityStatus": "conditional",
             "sourceObservation": {"verified": True, "observedAt": source_at, "currentPrice": 15.5}}}}
 
+    def test_readiness_records_exact_rule_and_distinguishes_missing_from_failed_conditions(self):
+        from digital_twin.modules.model_registry.domain.hypothesis_change_basis import source_refresh_decision
+        old = self.model_basis(source_at="2026-07-23T00:00:00Z")
+        rule_id = "rule.aapl.trend.v1"
+        cases = [
+            ({}, "model-missing", "unavailable"),
+            ({"status": "untested", "unknownConditionIds": ["price-window"]}, "model-unverified", "unavailable"),
+            ({"eligibilityStatus": "reference-only"}, "model-ineligible", "unavailable"),
+            ({"status": "not-supported", "failedConditionIds": ["price-window"]}, "ready", "ready"),
+        ]
+        for fields, reason, status in cases:
+            with self.subTest(reason=reason):
+                current = {"models": {rule_id: fields} if fields else {}, "quote": {"sourceAsOf": "2026-07-23T00:01:00Z"}}
+                assessment = source_refresh_decision(old, current, [rule_id])
+                check = assessment["rules"][0]
+                self.assertEqual(status, assessment["status"])
+                self.assertEqual(reason, check["reasonCode"])
+                self.assertEqual(rule_id, check["ruleId"])
+                if status == "ready":
+                    self.assertEqual("not-matched", check["conditionState"])
+                    previous, _ = record_for_snapshot(None, replace(lifecycle_snapshot(), observation_basis=old))
+                    record, transition = record_for_absent_snapshot(previous, "2026-07-23T00:01:00Z", current_basis=current)
+                    self.assertEqual("invalidated", record.state)
+                    self.assertTrue(transition.material_change)
+                else:
+                    self.assertFalse(check["issues"][0]["sourceProblem"], "model failure is not a feed outage")
+                    self.assertEqual("unverified", check["conditionState"])
+
+    def test_native_missing_abox_condition_survives_a_new_healthy_quote(self):
+        from digital_twin.modules.model_registry.domain.hypothesis_evidence_comparison import availability_for_traces
+        snapshot = replace(lifecycle_snapshot(), observation_basis=self.model_basis(), data_availability={"state": "usable"})
+        previous, _ = record_for_snapshot(None, snapshot)
+        availability = availability_for_traces([{
+            "ruleId": "rule.aapl.trend.v1", "label": "가격 회복 확인",
+            "freshnessStatus": "fresh", "evidenceUsableForJudgement": False,
+            "ungroundedRequiredConditionIds": ["price-window"],
+        }], {}, [])
+        current = replace(snapshot, inference_generation_id="new", data_availability=availability,
+                          observation_basis=self.model_basis(source_at="2026-10-12T14:00:00Z"))
+        held, transition = record_for_snapshot(previous, current, "2026-10-12T14:01:00Z")
+        readiness = held.snapshot["judgementRefresh"]
+        self.assertEqual("unavailable", readiness["status"])
+        self.assertEqual([], readiness["readyRuleIds"])
+        self.assertEqual(["rule.aapl.trend.v1"], readiness["blockedRuleIds"])
+        self.assertIn("price-window", readiness["reason"])
+        self.assertIn("가격 회복 확인", readiness["reason"])
+        self.assertEqual("2026-10-12T14:01:00Z", readiness["checkedAt"])
+        self.assertEqual("new", readiness["inferenceGenerationId"])
+        self.assertEqual(previous.last_observed_at, held.last_observed_at)
+        self.assertEqual(previous.snapshot["observationBasis"], held.snapshot["observationBasis"])
+        self.assertEqual("price-window", held.snapshot["dataAvailability"]["issues"][0]["conditionId"])
+        self.assertFalse(transition.material_change)
+
+    def test_required_domains_belong_to_their_own_trace(self):
+        from digital_twin.modules.model_registry.domain.hypothesis_evidence_comparison import availability_for_traces
+        traces = [
+            {"ruleId": "price", "freshnessStatus": "fresh", "hypothesisLifecycle": {"requiredFreshnessDomains": ["quote"]}},
+            {"ruleId": "flow", "hypothesisLifecycle": {"requiredFreshnessDomains": ["flow"]}},
+        ]
+        result = availability_for_traces(traces, {"quote": {"freshnessStatus": "fresh"}}, ["quote", "flow"])
+        self.assertEqual(["price"], result["readyRuleIds"])
+        self.assertEqual(["flow"], result["blockedRuleIds"])
+        self.assertEqual("domain-unverified", result["issues"][0]["reasonCode"])
+        self.assertEqual("unavailable", result["state"], "a fresh unrelated trace cannot waive missing flow")
+        legacy = availability_for_traces([{"ruleId": "price", "freshnessStatus": "fresh"}, {"ruleId": "flow"}], {}, ["flow"])
+        self.assertEqual("unavailable", legacy["state"], "unmapped legacy requirements remain explicit")
+        self.assertEqual("가설 공통 자료", legacy["issues"][0]["ruleLabel"])
+
+    def test_closed_price_does_not_hide_a_separate_news_failure(self):
+        from digital_twin.modules.model_registry.domain.hypothesis_data_readiness import merge_availability
+        refresh = {"rules": [{"ruleId": "price", "status": "awaiting-source", "marketSessionStatus": "closed"}]}
+        merged = merge_availability(refresh, {"state": "unavailable", "ruleChecks": [{
+            "ruleId": "news", "status": "unavailable", "reason": "뉴스 원문 미확인", "issues": [{"domain": "news"}],
+        }]})
+        self.assertEqual("unavailable", merged["status"])
+        self.assertIn("뉴스 원문 미확인", merged["reason"])
+
+    def test_legacy_native_failure_is_not_lost_behind_unchanged_source(self):
+        from digital_twin.modules.model_registry.domain.hypothesis_data_readiness import merge_availability
+        refresh = {"rules": [{"ruleId": "price", "status": "awaiting-source", "reason": "동일 시세",
+                              "marketSessionStatus": "open"}]}
+        merged = merge_availability(refresh, {"state": "unavailable", "reasons": ["실제 관측값 연결 실패"]})
+        self.assertEqual("unavailable", merged["status"])
+        self.assertIn("동일 시세", merged["reason"])
+        self.assertIn("실제 관측값 연결 실패", merged["reason"])
+
+    def test_service_continues_price_judgement_while_independent_flow_is_held(self):
+        context = relation_context()
+        hypothesis = deepcopy(context["hypothesisSet"]["hypotheses"][0])
+        hypothesis.update(hypothesisId="hypothesis:aapl-flow", marketHypothesisId="market-hypothesis-aapl-flow",
+                          familyId="family:aapl-flow", templateId="hypothesis-template:flow", supportingRuleIds=["flow"],
+                          causalSignature="flow", marketCausalSignature="flow", causalPathIds=["trace:flow"])
+        context["hypothesisSet"]["hypotheses"].append(hypothesis)
+        context["hypothesisSet"]["marketHypotheses"].append({"marketHypothesisId": "market-hypothesis-aapl-flow", "marketId": "US"})
+        trace = deepcopy(context["graphStoreInference"]["traces"][0])
+        trace.update(ruleId="flow", id="trace:flow", hypothesisLifecycle={"requiredFreshnessDomains": ["flow"]})
+        context["graphStoreInference"]["traces"].append(trace)
+        models = self.model_basis(source_at="2026-07-23T00:00:00Z")["models"]
+        models["flow"] = {**deepcopy(models["rule.aapl.trend.v1"]), "signalType": "flow-accumulation-support"}
+        context["modelEvidenceObservations"] = models
+        context["observationProfiles"] = {domain: {"freshnessStatus": "fresh", "judgementEvidenceUsable": True,
+            "sourceAsOf": "2026-07-23T00:00:00Z", "marketSessionStatus": "open"} for domain in ("quote", "flow")}
+        store = MemoryLifecycleStore()
+        service = HypothesisLifecycleService(store)
+        with mock.patch("digital_twin.modules.outcomes.application.hypothesis_lifecycle_service.relation_contexts_from_snapshot", return_value={"AAPL": context}):
+            service.observe_snapshot(account_snapshot())
+            prior = {record.family_id: record for record in store.records.values()}
+            self.assertEqual(2, len(prior))
+            context["inferenceGenerationId"] = "generation-2"
+            context["observationProfiles"]["quote"]["sourceAsOf"] = "2026-07-23T00:10:00Z"
+            context["observationProfiles"]["flow"].update(freshnessStatus="stale", judgementEvidenceUsable=False,
+                freshnessGateReason="체결·수급 원천 기준시각이 10분 전입니다.", freshnessAgeMinutes=10, maxAgeMinutes=5)
+            service.observe_snapshot(replace(account_snapshot("generation-2"), generated_at="2026-07-23T00:10:00Z"))
+        records = {record.family_id: record for record in store.records.values()}
+        self.assertEqual("2026-07-23T00:10:00Z", records["family:aapl-trend"].last_observed_at)
+        self.assertEqual("usable", records["family:aapl-trend"].snapshot["dataAvailability"]["state"])
+        flow = records["family:aapl-flow"]
+        self.assertEqual(prior["family:aapl-flow"].last_observed_at, flow.last_observed_at)
+        self.assertEqual(["flow"], flow.snapshot["judgementRefresh"]["blockedRuleIds"])
+        self.assertIn("10분 전", flow.snapshot["judgementRefresh"]["reason"])
+        self.assertEqual("source-stale", flow.snapshot["dataAvailability"]["issues"][0]["reasonCode"])
+
     def test_missing_model_proof_is_not_a_negative_rule_result(self):
         snapshot = replace(lifecycle_snapshot(), observation_basis=self.model_basis(),
                            policy={"requiredFreshnessDomains": ["model-signal", "price-path"]})
@@ -422,9 +544,13 @@ class HypothesisLifecycleTests(unittest.TestCase):
             support_keys = support_keys or snapshot.supporting_evidence_keys
             self.assertEqual(support_keys, snapshot.supporting_evidence_keys)
             self.assertFalse(any("unresolved-slot" in key for key in support_keys))
+            prior_state = previous.state if previous else ""
+            prior_judged_at = previous.last_observed_at if previous else ""
             previous, transition = record_for_snapshot(previous, snapshot)
             if index:
-                self.assertEqual("maintained", previous.state)
+                self.assertEqual(prior_state if stale else "maintained", previous.state)
+                if stale:
+                    self.assertEqual(prior_judged_at, previous.last_observed_at)
                 self.assertFalse(previous.material_change)
                 contract = relation_lifecycle_transition_contract({"transitions": [transition.to_dict()]})
                 self.assertEqual("data-availability", contract["changeCategory"])
@@ -432,7 +558,7 @@ class HypothesisLifecycleTests(unittest.TestCase):
                 self.assertFalse(contract["material"])
         # Upgrading a legacy record without availability metadata still exposes
         # its first data issue once, without fabricating market weakening.
-        legacy = replace(previous, snapshot={**previous.snapshot, "dataAvailability": {}})
+        legacy = replace(previous, snapshot={**previous.snapshot, "dataAvailability": {}, "judgementRefresh": {}})
         migrated, transition = record_for_snapshot(legacy, replace(snapshot, inference_generation_id="migration"))
         self.assertFalse(migrated.material_change)
         self.assertEqual("data-unavailable", transition.data_availability_change["kind"])

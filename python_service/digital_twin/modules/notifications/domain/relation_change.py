@@ -69,6 +69,7 @@ def relation_change_authority(context):
         transition["hypothesisIds"] = strings(snapshot.get("hypothesisIds") or item.get("hypothesisIds"))
         transition["sourceRuleIds"] = strings(snapshot.get("sourceRuleIds") or item.get("sourceRuleIds"))
         transition["dataIssues"] = source_issues(relation, item)
+        transition["judgementReadiness"] = deepcopy(mapping(snapshot.get("judgementRefresh")))
         transitions.append(transition)
     return transitions
 
@@ -203,6 +204,11 @@ def relation_change_evidence(context, baseline=None, *, require_recovery_receipt
                          and current.get("accountId") and previous.get("accountId") == current["accountId"])
     transitions, suppressed, follow_up = follow_up_policy(
         transitions, previous if receipt_scope else {}, require_receipt=require_recovery_receipt)
+    waits = [value for value in mapping(current.get("dataAvailability")).values()
+             if isinstance(value, Mapping) and value.get("state") == "unavailable"]
+    wait_reasons = strings([reason for value in waits for reason in value.get("reasons") or []])
+    non_delivery_code = ("relation_followup_not_deliverable" if suppressed else
+                         "rule_evidence_unavailable" if wait_reasons else "unchanged_rulebox_relation")
     changes = {}
     for kind in ("hypotheses", "rules", "facts"):
         before = {row["id"]: row for row in rows(previous.get(kind))}
@@ -212,7 +218,10 @@ def relation_change_evidence(context, baseline=None, *, require_recovery_receipt
                          for key in dict.fromkeys([*after, *before])]
     return {"version": VERSION, "authority": "typedb-hypothesis-lifecycle", "eligible": bool(transitions),
             "reason": " · ".join(str(row.get("changeLabel") or row.get("reason") or "관계 상태 변경") for row in transitions)
-            if transitions else (suppressed[0]["reason"] if suppressed else "룰박스 관계의 새 의미 변화가 없어 웹 이력에만 저장합니다."),
+            if transitions else (suppressed[0]["reason"] if suppressed else
+                                 "판단 보류: " + " · ".join(wait_reasons) if wait_reasons else
+                                 "룰박스 관계의 새 의미 변화가 없어 웹 이력에만 저장합니다."),
+            "nonDeliveryReasonCode": "" if transitions else non_delivery_code,
             "baselineAvailable": bool(previous), "baselineDeliveredAt": previous.get("deliveredAt") or "",
             "current": current, "previous": previous, "transitions": transitions, "changes": changes,
             "followUp": follow_up, "suppressedTransitions": suppressed}

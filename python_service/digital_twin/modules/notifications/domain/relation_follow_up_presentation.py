@@ -76,6 +76,8 @@ def data_follow_up_summary(packet):
                          if age is not None and maximum is not None and maximum > 0 and age > maximum
                          else "유효한 " + label + " 자료를 확인하지 못했습니다. ")
                 effects.append(cause + subject + "의 근거가 지금도 유지되는지 확인할 수 없습니다.")
+                if issue.get("ruleLabel") and issue["ruleLabel"] != issue.get("ruleId") and issue.get("reason"):
+                    effects.append("해당 규칙: " + issue["ruleLabel"] + " — " + issue["reason"])
             parts = [label + " 원천 기준 " + clock(issue.get("sourceAsOf")), "이번 확인 " + clock(row.get("occurredAt"))]
             if age is not None and age >= 0:
                 parts.append("원천 관측 후 " + decimal(age) + "분 경과")
@@ -83,6 +85,8 @@ def data_follow_up_summary(packet):
                 parts.append("허용 경과 시간 " + decimal(maximum) + "분")
             if issue.get("source"):
                 parts.append("출처 " + issue["source"])
+            if issue.get("nextCheck"):
+                parts.append("재확인: " + issue["nextCheck"])
             source_rows.append(" · ".join(parts))
     effects = list(dict.fromkeys(effects))
     parent = (packet.get("followUp") or {}).get("parentJobId") or ""

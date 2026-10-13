@@ -1961,7 +1961,7 @@ class MySQLNotificationJobStore(DiagnosticThreadStore, InvestmentConversationSto
                 packet = relation_change_evidence(job.context, baseline)
                 job.context["relationChangeEvidence"] = packet
                 if not packet["eligible"]:
-                    return {"allowed": False, "suppressionReason": "unchanged_rulebox_relation", "reason": packet["reason"]}
+                    return {"allowed": False, "suppressionReason": packet.get("nonDeliveryReasonCode") or "unchanged_rulebox_relation", "reason": packet["reason"]}
             rule = self.rule_for_connection(connection, job.message_type)
             if not rule.enabled or not rule.state_cooldown_enabled:
                 return {"allowed": True, "reason": "repeat-policy-disabled"}

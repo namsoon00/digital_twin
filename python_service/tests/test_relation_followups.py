@@ -44,6 +44,80 @@ class RelationFollowUpTests(unittest.TestCase):
         self.context = context_fixture()
         self.original = receipt(relation_change_evidence(self.context))
 
+    def test_frozen_rule_issue_explains_its_own_interruption_not_unrelated_live_profiles(self):
+        from digital_twin.modules.model_registry.domain.hypothesis_data_readiness import issue, VERSION
+        change(self.context)
+        relation = self.context["ontologyRelationContext"]
+        row = relation["hypothesisLifecycle"]["transitions"][0]
+        problem = issue("rule:linked", "flow", "source-stale", "체결·수급 자료가 허용 시간 5분을 지났습니다.",
+                        relation["observationProfiles"]["flow"], rule_label="수급 회복 확인")
+        unrelated = issue("unrelated", "quote", "source-stale", "다른 규칙의 시세 지연")
+        row["record"]["snapshot"]["dataAvailability"] = {"version": VERSION, "state": "unavailable", "issues": [problem, unrelated]}
+        # A later profile must not rewrite the source time of this frozen event.
+        relation["observationProfiles"]["flow"].update(sourceAsOf="2026-10-13T01:39:00Z", freshnessStatus="fresh")
+        packet = relation_change_evidence(self.context, self.original)
+        self.assertEqual(1, len(packet["transitions"][0]["dataIssues"]))
+        self.assertEqual("a1234567-root", packet["followUp"]["parentJobId"])
+        self.context["relationChangeEvidence"] = packet
+        text = typedb_observation_telegram_message(self.context)
+        self.assertIn("매수·매도 흐름 회복 확인", text)
+        self.assertIn("허용 시간 5분", text)
+        self.assertIn("재확인:", text)
+        self.assertIn("10/13 10:20 KST", text)
+        self.assertNotIn("다른 규칙의 시세 지연", text)
+        self.assertFalse(relation_change_evidence(self.context)["eligible"], "source failure still needs a delivered parent")
+
+    def test_model_input_failure_keeps_precise_web_reason_without_feed_alert(self):
+        from digital_twin.modules.model_registry.domain.hypothesis_data_readiness import issue, VERSION
+        change(self.context)
+        row = self.context["ontologyRelationContext"]["hypothesisLifecycle"]["transitions"][0]
+        reason = "수급 회복 확인: 이 규칙의 현재 모델 평가 결과가 없습니다."
+        row["record"]["snapshot"].update(dataAvailability={"version": VERSION, "state": "unavailable", "issues": [
+            issue("rule:linked", "flow", "model-missing", reason)]}, judgementRefresh={"reason": reason})
+        packet = relation_change_evidence(self.context, self.original)
+        self.assertFalse(packet["eligible"])
+        self.assertEqual("relation_followup_not_deliverable", packet["nonDeliveryReasonCode"])
+        self.assertIn(reason, packet["reason"])
+        self.assertNotIn("새 의미 변화가 없어", packet["reason"])
+
+    def test_admission_does_not_replace_data_hold_reason_with_delivery_cooldown(self):
+        from digital_twin.modules.notifications.application.notification.admission import NotificationAdmissionPolicy
+        from digital_twin.modules.notifications.domain.notification_rules import default_notification_rule
+        change(self.context)
+        row = self.context["ontologyRelationContext"]["hypothesisLifecycle"]["transitions"][0]
+        row["record"]["snapshot"].update(
+            dataAvailability={"version": "hypothesis-data-readiness-v1", "state": "unavailable", "issues": []},
+            judgementRefresh={"reason": "가격 회복 확인: price-window 조건의 관측값이 없습니다."})
+        policy = NotificationAdmissionPolicy()
+        rule = default_notification_rule("investmentInsight")
+        job = NotificationJob.create("관계 확인", account_id="main", message_type="investmentInsight", context=self.context)
+        decision = policy.evaluate(job, rule, policy.prepare(job, rule))
+        self.assertEqual("relation_followup_not_deliverable", decision.suppression_reason)
+        decision.state_suppressed, decision.state_decision = True, "cooldown"
+        decision.state_reason = "60분 발송 간격 대기"
+        outcome = policy.apply_result(job, decision)
+        self.assertFalse(outcome.accepted)
+        self.assertIn("price-window", job.last_error)
+        self.assertEqual("relation_followup_not_deliverable", job.context["deliverySuppressionReason"])
+        from contextlib import nullcontext
+        from types import SimpleNamespace
+        from digital_twin.modules.notifications.infrastructure.mysql_notification_jobs import MySQLNotificationJobStore
+        store = SimpleNamespace(connect=lambda: nullcontext(None),
+                                relation_delivery_snapshot_with_connection=lambda *_: self.original)
+        final_gate = MySQLNotificationJobStore.recheck_delivery_cadence(store, job)
+        self.assertFalse(final_gate["allowed"])
+        self.assertEqual("relation_followup_not_deliverable", final_gate["suppressionReason"])
+        self.assertIn("price-window", final_gate["reason"])
+
+    def test_repeated_hold_without_transition_retains_its_reason(self):
+        relation = self.context["ontologyRelationContext"]
+        relation["hypothesisLifecycle"].update(transitions=[], records=[{
+            "lifecycleKey": "recovery", "dataAvailability": {"state": "unavailable", "reasons": ["수급 원천이 10분 전입니다."]}}])
+        packet = relation_change_evidence(self.context, self.original)
+        self.assertFalse(packet["eligible"])
+        self.assertEqual("rule_evidence_unavailable", packet["nonDeliveryReasonCode"])
+        self.assertIn("수급 원천이 10분 전", packet["reason"])
+
     def test_interruption_replies_once_and_recovery_requires_actual_interruption_delivery(self):
         change(self.context)
         packet = relation_change_evidence(self.context, self.original)

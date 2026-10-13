@@ -74,6 +74,46 @@ class ResearchJudgmentContinuityTests(unittest.TestCase):
         item = document(); item.raw_payload["promptEvidenceAdmission"]["reasonCodes"] += ["document-unverified"]
         self.assertEqual({}, research_document_reference(item))
 
+    def test_question_document_changes_and_retractions_refresh_without_event_promotion(self):
+        from test_external_official_evidence_projection import MemoryEvidenceStore, MemoryPublisher
+        from digital_twin.modules.decisions.contracts import InvestmentQuestion
+        from digital_twin.modules.news_intelligence.domain.investment_research import NewsCollectionTarget
+        from digital_twin.modules.news_intelligence.domain.integration_events import research_evidence_lifecycle_events
+        from digital_twin.modules.news_intelligence.application.investment_research_orchestration_service import InvestmentResearchOrchestrationService
+        repository, publisher = MemoryEvidenceStore(), MemoryPublisher()
+        service = InvestmentResearchOrchestrationService(repository, None, event_publisher=publisher)
+        question = InvestmentQuestion.create("Compare reported revenue", subject_symbol="TEST")
+        target = NewsCollectionTarget("TEST", "Test", "US", "USD", "technology")
+        item = document()
+        saved, _ = service.persist_evidence([item], question, target, "initial")
+        self.assertEqual(1, saved)
+        self.assertEqual(2, len(publisher.events))
+        completed, request = publisher.events
+        self.assertEqual([], completed.payload["inferenceChangedSymbols"])
+        self.assertFalse(request.payload.get("factRevisionsBySymbol"))
+        self.assertEqual(["TEST"], request.payload["symbols"])
+        self.assertFalse(item.raw_payload["promptEvidenceAdmission"]["decisionEligible"])
+        # Repeated unchanged storage must not create another refresh.
+        service.persist_evidence([item], question, target, "unchanged")
+        self.assertEqual(2, len(publisher.events))
+        # A broken or revoked source must remove its previous reference too.
+        changed = copy.deepcopy(item); changed.raw_payload["documentVerified"] = False
+        service.persist_evidence([changed], question, target, "invalidated")
+        self.assertEqual(4, len(publisher.events))
+        lifecycle = {"inferenceChangedSymbols": [], "changedSymbols": ["TEST"],
+                     "retractedCount": 1, "evidenceDeltas": [{"evidenceId": item.evidence_id,
+                         "symbol": "TEST", "previousEligible": False, "eligible": False,
+                         "transition": "retraction"}], "factRevisionsBySymbol": {}}
+        events = research_evidence_lifecycle_events(lifecycle)
+        self.assertEqual(2, len(events))
+        self.assertEqual([], events[0].payload["inferenceChangedSymbols"])
+        self.assertEqual(["TEST"], events[1].payload["symbols"])
+        lifecycle["evidenceDeltas"][0]["evidenceId"] = "research:TEST:news:ordinary"
+        self.assertEqual(1, len(research_evidence_lifecycle_events(lifecycle)))
+        ordinary = copy.deepcopy(item); ordinary.evidence_id = "research:TEST:filing:ordinary"
+        service.persist_evidence([ordinary], question, target, "ordinary")
+        self.assertEqual(5, len(publisher.events))
+
     def test_original_question_sources_resolve_only_inside_captured_graph(self):
         from test_ai_directed_retrieval import session, SUBJECT
         from digital_twin.modules.reasoning.public import ObservationEvidenceReader

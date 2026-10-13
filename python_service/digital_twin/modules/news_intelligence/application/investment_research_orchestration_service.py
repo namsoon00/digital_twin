@@ -10,6 +10,7 @@ from digital_twin.modules.news_intelligence.domain.investment_evidence_governanc
 from digital_twin.modules.news_intelligence.domain.investment_research import NewsCollectionTarget, ResearchEvidence
 from digital_twin.modules.market_data.contracts import parse_datetime
 from digital_twin.modules.news_intelligence.domain.materiality import evidence_materiality
+from digital_twin.modules.news_intelligence.domain.research_document_reference import question_document_changed_symbols
 from digital_twin.modules.news_intelligence.domain.research_progress import all_tasks_addressed, assess_tasks, audit_retain_until, evidence_packets, fingerprint, progress_plan, task_contract
 
 
@@ -453,7 +454,11 @@ class InvestmentResearchOrchestrationService:
                 for symbol in fact_revisions
                 if str(symbol or "").strip()
             }) if tracks_eligible_set else list(changed_symbols or [target.normalized_symbol()])
-            persisted_handoff = handoff.requested(changed_evidence_ids) if inference_symbols else handoff
+            reference_symbols = question_document_changed_symbols([
+                {"evidenceId": item.evidence_id, "symbol": item.symbol} for item in changed_items
+            ])
+            projection_symbols = sorted(set(inference_symbols + reference_symbols))
+            persisted_handoff = handoff.requested(changed_evidence_ids) if projection_symbols else handoff
             materiality = [evidence_materiality(item, self.settings).to_dict() for item in changed_items]
             completed = hypothesis_research_completed_event({
                 "runId": run_id,
@@ -470,24 +475,24 @@ class InvestmentResearchOrchestrationService:
                 "reasoningHandoff": persisted_handoff.to_dict(),
                 "hypothesisResearchBrief": (hypothesis_research_brief or HypothesisResearchBrief()).to_dict(),
             })
-            if not inference_symbols:
+            if not projection_symbols:
                 return [completed]
             reasoning = ontology_reasoning_requested_event(
                 completed,
                 "hypothesis-research-update",
-                symbols=inference_symbols,
-                changed_count=len(inference_symbols),
+                symbols=projection_symbols,
+                changed_count=len(projection_symbols),
                 observed_count=len(items),
                 fact_types=["ResearchEvidence", "VerifiedClaim", "VerificationRun"],
                 fact_types_by_symbol={
                     symbol: ["ResearchEvidence", "VerifiedClaim", "VerificationRun"]
-                    for symbol in inference_symbols
+                    for symbol in projection_symbols
                 },
                 changed_fields_by_symbol={
                     symbol: ["external.researchEvidence", "external.verifiedClaims"]
-                    for symbol in inference_symbols
+                    for symbol in projection_symbols
                 },
-                reason="가설 검증에서 확보한 근거를 전체 ABox 스냅샷에 반영하고 TypeDB 네이티브 추론을 다시 실행합니다.",
+                reason="질문에 연결된 원문과 변경된 검증 근거를 ABox에 반영합니다. 과거 보고 기간의 원문은 최신 사건의 적격성을 바꾸지 않습니다.",
                 materiality_assessments=materiality,
                 fact_revisions_by_symbol=fact_revisions,
                 evidence_deltas=evidence_deltas,

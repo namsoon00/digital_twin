@@ -7,6 +7,7 @@ from digital_twin.shared_kernel.events import _event_signature_digest
 from digital_twin.shared_kernel.events import _event_text
 from digital_twin.shared_kernel.events import _event_text_list
 from typing import Dict, Iterable, List, Mapping
+from digital_twin.modules.news_intelligence.domain.research_document_reference import question_document_changed_symbols
 
 
 
@@ -188,7 +189,9 @@ def research_evidence_lifecycle_events(payload: Dict[str, object]) -> List[Domai
         int(values.get("expiredCount") or 0) + int(values.get("retractedCount") or 0)
     )
     source_event = research_evidence_lifecycle_changed_event(values)
-    symbols = list(source_event.payload.get("inferenceChangedSymbols") or [])
+    symbols = sorted(set(source_event.payload.get("inferenceChangedSymbols") or []).union(
+        question_document_changed_symbols(values.get("evidenceDeltas"))
+    ))
     events = [source_event]
     if symbols:
         events.append(ontology_reasoning_requested_event(
@@ -200,7 +203,7 @@ def research_evidence_lifecycle_events(payload: Dict[str, object]) -> List[Domai
             fact_types=["ResearchEvidence", "EvidenceLifecycle"],
             fact_types_by_symbol={symbol: ["ResearchEvidence", "EvidenceLifecycle"] for symbol in symbols},
             changed_fields_by_symbol={symbol: ["external.researchEvidence"] for symbol in symbols},
-            reason="유효 리서치 근거가 만료 또는 철회되어 TypeDB ABox와 네이티브 규칙 추론을 갱신합니다.",
+            reason="리서치 근거 또는 질문 원문이 만료·철회되어 ABox를 갱신합니다. 과거 원문의 갱신은 투자 판단 적격성을 부여하지 않습니다.",
             fact_revisions_by_symbol=dict(values.get("factRevisionsBySymbol") or {}),
             evidence_deltas=list(values.get("evidenceDeltas") or []),
         ))

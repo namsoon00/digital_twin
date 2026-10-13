@@ -1049,6 +1049,11 @@ governance, document hash and exact passage hashes. It preserves table line brea
 and checks the source normalizer's representation against the stored document.
 Invalid, superseded, conflicting or oversized documents receive no historical
 reference. This does not extend the seven-day current-event admission window.
+Changed question filings request an ABox refresh even when the inference-eligible
+fact set is unchanged. Lifecycle changes also refresh these references so expired,
+retracted or invalidated originals cannot remain in the graph. This handoff keeps
+`inferenceChangedSymbols` and eligible-set revisions unchanged; it grants no
+current-event or investment authority. Unchanged source polls create no new work.
 
 `historicalDocumentReference` is a bounded ABox property for the stated reporting
 period, with original publication/observation times and document/passage hashes.

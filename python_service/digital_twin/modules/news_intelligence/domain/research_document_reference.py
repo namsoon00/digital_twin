@@ -14,6 +14,22 @@ def digest(value):
     return hashlib.sha256(value.encode()).hexdigest()
 
 
+def question_document_changed_symbols(changes):
+    """Refresh original-source projections even when a change revokes their use.
+
+    This identifies the source owner's question documents, not their admission.
+    Requiring a currently valid reference here would strand retracted references
+    in the graph. Unchanged provider polls never reach this change boundary.
+    """
+    return sorted({
+        str(row.get("symbol") or "").strip().upper()
+        for row in changes or []
+        if isinstance(row, dict) and str(row.get("symbol") or "").strip()
+        and str(row.get("evidenceId") or "").startswith(
+            "research:" + str(row["symbol"]).strip().upper() + ":sec-question:")
+    })
+
+
 def research_document_reference(item):
     """Fail closed; this reference never changes the filing's event eligibility."""
     raw = item.raw_payload

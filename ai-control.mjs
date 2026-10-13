@@ -66,10 +66,12 @@ function researchAnswerView(result = {}) {
 function brainView(brain = {}) {
   brainCases = brain.cases || [];
   const cards = brainCases.map((row) => {
-    if (row.kind === "business-thesis") return `<div class="panel brain-card"><header><h3>${escape(row.symbol)} · 사업 가설</h3><span>${escape(businessStatuses[row.status] || row.status)}</span></header>${businessThesisView(row.contract || {}, row.observations)}<p>${escape(row.reason)}</p><p class="muted">등록 ${escape(date(row.createdAt))} · 확인 기한 ${escape(date(row.expiresAt))}</p><details><summary>원래 근거와 검토 이력</summary><pre>${escape(JSON.stringify({origin:row.origin,history:row.history},null,2))}</pre></details></div>`;
+    const name = String(row.name || "").trim();
+    const subject = name && name !== row.symbol ? `${name} (${row.symbol})` : row.symbol;
+    if (row.kind === "business-thesis") return `<div class="panel brain-card"><header><h3>${escape(subject)} · 사업 가설</h3><span>${escape(businessStatuses[row.status] || row.status)}</span></header>${businessThesisView(row.contract || {}, row.observations)}<p>${escape(row.reason)}</p><p class="muted">등록 ${escape(date(row.createdAt))} · 확인 기한 ${escape(date(row.expiresAt))}</p><details><summary>원래 근거와 검토 이력</summary><pre>${escape(JSON.stringify({origin:row.origin,history:row.history},null,2))}</pre></details></div>`;
     const feedback = row.kind === "service-feedback";
     const origin = row.origin || {};
-    return `<div class="panel brain-card"><header><h3>${escape(row.symbol)} · ${escape(feedback ? categoryLabels[row.category] : "지속 질문")}</h3><span>${escape(brainLabels[row.status] || row.status)}</span></header>
+    return `<div class="panel brain-card"><header><h3>${escape(subject)} · ${escape(feedback ? categoryLabels[row.category] : "지속 질문")}</h3><span>${escape(brainLabels[row.status] || row.status)}</span></header>
       <p><strong>${escape(feedback ? row.problem : row.question)}</strong></p>
       ${researchAnswerView({...row.lastResearch?.result, documentaryAnswer:row.latestSourceAnswer || row.lastResearch?.result?.documentaryAnswer})}
       ${researchWorkView(row)}

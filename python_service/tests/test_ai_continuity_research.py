@@ -186,12 +186,28 @@ class AIContinuityResearchTests(unittest.TestCase):
         self.assertEqual(original, source)
         self.assertEqual(CONTRACT, context["questionContract"])
         self.assertEqual("partial", context["answerPreview"]["status"])
-        self.assertEqual(["현금흐름 원문"], context["answerPreview"]["missingRequirements"])
+        self.assertEqual(["현금흐름 원문"], context["answerResolution"]["missingRequirements"])
+        self.assertEqual("answerResolution.missingRequirements", context["answerPreview"]["missingRequirementsRef"])
         self.assertIn("lastResearch", context["truncatedFields"])
         self.assertEqual("source-task", context["lastResearch"]["taskId"])
         self.assertEqual("earlier-task", context["hypothesisResolution"]["sourceQuestion"]["researchTaskId"])
         due = {**source, "reviewDue": True}
         self.assertEqual(due, continuity_memory([], [due])["researchResults"][0])
+        missing = [f"항목{index}: " + "공식 분기 보고서의 동일 기간 수치를 확인해야 합니다. " * 3 for index in range(8)]
+        planned = copy.deepcopy(source)
+        planned["answerResolution"]["missingRequirements"] = missing
+        planned["lastResearch"]["result"]["documentaryAnswer"]["missingRequirements"] = missing
+        planned["reason"] = "이전 조사에서 부족했던 자료를 공식 공시에서 확인합니다. " * 12
+        planned["researchPlan"] = {"action": "research", "reason": planned["reason"],
+            "resumeWhen": "새 공시의 동일 기준 비교 수치를 확보하면 재검토합니다. " * 12,
+            "missingRequirements": missing, "taskId": "plan-task", "executionInputId": "plan-input"}
+        batch = [{**planned, "caseId": f"question-{index}"} for index in range(5)]
+        memory = continuity_memory([historical], batch)
+        for item in memory["researchResults"]:
+            self.assertEqual(missing, item["answerResolution"]["missingRequirements"])
+            self.assertEqual(planned["researchPlan"]["resumeWhen"], item["researchPlan"]["resumeWhen"])
+            self.assertIn("researchPlan", item["truncatedFields"])
+            self.assertEqual("plan-input", item["researchPlan"]["executionInputId"])
 
     def test_question_contract_rejects_unsupported_and_private_searches(self):
         self.assert_historical_filings_require_explicit_window_without_extending_news_freshness()

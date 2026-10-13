@@ -32,6 +32,11 @@ def _work_summary(row):
         "capability", "status", "revision", "reviewDue", "nextCheckAt", "completionCriterion", "reason",
         "researchAttempts", "researchRequest", "hypothesisResolution", "developmentProgress",
         "questionContract", "answerResolution", "researchPlan", "mergedQuestions"))
+    plan = row.get("researchPlan") or {}
+    if plan:
+        result["researchPlan"] = {key: deepcopy(plan[key]) for key in
+            ("version", "action", "resumeWhen", "executionInputId", "taskId", "at", "unchangedPlans", "authority") if key in plan}
+        result["truncatedFields"].append("researchPlan")
     research = row.get("lastResearch") or {}
     returned = research.get("result") or {}
     result["lastResearch"] = {key: deepcopy(research[key]) for key in
@@ -56,6 +61,9 @@ def _work_summary(row):
     if answer:
         result["answerPreview"] = {key: deepcopy(answer[key]) for key in
             ("taskId", "status", "text", "missingRequirements", "assessmentFingerprint", "assessedAt", "authority") if key in answer}
+        if answer.get("missingRequirements") == (row.get("answerResolution") or {}).get("missingRequirements"):
+            result["answerPreview"].pop("missingRequirements", None)
+            result["answerPreview"]["missingRequirementsRef"] = "answerResolution.missingRequirements"
         result["answerPreview"].update(sourceCount=len(answer.get("sources", [])), detailsAvailable=True)
     result["knownAnswerTaskIds"] = [item["taskId"] for item in row.get("answerMemory", [])]
     result["truncatedFields"].extend(key for key in ("lastResearch", "answerMemory", "latestSourceAnswer") if row.get(key))

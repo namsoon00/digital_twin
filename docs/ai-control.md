@@ -24,6 +24,9 @@ Observation continuity uses `research-work-memory-v1` previews for non-due work:
 answer text/status, unmet requirements, contract, next plan and exact source task/hash
 references remain mandatory; large provider audits stay in detailed recall/storage.
 Omission is explicit. Due hypothesis reviews retain their full captured case memory.
+Repeated missing-requirement lists share the exact `answerResolution` value in the
+observation preview. Plans retain the action, resumption condition and original input
+reference without duplicating their reason and missing requirements in each question.
 Current questions acquire immutable target/period/answer-criterion contracts.
 Merging requires already identical contracts in the same account/subject/world and
 preserves the retired question with `mergedInto`. Unknown periods cannot be merged.

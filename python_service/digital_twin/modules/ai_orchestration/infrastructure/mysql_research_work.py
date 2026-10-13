@@ -136,8 +136,10 @@ def reconcile_and_schedule(store, connection, subjects):
             "AND capability='research-plan' AND status IN ('pending','processing') "
             "AND JSON_UNQUOTE(JSON_EXTRACT(payload_json,'$.worldId'))=%s LIMIT 1", scope).fetchone()
         if existing:
+            connection.execute("UPDATE ai_control_tasks SET priority=GREATEST(priority,%s) WHERE task_id=%s "
+                "AND status='pending' AND attempts=0", (work.PRIORITY, existing["task_id"]))
             continue
-        task = {**subject, "capability": "research-plan", "priority": 3, "availableAt": now,
+        task = {**subject, "capability": "research-plan", "priority": work.PRIORITY, "availableAt": now,
                 "taskId": identity(work.VERSION, *scope, [[row["caseId"], row["revision"]] for row in due[:5]])}
         MySQLAIControlStore.insert(connection, task)
         counts["plansScheduled"] += 1

@@ -20,6 +20,10 @@ not market ABox readiness, a completed narrative, or notification approval. The 
 chooses a missing-evidence search, a concrete wait condition, or a capability blocker.
 Partial answers retain their original citations, unmet requirements and up to three
 prior cited answers in working memory; full history remains in tasks and case events.
+Observation continuity uses `research-work-memory-v1` previews for non-due work:
+answer text/status, unmet requirements, contract, next plan and exact source task/hash
+references remain mandatory; large provider audits stay in detailed recall/storage.
+Omission is explicit. Due hypothesis reviews retain their full captured case memory.
 Current questions acquire immutable target/period/answer-criterion contracts.
 Merging requires already identical contracts in the same account/subject/world and
 preserves the retired question with `mergedInto`. Unknown periods cannot be merged.
@@ -33,6 +37,9 @@ limit. At or beyond three attempts, the new planner must change the search inten
 There is still a six-hour collection interval, active-task coalescing, frozen lease
 and case revision checks, and the global AI call/task budget. Repeated unchanged
 plans back off up to seven days; exhaustion is recorded, not converted into success.
+Source planning has priority 4, ahead of the recurring observation backlog (0–3)
+and behind source collection (5). It can consume capacity that would otherwise
+serve observations, so its queue and call usage must be included in operational review.
 Source receipt reconciliation is idempotent and requires the completed task's exact
 answer, account, subject, world and original question link. It neither replays old
 notifications nor rewrites historical market judgments.

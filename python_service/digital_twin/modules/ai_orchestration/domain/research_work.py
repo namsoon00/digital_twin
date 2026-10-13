@@ -9,6 +9,7 @@ from .insight_schema import obj, array, choice
 
 VERSION = "research-work-v1"
 PROMPT_VERSION = "independent-research-plan-v1"
+PRIORITY = 4  # Source planning precedes the recurring observation backlog; collection is 5.
 EMPTY_REQUEST = {"queryTerms": [], "sourceTypes": [], "maxAgeMinutes": 0}
 
 

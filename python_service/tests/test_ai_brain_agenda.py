@@ -293,7 +293,7 @@ class BrainAgendaStorageTests(unittest.TestCase):
             self.assertEqual(due, foreign["available_at"])
             self.assertEqual(0, foreign["priority"])
             self.assertLessEqual(owner["available_at"], stamp())
-            self.assertEqual(3, owner["priority"])
+            self.assertEqual(4 if capability == "research-plan" else 3, owner["priority"])
 
         check_only_owner_woken()
         with self.control.transaction() as c:

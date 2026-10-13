@@ -27,6 +27,42 @@ def _summary(row, fields):
     return result
 
 
+def _work_summary(row):
+    result = _summary(row, ("kind", "caseId", "accountId", "symbol", "worldId", "question",
+        "capability", "status", "revision", "reviewDue", "nextCheckAt", "completionCriterion", "reason",
+        "researchAttempts", "researchRequest", "hypothesisResolution", "developmentProgress",
+        "questionContract", "answerResolution", "researchPlan", "mergedQuestions"))
+    research = row.get("lastResearch") or {}
+    returned = research.get("result") or {}
+    result["lastResearch"] = {key: deepcopy(research[key]) for key in
+        ("taskId", "requestedAt", "inputFingerprint", "requestFingerprint") if key in research}
+    if returned:
+        result["lastResearch"]["result"] = {key: deepcopy(returned[key]) for key in
+            ("runId", "status", "stopReason", "changedEvidenceCount", "completedAt") if key in returned}
+        if returned.get("questionAssessment") and not row.get("answerResolution"):
+            assessment = returned["questionAssessment"]
+            result["lastResearch"]["result"]["questionAssessment"] = {key: deepcopy(assessment[key]) for key in
+                ("version", "status", "coverageState", "missingRequirements", "semanticReviewState", "assessmentFingerprint", "authority") if key in assessment}
+    resolution = row.get("hypothesisResolution") or {}
+    if resolution:
+        result["hypothesisResolution"] = {key: deepcopy(resolution[key]) for key in
+            ("disposition", "state", "qualification", "reason", "evidenceIds", "taskId", "executionInputId", "at", "requestId", "thesisId") if key in resolution}
+        source = resolution.get("sourceQuestion") or {}
+        if source:
+            result["hypothesisResolution"]["sourceQuestion"] = {key: deepcopy(source[key]) for key in ("caseId", "revision", "question") if key in source}
+            result["hypothesisResolution"]["sourceQuestion"]["researchTaskId"] = source.get("research", {}).get("taskId", "")
+        result["truncatedFields"].append("hypothesisResolution")
+    answer = row.get("latestSourceAnswer") or returned.get("documentaryAnswer") or {}
+    if answer:
+        result["answerPreview"] = {key: deepcopy(answer[key]) for key in
+            ("taskId", "status", "text", "missingRequirements", "assessmentFingerprint", "assessedAt", "authority") if key in answer}
+        result["answerPreview"].update(sourceCount=len(answer.get("sources", [])), detailsAvailable=True)
+    result["knownAnswerTaskIds"] = [item["taskId"] for item in row.get("answerMemory", [])]
+    result["truncatedFields"].extend(key for key in ("lastResearch", "answerMemory", "latestSourceAnswer") if row.get(key))
+    result["workSummaryVersion"] = "research-work-memory-v1"
+    return result
+
+
 def continuity_memory(history, research):
     """Keep a dated judgment and work-state summaries; detailed claims need recall."""
     analyses, memories = [], []
@@ -44,9 +80,7 @@ def continuity_memory(history, research):
         elif row.get("kind") in {"business-thesis", "company-research-record"}:
             memories.append({**deepcopy(row), "memoryRole": MARKER, "authority": "historical-context-only"})
         elif row.get("kind") == "brain-case":
-            memories.append(_summary(row, ("kind", "caseId", "accountId", "symbol", "worldId", "question",
-                "capability", "status", "revision", "reviewDue", "nextCheckAt", "completionCriterion", "reason",
-                "researchAttempts", "lastResearch", "researchRequest", "hypothesisResolution", "developmentProgress")))
+            memories.append(_work_summary(row))
         elif row.get("kind") == "service-feedback":
             memories.append(_summary(row, ("kind", "caseId", "category", "status", "problem", "proposal", "verification")))
         elif row.get("runId"):

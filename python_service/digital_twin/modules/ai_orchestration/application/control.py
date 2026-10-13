@@ -271,7 +271,8 @@ class AIControlService:
                  "taskId": identity(job["taskId"], "wait"), "availableAt": outcome["retryAt"]}
         children = [child]
         if status != "unchanged-wait" and outcome.get("status") == "data-wait" and outcome.get("requirements"):
-            children.append({**self.subject(job), "capability": "research-plan", "priority": 3,
+            from ..domain.research_work import PRIORITY
+            children.append({**self.subject(job), "capability": "research-plan", "priority": PRIORITY,
                 "taskId": identity("research-gap-v1", job["accountId"], job["symbol"], job["worldId"], outcome["retryKey"]),
                 "researchGaps": list(outcome["requirements"])[:4], "availableAt": stamp()})
         saved = self.store.complete(job, result, children)

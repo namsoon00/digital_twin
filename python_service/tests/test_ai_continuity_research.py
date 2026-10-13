@@ -171,6 +171,27 @@ class AIContinuityResearchTests(unittest.TestCase):
         validate_execution_input(old)
         with self.assertRaises(EvidenceContractError):
             continuity_memory([{**historical, "followUpConditions": [{"body": "x" * MAX_CONTINUITY_BYTES}]}], [])
+        # Source research now progresses independently, so its non-due records
+        # must not inject the full provider audit into mandatory author memory.
+        from test_research_work import case, answer, CONTRACT
+        source = {**case(), "reviewDue": False, "questionContract": CONTRACT,
+            "hypothesisResolution": {"disposition": "defer", "state": "quality-blocked",
+                "sourceQuestion": {"caseId": "original", "research": {"taskId": "earlier-task", "result": "audit" * MAX_CONTINUITY_BYTES}}},
+            "lastResearch": {"taskId": "source-task", "result": {"status": "completed",
+                "documentaryAnswer": answer("source-task", "partial"),
+                "questionAssessment": {"excludedEvidence": "audit" * MAX_CONTINUITY_BYTES}}}}
+        original = copy.deepcopy(source)
+        context = continuity_memory([], [source])["researchResults"][0]
+        self.assertLess(len(str(context).encode()), 8000)
+        self.assertEqual(original, source)
+        self.assertEqual(CONTRACT, context["questionContract"])
+        self.assertEqual("partial", context["answerPreview"]["status"])
+        self.assertEqual(["현금흐름 원문"], context["answerPreview"]["missingRequirements"])
+        self.assertIn("lastResearch", context["truncatedFields"])
+        self.assertEqual("source-task", context["lastResearch"]["taskId"])
+        self.assertEqual("earlier-task", context["hypothesisResolution"]["sourceQuestion"]["researchTaskId"])
+        due = {**source, "reviewDue": True}
+        self.assertEqual(due, continuity_memory([], [due])["researchResults"][0])
 
     def test_question_contract_rejects_unsupported_and_private_searches(self):
         self.assert_historical_filings_require_explicit_window_without_extending_news_freshness()

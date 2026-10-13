@@ -115,6 +115,24 @@ function companyReportBrief(report) {
   ]};
 }
 
+function renderCompanyPreparation(preparation) {
+  if (!preparation || !preparation.status) return '';
+  var labels = {complete: '확인 완료', partial: '부분 확보', waiting: '대기', failed: '재처리 대기', blocked: '확인 필요', unavailable: '조회 실패'};
+  var roles = companyEvidenceArray(preparation.roles).map(function (role) { return role === 'holding' ? '보유' : '즐겨찾기'; }).join(' · ');
+  var stages = companyEvidenceArray(preparation.stages).map(function (stage) {
+    return '<li><strong>' + escapeHtml(stage.label) + '</strong> · ' + escapeHtml(labels[stage.status] || '확인 필요') + '<br><small>' + escapeHtml(stage.detail || '') + '</small></li>';
+  }).join('');
+  var gaps = companyEvidenceArray(preparation.gaps).map(function (gap) { return '<li>' + escapeHtml(gap) + '</li>'; }).join('');
+  var retry = preparation.nextCheckAt ? '<p>다음 상태 확인 ' + escapeHtml(preparation.nextCheckAt) + '</p>' : '';
+  var error = preparation.status === 'failed' ? '<p>최근 처리에 실패해 재시도할 예정입니다. 아래 단계는 마지막 확인 기록입니다.</p>' : '';
+  var request = preparation.researchRequest || {};
+  var planning = {pending: '대기', processing: '진행 중', completed: '계획 처리 완료', failed: '실패 · 확인 필요', paused: '중앙 AI 일시 중지'};
+  var requestHtml = request.status ? '<p>추가 조사 계획 · ' + escapeHtml(planning[request.status] || '처리 대기') + '<br><small>계획 처리가 끝나도 자료 확보와 분석은 계속 확인합니다.</small></p>' : '';
+  return '<section class="company-report-brief company-preparation"><h4>기업 조사 진행 · ' + escapeHtml(preparation.label || labels[preparation.status] || '확인 필요') + '</h4><p>' + escapeHtml(roles) + ' · 확인 ' + escapeHtml(preparation.checkedAt || '대기') + '</p>' + error
+    + '<details><summary>진행 단계와 부족한 자료</summary>' + (stages ? '<ol>' + stages + '</ol>' : '<p>다음 작업 주기에 진행 상태를 확인합니다.</p>')
+    + (gaps ? '<p><strong>추가 확인할 자료</strong></p><ul>' + gaps + '</ul>' : '') + requestHtml + retry + '<p>' + escapeHtml(preparation.boundary || '자료 확보와 처리 상태이며 투자 판단을 뜻하지 않습니다.') + '</p></details></section>';
+}
+
 function renderCompanyEvidenceReport(report) {
   var kindLabel = {baseline: "첫 비교 기준", expanded: "상세 자료 보강", change: "변경 자료 확인", unchanged: "변화 없음"}[report.reportKind] || "기업 보고서";
   var sections = companyEvidenceArray(report.sections).map(function (section, index) {
@@ -130,7 +148,7 @@ function renderCompanyEvidenceReport(report) {
   var recordSection = companyEvidenceArray(report.sections).find(function (section) { return section.key === "researchRecord"; });
   var researchHtml = compact && recordSection ? '<section class="company-report-brief"><h4>' + escapeHtml(recordSection.title) + '</h4>' + companyEvidenceArray(recordSection.paragraphs).map(function (line) { return '<p>' + escapeHtml(line) + '</p>'; }).join('') + '</section>' : '';
   var full = sections + '<p class="instrument-valuation-explanation">' + escapeHtml(report.boundary) + '</p>';
-  return '<section class="instrument-valuation-workspace company-change-report"><header><div><span class="label">기업 자료 보고서</span><h3>' + escapeHtml(report.headline || "기업 보고서") + '</h3><p>' + escapeHtml(brief ? brief.summary : report.summary) + '</p></div><span class="tone-chip hold">' + escapeHtml(kindLabel) + '</span></header><p class="instrument-valuation-explanation">자료 확인 ' + escapeHtml(report.sourceCutoffDisplay || report.sourceCutoffAt || "시각 미기록") + ' · 종목 ' + escapeHtml(report.symbol) + '</p>' + briefHtml + researchHtml + (compact ? '<details class="company-report-full"><summary>상세 근거와 전체 보고서</summary>' + full + '</details>' : full) + '</section>';
+  return '<section class="instrument-valuation-workspace company-change-report"><header><div><span class="label">기업 자료 보고서</span><h3>' + escapeHtml(report.headline || "기업 보고서") + '</h3><p>' + escapeHtml(brief ? brief.summary : report.summary) + '</p></div><span class="tone-chip hold">' + escapeHtml(kindLabel) + '</span></header><p class="instrument-valuation-explanation">자료 확인 ' + escapeHtml(report.sourceCutoffDisplay || report.sourceCutoffAt || "시각 미기록") + ' · 종목 ' + escapeHtml(report.symbol) + '</p>' + briefHtml + renderCompanyPreparation(report.preparation) + researchHtml + (compact ? '<details class="company-report-full"><summary>상세 근거와 전체 보고서</summary>' + full + '</details>' : full) + '</section>';
 }
 
 export { renderCompanyEvidenceReport };

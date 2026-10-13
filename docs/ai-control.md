@@ -7,6 +7,24 @@ contexts; runtime composition injects their capabilities into the controller.
 
 ## Running behavior
 
+Task starts use `central-task-fairness-v1`: expired-lease recovery → observation →
+source collection → observation → research planning, skipping empty or currently
+budget-ineligible lanes. A persisted cursor, task lease and daily usage update
+commit together, so restarting or adding a second worker preserves the rotation.
+Priority applies within each pending lane; after 20 minutes due work is ordered
+oldest first. Expired leases are reclaimed oldest first on their own turn and
+replace the old token, so interrupted workers cannot publish or create children.
+Valid leases, source cooldowns, scheduled availability and existing call/task
+limits remain enforced. The existing call-budget deferral can resume early only
+when capacity is available. This bounds dispatch opportunities, not wall-clock
+latency or research success; running model calls are not preempted.
+
+`taskScheduling` reports due, live processing and expired leases per capability
+across the active queue (account-scoped when requested), independently of the
+latest-60 history or observation restart grace. Each task persists its latest
+`taskDispatch` receipt, and the shared cursor counts dispatches and recovered
+leases. Old frozen inputs/calls and their attempt identities are retained.
+
 The `research-work-v1` workflow separates three states: cited source-answer
 completion (`answerResolution`), further research (`researchPlan`), and investment
 hypothesis disposition (`hypothesisResolution`). An answered documentary artifact

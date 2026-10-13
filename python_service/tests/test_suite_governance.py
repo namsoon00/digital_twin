@@ -317,7 +317,9 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # Nine research-work regressions cover independent source completion,
         # frozen planning, scoped merges, graph outages, thesis expiry, original
         # criteria, bounded retries, atomic leases and idempotent receipt recovery.
-        self.assertLessEqual(total, 2263)
+        # Four real task-dispatch contracts protect restart fairness, expired
+        # leases, cooldown/budget rollback and concurrent account-scoped queues.
+        self.assertLessEqual(total, 2267)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

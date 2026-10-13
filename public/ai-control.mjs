@@ -137,6 +137,13 @@ function card(task, scheduling = {}) {
   ${facts.length ? `<details><summary>사용한 사실 ${facts.length}개 · 시점과 출처 보기</summary><pre>${escape(JSON.stringify(r.input,null,2))}</pre></details>` : ""}</article>`;
 }
 const healthLabels = {"runtime-unconfirmed":"워커 생존 미확인","awaiting-result":"관찰 저장 확인 중",healthy:"호출 정상",recovering:"복구 확인 중",unavailable:"실행 오류 · 재시도 대기",degraded:"오류 확인 필요",delayed:"관찰 지연",paused:"일시 중지",idle:"예약 대기"};
+function queueView(scheduling) {
+  if (!scheduling) return "";
+  const names = {observe:"관찰",research:"자료 수집","research-plan":"조사 계획"};
+  const queues = scheduling.queues || [];
+  const expired = queues.reduce((sum, row) => sum + Number(row.expiredLeases || 0), 0);
+  return `<p>실행 차례: 중단 작업 복구 → 관찰 → 자료 수집 → 관찰 → 조사 계획. 준비된 작업이 없는 차례는 건너뜁니다.<br>${queues.map(row => `${escape(names[row.capability] || row.capability)}: 실행 시각 도래 ${escape(row.due)}건 · 진행 ${escape(row.processing)}건`).join(" / ")}<br><strong>실행 기한이 지나 복구할 작업 ${escape(expired)}건</strong><br><small>호출 한도와 자료 재수집 대기 시간은 유지됩니다. 순서는 작업 시작 차례이며, 각 작업의 소요 시간에 따라 대기 시간이 달라집니다.</small></p>`;
+}
 function healthView(health) {
   if (!health) return '<p role="status">AI 실행 상태를 아직 확인하지 못했습니다.</p>';
   const failure = health.sharedExecution?.lastFailure;
@@ -154,6 +161,7 @@ async function load() {
     const scheduling = data.observationScheduling || {};
     const waiting = data.enabled && scheduling.status === "budget-wait";
     $("overview").innerHTML = `${healthView(data.executionHealth)}${waiting ? `<p role="status"><strong>AI 관찰이 사용 한도로 대기 중입니다.</strong> ${scheduling.reason === "ai-task-budget-exhausted" ? "오늘 작업 시작 한도에 도달했습니다." : "새 분석과 독립 검토에 필요한 호출 여유가 없습니다."} 한도 갱신 ${escape(date(scheduling.nextCheckAt))}. 설정에서 한도를 늘리면 다음 실행부터 다시 확인합니다.</p>` : ""}<p>문장 검토 통과 ${escape(data.qualitySummary?.accepted ?? 0)}건 · 보류 ${escape(data.qualitySummary?.rejected ?? 0)}건. 검토 통과는 투자 가설의 적중이나 유료 가치 인증을 뜻하지 않습니다.</p><p>기존 규칙 기반 투자 알림은 종료했습니다. AI가 마지막 발송과 비교해 새로운 해석이 있을 때 알립니다. 같은 종목은 일반 관찰 3시간, 등록한 반증 조건의 새 전환은 1시간 간격이며 하루 최대 2회 · 계정당 하루 최대 8회입니다. 일일 한도는 UTC 기준입니다.</p><div class="metrics"><div class="metric">독립 관찰 상태<strong>${!data.enabled ? "일시 중지" : waiting ? "사용 한도 대기" : escape(healthLabels[data.executionHealth?.status] || "상태 미확인")}</strong></div><div class="metric">오늘 시작한 작업<strong>${escape(data.tasksStartedToday)} / ${data.budgetEnabled === false ? "제한 없음" : escape(data.dailyTaskBudget)}</strong></div><div class="metric">오늘 독립 AI 호출<strong>${escape(data.modelCallsUsedToday ?? 0)} / ${data.budgetEnabled === false ? "제한 없음" : escape(data.dailyCallBudget)}</strong></div><div class="metric">대기·진행 작업<strong>${escape(data.activeTaskCount)}</strong></div></div><p class="muted">관찰 분석과 발송 전 검토는 각각 호출을 사용합니다. 뉴스 분석 등 별도 작업의 호출은 아래 이력에 표시되며 독립 AI 한도와 구분됩니다.</p>`;
+    $("overview").insertAdjacentHTML("beforeend", queueView(data.taskScheduling));
     if (!dirty) { $("enabled").checked = data.configuredEnabled; $("budgetEnabled").checked = data.budgetEnabled !== false; syncBudgetFields(); $("taskBudget").value = data.dailyTaskBudget; $("callBudget").value = data.dailyCallBudget; }
     if (!brainDirty) $("brain").innerHTML = brainView(data.brain);
     const analyses = data.tasks.filter((task) => task.result?.summary);

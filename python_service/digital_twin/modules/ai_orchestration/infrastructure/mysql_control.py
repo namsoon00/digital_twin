@@ -20,6 +20,8 @@ from digital_twin.modules.ai_orchestration.infrastructure.mysql_execution import
 from digital_twin.modules.ai_orchestration.domain.execution_resilience import safe_diagnostic
 from digital_twin.modules.ai_orchestration.infrastructure.mysql_runtime import AIRuntimePersistence, RUNTIME_SCHEMA
 from digital_twin.modules.ai_orchestration.domain.observation_recovery import same_regular_observation
+from ..domain.task_dispatch import SCOPE as DISPATCH_SCOPE, dispatched
+from .mysql_task_dispatch import AITaskDispatchPersistence
 
 
 STATUS_INDEXES = (
@@ -72,7 +74,7 @@ SCHEMA = (
 )
 
 
-class MySQLAIControlStore(AIRuntimePersistence, AIExecutionPersistence, MySQLOperationalConnection):
+class MySQLAIControlStore(AITaskDispatchPersistence, AIRuntimePersistence, AIExecutionPersistence, MySQLOperationalConnection):
     def __init__(self, settings=None):
         super().__init__(settings)
         with self.connect() as connection:
@@ -102,29 +104,30 @@ class MySQLAIControlStore(AIRuntimePersistence, AIExecutionPersistence, MySQLOpe
 
     def claim(self):
         now = stamp()
+        clock = datetime.fromisoformat(now.replace("Z", "+00:00"))
         day = now[:10]
         with self.transaction() as connection:
-            connection.execute("INSERT IGNORE INTO ai_control_budget (day_key,used_count) VALUES (%s,0)", (day,))
+            cursor = self._locked_execution_state(connection, DISPATCH_SCOPE, clock)
+            connection.execute("INSERT INTO ai_control_budget (day_key,used_count) VALUES (%s,0) "
+                               "ON DUPLICATE KEY UPDATE day_key=VALUES(day_key)", (day,))
             budget = connection.execute("SELECT used_count FROM ai_control_budget WHERE day_key=%s FOR UPDATE", (day,)).fetchone()
-            row = connection.execute(
-                "SELECT * FROM ai_control_tasks WHERE (status='pending' AND (available_at<=%s OR last_error='ai-call-budget-exhausted')) OR (status='processing' AND lease_until<%s) ORDER BY priority DESC,available_at,task_id LIMIT 1 FOR UPDATE SKIP LOCKED",
-                (now, now),
-            ).fetchone()
+            calls = connection.execute("SELECT used_count FROM ai_control_budget WHERE day_key=%s", ("calls:" + day,)).fetchone()
+            state = budget_state(self.runtime_settings, budget["used_count"], (calls or {}).get("used_count", 0), clock)
+            row, slot, lane = self.select_dispatch(connection, cursor, state, clock)
             if not row:
                 return None
-            calls = connection.execute("SELECT used_count FROM ai_control_budget WHERE day_key=%s", ("calls:" + day,)).fetchone()
-            state = budget_state(self.runtime_settings, budget["used_count"], (calls or {}).get("used_count", 0),
-                                 datetime.fromisoformat(now.replace("Z", "+00:00")))
-            wait = admission_wait(state, row["capability"])
-            if wait:
-                raise wait
             token = uuid.uuid4().hex
-            until = (datetime.now(timezone.utc) + timedelta(minutes=15)).isoformat().replace("+00:00", "Z")
-            connection.execute("UPDATE ai_control_tasks SET status='processing',lease_token=%s,lease_until=%s,attempts=attempts+1,updated_at=%s WHERE task_id=%s", (token, until, now, row["task_id"]))
+            until = (clock + timedelta(minutes=15)).isoformat().replace("+00:00", "Z")
+            cursor, receipt = dispatched(cursor, slot, lane, row["task_id"], row["capability"], now,
+                                         row["lease_until"] if lane == "recovery" else "")
+            connection.execute("UPDATE ai_control_tasks SET status='processing',lease_token=%s,lease_until=%s,"
+                "attempts=attempts+1,updated_at=%s,payload_json=JSON_SET(payload_json,'$.taskDispatch',CAST(%s AS JSON)) "
+                "WHERE task_id=%s", (token, until, now, json.dumps(receipt), row["task_id"]))
             connection.execute("UPDATE ai_control_budget SET used_count=used_count+1 WHERE day_key=%s", (day,))
+            self._save_execution_state(connection, DISPATCH_SCOPE, cursor, clock)
             return {**json.loads(row["payload_json"]), "leaseToken": token, "attempts": int(row["attempts"]) + 1,
                     "previousError": row["last_error"], "scheduledAt": row["available_at"], "claimedAt": now,
-                    "claimedPriority": int(row["priority"])}
+                    "claimedPriority": int(row["priority"]), "taskDispatch": receipt}
 
     def heartbeat(self, job):
         until = (datetime.now(timezone.utc) + timedelta(minutes=15)).isoformat().replace("+00:00", "Z")
@@ -197,7 +200,7 @@ class MySQLAIControlStore(AIRuntimePersistence, AIExecutionPersistence, MySQLOpe
         if not job.get("claimedAt") or job.get("claimedPriority", 0) != 0:
             return 0
         original = {k: v for k, v in job.items() if k not in
-                    {"leaseToken", "attempts", "previousError", "scheduledAt", "claimedAt", "claimedPriority"}}
+                    {"leaseToken", "attempts", "previousError", "scheduledAt", "claimedAt", "claimedPriority", "taskDispatch"}}
         if not same_regular_observation(original, original):
             return 0
         rows = connection.execute("SELECT task_id,payload_json FROM ai_control_tasks WHERE account_id=%s AND symbol=%s "
@@ -435,6 +438,7 @@ class MySQLAIControlStore(AIRuntimePersistence, AIExecutionPersistence, MySQLOpe
             active = connection.execute("SELECT /*+ MAX_EXECUTION_TIME(5000) */ COUNT(*) AS count FROM ai_control_tasks WHERE status IN ('pending','processing') AND (%s='' OR account_id=%s)", (account_id, account_id)).fetchone()
             from digital_twin.modules.ai_orchestration.domain.planning import enabled
             health = self.operational_health(connection, now, enabled(self.runtime_settings))
+            scheduling = self.task_scheduling(connection, now, account_id)
         state = budget_state(self.runtime_settings, (budget or {}).get("used_count", 0), (call_budget or {}).get("used_count", 0), now)
         wait = admission_wait(state)
         return {"tasks": [{"taskId": row["task_id"], "accountId": row["account_id"], "symbol": row["symbol"],
@@ -444,4 +448,4 @@ class MySQLAIControlStore(AIRuntimePersistence, AIExecutionPersistence, MySQLOpe
                            "result": json.loads(row["result_json"])} for row in rows],
                 "callsToday": list(calls), **state,
                 "observationScheduling": wait.result() if wait else {"status": "ready"},
-                "activeTaskCount": int(active["count"]), "executionHealth": health}
+                "activeTaskCount": int(active["count"]), "executionHealth": health, "taskScheduling": scheduling}

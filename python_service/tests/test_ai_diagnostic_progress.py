@@ -18,6 +18,7 @@ from digital_twin.modules.notifications.application.ai_observation_diagnostic im
 from digital_twin.modules.notifications.application.notification.rendering import NotificationRenderingService
 from digital_twin.modules.notifications.application.notification.dispatch import NotificationDispatchService
 from digital_twin.modules.notifications.domain.delivery_suppression import NotificationDeliverySuppressed
+from digital_twin.modules.notifications.domain.research_thread import ResearchDeliveryDeferred
 from digital_twin.modules.notifications.infrastructure.notification.transport import TelegramNotifier
 
 
@@ -225,3 +226,16 @@ class DiagnosticProgressStorageTests(StabilizationDatabaseCase):
         self.assertEqual(1, self.progress.run_once()['queued'])
         self.assertEqual('waiting', self.progress_events(root)[-1]['stage'])
         self.assertEqual(replacement['taskId'], self.progress_events(root)[-1]['sourceTaskId'])
+        previous=self.job(self.progress_events(root)[-1]['eventId'])
+        intermediate=self.task(identity(replacement['taskId'],'wait')); self.waiting(intermediate,['중간 기록의 자료'])
+        latest=self.task(identity(intermediate['taskId'],'wait')); self.waiting(latest,['현재 필요한 자료'])
+        chain=self.control.diagnostic_chain
+        with patch.object(self.control,'diagnostic_chain',side_effect=lambda c,s: chain(c,s,limit=1)):
+            self.assertEqual(0,self.progress.run_once()['queued'],'bounded catch-up must not publish historical intermediate states')
+        with self.assertRaises(ResearchDeliveryDeferred): self.send(previous)
+        self.assertEqual(1,self.progress.run_once()['queued'])
+        event=self.progress_events(root)[-1]
+        self.assertEqual(['현재 필요한 자료'],event['reasons'])
+        self.assertEqual(latest['taskId'],event['sourceTaskId'])
+        with self.assertRaises(NotificationDeliverySuppressed): self.send(previous)
+        self.send(self.job(event['eventId']))

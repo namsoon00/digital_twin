@@ -65,6 +65,7 @@ class DiagnosticProgressPersistence:
             task = child
         if task:
             task["deliveries"] = deliveries
+            task["lineageIncomplete"] = True
         return task if not target else None
 
     def diagnostic_ancestor(self, connection, task):

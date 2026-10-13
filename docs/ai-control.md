@@ -824,6 +824,9 @@ For existing diagnostics the reconciler examines the latest 30 completed jobs
 within seven days and adopts the newest verified original per account/symbol/world
 without an existing case. It still requires persisted successor ancestry and does
 not resend originals or trigger analysis merely to populate a reply.
+Bounded catch-up advances its cursor without publishing intermediate historical
+states. Queued replies wait while that lineage is incomplete; once caught up,
+only the latest status is eligible and superseded unsent statuses stay in audit.
 
 - `/ai-control.html`: owner-only data, recent analyses, dated facts, schedules,
   process counts, enable switch and daily limits; linked from Operations.

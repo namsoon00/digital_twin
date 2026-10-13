@@ -74,14 +74,22 @@ class AIDiagnosticProgress:
                     self.control.save_diagnostic_progress(connection, scope, {**state, "closed": True, "closureReason": "lineage-unavailable"}, scope["cursor_task_id"])
                     continue
                 candidates = {**state.get("deliveries", {}), **task.get("deliveries", {})}
+                if task.get("lineageIncomplete"):
+                    state.update(deliveries=candidates, catchingUp=True)
+                    self.control.save_diagnostic_progress(connection, scope, state, task["taskId"])
+                    continue
+                if state.pop("catchingUp", False) and state.get("revision"):
+                    previous_id = identity("ai-diagnostic-progress", scope["root_job_id"], state["revision"])
+                    previous = connection.execute("SELECT status FROM notification_jobs WHERE job_id=%s", (previous_id,)).fetchone()
+                    if previous and previous["status"] != "done":
+                        state["fingerprint"] = ""
                 delivered, failed = None, None
                 for job_id, task_id in candidates.items():
                     delivered = self.receipt(connection, job_id, scope["account_id"], task_id, "aiObservation")
                     if delivered:
                         break
                     job = connection.execute("SELECT status FROM notification_jobs WHERE job_id=%s AND account_id=%s", (job_id, scope["account_id"])).fetchone()
-                    if (job and job["status"] in {"failed", "suppressed", "cancelled"}
-                            and (task_id == task["taskId"] or job_id not in state.get("reportedDeliveryFailures", []))):
+                    if job and job["status"] in {"failed", "suppressed", "cancelled"} and task_id == task["taskId"]:
                         failed = {**job, "jobId": job_id}
                 update = progress_state(task, failed, delivered)
                 state["deliveries"] = candidates
@@ -109,8 +117,6 @@ class AIDiagnosticProgress:
                             state["reviewNotified"] = True
                         else:
                             state["fingerprint"] = fingerprint
-                        if update["stage"] == "delivery-blocked":
-                            state["reportedDeliveryFailures"] = sorted(set(state.get("reportedDeliveryFailures", [])) | {update["deliveryJobId"]})
                         emitted += 1
                 self.control.save_diagnostic_progress(connection, scope, state, task["taskId"], event)
         return {"status": "ok", "checked": len(rows), "queued": emitted}
@@ -120,9 +126,16 @@ class AIDiagnosticProgress:
         with self.control.connect() as connection:
             row = connection.execute("SELECT payload_json FROM ai_observation_diagnostic_events WHERE event_id=%s", (job.job_id,)).fetchone()
             delivered = connection.execute("SELECT job_id FROM notification_delivery_attempts WHERE job_id=%s AND status='delivered' LIMIT 1", (job.job_id,)).fetchone()
+            scope = connection.execute("SELECT state_json FROM ai_observation_diagnostic_followups WHERE root_job_id=%s", (event.get("rootJobId", ""),)).fetchone()
         if (not row or decode(row["payload_json"]) != event or event.get("version") != VERSION
                 or event.get("accountId") != job.account_id or event.get("symbol") != job.context.get("symbol") or delivered):
             raise NotificationDeliverySuppressed("원본 진단에 연결된 후속 처리 기록을 확인할 수 없거나 이미 전송한 안내입니다.")
+        state = decode(scope["state_json"]) if scope else {}
+        if state.get("catchingUp"):
+            from digital_twin.modules.notifications.domain.research_thread import ResearchDeliveryDeferred
+            raise ResearchDeliveryDeferred("이전 후속 이력을 연결 중입니다. 현재 처리 상태를 확인한 뒤 안내합니다.")
+        if scope and identity("ai-diagnostic-progress", event["rootJobId"], state["revision"]) != job.job_id:
+            raise NotificationDeliverySuppressed("더 최근의 후속 처리 결과가 있어 과거 상태 안내는 기록에만 남깁니다.")
         expected = render_diagnostic_progress(event, debug_number=notification_debug_number(job.job_id))
         if job.context.get("notificationDisplayTimezone") == "Asia/Seoul":
             from digital_twin.modules.notifications.domain.display_time import notification_times_kst

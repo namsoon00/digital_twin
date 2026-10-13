@@ -4,6 +4,7 @@ import re
 from datetime import datetime, timedelta
 
 from digital_twin.modules.ai_orchestration.domain.planning import identity, bounded
+from .research_evidence_use import usable_fact
 
 
 ACTIVE_CASE_STATES = ("open", "waiting", "review-needed", "blocked")
@@ -89,7 +90,7 @@ def validate_management(value, packet, research, require_research=False):
         ids = item.get("evidenceIds")
         if not isinstance(ids, list) or not 1 <= len(ids) <= 8 or any(not isinstance(key, str) or key not in known for key in ids):
             raise ValueError("brain management requires captured evidence")
-        if usable and any(known[key].get("judgementEvidenceUsable") is False or known[key].get("valuationDecisionEligible") is False for key in ids):
+        if usable and any(not usable_fact(known[key]) for key in ids):
             raise ValueError("reference-only facts cannot answer a case")
         return list(dict.fromkeys(ids))
 

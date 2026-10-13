@@ -176,6 +176,7 @@ class AIControlService:
                             result.pop("conditionValidation", None)
                             result.update(repaired, executionInputId=repair_id, observedAt=stamp(), memoryCoverage=correction["memoryCoverage"],
                                           judgmentContinuity=judgment_continuity(correction))
+                            envelope = correction
                         except (AIControlBudgetWait, AIExecutionDeferred):
                             raise
                         except Exception as error:
@@ -184,6 +185,21 @@ class AIControlService:
                             break
                     if result.get("repair", {}).get("status") == "pending":
                         result["repair"]["status"] = result["quality"]["status"]
+                    from ..domain import research_review
+                    if research_review.needed(result) and result["quality"]["status"] not in {"accepted", "observation-only"}:
+                        stage = "research-assessment-review"
+                        result["researchQuality"] = {"version": research_review.VERSION, "status": "rejected"}
+                        try:
+                            review_input = research_review.freeze(result, envelope["researchResults"], envelope["promptBudgetBytes"])
+                            review_id = self.store.save_execution_input(job, review_input)
+                            if not review_id:
+                                return {"status": "lease-lost", "taskId": job["taskId"]}
+                            result["researchQuality"] = research_review.accept(result,
+                                (self.reviewer or self.planner)(review_input, review_id), review_id)
+                        except (AIControlBudgetWait, AIExecutionDeferred):
+                            raise
+                        except Exception as error:
+                            result["researchQuality"]["failure"] = task_failure(stage, error)[1]
                     if result.get("conditionValidation", {}).get("reasonCode") == "condition-baseline-unusable":
                         result["dataRecovery"] = {"status": "awaiting-next-observation", "reasonCode": "condition-baseline-unusable",
                                                   "sameSnapshotRepairSkipped": True}

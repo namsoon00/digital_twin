@@ -28,10 +28,23 @@ class ObservationEvidenceSession:
                     raise EvidenceContractError("conflicting retrieval evidence identity")
                 self._facts[row["id"]] = compact
 
-    def business_baseline(self):
+    def question_document_index(self, sources):
+        """Resolve source-owner IDs only against this frozen graph inventory."""
+        rows = []
+        for fact in self._facts.values():
+            ref = fact.get("historicalDocumentReference") or {}
+            if ref.get("evidenceId") not in sources:
+                continue
+            rows.append({"factId": fact["id"], "category": fact["evidenceCategory"],
+                         "evidenceId": ref["evidenceId"], "caseIds": sources[ref["evidenceId"]],
+                         "periodEnd": ref["periodEnd"], "publishedAt": ref["publishedAt"],
+                         "documentHash": ref["documentHash"], "bytes": len(canonical_json(fact).encode())})
+        return sorted(rows, key=lambda row: row["factId"])[:8]
+
+    def business_baseline(self, question_documents=()):
         """Reserve report history and documentary context before discretionary reads."""
         rows = sorted(self._facts.values(), key=lambda row: (-source_clock(row), row["id"]))
-        groups = [
+        groups = [[self._facts[row["factId"]] for row in question_documents]] + [
             [row for row in rows if row.get("historicalReport") and row.get("frequency") == frequency]
             for frequency in ("annual", "quarterly")]
         groups += [[row for row in rows if row.get("kind") == "company-relationship"],

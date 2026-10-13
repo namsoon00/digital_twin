@@ -322,7 +322,9 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # Relation causes, exact historical boundaries, named qualification and investor amount units.
         # Seven receipt-backed diagnostic recovery and immutable rendering contracts.
         # Three source-recovery extraction, checkpoint and central-memory contracts.
-        self.assertLessEqual(total, 2282)
+        # Five original-document and independent research-review regressions:
+        # exact projection, invalid sources, frozen reads, review proof and atomic agenda persistence.
+        self.assertLessEqual(total, 2287)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

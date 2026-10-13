@@ -100,6 +100,28 @@ class MySQLBrainAgendaStore(MySQLOperationalConnection):
             if validate_resolutions(raw_resolutions(result["questionResolutions"]), result["input"],
                     envelope["researchResults"], result, required=True) != result["questionResolutions"]:
                 raise ValueError("question resolution changed after input capture")
+        return envelope
+
+    @staticmethod
+    def research_proof(connection, job, result, author):
+        from ..domain import research_review
+        quality = result.get("researchQuality") or {}
+        if quality.get("status") != "accepted":
+            return False
+        row = connection.execute("SELECT i.artifact_gzip FROM ai_control_inputs i JOIN ai_control_input_calls l ON l.input_id=i.input_id "
+            "JOIN ai_control_calls c ON c.call_id=l.call_id AND c.task_id=i.task_id AND c.prompt_hash=i.prompt_hash "
+            "WHERE i.input_id=%s AND i.task_id=%s AND i.attempt=%s AND c.status='completed' LIMIT 1",
+            (quality.get("reviewInputId", ""), job["taskId"], job["attempts"])).fetchone()
+        if not row:
+            raise ValueError("research review requires a completed frozen call")
+        review = json.loads(gzip.decompress(row["artifact_gzip"]))
+        research_review.validate_input(review)
+        memories = [row for row in author["researchResults"] if row.get("kind") in {"brain-case", "business-thesis"}]
+        if (review["current"] != result["input"] or review["parentInputId"] != result["executionInputId"]
+                or review["proposal"] != research_review.proposal(result) or review["researchResults"] != memories
+                or research_review.accept(result, quality.get("review"), quality["reviewInputId"]) != quality):
+            raise ValueError("research review changed after capture")
+        return True
 
     def record(self, connection, job, result, children):
         if job["capability"] == "research-plan":
@@ -111,12 +133,13 @@ class MySQLBrainAgendaStore(MySQLOperationalConnection):
             return self.research_completed(connection, job, result)
         if not result.get("summary"):
             return {"status": "no-assessment"}
-        self.proof(connection, job, result)
+        author = self.proof(connection, job, result)
+        research_accepted = self.research_proof(connection, job, result, author)
         now = stamp()
         source = source_memory(job, result)
         feedback_ids = self.feedback(connection, job, result, source, now)
         receipt = {"status": "recorded", "caseIds": [], "feedbackIds": feedback_ids, "deferred": []}
-        if result.get("quality", {}).get("status") not in {"accepted", "observation-only"} or local_quality(result)["errors"]:
+        if not research_accepted and (result.get("quality", {}).get("status") not in {"accepted", "observation-only"} or local_quality(result)["errors"]):
             children[:] = [child for child in children if child["capability"] != "research"]
             for review in result.get("caseReviews", []):
                 case = self.read(connection, review["caseId"], job["accountId"], job["symbol"], lock=True)
@@ -148,14 +171,19 @@ class MySQLBrainAgendaStore(MySQLOperationalConnection):
             if not case or case["worldId"] != job["worldId"]:
                 raise ValueError("brain case scope mismatch")
             case = review_transition(case, review, source, now)
+            case.pop("reviewBlocker", None)
+            if research_accepted:
+                case["lastAssessment"]["researchReviewInputId"] = result["researchQuality"]["reviewInputId"]
             from .mysql_question_resolution import link_resolution
             link_resolution(connection, case, job, result, self.read, now)
             if review["action"] == "research":
                 self.schedule_research(connection, case, job, result, children, now)
             self.save(connection, case, job["taskId"], "assessment", case["lastAssessment"])
             receipt["caseIds"].append(case["caseId"])
-        self.record_questions(connection, job, result, children, source, now, receipt)
+        self.record_questions(connection, job, result, children, source, now, receipt, research_only=research_accepted)
         receipt["caseIds"] = list(dict.fromkeys(receipt["caseIds"]))
+        if research_accepted:
+            receipt["researchReviewInputId"] = result["researchQuality"]["reviewInputId"]
         return receipt
 
     def record_questions(self, connection, job, result, children, source, now, receipt, research_only=False):
@@ -341,7 +369,8 @@ class MySQLBrainAgendaStore(MySQLOperationalConnection):
                 "AND status IN ('open','waiting','review-needed','blocked') "
                 + ("AND JSON_UNQUOTE(JSON_EXTRACT(payload_json,'$.capability'))='research' "
                    "AND COALESCE(JSON_UNQUOTE(JSON_EXTRACT(payload_json,'$.answerResolution.status')),'')<>'answered' " if research_only else "")
-                + "ORDER BY next_check_at,created_at,case_id LIMIT 5", (account, symbol, world, world)).fetchall()
+                + "ORDER BY (COALESCE(JSON_UNQUOTE(JSON_EXTRACT(payload_json,'$.answerResolution.status')),'')='answered') DESC,"
+                  "next_check_at,created_at,case_id LIMIT 5", (account, symbol, world, world)).fetchall()
             feedback = connection.execute("SELECT payload_json FROM ai_brain_cases WHERE account_id=%s AND symbol=%s AND kind='service-feedback' "
                 "ORDER BY updated_at DESC LIMIT 3", (account, symbol)).fetchall()
             from .mysql_business_research import business_memories

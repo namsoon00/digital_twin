@@ -164,6 +164,7 @@
     {"file": "test_news_analysis_domain.py", "tier": "contract", "core": true},
     {"file": "test_news_collection_quality.py", "tier": "contract", "core": true},
     {"file": "test_research_evidence_identity.py", "tier": "unit", "core": true},
+    {"file": "test_research_judgment_continuity.py", "tier": "contract", "core": true},
     {"file": "test_research_evidence_store.py", "tier": "integration", "core": false},
     {"file": "test_research_evidence_governance_maintenance.py", "tier": "contract", "core": true},
 

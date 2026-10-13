@@ -61,6 +61,7 @@ _EXPORTS['ResearchEvidenceGateway'] = ('digital_twin.modules.news_intelligence.d
 
 
 _EXPORTS.update({
+    'research_document_reference': ('digital_twin.modules.news_intelligence.domain.research_document_reference', 'research_document_reference'),
     'source_recovery_summary': ('digital_twin.modules.news_intelligence.domain.source_recovery', 'source_recovery_summary'),
     'QUESTION_PASSAGES_VERSION': ('digital_twin.modules.news_intelligence.domain.question_passages', 'VERSION'),
     'question_terms': ('digital_twin.modules.news_intelligence.domain.question_passages', 'question_terms'),

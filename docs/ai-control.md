@@ -1020,3 +1020,46 @@ have a five-second server execution limit; dashboard connections use a separate 
 and an eight-second socket timeout. Database timeouts return retryable HTTP 503 without
 fabricating empty tasks or successful AI health. These limits do not change worker
 execution budgets or investment publication rules.
+
+### Research assessment and dated original documents
+
+`research-assessment-review-v1` separates research acceptance from customer
+notification acceptance. If an otherwise rejected observation proposes answering
+or dismissing a question, or changing a business thesis, one bounded independent
+review checks the original questions, captured ABox facts and proposed changes.
+Its frozen input, completed call, task attempt, parent author input, exact memories
+and proposal must all match before the agenda transaction can apply it. An absent,
+failed or rejected research review retains the previous deferral. Experiment
+handoffs still require the existing development admission and receipt.
+
+`researchQuality` grants research assessment authority only. It does not change
+`quality`, publication novelty, price freshness, notification receipts, trading
+authority or empirical hypothesis qualification. A factual question can therefore
+be answered with `not-applicable` for hypothesis creation while its notification
+remains rejected. Pure waiting and source collection do not require another model
+call. The retry identity includes the research review policy so an older quality
+failure can be assessed again without rewriting its frozen input or result.
+
+The v5 ontology projection input reserves up to eight original question filings
+within the existing twelve-record research limit, prioritizing sources referenced
+by open questions. Completed source answers take priority in the bounded question
+memory and source reservation so unfinished collection work cannot crowd out
+pending assessments. The source owner validates issuer identity, active lifecycle,
+governance, document hash and exact passage hashes. It preserves table line breaks
+and checks the source normalizer's representation against the stored document.
+Invalid, superseded, conflicting or oversized documents receive no historical
+reference. This does not extend the seven-day current-event admission window.
+
+`historicalDocumentReference` is a bounded ABox property for the stated reporting
+period, with original publication/observation times and document/passage hashes.
+It is available for actionless period comparisons even when current-event
+admission is stale; no TypeDB rule/action eligibility is promoted. Central AI
+receives `questionDocumentIndex`, resolves source IDs against the same immutable
+graph inventory, and explicitly selects the necessary original facts. Publication
+claims using this path must cite the historical reference fields and independently
+pass the normal semantic review. Missing periods remain missing; historical
+statements do not establish current conditions or price causation.
+
+New prompt instructions are conditional on the new reference/index contract;
+previous frozen prompts remain byte-identical and replayable. Original question
+answers are pointers to sources, never a substitute for current captured facts.

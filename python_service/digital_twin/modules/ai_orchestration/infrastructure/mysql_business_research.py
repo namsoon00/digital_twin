@@ -23,6 +23,8 @@ def record_business(connection, job, result, read, save, now):
         memory = next((row for row in result["input"].get("businessThesisMemory", []) if row["caseId"] == case["caseId"]), {})
         case["observations"] = deepcopy(memory.get("observations", case.get("observations", [])))
         case["lastReview"] = {**deepcopy(review), "taskId": job["taskId"], "executionInputId": result["executionInputId"],
+                              **({"researchReviewInputId": result["researchQuality"]["reviewInputId"]}
+                                 if result.get("researchQuality", {}).get("status") == "accepted" else {}),
                               "at": now, "observations": deepcopy(case["observations"])}
         case.update(status={"retain": "tracking" if case["contract"]["checkpoints"] else "data-needed",
                             "revise": "superseded", "retire": "retired"}[review["disposition"]], reason=review["reason"],

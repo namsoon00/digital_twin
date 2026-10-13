@@ -125,6 +125,7 @@ function card(task, scheduling = {}) {
   ${r.publication ? `<p class="muted">알림: ${escape(publicationLabels[r.publication.deliveryStatus || r.publication.status] || r.publication.status)}${deliveryProgress(r.publication)} · ${escape(r.publication.reason)}</p>` : ""}
   ${diagnostic ? `<p class="muted">검증 미통과 초안 · 운영 알림: ${escape(publicationLabels[diagnostic.deliveryStatus || diagnostic.status] || diagnostic.status)}${deliveryProgress(diagnostic)} · ${escape(diagnostic.reason)}</p>` : ""}
   ${r.quality ? `<p class="muted">설명 검증: ${escape(qualityLabels[r.quality.status] || r.quality.status)}${r.quality.errors?.length ? " · " + escape(r.quality.errors.join(" / ")) : ""}</p>` : ""}
+  ${r.researchQuality ? `<p>연구 검토: ${r.researchQuality.status === "accepted" ? "통과 · 질문·사업 가설 평가에 반영" : "보류"}${r.researchQuality.review?.reason ? " · " + escape(r.researchQuality.review.reason) : ""}</p>` : ""}
   ${r.quality?.diagnostics?.length || r.failure?.stage ? `<details><summary>검증 단계와 원인 분류</summary><pre>${escape(JSON.stringify(r.quality?.diagnostics || r.failure,null,2))}</pre></details>` : ""}
   ${r.dataRecovery ? '<p class="muted">현재 자료로는 확인 조건을 평가할 수 없습니다. 다음 관찰에서 자료를 다시 조회합니다.</p>' : ''}
   ${r.resumption?.scheduledAt ? `<p class="muted">예약 ${escape(date(r.resumption.scheduledAt))} · 실제 자료 확인 ${escape(date(r.resumption.capturedAt))}. 중단 기간의 관찰을 소급한 결과가 아닙니다.${r.resumption.coalescedTaskCount ? ` 동일 예약 ${escape(r.resumption.coalescedTaskCount)}건을 함께 처리했습니다.` : ''}</p>` : ''}

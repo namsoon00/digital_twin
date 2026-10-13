@@ -1,5 +1,6 @@
 """A question's explicit route to a thesis or experiment, with frozen lineage."""
 from copy import deepcopy
+from .research_evidence_use import usable_fact, reference_instructions
 
 VERSION = "question-resolution-v1"
 DISPOSITIONS = ("business-thesis", "experiment", "defer", "not-applicable")
@@ -18,7 +19,7 @@ disposition=experiment이면 이번 questions 중 capability=develop-hypothesis�
 
 def resolution_prompt(packet, history, research):
     from .business_research import business_prompt
-    return INSTRUCTIONS + business_prompt(packet, history, research)
+    return reference_instructions(packet) + INSTRUCTIONS + business_prompt(packet, history, research)
 
 
 def resolution_schema(packet, research):
@@ -63,7 +64,7 @@ def validate_resolutions(value, packet, research, result, required=False):
         if not isinstance(ids, list) or not 1 <= len(ids) <= 8 or any(not isinstance(key, str) or key not in known for key in ids):
             raise ValueError("question resolution requires current evidence")
         if disposition in {"business-thesis", "experiment"}:
-            if any(known[key].get("judgementEvidenceUsable") is False or known[key].get("valuationDecisionEligible") is False for key in ids):
+            if any(not usable_fact(known[key]) for key in ids):
                 raise ValueError("reference-only evidence cannot originate a hypothesis")
             targets = (result.get("businessResearch") or {}).get("theses", []) if disposition == "business-thesis" else result.get("developmentQuestions", [])
             if not 0 <= index < len(targets):
@@ -87,4 +88,4 @@ def raw_resolutions(rows):
 
 def resolution_review_prompt(packet, draft):
     from .business_research import business_review_prompt
-    return INSTRUCTIONS + "독립 검토에서는 questionResolutions의 원래 질문·선택한 가설·현재 인용 근거가 서로 부합하는지도 hypothesis 항목으로 검토하세요.\n" + business_review_prompt(packet, draft)
+    return reference_instructions(packet) + INSTRUCTIONS + "독립 검토에서는 questionResolutions의 원래 질문·선택한 가설·현재 인용 근거가 서로 부합하는지도 hypothesis 항목으로 검토하세요.\n" + business_review_prompt(packet, draft)

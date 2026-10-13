@@ -496,9 +496,21 @@ class ExternalSignalCoreMixin:
                 continue
             seen.add(symbol)
             try:
+                latest = self.evidence_store.latest(symbol=symbol, limit=limit)
+                preferred = []
+                if hasattr(self.evidence_store, "question_documents") and hasattr(self.evidence_store, "connect"):
+                    try:
+                        from digital_twin.modules.ai_orchestration.public import question_document_sources
+                        with self.evidence_store.connect() as connection:
+                            preferred = question_document_sources(connection, symbol)
+                    except Exception:
+                        signals.setdefault("statuses", []).append({"source": "ResearchQuestionSources", "ok": False,
+                            "message": "질문별 원문 연결 조회 실패 · 최근 원문만 제공"})
+                documents = getattr(self.evidence_store, "question_documents", lambda **_: [])(symbol=symbol, limit=8, preferred_ids=preferred)
+                reserved = {item.evidence_id: item for item in [*latest[:4], *documents, *latest]}
                 items = [
                     item.to_dict()
-                    for item in self.evidence_store.latest(symbol=symbol, limit=limit)
+                    for item in list(reserved.values())[:12]
                     if item.kind in {"news", "disclosure", "filing", "financial-fact", "market-move"}
                 ]
             except Exception as error:  # noqa: BLE001 - stored evidence must not block realtime monitoring.

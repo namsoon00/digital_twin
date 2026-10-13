@@ -121,8 +121,9 @@ def validate_business(value, packet, research):
         if not isinstance(item, dict) or set(item) != set(TEXT_FIELDS) | {"evidenceIds", "missingEvidence", "horizonDays", "checkpoints"}:
             raise ValueError("incomplete business thesis")
         ids = evidence(item["evidenceIds"])
+        from .research_evidence_use import usable_fact
         usable = [facts[key] for key in ids if facts[key].get("evidenceCategory") in {"company", "research", "valuation"}
-                  and facts[key].get("judgementEvidenceUsable") is not False and facts[key].get("valuationDecisionEligible") is not False]
+                  and usable_fact(facts[key])]
         if not usable:
             raise ValueError("business thesis cannot be based on prices alone")
         horizon = item["horizonDays"]
@@ -262,6 +263,8 @@ def thesis_case(job, result, thesis, now):
         "expiresAt": (clock(now) + timedelta(days=thesis["horizonDays"])).isoformat().replace("+00:00", "Z"),
         "nextCheckAt": (clock(now) + timedelta(days=7)).isoformat().replace("+00:00", "Z"),
         "origin": {"taskId": job["taskId"], "executionInputId": result["executionInputId"],
+            **({"researchReviewInputId": result["researchQuality"]["reviewInputId"]}
+               if result.get("researchQuality", {}).get("status") == "accepted" else {}),
             "sourceQuestions": [deepcopy(row["sourceQuestion"]) for row in result.get("questionResolutions", [])
                 if row["disposition"] == "business-thesis"
                 and result["businessResearch"]["theses"][row["targetIndex"]] == thesis],

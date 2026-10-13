@@ -212,7 +212,8 @@ def insight_errors(result, packet, *, causal_guard_version=CAUSAL_GUARD_VERSION)
                     raise ValueError("uncited field")
                 if ref["period"] == "assessment" and section != "counterEvidence":
                     raise ValueError("quote assessment is limitation metadata only")
-                if section != "counterEvidence" and (fact.get("judgementEvidenceUsable") is False or fact.get("valuationDecisionEligible") is False):
+                from .research_evidence_use import usable_fact
+                if section != "counterEvidence" and not usable_fact(fact, ref["field"]):
                     raise ValueError("reference-only evidence")
                 if ref["field"] in {"foreignNetVolume", "institutionNetVolume"}:
                     participant = "foreign" if ref["field"].startswith("foreign") else "institution"

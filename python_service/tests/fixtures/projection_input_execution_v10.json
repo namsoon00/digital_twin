@@ -1,0 +1,27 @@
+{
+  "sourceRevision": "c716bef80 + dated question document projection",
+  "contractVersion": "projection-input-execution-v10",
+  "reason": "Projection and reasoning snapshot input versions advance from v4 to v5 for exact dated filing passages. Restoring both v4 constants reproduces all nine v9 scenarios exactly; source facts, rule semantics and thresholds in these synthetic scenarios are unchanged. Dedicated original-document tests cover the new ABox property and unchanged current-event admission.",
+  "changedCases": [
+    "full",
+    "target",
+    "source-facts",
+    "live-context",
+    "memory-hit",
+    "persistent-hit",
+    "cache-errors",
+    "scoring-failure",
+    "world-identity"
+  ],
+  "scenarios": {
+    "full": "0262d417f38a9eb3ee7e55b691a197fcaf413a54b3bcf1e63cff3ff83c4fad9e",
+    "target": "ddc54d5ece987daf5547d5d11fa6517bf53df95e8036cbfcd61be1a49890e83f",
+    "source-facts": "1bae1c070e16b80e1fe543718f20173e1e55bbd1a08809b15befc4a72cd65f81",
+    "live-context": "6f453390c45e513fb5477329963708b1daead9ee1fac7609fd13fd0dcf102950",
+    "memory-hit": "bdddeca76c423ec198fe5d5c99316f1a3af1744918d9a05de5267830804e9f66",
+    "persistent-hit": "e9584cb057b504ee3b055d2b792134313f3a8236626b23ac299ca2fc006e7857",
+    "cache-errors": "f76e444702703f3104e875b1771e3a11744d175ad1945dfbf11fa3acfd114de7",
+    "scoring-failure": "014ec5270a97b10c276310bc21aa2e5ccbe23fb0744f18b99fe1deda9d4fd579",
+    "world-identity": "a733772b6f45fc6837205c099d3033e08e79fadf1434bec4ccd03c439ac12648"
+  }
+}

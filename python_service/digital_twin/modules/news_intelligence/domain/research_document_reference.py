@@ -1,0 +1,67 @@
+"""Dated original filing passages, independently of current-event admission."""
+from copy import deepcopy
+from datetime import datetime, timezone
+import hashlib
+import json
+from urllib.parse import urlparse
+from .disclosure_quality import normalize_official_document_text
+
+VERSION = "research-document-reference-v1"
+MAX_BYTES = 16000
+
+
+def digest(value):
+    return hashlib.sha256(value.encode()).hexdigest()
+
+
+def research_document_reference(item):
+    """Fail closed; this reference never changes the filing's event eligibility."""
+    raw = item.raw_payload
+    governance = raw.get("evidenceGovernance") or {}
+    admission = raw.get("promptEvidenceAdmission") or {}
+    issuer = raw.get("documentIssuerIdentity") or {}
+    passages = raw.get("documentPassages") or []
+    document = raw.get("officialDocumentText") or ""
+    if (item.kind != "filing" or not raw.get("researchTaskIds")
+            or not raw.get("documentVerified") or not raw.get("analysisReady")
+            or raw.get("officialDocumentState") != "document-verified"
+            or governance.get("verificationStatus") != "verified-primary"
+            or governance.get("sourceTrustState") != "trusted"
+            or governance.get("validationState") != "ready"
+            or governance.get("investmentJudgmentEligible") is not True
+            or governance.get("supersededByEvidenceId") or governance.get("conflictingEvidenceIds")
+            or raw.get("evidenceLifecycleState") != "active"
+            or set(admission.get("reasonCodes") or []) - {"evidence-stale"}
+            or issuer.get("symbol") != item.symbol or issuer.get("sourceUrl") != item.url
+            or issuer.get("verification") != "sec-discovered-issuer-document"
+            or urlparse(item.url).hostname not in {"sec.gov", "www.sec.gov"}
+            or not document or digest(document) != raw.get("documentHash")
+            or not isinstance(passages, list) or not 1 <= len(passages) <= 8):
+        return {}
+    exact = []
+    normalized = normalize_official_document_text(document)
+    for passage in passages:
+        quote = passage.get("quote") if isinstance(passage, dict) else None
+        if (not isinstance(quote, str) or not quote or digest(quote) != passage.get("passageHash")
+                or normalize_official_document_text(quote) not in normalized):
+            return {}
+        exact.append({"quote": quote, "passageHash": passage["passageHash"]})
+    text = "\n\n".join(row["quote"] for row in exact)
+    if normalize_official_document_text(text) != normalized:
+        return {}
+    try:
+        clocks = [datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+                  for value in (raw.get("reportDate"), item.published_at, item.observed_at)]
+        clocks = [value if value.tzinfo else value.replace(tzinfo=timezone.utc) for value in clocks]
+    except (TypeError, ValueError):
+        return {}
+    if not clocks[0] <= clocks[1] <= clocks[2]:
+        return {}
+    value = {"version": VERSION, "purpose": "historical-period-comparison", "evidenceId": item.evidence_id,
+             "symbol": item.symbol, "sourceUrl": item.url, "periodEnd": raw["reportDate"],
+             "publishedAt": item.published_at, "observedAt": item.observed_at,
+             "documentHash": raw["documentHash"], "sourceDocumentHash": raw.get("sourceDocumentHash", ""),
+             "passageHashes": [row["passageHash"] for row in exact], "text": text,
+             "passageTextHash": digest(text), "sourceNormalization": "disclosure-document-quality-v3",
+             "limitation": "해당 보고 기간의 원문 발췌입니다. 최신 사건·현재 수치·현재 주가의 원인을 증명하지 않습니다."}
+    return deepcopy(value) if len(json.dumps(value, ensure_ascii=False).encode()) <= MAX_BYTES else {}

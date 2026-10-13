@@ -219,6 +219,53 @@ class BrainAgendaStorageTests(unittest.TestCase):
         old_ai.enqueue.assert_not_called()
         self.assertEqual("done", rows()[0]["status"])
 
+    def test_independent_research_review_commits_answer_despite_notification_rejection(self):
+        from digital_twin.modules.ai_orchestration.domain import research_review
+        from digital_twin.modules.ai_orchestration.domain.brain_management import new_case
+        from digital_twin.modules.ai_orchestration.domain.insight_quality import quality_block
+        task, result, children = self.observation()
+        self.assertTrue(self.control.complete(task, result, children))
+        original = next(row for row in self.brain.status()["cases"] if row.get("kind") != "service-feedback")
+        with self.control.transaction() as connection:
+            case = self.brain.read(connection, original["caseId"], self.subject["accountId"], self.subject["symbol"], lock=True)
+            case["answerResolution"] = {"status": "answered"}
+            self.brain.save(connection, case, task["taskId"], "fixture-source-answer", {})
+            for index in range(5):
+                waiting = new_case(task, result, "원문 미확보 질문 " + str(index), "research", "2026-01-01T00:00:00Z")
+                self.brain.save(connection, waiting, task["taskId"], "created", {})
+        memory = next(row for row in self.brain.memory(self.subject["accountId"], self.subject["symbol"])
+                      if row.get("kind") == "brain-case")
+        self.assertEqual(original["caseId"], memory["caseId"], "completed answers must not be crowded out by older collection work")
+        with self.control.transaction() as connection:
+            connection.execute("DELETE FROM ai_control_tasks WHERE capability='research'")
+            connection.execute("UPDATE ai_control_tasks SET available_at=%s WHERE status='pending'", (stamp(),))
+        raw = {**plan(), "questions": [], "caseReviews": [review_case(memory, "answered")], "serviceFeedback": [],
+               "questionResolutions": [{"caseId": memory["caseId"], "disposition": "not-applicable", "targetIndex": -1,
+                                        "reason": "이 질문은 관측 사실을 확인하는 질문이므로 설명 가설을 만들지 않습니다.", "evidenceIds": ["quote-1"]}]}
+        follow, evaluated, next_jobs = self.observation(raw, seed=False)
+        evaluated["followUpConditions"] = []
+        evaluated["quality"] = local_quality(evaluated)
+        self.assertEqual("rejected", evaluated["quality"]["status"])
+        with self.control.connect() as connection:
+            author = self.brain.proof(connection, follow, evaluated)
+        memories = author["researchResults"]
+        review_input = research_review.freeze(evaluated, memories, 262144)
+        review_id = self.control.save_execution_input(follow, review_input)
+        reviewed = {"version": research_review.VERSION, "accepted": True, "reason": "질문에 필요한 관측 사실과 인용 근거가 일치합니다."}
+        evaluated["researchQuality"] = research_review.accept(evaluated, reviewed, review_id)
+        # A claimed acceptance without a completed independent call cannot commit.
+        with self.assertRaises(ValueError):
+            self.control.complete(follow, evaluated, next_jobs)
+        call = self.control.begin_call("independent-observation", review_input["promptHash"], follow["taskId"], review_id)
+        self.control.finish_call(call)
+        self.assertTrue(self.control.complete(follow, evaluated, next_jobs))
+        case = next(row for row in self.brain.status()["cases"] if row["caseId"] == memory["caseId"])
+        self.assertEqual("answered", case["status"])
+        self.assertEqual("not-applicable", case["hypothesisResolution"]["disposition"])
+        self.assertEqual(review_id, case["lastAssessment"]["researchReviewInputId"])
+        self.assertTrue(quality_block(evaluated))
+        self.assertFalse(self.control.complete(follow, evaluated, next_jobs))
+
     def test_atomic_question_research_reassessment_preserves_origin_and_blocks_duplicate_work(self):
         from question_resolution_checks import assert_question_loop
         assert_question_loop(self)

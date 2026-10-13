@@ -41,7 +41,14 @@ def author_packet(session, packet, ids, seen, research, trace, status, reserve=0
 def retrieve_working_evidence(session, packet, history, research, decide, save_input, prompt_bytes,
                              max_rounds=MAX_ROUNDS, record_round=None):
     rounds = max(0, min(MAX_ROUNDS, int(max_rounds)))
-    baseline = session.business_baseline()
+    sources = {}
+    for case in research:
+        if case.get("kind") == "brain-case":
+            for source in (case.get("latestSourceAnswer") or {}).get("sources", []):
+                if source.get("evidenceId"):
+                    sources.setdefault(source["evidenceId"], []).append(case["caseId"])
+    documents = session.question_document_index(sources)
+    baseline = session.business_baseline(documents)
     packet = {**packet, "businessEvidence": baseline}
     current = {**packet, **session.select(baseline["factIds"])}
     seen = {x["id"]: x for x in current["facts"]}
@@ -51,6 +58,7 @@ def retrieve_working_evidence(session, packet, history, research, decide, save_i
     tools.admit(current)
     continuity = continuity_memory(history, research)
     context = {"catalog": session.catalog(), "continuity": continuity, "reportIndex": session.report_index(),
+               "questionDocumentIndex": documents,
                "reportIndexLimit": 32, "reportIndexOrdering": "source-time-descending; excluded older reports remain queryable",
                "roundLimit": rounds, "selectionPolicy": contract.POLICY}
     trace, recalled, requests_seen = [], {"analyses": [], "memories": []}, set()

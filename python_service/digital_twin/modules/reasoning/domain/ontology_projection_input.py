@@ -23,8 +23,8 @@ from digital_twin.modules.news_intelligence.contracts import company_knowledge_b
 from digital_twin.modules.instruments.contracts import security_lines_for_symbol
 
 
-ONTOLOGY_PROJECTION_INPUT_VERSION = "ontology-projection-input-v4"
-ONTOLOGY_REASONING_SNAPSHOT_INPUT_VERSION = "ontology-reasoning-snapshot-input-v4"
+ONTOLOGY_PROJECTION_INPUT_VERSION = "ontology-projection-input-v5"
+ONTOLOGY_REASONING_SNAPSHOT_INPUT_VERSION = "ontology-reasoning-snapshot-input-v5"
 
 SYMBOL_SIGNAL_GROUPS = {
     "secFilings",
@@ -289,6 +289,14 @@ def _compact_research_payload(item: Mapping[str, object]) -> Dict[str, object]:
         depth=2,
     )
     relationships = source.get("companyRelationships") or {}
+    if source.get("researchTaskIds") and source.get("documentPassages"):
+        # Preserve exact bounded passages and their verification inputs.
+        document = source.get("officialDocumentText")
+        if isinstance(document, str) and len(document.encode()) <= 16000:
+            proof = {key: source[key] for key in ("officialDocumentText", "documentHash", "sourceDocumentHash", "documentPassages",
+                     "documentIssuerIdentity", "reportDate", "evidenceLifecycleState", "researchTaskIds") if key in source}
+            if len(json.dumps(proof, ensure_ascii=False).encode()) <= 32000:
+                result.update(deepcopy(proof))
     assertions = relationships.get("assertions") if isinstance(relationships, Mapping) else None
     document = source.get("officialDocumentText")
     if (isinstance(assertions, list) and 0 < len(assertions) <= 12

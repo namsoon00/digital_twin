@@ -106,6 +106,9 @@ def freeze_execution_input(packet, history, research, max_prompt_bytes=DEFAULT_P
 
 
 def validate_execution_input(envelope):
+    from . import research_review
+    if envelope.get("promptVersion") == research_review.VERSION:
+        return research_review.validate_input(envelope)
     from . import research_work
     if envelope.get("promptVersion") == research_work.PROMPT_VERSION:
         return research_work.validate_input(envelope)

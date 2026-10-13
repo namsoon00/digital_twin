@@ -2,6 +2,7 @@
 from digital_twin.modules._exports import resolve_export
 
 _EXPORTS = {
+    "question_document_sources": ("digital_twin.modules.ai_orchestration.infrastructure.mysql_question_sources", "question_document_sources"),
     "current_execution_metrics": ("digital_twin.modules.ai_orchestration.infrastructure.execution", "current_execution_metrics"),
     "AIControlService": ("digital_twin.modules.ai_orchestration.application.control", "AIControlService"),
     "execute_ai_work": ("digital_twin.modules.ai_orchestration.infrastructure.execution", "execute_ai_work"),

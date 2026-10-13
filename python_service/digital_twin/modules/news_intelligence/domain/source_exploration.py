@@ -28,7 +28,7 @@ def short_texts(value, limit=8):
 
 
 def exploration_action(value, candidate_ids, private_terms=()):
-    if not isinstance(value, dict) or value.get("action") not in {"search", "read", "finish"}:
+    if not isinstance(value, dict) or value.get("action") not in {"search", "read", "extract", "finish"}:
         raise ValueError("invalid-exploration-action")
     action = value["action"]
     reason = " ".join(str(value.get("reason") or "").split())[:400]
@@ -43,15 +43,33 @@ def exploration_action(value, candidate_ids, private_terms=()):
                 or any(str(term).casefold() in query.casefold() for term in private_terms if term)):
             raise ValueError("invalid-public-search-query")
         result["query"] = " ".join(query.split())
-    elif action == "read":
+    elif action in {"read", "extract"}:
         if value.get("candidateId") not in candidate_ids:
             raise ValueError("unknown-document-candidate")
         result["candidateId"] = value["candidateId"]
+        if action == "extract":
+            focus = value.get("focus")
+            if (not isinstance(focus, list) or not 1 <= len(focus) <= 4
+                    or any(not isinstance(item, str) or not 2 <= len(item.strip()) <= 180
+                           or re.search(r"[\x00-\x1f]", item) for item in focus)):
+                raise ValueError("invalid-extraction-focus")
+            result["focus"] = list(dict.fromkeys(item.strip() for item in focus))
     return result
 
 
 def exploration_prompt(context):
     import json
+    recovery = (
+        "\nrecovery는 실행 기록에서 분류한 실패 원인입니다. 자료 미공개라는 뜻이 아닙니다. "
+        "previousRecovery는 이전 조사 기록이며 현재 자료나 현재 접근 상태를 증명하지 않습니다. "
+        "원인을 확인하여 다음 도구를 선택하세요. extract는 이미 읽은 문서의 candidateId와 focus(부족한 항목 1~4개)를 사용합니다. "
+        "원본 해시를 검증한 뒤 해당 항목과 표 주변의 기간·단위·연결범위를 집중 추출합니다. 새 사실을 계산하거나 출처 검증을 생략하지 않습니다. "
+        "extract도 문서 읽기 예산을 사용하며 조사당 한 번입니다. 읽은 문서에 필요한 내용이 빠졌을 때 사용하세요. "
+        "발행일·발행사 미확인은 추가 추출만으로 해결되지 않습니다. 공식 색인이나 다른 공식 원문을 확인하세요. "
+        "수집 건수와 newPassageCount는 답변 완료가 아닙니다. 원래 질문의 purpose와 부족한 항목에 실제로 도움이 되는지 확인하세요. "
+        "extract 응답 예: {\"action\":\"extract\",\"candidateId\":\"읽은 문서 ID\",\"focus\":[\"cash flow units\"],"
+        "\"reason\":\"현금흐름표 단위 확인\",\"missingRequirements\":[\"표시 단위\"]}.\n"
+    ) if context.get("recoveryVersion") else ""
     return (
         "당신은 기존 질문의 부족한 근거를 찾는 조사자입니다. 검색·문서 읽기 중 다음 행동 하나를 고르세요. "
         "검색어, 출처, 문서, 추가 조사 여부를 직접 선택하되 원래 질문과 대상 기업을 바꾸지 마세요. "
@@ -70,5 +88,5 @@ def exploration_prompt(context):
         'JSON 하나만 반환: {"action":"search|read|finish","query":"검색 때만",'
         '"candidateId":"읽을 때만","reason":"선택 이유",'
         '"missingRequirements":["아직 확인하지 못한 구체적인 항목"]}.\n'
-        + json.dumps(context, ensure_ascii=False, sort_keys=True)
+        + recovery + json.dumps(context, ensure_ascii=False, sort_keys=True)
     )

@@ -262,7 +262,8 @@ class InvestmentResearchOrchestrationService:
                     save("processing")
                 collected, exploration = self.source_exploration.explore(
                     target, pending, packets, assessments, private_terms=(account_id,), checkpoint=checkpoint,
-                    resume=brain.get("sourceExplorationResume"))
+                    resume=brain.get("sourceExplorationResume"), provider_statuses=statuses,
+                    previous_recovery=brain.get("previousSourceRecovery"))
                 plan["sourceExploration"] = exploration
                 provider_statuses = [{"provider": "question-source-exploration", "status": exploration["stopReason"],
                     "searchCount": exploration["searchCount"], "readCount": exploration["readCount"],

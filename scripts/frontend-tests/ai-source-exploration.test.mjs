@@ -32,6 +32,14 @@ test("the final cited answer replaces earlier exploration gaps, including an emp
   assert.doesNotMatch(html, /아직 확인하지 못한 항목|이미 확인한 매출/);
   assert.match(render({sourceExploration:old}), /이미 확인한 매출/);
 });
+test("recovery history shows causes and measured extraction without declaring an answer complete", () => {
+  const html = render({sourceRecovery:{version:"source-recovery-v1",issues:[{label:"접근 거부",host:"example.com",
+    explanation:"다른 공식 원문 확인 <script>"}],progress:{measured:true,extractionCount:1,newPassageCount:2}}});
+  for (const text of ["접근 거부", "example.com", "다른 공식 원문", "집중 추출 1회", "본문 2개", "답변 완료를 뜻하지 않습니다"]) assert.ok(html.includes(text), text);
+  assert.doesNotMatch(html, /<script>|자료 답변 확인/);
+  const legacy = render({sourceRecovery:{version:"source-recovery-v1",issues:[],progress:{measured:false,newPassageCount:0}}});
+  assert.doesNotMatch(legacy, /본문 0개/);
+});
 test("a pending collection interval shows its explanation and retry time without a failure label", () => {
   const input = {status:"pending",capability:"research",symbol:"TEST",lastError:"research-cooldown",
     nextCheckAt:"2026-10-11T13:00:00Z",result:{status:"research-wait",reason:"research-cooldown",

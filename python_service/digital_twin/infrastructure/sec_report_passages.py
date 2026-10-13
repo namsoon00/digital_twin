@@ -47,22 +47,36 @@ def document_blocks(raw_html):
 
 class _Tables(HTMLParser):
     """Retain whole tables, including headers; nested/layout tables stay bounded."""
-    def __init__(self):
+    def __init__(self, include_context=False):
         super().__init__(convert_charrefs=True)
         self.depth, self.skip, self.size = 0, 0, 0
         self.parts, self.tables = [], []
+        self.include_context = include_context
+        self.context, self.outside, self.prelude = [], [], []
+
+    def flush_context(self):
+        line = re.sub(r'\s+', ' ', ''.join(self.outside)).strip()
+        self.outside = []
+        if line:
+            self.context = (self.context + [line])[-6:]
 
     def handle_starttag(self, tag, attrs):
         if tag in {'script', 'style', 'ix:hidden', 'ix:header'}:
             self.skip += 1
         if tag == 'table':
             if not self.depth:
+                self.flush_context()
+                self.prelude = list(self.context) if sum(map(len, self.context)) <= 2000 else []
                 self.parts, self.size = [], 0
             self.depth += 1
+        elif not self.depth and not self.skip and tag in {'p', 'div', 'br', 'h1', 'h2', 'h3', 'h4'}:
+            self.flush_context()
         if self.depth and not self.skip and tag in {'tr', 'td', 'th', 'br'}:
             self.parts.append('\n' if tag == 'tr' else ' | ' if tag in {'td', 'th'} else ' ')
 
     def handle_data(self, data):
+        if not self.depth and not self.skip and self.include_context:
+            self.outside.append(data)
         if self.depth and not self.skip:
             self.size += len(data)
             if self.size <= 12000:
@@ -76,11 +90,15 @@ class _Tables(HTMLParser):
             if not self.depth and self.size <= 12000:
                 value = '\n'.join(re.sub(r'\s+', ' ', row).strip() for row in ''.join(self.parts).split('\n')).strip()
                 if value:
-                    self.tables.append(value)
+                    self.tables.append('\n'.join([*self.prelude, value]) if self.include_context else value)
+            if not self.depth:
+                self.context = []  # Do not attach another statement's heading.
+        elif not self.depth and not self.skip and tag in {'p', 'div', 'h1', 'h2', 'h3', 'h4'}:
+            self.flush_context()
 
 
-def question_document_blocks(raw_html):
-    parser = _Tables()
+def question_document_blocks(raw_html, include_context=False):
+    parser = _Tables(include_context=include_context)
     parser.feed(str(raw_html or ''))
     return parser.tables + document_blocks(raw_html)
 

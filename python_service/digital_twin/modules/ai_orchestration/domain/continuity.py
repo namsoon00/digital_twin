@@ -44,6 +44,9 @@ def _work_summary(row):
     if returned:
         result["lastResearch"]["result"] = {key: deepcopy(returned[key]) for key in
             ("runId", "status", "stopReason", "changedEvidenceCount", "completedAt") if key in returned}
+        if returned.get("sourceRecovery"):
+            result["lastResearch"]["result"]["sourceRecovery"] = {key: deepcopy(returned["sourceRecovery"][key])
+                for key in ("version", "authority", "causeCounts", "progress") if key in returned["sourceRecovery"]}
         if returned.get("questionAssessment") and not row.get("answerResolution"):
             assessment = returned["questionAssessment"]
             result["lastResearch"]["result"]["questionAssessment"] = {key: deepcopy(assessment[key]) for key in

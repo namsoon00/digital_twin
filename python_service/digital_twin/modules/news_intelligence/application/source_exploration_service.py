@@ -7,6 +7,7 @@ from copy import deepcopy
 from ..domain.source_exploration import VERSION, exploration_action, public_url
 from ..domain.investment_research import research_evidence_from_payload
 from ..domain.research_progress import fingerprint, task_contract
+from ..domain.source_recovery import VERSION as RECOVERY_VERSION, source_recovery_summary
 
 
 class SourceExplorationService:
@@ -20,15 +21,18 @@ class SourceExplorationService:
     def enabled(self):
         return str(self.settings.get("researchSourceExplorationEnabled", "1")).lower() not in {"0", "false", "off"}
 
-    def explore(self, target, tasks, packets, assessments, *, private_terms=(), checkpoint=None, resume=None):
+    def explore(self, target, tasks, packets, assessments, *, private_terms=(), checkpoint=None, resume=None,
+                provider_statuses=(), previous_recovery=None):
         audit = {"version": VERSION, "taskIds": [row["taskId"] for row in tasks],
                  "taskFingerprint": fingerprint([task_contract(row) for row in tasks]),
                  "steps": [], "stopReason": "step-budget-exhausted", "missingRequirements": [],
-                 "searchCount": 0, "readCount": 0, "evidenceIds": []}
+                 "searchCount": 0, "readCount": 0, "extractionCount": 0, "evidenceIds": [],
+                 "recoveryVersion": RECOVERY_VERSION}
         if not self.enabled():
             audit["stopReason"] = "exploration-disabled"
             return [], audit
         started, candidates, documents, evidence, attempted = self.clock(), {}, [], [], set()
+        read_documents, passage_keys = {}, set()
         carried_seconds = 0
         if resume:
             if (resume.get("version") != VERSION or resume.get("taskFingerprint") != audit["taskFingerprint"]
@@ -66,18 +70,22 @@ class SourceExplorationService:
         audit.setdefault("seedCandidates", deepcopy(list(candidates.values())))
         for step in audit["steps"]:
             decision = step.get("decision", {})
-            if decision.get("action") in {"search", "read"}:
+            if decision.get("action") in {"search", "read", "extract"}:
                 attempted.add((decision["action"], str(decision.get("query") or decision.get("candidateId")).casefold()))
             result = step.get("result") or {}
             add_candidates(result.get("candidates") or [])
             if result.get("document"):
                 documents.append(result["document"])
+                read_documents[decision.get("candidateId")] = result["document"]
+                passage_keys.update((result["document"].get("sourceDocumentHash"), row.get("passageHash"))
+                                    for row in result["document"].get("passages", []))
             if step.get("status") in {"deciding", "executing"}:
                 step.update(status="interrupted", errorKind="execution-result-unconfirmed")
         def save():
             audit["evidenceIds"] = [row.evidence_id for row in evidence]
             audit["collectedEvidence"] = [row.to_dict() for row in evidence]
             audit["elapsedSeconds"] = round(carried_seconds + self.clock() - started, 2)
+            audit["recovery"] = source_recovery_summary(audit, provider_statuses)
             if checkpoint:
                 checkpoint(deepcopy(audit))
         # A run can spend at most six decisions, two searches and three reads.
@@ -92,11 +100,17 @@ class SourceExplorationService:
                 allowed.append("search")
             if audit["readCount"] < 3 and candidates:
                 allowed.append("read")
+            if (audit["readCount"] < 3 and audit.get("extractionCount", 0) < 1 and read_documents
+                    and callable(getattr(self.tools, "extract", None))):
+                allowed.append("extract")
             context = {"version": VERSION, "subject": {"symbol": target.normalized_symbol(), "name": target.name},
-                "tasks": [{key: row.get(key) for key in ("taskId", "question", "queryTerms", "maxAgeMinutes", "requiredPeriodEnds", "requiredMetrics")}
+                "tasks": [{key: row.get(key) for key in ("taskId", "question", "purpose", "queryTerms", "maxAgeMinutes", "requiredPeriodEnds", "requiredMetrics")}
                           for row in tasks],
                 "assessments": assessments, "existingEvidence": packets[:6],
                 "candidates": list(candidates.values()), "documents": documents,
+                "recoveryVersion": RECOVERY_VERSION, "recovery": source_recovery_summary(audit, provider_statuses),
+                "previousRecovery": deepcopy(previous_recovery or {}),
+                "extractableCandidateIds": list(read_documents),
                 "previousSteps": [{"decision": row.get("decision"), "status": row.get("status"),
                                    "errorKind": row.get("errorKind")} for row in audit["steps"]],
                 "budget": {"allowedActions": allowed, "remainingSeconds": int(remaining),
@@ -144,18 +158,33 @@ class SourceExplorationService:
                     save()
                     result = self.tools.search(target, action["query"], min(90, remaining))
                 else:
+                    if action["action"] == "extract" and action["candidateId"] not in read_documents:
+                        raise ValueError("extraction-requires-read-document")
                     audit["readCount"] += int(not resuming_operation)
+                    if action["action"] == "extract":
+                        audit["extractionCount"] = audit.get("extractionCount", 0) + int(not resuming_operation)
                     step["status"] = "executing"
+                    step["sourceUrl"] = candidates[action["candidateId"]]["url"]
                     save()
-                    result = self.tools.read(target, candidates[action["candidateId"]], tasks, min(25, remaining))
+                    if action["action"] == "extract":
+                        result = self.tools.extract(target, candidates[action["candidateId"]], tasks,
+                            read_documents[action["candidateId"]], action["focus"], min(25, remaining))
+                    else:
+                        result = self.tools.read(target, candidates[action["candidateId"]], tasks, min(25, remaining))
                 found = result.pop("evidence", None)
-                if found is not None:
+                if found is not None and found.evidence_id not in {row.evidence_id for row in evidence}:
                     evidence.append(found)
                 step["result"] = deepcopy(result)
                 step["status"] = str(result.get("status") or "completed")
                 add_candidates(result.get("candidates") or [])
                 if result.get("document"):
                     documents.append(result["document"])
+                    read_documents[action["candidateId"]] = result["document"]
+                    keys = {(result["document"].get("sourceDocumentHash"), row.get("passageHash"))
+                            for row in result["document"].get("passages", [])}
+                    step["progress"] = {"newPassageCount": len(keys - passage_keys),
+                        "documentAdmitted": found is not None, "answerCompletion": "requires-independent-review"}
+                    passage_keys.update(keys)
             except self.deferred_errors as error:
                 step.update(deferredPhase=step["status"], status="deferred", errorKind=type(error).__name__,
                             lastDeferredErrorKind=type(error).__name__,

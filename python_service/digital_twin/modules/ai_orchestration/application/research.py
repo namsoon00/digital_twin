@@ -1,11 +1,29 @@
 """Execute the captured question-specific intent through the source owner."""
 import json
+from copy import deepcopy
 from digital_twin.modules.decisions.contracts import InvestmentQuestion
-from digital_twin.modules.news_intelligence.contracts import NewsCollectionTarget
+from digital_twin.modules.news_intelligence.contracts import NewsCollectionTarget, source_recovery_summary
 from ..domain.planning import identity
 from ..domain.research_request import executable_research_request
 from ..domain.research_return import research_return
 from ..domain.research_wait import AIResearchWait
+
+
+def previous_recovery(job, research_store):
+    """Read old receipts as operational history; never rewrite old answers."""
+    if job.get("previousSourceRecovery"):
+        return deepcopy(job["previousSourceRecovery"])
+    reference = job.get("previousSourceRun") or {}
+    if not reference.get("runId") or not reference.get("taskId"):
+        return {}
+    run = research_store.get_run(reference["runId"]) or {}
+    expected_task = identity(reference["taskId"], "sources")
+    if (run.get("accountId") != job["accountId"] or run.get("symbol") != job["symbol"]
+            or run.get("runId") != reference["runId"] or run.get("taskIds") != [expected_task]):
+        return {}  # A missing or unrelated receipt cannot influence this plan.
+    audit = (run.get("executedPlan") or {}).get("sourceExploration") or {}
+    return {**source_recovery_summary(audit, run.get("providerStatuses") or []),
+            "runId": reference["runId"], "taskId": reference["taskId"], "historical": True}
 
 
 def execute_research(job, research_store, orchestrator_factory):
@@ -37,6 +55,7 @@ def execute_research(job, research_store, orchestrator_factory):
     # the collected answer independently of market-observation quality gates.
     run = orchestrator.run(question, NewsCollectionTarget(job["symbol"], job["name"]),
         {"documentaryReviewOnly": True, "documentarySourceExploration": documentary,
+         "previousSourceRecovery": previous_recovery(job, research_store),
          "sourceExplorationResume": ((existing or {}).get("executedPlan") or {}).get("sourceExploration"),
          "researchPlan": {"planId": job["taskId"], "tasks": [task], "unresolvedQuestions": [job["question"]]}},
         account_id=job["accountId"], run_id=run_id,

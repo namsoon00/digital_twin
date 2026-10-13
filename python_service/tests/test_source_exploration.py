@@ -17,6 +17,7 @@ from digital_twin.modules.news_intelligence.domain.investment_research import Ne
 from digital_twin.modules.news_intelligence.domain.investment_evidence_governance import governed_evidence
 from digital_twin.modules.news_intelligence.domain.research_progress import assess_tasks, evidence_packets
 from digital_twin.modules.news_intelligence.domain.source_exploration import exploration_action, public_url
+from digital_twin.modules.news_intelligence.domain.source_recovery import source_recovery_summary
 from digital_twin.modules.news_intelligence.infrastructure.source_document_tools import SourceDocumentTools, publication_metadata, pdf_pages
 from digital_twin.modules.news_intelligence.infrastructure.source_exploration_ai import PublicSourceSearch, search_receipt, source_command
 from digital_twin.modules.news_intelligence.infrastructure.public_document_http import fetch_public_document, public_addresses, _PinnedHTTPS
@@ -58,6 +59,85 @@ class Explorer:
 
 
 class SourceExplorationTests(unittest.TestCase):
+    def test_focused_extraction_recovers_table_units_without_changing_source_or_admission(self):
+        markup = HTML.replace(b'NVIDIA revenue (USD in millions)', b'NVIDIA revenue').replace(
+            b'<table>', b'<h2>NVIDIA consolidated financial statements</h2><p>USD in millions, unaudited</p><table>')
+        tools = tools_for(markup)
+        candidate = {"url": URL, "title": "NVIDIA original results"}
+        first = tools.read(TARGET, candidate, [TASK], 10)
+        self.assertNotIn("USD in millions", first["evidence"].raw_payload["officialDocumentText"])
+        focused = tools.extract(TARGET, candidate, [TASK], first["document"], ["revenue units"], 10)
+        text = focused["evidence"].raw_payload["officialDocumentText"]
+        for value in ("USD in millions, unaudited", "Current quarter", "Prior year quarter", "120", "100"):
+            self.assertIn(value, text)
+        self.assertEqual(first["document"]["sourceDocumentHash"], focused["document"]["sourceDocumentHash"])
+        self.assertEqual(first["evidence"].published_at, focused["evidence"].published_at)
+        self.assertFalse(focused["evidence"].raw_payload["valuationInputEligible"])
+        # A focused read cannot promote an undated source or silently replace
+        # the original document with a newer revision.
+        undated = tools_for(markup.replace(b'article:published_time', b'unknown-date'))
+        read = undated.read(TARGET, candidate, [TASK], 10)
+        extracted = undated.extract(TARGET, candidate, [TASK], read["document"], ["revenue units"], 10)
+        self.assertNotIn("evidence", extracted)
+        self.assertIn("publication-date-unverified", extracted["document"]["admissionBlockers"])
+        tools.fetch.return_value = {**tools.fetch.return_value, "body": markup + b'changed'}
+        with self.assertRaisesRegex(ValueError, "document-revision-changed"):
+            tools.extract(TARGET, candidate, [TASK], first["document"], ["revenue units"], 10)
+
+    def test_extraction_resumes_once_with_original_contract_and_real_progress(self):
+        from digital_twin.infrastructure.local_ai_process_guard import LocalAICapacityUnavailable
+        tools = tools_for()
+        tools.seeds = Mock(return_value=[{"url": URL, "title": "NVIDIA results"}])
+        receipt = tools.fetch.return_value
+        tools.fetch.side_effect = [receipt, LocalAICapacityUnavailable("capacity"), receipt]
+        contexts, checkpoints = [], []
+        def choose(context, timeout):
+            contexts.append(copy.deepcopy(context))
+            base = {"reason": "Inspect missing source context", "missingRequirements": ["units"]}
+            if len(contexts) == 1:
+                return {**base, "action": "read", "candidateId": context["candidates"][0]["candidateId"]}
+            if len(contexts) == 2:
+                self.assertIn("extract", context["budget"]["allowedActions"])
+                return {**base, "action": "extract", "candidateId": context["extractableCandidateIds"][0], "focus": ["revenue units"]}
+            self.assertNotIn("extract", context["budget"]["allowedActions"])
+            return {**base, "action": "finish"}
+        advisor = Mock(); advisor.choose.side_effect = choose
+        service = SourceExplorationService(advisor, tools, deferred_errors=(LocalAICapacityUnavailable,))
+        task = {**TASK, "purpose": "Original quarter, issuer and units must remain unchanged"}
+        with self.assertRaises(LocalAICapacityUnavailable):
+            service.explore(TARGET, [task], [], [], checkpoint=checkpoints.append)
+        evidence, audit = service.explore(TARGET, [task], [], [], resume=checkpoints[-1])
+        self.assertEqual((2, 1), (audit["readCount"], audit["extractionCount"]))
+        self.assertEqual(3, tools.fetch.call_count)
+        self.assertEqual(task["purpose"], contexts[0]["tasks"][0]["purpose"])
+        self.assertGreater(audit["recovery"]["progress"]["newPassageCount"], 0)
+        self.assertEqual("requires-independent-review", audit["recovery"]["progress"]["answerCompletion"])
+        self.assertEqual(len(evidence), len({row.evidence_id for row in evidence}))
+        self.assertTrue(audit["complete"])
+
+    def test_recovery_reaches_central_memory_without_claiming_absence_or_answer_success(self):
+        from digital_twin.modules.ai_orchestration.domain.research_return import research_return
+        tools = tools_for(); tools.fetch.side_effect = ValueError("document-http-403")
+        explorer = Explorer()
+        _, audit = SourceExplorationService(explorer, tools).explore(TARGET, [TASK], [], [],
+            provider_statuses=[{"status": "unsupported-document-source"}],
+            previous_recovery={"version": "source-recovery-v1", "issues": [{"cause": "date-unverified"}]})
+        self.assertIn("unsupported-source", explorer.contexts[0]["recovery"]["causeCounts"])
+        self.assertNotIn("budget-exhausted", explorer.contexts[0]["recovery"]["causeCounts"])
+        self.assertIn("access-denied", explorer.contexts[-1]["recovery"]["causeCounts"])
+        self.assertTrue(explorer.contexts[-1]["previousRecovery"])
+        result = research_return({"status": "evidence-unavailable", "executedPlan": {"sourceExploration": audit}},
+                                 "run", TASK["taskId"], {})
+        self.assertEqual("unavailable", result["documentaryAnswer"]["status"])
+        self.assertIn("access-denied", result["sourceRecovery"]["causeCounts"])
+        self.assertEqual(0, result["sourceRecovery"]["progress"]["collectedEvidenceCount"])
+        self.assertNotIn("unpublished", str(result))
+        # Historical receipts have no extraction instrumentation; absent
+        # measurements cannot become claims of zero progress.
+        historical = source_recovery_summary({"steps": [{"step": 1, "errorKind": "unexpected-error"}]})
+        self.assertFalse(historical["progress"]["measured"])
+        self.assertEqual("unclassified-failure", historical["issues"][0]["cause"])
+
     def _assert_original_publication_dates_accept_iso_and_exclude_related_stories(self):
         from digital_twin.infrastructure.external_api.adapters.issuer_ir import _date
         for value in ('2026-01-29T16:00:00.000+0900', '2026-01-29T07:00:00Z', '2026-01-29'):

@@ -227,6 +227,10 @@ class MySQLBrainAgendaStore(MySQLOperationalConnection):
         children.append({**{key: job[key] for key in ("accountId", "symbol", "worldId", "name")},
             "taskId": task_id, "capability": "research", "question": case["question"], "brainCaseId": case["caseId"],
             "researchRequest": copy.deepcopy(case.get("researchRequest", {})),
+            **({"previousSourceRecovery": copy.deepcopy(previous["result"]["sourceRecovery"])}
+               if previous.get("result", {}).get("sourceRecovery") else {}),
+            **({"previousSourceRun": {"runId": previous["result"]["runId"], "taskId": previous["taskId"]}}
+               if previous.get("taskId") and previous.get("result", {}).get("runId") else {}),
             **({"questionContract": copy.deepcopy(case["questionContract"])} if case.get("questionContract") else {}),
             "priority": 5, "availableAt": now})
         case.update(status="waiting", researchAttempts=case["researchAttempts"] + 1,
@@ -273,7 +277,7 @@ class MySQLBrainAgendaStore(MySQLOperationalConnection):
         reason = "조사가 실패해 원래 질문과 자료 경로를 다시 검토합니다." if result.get("status") == "failed" else "조사 처리가 끝났습니다. 원래 질문의 해결 여부는 다음 관찰에서 검토합니다."
         case.update(status="review-needed", nextCheckAt=stamp(), reason=reason)
         case["lastResearch"]["result"] = {key: copy.deepcopy(result[key]) for key in (
-            "runId", "status", "stopReason", "changedEvidenceCount", "completedAt", "questionAssessment", "documentaryAnswer", "sourceExploration") if key in result}
+            "runId", "status", "stopReason", "changedEvidenceCount", "completedAt", "questionAssessment", "documentaryAnswer", "sourceExploration", "sourceRecovery") if key in result}
         answer = result.get("documentaryAnswer") or {}
         if answer and (answer.get("taskId") != identity(job["taskId"], "sources")
                        or answer.get("authority") != "source-review-only"):

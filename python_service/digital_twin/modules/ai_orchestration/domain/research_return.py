@@ -1,5 +1,6 @@
 """Bounded question-specific research status, never current market evidence."""
 from copy import deepcopy
+from digital_twin.modules.news_intelligence.contracts import source_recovery_summary
 from .documentary_answer import documentary_answer
 
 
@@ -35,6 +36,10 @@ def research_return(run, run_id, source_task_id, request):
     exploration = (run.get("executedPlan") or {}).get("sourceExploration")
     if isinstance(exploration, dict):
         result["sourceExploration"] = {key: deepcopy(exploration[key]) for key in (
-            "version", "taskIds", "stopReason", "searchCount", "readCount", "evidenceIds", "missingRequirements", "elapsedSeconds")
+            "version", "taskIds", "stopReason", "searchCount", "readCount", "extractionCount", "evidenceIds", "missingRequirements", "elapsedSeconds")
             if key in exploration}
+    scoped_exploration = exploration if exploration and source_task_id in exploration.get("taskIds", []) else {}
+    providers = [row for row in run.get("providerStatuses", [])
+                 if not row.get("taskIds") or source_task_id in row["taskIds"]]
+    result["sourceRecovery"] = source_recovery_summary(scoped_exploration, providers)
     return result

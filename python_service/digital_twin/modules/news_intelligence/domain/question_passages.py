@@ -4,7 +4,7 @@ import re
 from datetime import date
 
 
-VERSION = 'question-passages-v1'
+VERSION = 'question-passages-v2'
 _TOPICS = (
     (r'순손실|적자|손실|net loss', ('net loss', 'operating loss', 'losses')),
     (r'순이익|수익성|profitability', ('net income', 'profitability', 'operating income')),
@@ -35,11 +35,11 @@ def question_terms(tasks):
     return sorted(terms)[:64]
 
 
-def select_question_passages(blocks, tasks, limit=6000):
+def select_question_passages(blocks, tasks, limit=6000, *, max_block_chars=12000):
     terms = question_terms(tasks)
     candidates = []
     for index, block in enumerate(dict.fromkeys(blocks)):
-        if not 80 <= len(block) <= (12000 if '\n' in block else 2800):
+        if not 80 <= len(block) <= (max(12000, min(14000, max_block_chars)) if '\n' in block else 2800):
             continue
         matched = [term for term in terms if term in block.casefold()]
         if matched:

@@ -82,7 +82,8 @@ def collect_question_documents(provider, target, signals, tasks):
                 raise ValueError('document-size-budget')
             if any(marker in str(raw).lower() for marker in ('undeclared automated tool', 'request rate threshold exceeded', 'access denied')):
                 raise ValueError('official-document-unavailable')
-            passages = select_question_passages(question_document_blocks(raw), tasks, provider.sec_document_text_max_chars())
+            passages = select_question_passages(question_document_blocks(raw, include_context=True), tasks,
+                                                provider.sec_document_text_max_chars(), max_block_chars=14000)
             if not parent:
                 links = _Exhibits(); links.feed(str(raw))
                 exhibits = [urljoin(url, href) for href in links.links]
@@ -114,7 +115,10 @@ def collect_question_documents(provider, target, signals, tasks):
             break  # A provider circuit applies to all remaining SEC documents.
         except Exception as error:
             # Keep one failed provider/document from discarding other receipts.
-            statuses.append({**base, 'ok': False, 'status': 'document-unavailable', 'errorKind': type(error).__name__})
+            code = str(error) if isinstance(error, ValueError) and str(error) in {
+                'document-size-budget', 'official-document-unavailable'} else ''
+            statuses.append({**base, 'ok': False, 'status': 'document-unavailable',
+                             'errorKind': type(error).__name__, 'reasonCode': code})
     statuses.append({**base, 'ok': True, 'status': 'passages-collected' if evidence else 'unresolved',
                      'count': len(evidence), 'documentsAttempted': fetched, 'remainingCandidates': len(candidates)})
     return evidence, statuses

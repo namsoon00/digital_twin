@@ -5,6 +5,10 @@ execution accounting, bounded recall and recurring work. It is the thirteenth
 business module. Domain-specific prompts and validators remain in their owning
 contexts; runtime composition injects their capabilities into the controller.
 
+Question-specific collection failures and bounded, same-revision focused reads
+follow the [source recovery contract](source-recovery.md). Diagnostics return to
+the original question and next plan without changing past answers or eligibility.
+
 ## Running behavior
 
 Task starts use `central-task-fairness-v1`: expired-lease recovery → observation →

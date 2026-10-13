@@ -16,6 +16,7 @@ from digital_twin.infrastructure.external_api.adapters.issuer_ir import parse_ir
 from ..domain.investment_research import ResearchEvidence, target_aliases
 from ..domain.question_passages import select_question_passages
 from ..domain.source_exploration import VERSION, public_url
+from ..domain.source_recovery import EXTRACTION_VERSION
 from .public_document_http import fetch_public_document
 
 
@@ -136,7 +137,14 @@ class SourceDocumentTools:
         return self.search_provider.search(target, query, timeout,
             issuer_sites=list(source.source_urls) if source else [])
 
-    def read(self, target, candidate, tasks, timeout):
+    def extract(self, target, candidate, tasks, document, focus, timeout):
+        """Re-read the exact original revision with focused passage selection."""
+        digest = document.get("sourceDocumentHash", "")
+        if not re.fullmatch(r"[a-f0-9]{64}", digest):
+            raise ValueError("extraction-requires-read-document")
+        return self.read(target, candidate, tasks, timeout, focus=focus, expected_hash=digest)
+
+    def read(self, target, candidate, tasks, timeout, *, focus=None, expected_hash=""):
         deadline = time.monotonic() + timeout
         receipt = self.fetch(candidate["url"], timeout)
         url, data = public_url(receipt["url"]), receipt["body"]
@@ -154,6 +162,8 @@ class SourceDocumentTools:
                       and url == candidate["url"])
         now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
         document_hash = hashlib.sha256(data).hexdigest()
+        if expected_hash and document_hash != expected_hash:
+            raise ValueError("document-revision-changed")
         content_type = str(receipt.get("contentType") or "").lower()
         date, date_proof, title, links, page_info = "", {}, candidate.get("title", ""), [], {}
         if data.startswith(b"%PDF-"):
@@ -179,7 +189,7 @@ class SourceDocumentTools:
             if not date and not date_proof and source_bound and url == candidate["url"]:
                 date, date_proof = index_publication(candidate, hosts)
             title = page_title or title
-            blocks = question_document_blocks(markup)
+            blocks = question_document_blocks(markup, include_context=bool(focus))
             pages, document_type = [], "html"
             for link in parse_ir_documents(markup, url, limit=40):
                 try:
@@ -195,7 +205,8 @@ class SourceDocumentTools:
                 links.append(row)
         else:
             raise ValueError("unsupported-document-format")
-        passages = select_question_passages(blocks, tasks, 14000)
+        selection = [{"question": " ".join(focus), "queryTerms": focus}] if focus else tasks
+        passages = select_question_passages(blocks, selection, 14000, max_block_chars=14000 if focus else 12000)
         for passage in passages:
             matches = [row["page"] for row in pages if row["text"] == passage["quote"]]
             if matches:
@@ -205,6 +216,9 @@ class SourceDocumentTools:
             "publicationProof": date_proof, "passages": passages, **page_info,
             "issuerVerification": "registered-issuer-source" if source_bound else "official-issuer-redirect" if issuer_redirect else "official-linked-document" if linked_pdf else "unverified-source",
             "readScope": "question-selected-passages", "redirects": receipt.get("redirects", [])}
+        if focus:
+            document["extraction"] = {"version": EXTRACTION_VERSION, "focus": list(focus),
+                "originalDocumentHash": expected_hash, "scope": "selected-passages-with-nearby-context"}
         result = {"status": "document-read", "document": document, "candidates": links}
         reasons = []
         if not (source_bound or linked_pdf or issuer_redirect):
@@ -229,7 +243,7 @@ class SourceDocumentTools:
             "officialSource": True, "primarySource": True, "relationScope": "direct",
             "officialDocumentText": text, "officialDocumentType": document_type,
             "officialDocumentScope": "question-selected-passages", "documentPassages": passages,
-            "officialDocumentQuality": "body", "documentTextVersion": VERSION,
+            "officialDocumentQuality": "body", "documentTextVersion": EXTRACTION_VERSION if focus else VERSION,
             "metadataVerified": True, "analysisReady": True, "documentHash": document_hash,
             "documentIssuerIdentity": {"symbol": symbol, "sourceUrl": url,
                 "registryUrls": list(source.source_urls), "verification": document["issuerVerification"],
@@ -242,6 +256,8 @@ class SourceDocumentTools:
             "sourceTrustState": "trusted", "dataState": "sufficient", "validationState": "ready",
             "researchTaskIds": [row["taskId"] for row in tasks], "sourceExplorationVersion": VERSION,
             "valuationInputEligible": False, "documentUsePolicy": "issuer-reported-reference-until-cross-checked"}
+        if focus:
+            raw["focusedExtraction"] = document["extraction"]
         result["evidence"] = ResearchEvidence(
             evidence_id="research:" + symbol + ":explored:" + hashlib.sha256((url + document_hash + text).encode()).hexdigest()[:24],
             symbol=symbol, kind="issuer-ir", source=source.issuer_name + " Investor Relations",

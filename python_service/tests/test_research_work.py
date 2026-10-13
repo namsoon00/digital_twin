@@ -116,6 +116,16 @@ class ResearchWorkTests(unittest.TestCase):
         task = owner.run.call_args.args[2]["researchPlan"]["tasks"][0]
         self.assertEqual(job["question"], task["question"])
         for value in CONTRACT.values(): self.assertIn(value, task_contract(task)["purpose"])
+        from digital_twin.modules.ai_orchestration.application.research import previous_recovery
+        original = {"runId": "old-run", "taskIds": [identity("previous", "sources")],
+            "accountId": SUBJECT["accountId"], "symbol": SUBJECT["symbol"],
+            "providerStatuses": [{"status": "configuration-required"}]}
+        store.get_run.return_value = original
+        job["previousSourceRun"] = {"runId": "old-run", "taskId": "previous"}
+        self.assertIn("configuration-required", previous_recovery(job, store)["causeCounts"])
+        self.assertNotIn("sourceRecovery", original, "historical receipts are not rewritten")
+        store.get_run.return_value = {**original, "accountId": "different-account"}
+        self.assertEqual({}, previous_recovery(job, store))
 
     def test_changed_source_plan_has_bounded_retries_and_preserves_partial_answers(self):
         from digital_twin.modules.ai_orchestration.infrastructure.mysql_brain_agenda import MySQLBrainAgendaStore
@@ -123,7 +133,8 @@ class ResearchWorkTests(unittest.TestCase):
         connection = Mock(); connection.execute.return_value.fetchone.return_value = None
         value = {**case(), "researchAttempts": 3, "researchRequest": deepcopy(REQUEST),
             "lastResearch": {"taskId": "previous", "requestedAt": later(stamp(), -400), "inputFingerprint": "old",
-                "requestFingerprint": research_intent_identity(REQUEST), "result": {"documentaryAnswer": answer("previous", "partial")}}}
+                "requestFingerprint": research_intent_identity(REQUEST), "result": {"documentaryAnswer": answer("previous", "partial"),
+                    "runId": "old-run", "sourceRecovery": {"version": "source-recovery-v1", "issues": []}}}}
         job = {**SUBJECT, "taskId": "planner"}
         children = []
         MySQLBrainAgendaStore.schedule_research(connection, value, job, {"researchBasis": "question-basis"}, children, stamp())
@@ -134,6 +145,8 @@ class ResearchWorkTests(unittest.TestCase):
         self.assertEqual(1, len(children))
         self.assertEqual(4, value["researchAttempts"])
         self.assertEqual(CONTRACT, children[0]["questionContract"])
+        self.assertEqual({"runId": "old-run", "taskId": "previous"}, children[0]["previousSourceRun"])
+        self.assertEqual("source-recovery-v1", children[0]["previousSourceRecovery"]["version"])
         self.assertEqual("partial", value["answerMemory"][0]["answer"]["status"])
         self.assertEqual(["현금흐름 원문"], value["answerMemory"][0]["answer"]["missingRequirements"])
         value["researchAttempts"] = 6
@@ -154,7 +167,9 @@ class ResearchWorkStorageTests(unittest.TestCase):
             job, result, children = fixture.observation()
             fixture.control.complete(job, result, children)
             research = fixture.control.claim()
-            fixture.control.complete(research, {"status": "completed", "documentaryAnswer": answer(research["taskId"], "partial")}, [])
+            recovery = {"version": "source-recovery-v1", "causeCounts": {"date-unverified": 1}, "issues": []}
+            fixture.control.complete(research, {"status": "completed", "documentaryAnswer": answer(research["taskId"], "partial"),
+                "sourceRecovery": recovery}, [])
             with fixture.brain.transaction() as connection:
                 counts = reconcile_and_schedule(fixture.brain, connection, [fixture.subject])
             self.assertEqual(1, counts["plansScheduled"])
@@ -163,6 +178,7 @@ class ResearchWorkStorageTests(unittest.TestCase):
             memories = [row for row in fixture.brain.memory(*[task[key] for key in ("accountId", "symbol", "worldId")], research_only=True) if row["kind"] == "brain-case"]
             for row in memories: row["planDue"] = True
             envelope = work.freeze(task, memories)
+            self.assertEqual(recovery, memories[0]["lastResearch"]["result"]["sourceRecovery"])
             input_id = fixture.control.save_execution_input(task, envelope)
             call = fixture.control.begin_call("independent-observation", envelope["promptHash"], task["taskId"], input_id)
             fixture.control.finish_call(call)

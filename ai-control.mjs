@@ -1,6 +1,6 @@
 const $ = (id) => document.getElementById(id);
 const escape = (value) => String(value ?? "").replace(/[&<>"']/g, (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
-const labels = {pending:"대기",processing:"진행 중",completed:"완료",failed:"실패",running:"완료 미확인",observe:"관찰·재검토",research:"추가 조사"};
+const labels = {pending:"대기",processing:"진행 중",completed:"완료",failed:"실패",running:"완료 미확인",observe:"관찰·재검토",research:"추가 조사","research-plan":"추가 조사 계획"};
 const workloads = {"independent-observation":"독립 관찰", "news-analysis":"뉴스 분석", "disclosure-analysis":"공시 분석", "model-review":"모델 검토", "research-planning":"조사 계획", "source-exploration":"자료 탐색 판단", "source-search":"외부 자료 검색", "hypothesis-proposal":"가설 제안", "rule-change-proposal":"규칙 개선 제안", "investment-judgement":"투자 판단", "interactive-chat":"대화"};
 const qualityLabels = {accepted:"문장·새로움 검토 통과",rejected:"품질 검토 보류","awaiting-review":"독립 검토 미완료","observation-only":"관찰 기록 · 발송 제안 없음"};
 const followUpLabels = {pending:"관찰 중",triggered:"조건 전환 확인",expired:"기간 만료 · 평가 불가",unavailable:"자료 부족 · 평가 불가"};
@@ -31,7 +31,7 @@ function retrievalView(retrieval) {
   return `<details class="retrieval"><summary>AI가 조회한 과정 · ${escape(states[retrieval.status] || retrieval.status)}</summary>${(retrieval.steps || []).map((step, index) => `<p><strong>${index + 1}. ${step.correction ? "요청 보정 · " : ""}${escape(step.reason)}</strong></p>${(step.errors || []).map((error) => `<p class="muted">요청 규격 오류 · ${escape(error.field)} · 허용 형식: ${escape(typeof error.expected === "string" ? error.expected : JSON.stringify(error.expected))}</p>`).join("")}${(step.reads || []).map((read) => `<p>${escape(tools[read.request?.tool] || "조회")} · ${escape(categories[read.request?.category] || read.request?.category)} · ${read.request?.tool === "recall_memory" ? "현재 사실과 구분해 참고" : `사실 ${escape(read.factIds?.length || 0)}개`}<br><small>${read.status === "ok" ? "조회 결과 기록" : escape(states[read.status] || "조회 제한 또는 자료 확인 필요")}${read.omitted?.length ? ` · 용량 한도로 제외 ${escape(read.omitted.length)}개` : ""}${read.nextCursor || read.nextOffset != null ? " · 다음 페이지 있음" : ""}</small></p>`).join("")}`).join("")}<p class="muted">동일한 시점의 근거에서 선택해 읽었습니다. 조회하지 않은 자료가 없다는 뜻은 아닙니다.</p></details>`;
 }
 const businessMetricLabels = {revenue:"매출",grossProfit:"매출총이익",operatingIncome:"영업이익",netIncome:"순이익",operatingCashFlow:"영업현금흐름",capitalExpenditure:"자본 지출",freeCashFlow:"잉여현금흐름",totalAssets:"자산",totalLiabilities:"부채",equity:"자본",cash:"현금",totalDebt:"차입금",sharesOutstanding:"발행 주식 수"};
-const businessStatuses = {tracking:"다음 실적 추적", "data-needed":"사업 자료 보강 필요", "needs-review":"가설 재검토", superseded:"새 가설로 교체", retired:"검토 종료"};
+const businessStatuses = {tracking:"다음 실적 추적", "data-needed":"사업 자료 보강 필요", "needs-review":"가설 재검토", superseded:"새 가설로 교체", retired:"검토 종료", expired:"확인 기간 만료 · 추적 종료"};
 const metricStatuses = {"awaiting-report":"다음 비교 가능 실적 대기", "direction-observed":"등록한 지표 방향 확인", "direction-not-observed":"등록한 지표 방향과 다름", "expired-unobserved":"기간 만료 · 관측 자료 없음", "invalid-clock":"시점 확인 필요"};
 function businessThesisView(thesis, observations = []) {
   return `<p><strong>${escape(thesis.question)}</strong></p><p>사업 연결: ${escape(thesis.mechanism)}</p><p>필요 가정: ${escape(thesis.assumption)}</p><p>다른 설명: ${escape(thesis.alternative)}</p><p>철회·수정 조건: ${escape(thesis.invalidation)}</p>
@@ -71,7 +71,8 @@ function brainView(brain = {}) {
     const origin = row.origin || {};
     return `<div class="panel brain-card"><header><h3>${escape(row.symbol)} · ${escape(feedback ? categoryLabels[row.category] : "지속 질문")}</h3><span>${escape(brainLabels[row.status] || row.status)}</span></header>
       <p><strong>${escape(feedback ? row.problem : row.question)}</strong></p>
-      ${researchAnswerView(row.lastResearch?.result)}
+      ${researchAnswerView({...row.lastResearch?.result, documentaryAnswer:row.latestSourceAnswer || row.lastResearch?.result?.documentaryAnswer})}
+      ${researchWorkView(row)}
       ${feedback ? `<p>${escape(row.proposal)}</p><p class="muted">개선 확인 기준: ${escape(row.verification)}</p>` : `<p>${escape(row.reason)}</p><p class="muted">완료 기준: ${escape(row.completionCriterion)}<br>다음 확인 ${escape(date(row.nextCheckAt))} · 연결된 조사 ${escape(row.researchAttempts || 0)}회</p>`}
       ${row.hypothesisResolution ? `<p><strong>가설로 이어진 판단: ${escape(({"business-thesis":"사업 가설 추적",experiment:"격리 실험 요청",defer:"추가 확인 후 판단","not-applicable":"가설 개발 대상 아님"})[row.hypothesisResolution.disposition] || "검토 필요")}</strong><br>${escape(row.hypothesisResolution.reason || "원래 개발 요청과 연결된 진행 상태를 확인합니다.")}</p>${row.hypothesisResolution.state === "deferred-daily-budget" ? '<p class="muted">오늘 먼저 접수된 다른 질문이 있어 이 질문의 실험 요청은 보류됐습니다.</p>' : ''}` : ''}
       ${row.developmentProgress ? `<p class="muted">연결된 개발 결과: ${escape(developmentLabels[row.developmentProgress.resultStatus || row.developmentProgress.status] || row.developmentProgress.resultStatus || row.developmentProgress.status)}</p>${(row.developmentProgress.cases || []).map(item => `<p>${escape(developmentLabels[item.status] || item.status)}${item.blockedReason ? ' · ' + escape(item.blockedReason) : ''}${item.dataShapeErrors?.length ? '<br>이전 인과경로 저장 형식에 오류가 있어 새 근거로 재검토가 필요합니다.' : ''}</p>`).join('')}<p class="muted">후보 생성과 실험 진행은 가설이 검증됐다는 뜻이 아닙니다.</p>` : ''}
@@ -80,7 +81,20 @@ function brainView(brain = {}) {
       ${feedback ? `<form class="feedback-review" data-case="${escape(row.caseId)}"><label>검토 결과 <select name="status"><option value="planned">개선 계획에 반영</option><option value="implemented">반영 사실 기록</option><option value="dismissed">사유를 남기고 종료</option></select></label><label>검토 사유 또는 확인한 변경 <textarea name="note" minlength="8" maxlength="600" required placeholder="어떤 변경을 했거나 계획했는지 적어 주세요."></textarea></label><button type="submit">검토 기록</button><button type="reset">입력 취소</button><span class="feedback-status" role="status"></span></form><p class="muted">반영 사실 기록은 소유자의 보고입니다. 개선 효과의 입증과 구분하며 다음 AI 분석에서 참고합니다.</p>` : ""}
       </div>`;
   }).join("");
-  return `<p class="muted">${(brain.goals || []).map(escape).join(" · ")}</p>${cards || '<p class="panel">아직 등록된 지속 질문이나 개선 제안이 없습니다. 새 관찰에서 근거가 있는 질문과 제안을 등록합니다.</p>'}`;
+  const metrics = brain.researchMetrics;
+  return `${metrics ? `<p>전체 질문 ${escape(metrics.questions)}건 · 자료 답변 완료 ${escape(metrics.sourceAnswered)}건 · 부분 답변 ${escape(metrics.sourcePartial)}건 · 답변 미확보 ${escape(metrics.sourceUnavailable)}건 · 추가 조사 계획 ${escape(metrics.planned)}건</p><p class="muted">자료 조사 결과를 집계한 수치입니다. 가설 검증 성과와 구분합니다.</p>` : ""}<p class="muted">${(brain.goals || []).map(escape).join(" · ")}</p>${cards || '<p class="panel">아직 등록된 지속 질문이나 개선 제안이 없습니다. 새 관찰에서 근거가 있는 질문과 제안을 등록합니다.</p>'}`;
+}
+function researchWorkView(row) {
+  const answer = row.answerResolution;
+  const contract = row.questionContract;
+  const plan = row.researchPlan;
+  const state = {answered:"자료 답변 완료",partial:"부분 답변 · 추가 조사 필요",unavailable:"답변 미확보"};
+  return `${answer ? `<p><strong>질문 답변: ${escape(state[answer.status] || "확인 중")}</strong><br><small>자료 답변의 완료 여부는 투자 관찰 문장 검토와 별도로 기록합니다. 가설 검증을 뜻하지 않습니다.</small></p>` : ""}
+    ${contract ? `<p>확인 대상: ${escape(contract.target)}<br>대상 기간: ${escape(contract.period)}<br>필요한 증거: ${escape(contract.answerCriterion)}</p>` : ""}
+    ${plan ? `<p>다음 조사: ${escape(plan.reason)}<br>다시 확인할 조건: ${escape(plan.resumeWhen)}</p>` : ""}
+    ${row.answerMemory?.length ? `<details><summary>앞선 조사에서 확인한 답변</summary>${row.answerMemory.map(item => researchAnswerView({documentaryAnswer:item.answer})).join("")}</details>` : ""}
+    ${row.mergedInto ? `<p class="muted">동일한 대상·기간·완료 기준의 질문에 연결했습니다. 원래 답변과 조사 이력은 보존됩니다.</p>` : ""}
+    ${row.reviewBlocker ? `<details><summary>투자 관찰 문장 검토 문제</summary><p>${(row.reviewBlocker.errors || []).map(escape).join(" / ")}</p><p>위 자료 답변과는 별도 상태입니다.</p></details>` : ""}`;
 }
 async function request(url, options) {
   const response = await fetch(url, {cache:"no-store", ...options});

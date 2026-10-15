@@ -1081,3 +1081,60 @@ promoted, and independent research and notification reviews retain their authori
 New prompt instructions are conditional on the new reference/index contract;
 previous frozen prompts remain byte-identical and replayable. Original question
 answers are pointers to sources, never a substitute for current captured facts.
+
+## Conservative repeat admission (2026-10-15)
+
+The owner requested conservative suppression of repeated work to reduce model
+usage. `research-repeat-v1` applies before the research planner and before queued
+source execution. A deadline, rephrased query, revised answer prose or another
+immutable fetch ID is not new research material. The first investigation is
+admitted; later automatic planning/collection requires newly observed source
+content that has not already been consumed by that phase. Each question retains
+the existing lifetime ceiling of six investigations. Query changes cannot reset
+that ceiling or the content ledger.
+
+The source owner supplies `research-material-v1` identities for cached report
+values, units, period/scope and actual passages/body content. Collection clocks,
+fetch IDs, source revisions and AI paraphrases do not change this scheduling
+identity. Exact immutable evidence IDs, input hashes, source clocks and review
+fingerprints remain intact for audit and factual admission. These content checks
+grant work permission only; they never approve a fact, answer or investment claim.
+
+Every six hours, due source questions may check bounded, locally cached material
+without an AI call or provider request. The reader reserves at most sixteen rows
+per applicable source kind, caches checks for five minutes, and respects explicit
+ISO report periods in the original question contract. Missing/failed reads do not
+reopen work. New cached content may reopen an eligible question once, subject to
+the remaining lifetime budget. This conservative policy can delay discovery when
+there is no new cached source content; a changed search phrase alone is deliberately
+insufficient. The code does not claim semantic understanding of free-text periods.
+
+Existing repeated or already-planned questions establish a baseline on upgrade
+and wait for subsequent content changes. Legacy queued research is checked again
+before it can call a model. New questions with the same source scope are deferred
+while an unresolved question is stalled, unless a distinct explicit period is
+present; they are not silently merged or assigned an answer. Suppressed work is
+recorded in the agenda, with its reason visible in the existing research view.
+
+Partial answers retain their cited content when a later collection fails.
+Follow-up source tasks carry the known answer and missing requirements as dated
+work context, while the original question's full completion criterion remains
+binding. Planning inputs omit duplicated answer history and operational hash
+ledgers. Frozen historical inputs are never rewritten.
+
+Partial-answer notifications compare source-content identities and answer status;
+different prose, regrouped missing requirements and repeated fetches do not create
+another milestone. A newly completed answer or changed cited content can still
+notify. Legacy notification markers are seeded without replaying the old update.
+
+Observation retries also require change: an expired `retryAt` is a cheap check,
+not permission to rerun the same rejected or evidence-blocked input. Identical
+accepted judgments have no timer-based reauthoring expiry. Unchanged tasks schedule
+a future six-hour check so suppression cannot create a past-due queue loop. New
+source/work identities, applicable policy changes and verified follow-up
+transitions retain their existing admission paths.
+An additional versioned observation key omits agenda-only revision, timer and
+self-authored review fields, so a suppressed source check cannot itself trigger
+another accepted observation. Source evidence, original questions, known answers
+and hypothesis resolutions remain in that key; frozen input fingerprints and
+historical replay validation are unchanged.

@@ -13,6 +13,7 @@ from digital_twin.modules.ai_orchestration.domain.execution_input import validat
 from digital_twin.modules.ai_orchestration.domain.insight_quality import local_quality
 from digital_twin.modules.ai_orchestration.domain.recovery import retry_delays
 from .mysql_brain_subjects import fill_case_names
+from ..domain import research_repeat as repeat
 
 
 SCHEMA = (
@@ -70,6 +71,37 @@ class MySQLBrainAgendaStore(MySQLOperationalConnection):
             (event["eventId"], case["caseId"], task_id, dumps(event), now))
         if progress:
             progress_writer(connection, progress)
+
+    def refresh_research_material(self, case):
+        reader = getattr(self, "research_source_reader", None)
+        if reader:
+            try:
+                case["researchSourceState"] = reader(case)
+            except Exception:
+                # An unavailable read is not a changed source or permission to
+                # repeatedly ask the model to diagnose the same outage.
+                case["researchSourceState"] = {"status": "unavailable", "fingerprints": []}
+        repeat.initialize(case)
+
+    def research_admission(self, job):
+        if not job.get("brainCaseId"):
+            return {"allowed": False, "reason": "research-case-required"}
+        with self.connect() as connection:
+            case = self.read(connection, job["brainCaseId"], job["accountId"], job["symbol"])
+        if (not case or case["worldId"] != job["worldId"]
+                or case.get("lastResearch", {}).get("taskId") != job["taskId"]
+                or case["status"] not in ACTIVE_CASE_STATES):
+            return {"allowed": False, "reason": "research-case-changed"}
+        self.refresh_research_material(case)
+        guard = case["researchRepeat"]
+        permitted = guard.get("authorizedTaskId") == job["taskId"]
+        initial = case.get("researchAttempts", 0) <= 1 and not case.get("latestSourceAnswer")
+        reason = ("answered" if (case.get("answerResolution") or {}).get("status") == "answered" else
+                  "source-state-unavailable" if case.get("researchSourceState", {}).get("status") == "unavailable" else
+                  "" if permitted or initial else "legacy-repeat-not-authorized")
+        return {"allowed": not reason, "reason": reason, "version": repeat.VERSION,
+            "sourceState": copy.deepcopy(case.get("researchSourceState", {})),
+            "knownSourceAnswer": copy.deepcopy(case.get("latestSourceAnswer") or {})}
 
     @staticmethod
     def proof(connection, job, result):
@@ -197,6 +229,15 @@ class MySQLBrainAgendaStore(MySQLOperationalConnection):
             if case:
                 receipt["caseIds"].append(key)
                 continue  # Existing questions require a captured caseReview; they cannot reset their history.
+            if item["capability"] == "research":
+                rows = connection.execute("SELECT payload_json FROM ai_brain_cases WHERE account_id=%s AND symbol=%s "
+                    "AND kind='question' AND status IN ('open','waiting','review-needed','blocked') "
+                    "AND JSON_UNQUOTE(JSON_EXTRACT(payload_json,'$.worldId'))=%s ORDER BY next_check_at LIMIT 12",
+                    (job["accountId"], job["symbol"], job["worldId"])).fetchall()
+                stalled = repeat.stalled_question([json.loads(row["payload_json"]) for row in rows], item.get("researchRequest"))
+                if stalled:
+                    receipt["deferred"].append({"question": item["question"], "reason": "existing-source-work-stalled", "caseId": stalled})
+                    continue
             count = connection.execute("SELECT COUNT(*) AS count FROM ai_brain_cases WHERE account_id=%s AND symbol=%s "
                 "AND JSON_UNQUOTE(JSON_EXTRACT(payload_json,'$.worldId'))=%s "
                 "AND kind='question' AND status IN ('open','waiting','review-needed','blocked')", (job["accountId"], job["symbol"], job["worldId"])).fetchone()["count"]
@@ -225,18 +266,28 @@ class MySQLBrainAgendaStore(MySQLOperationalConnection):
         if case.get("answerResolution", {}).get("status") == "answered":
             case.update(reason="원래 질문의 자료 답변을 확보했습니다. 투자 가설 연결 여부는 별도로 검토합니다.", nextCheckAt=later(now, 1440))
             return
-        fingerprint = (result.get("researchBasis") or evidence_change_identity(result["input"], []))
         previous = case.get("lastResearch", {})
+        row = connection.execute("SELECT status,payload_json FROM ai_control_tasks WHERE task_id=%s", (previous.get("taskId", ""),)).fetchone()
+        if row and row["status"] in {"pending", "processing"}:
+            case.update(status="waiting", reason="기존 조사가 진행 중입니다.",
+                        nextCheckAt=max(case.get("nextCheckAt", ""), later(now, repeat.WAIT_MINUTES)))
+            return
+        repeat.initialize(case)
+        ceiling = 6 if result.get("researchBasis") else 3
+        repeated = "research-attempt-limit" if case.get("researchAttempts", 0) >= ceiling else repeat.admission(case, "scheduled")
+        if repeated:
+            case["researchRepeat"]["waitReason"] = repeated
+            case.update(status="blocked" if repeated.endswith("-limit") else "waiting",
+                        reason=repeat.WAIT_REASON, nextCheckAt=later(now, repeat.WAIT_MINUTES))
+            return
+        fingerprint = (result.get("researchBasis") or evidence_change_identity(result["input"], []))
         from ..domain.research_request import research_intent_identity
         intent = research_intent_identity(case.get("researchRequest"))
-        row = connection.execute("SELECT status,payload_json FROM ai_control_tasks WHERE task_id=%s", (previous.get("taskId", ""),)).fetchone()
         previous_intent = previous.get("requestFingerprint") or research_intent_identity(
             json.loads(row["payload_json"]).get("researchRequest") if row else case.get("researchRequest"))
         retryable = previous.get("result", {}).get("status") in {"failed", "research-cooldown"}
-        ceiling = 6 if result.get("researchBasis") else 3
         attempts = case.get("researchIntentAttempts", {}).get(intent, 0)
-        reason = ("기존 조사가 진행 중입니다." if row and row["status"] in {"pending", "processing"} else
-                  "조사 횟수 한도에 도달해 추가 자료나 기능 검토가 필요합니다." if case["researchAttempts"] >= ceiling or attempts >= 2 else
+        reason = ("조사 횟수 한도에 도달해 추가 자료나 기능 검토가 필요합니다." if case["researchAttempts"] >= ceiling or attempts >= 2 else
                   "기존 조사 한도를 사용했습니다. 다른 출처나 구체적으로 달라진 조사 계획이 필요합니다." if result.get("researchBasis") and case["researchAttempts"] >= 3 and previous_intent == intent else
                   "같은 근거로 조사를 반복하지 않고 새 자료를 기다립니다." if previous.get("inputFingerprint") == fingerprint and previous_intent == intent and not retryable else
                   "조사 재시도 간격을 기다립니다." if previous.get("requestedAt") and later(previous["requestedAt"], 360) > now else "")
@@ -246,6 +297,7 @@ class MySQLBrainAgendaStore(MySQLOperationalConnection):
                         nextCheckAt=max(case.get("nextCheckAt", ""), later(now, 10080 if exhausted else 360)))
             return
         task_id = identity(case["caseId"], "research", case["researchAttempts"] + 1)
+        repeat.remember(case, "scheduled", task_id)
         answer = previous.get("result", {}).get("documentaryAnswer")
         if answer and answer.get("sources"):
             memories = case.setdefault("answerMemory", [])
@@ -293,16 +345,33 @@ class MySQLBrainAgendaStore(MySQLOperationalConnection):
         if not key:
             return {"status": "unlinked-research"}
         case = self.read(connection, key, job["accountId"], job["symbol"], lock=True)
+        if result.get("status") == "research-repeat-suppressed" and (not case or case.get("lastResearch", {}).get("taskId") != job["taskId"]):
+            return {"status": "obsolete", "caseIds": []}
         if not case or case["worldId"] != job["worldId"] or case.get("lastResearch", {}).get("taskId") != job["taskId"]:
             raise ValueError("research completion must own its brain case")
         if case["status"] not in ACTIVE_CASE_STATES:
             return {"status": "case-closed", "caseIds": [key]}
+        admission = result.get("researchAdmission") or {}
+        if admission.get("version") == repeat.VERSION:
+            case["researchSourceState"] = copy.deepcopy(admission.get("sourceState", {}))
+            repeat.initialize(case)
+            repeat.remember(case, "scheduled", job["taskId"])
+        if result.get("status") == "research-repeat-suppressed":
+            repeat.initialize(case)
+            repeat.remember(case, "planned")
+            case["researchRepeat"]["waitReason"] = result.get("reason", "unchanged-research-material")
+            case.update(status="waiting", nextCheckAt=later(stamp(), repeat.WAIT_MINUTES), reason=repeat.WAIT_REASON)
+            # Keep previous source receipts intact. Suppression is an execution
+            # audit, not a new unavailable answer or customer milestone.
+            self.save(connection, case, job["taskId"], "research-repeat-suppressed", {"reason": result.get("reason")})
+            return {"status": "research-repeat-suppressed", "caseIds": [key]}
         if result.get("status") == "failed" and not result.get("documentaryAnswer"):
             result = {**result, "documentaryAnswer": {"version": "documentary-answer-v1",
                 "taskId": identity(job["taskId"], "sources"), "authority": "source-review-only",
                 "status": "unavailable", "text": "자료 조사 실행에 실패해 답변을 만들지 못했습니다. 재시도 전에 수집 경로를 점검해야 합니다.",
                 "sources": [], "missingRequirements": [], "blockers": ["research-execution-failed"]}}
         reason = "조사가 실패해 원래 질문과 자료 경로를 다시 검토합니다." if result.get("status") == "failed" else "조사 처리가 끝났습니다. 원래 질문의 해결 여부는 다음 관찰에서 검토합니다."
+        previous_answer = copy.deepcopy(case.get("latestSourceAnswer") or case.get("lastResearch", {}).get("result", {}).get("documentaryAnswer") or {})
         case.update(status="review-needed", nextCheckAt=stamp(), reason=reason)
         case["lastResearch"]["result"] = {key: copy.deepcopy(result[key]) for key in (
             "runId", "status", "stopReason", "changedEvidenceCount", "completedAt", "questionAssessment", "documentaryAnswer", "sourceExploration", "sourceRecovery") if key in result}
@@ -314,10 +383,11 @@ class MySQLBrainAgendaStore(MySQLOperationalConnection):
             case["reason"] = "원래 질문의 자료 답변을 확보했습니다. 투자 가설 판단은 별도로 진행합니다." if answer.get("status") == "answered" else "확인한 답변을 보존하고 부족한 항목의 추가 조사 계획을 확인합니다."
             case.pop("reviewBlocker", None)
             from ..domain.research_work import answer_resolution
-            case["answerResolution"] = answer_resolution(result, job["taskId"])
-            case["latestSourceAnswer"] = copy.deepcopy(answer)
+            resolution = answer_resolution(result, job["taskId"])
+            if repeat.preserve_answer(case, answer):
+                case["answerResolution"] = resolution
         self.save(connection, case, job["taskId"], "research-returned", case["lastResearch"])
-        if not answer or answer.get("status") == "answered" or result.get("changedEvidenceCount", 0):
+        if not answer or repeat.answer_changed(previous_answer, answer):
             self.wake_observation(connection, job["accountId"], job["symbol"], job["worldId"], case["nextCheckAt"])
         return {"status": "review-needed", "caseIds": [case["caseId"]]}
 
@@ -387,6 +457,8 @@ class MySQLBrainAgendaStore(MySQLOperationalConnection):
                 "researchRequest": case.get("researchRequest", {}),
                 "questionContract": case.get("questionContract", {}), "answerResolution": case.get("answerResolution", {}),
                 "researchPlan": case.get("researchPlan", {}),
+                **({"researchRepeat": case.get("researchRepeat", {}), "researchSourceState": case.get("researchSourceState", {})}
+                   if research_only else {}),
                 "answerMemory": case.get("answerMemory", []),
                 "latestSourceAnswer": case.get("latestSourceAnswer", {}), "mergedQuestions": case.get("mergedQuestions", []),
                 "hypothesisResolution": case.get("hypothesisResolution", {}),

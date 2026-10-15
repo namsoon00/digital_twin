@@ -25,6 +25,46 @@ def reviewed_run():
 
 
 class DocumentaryAnswerTests(unittest.TestCase):
+    def test_material_identity_ignores_source_polling_but_preserves_values_and_units(self):
+        from digital_twin.modules.news_intelligence.contracts import research_material_fingerprint
+        packet = {"symbol": "TEST", "kind": "financial-fact", "source": "official", "periodEnd": "2026-06-30",
+            "reportedValues": {"operatingCashFlow": 120}, "metricUnits": {"operatingCashFlow": "KRW"},
+            "metricProvenance": {"operatingCashFlow": {"scope": "CFS", "periodStart": "2026-01-01",
+                "sourceReferences": [{"revisionId": "r1", "fetchedAt": "2026-10-13"}]}}}
+        original = research_material_fingerprint(packet)
+        changed = copy.deepcopy(packet)
+        changed.update(evidenceId="another-id", inputFingerprint="another-capture", observedAt="2026-10-15",
+                       title="이름 표기 수정", statement="AI 문장 변경")
+        changed["metricProvenance"]["operatingCashFlow"]["sourceReferences"][0].update(revisionId="r2", fetchedAt="2026-10-15")
+        self.assertEqual(original, research_material_fingerprint(changed))
+        for field, replacement in (("reportedValues", {"operatingCashFlow": 121}),
+            ("metricUnits", {"operatingCashFlow": "USD"}), ("periodEnd", "2025-06-30")):
+            self.assertNotEqual(original, research_material_fingerprint({**changed, field: replacement}))
+        changed["metricProvenance"]["operatingCashFlow"]["scope"] = "OFS"
+        self.assertNotEqual(original, research_material_fingerprint(changed))
+        self.assertEqual("", research_material_fingerprint({"title": "머리글만 있는 자료", "statement": "AI 요약"}))
+
+    def test_material_reader_is_scoped_bounded_and_has_no_ai_or_network_dependency(self):
+        from types import SimpleNamespace
+        from digital_twin.modules.news_intelligence.infrastructure.research_material_reader import ResearchMaterialReader
+        def source(period, number, symbol="TEST"):
+            return SimpleNamespace(symbol=symbol, kind="financial-fact", source="official", url="", raw_payload={
+                "periodEnd": period, "reportedValues": {"revenue": number}, "metricUnits": {"revenue": "USD"}})
+        repo = Mock()
+        repo.latest.side_effect = lambda **kw: [source("2026-06-30", 100), source("2026-06-30", 100),
+            source("2025-06-30", 90), source("2026-06-30", 999, "OTHER")] if kw["kind"] == "financial-fact" else []
+        reader = ResearchMaterialReader(repo)
+        question = {"symbol": "TEST", "researchRequest": {"sourceTypes": ["official-filing"]},
+                    "questionContract": {"period": "2026-06-30 종료 반기"}}
+        state = reader(question)
+        self.assertEqual(1, len(state["fingerprints"]))
+        self.assertTrue(all(call.kwargs["symbol"] == "TEST" and call.kwargs["limit"] == 16 for call in repo.latest.call_args_list))
+        calls = repo.latest.call_count
+        self.assertEqual(state, reader(question))
+        self.assertEqual(calls, repo.latest.call_count)
+        state["fingerprints"].append("caller-mutation")
+        self.assertEqual(1, len(reader(question)["fingerprints"]))
+
     def _assert_final_review_replaces_explorers_earlier_missing_requirements(self):
         run = reviewed_run()
         for row in (run['taskAssessments'][0], run['roundHistory'][0]['taskAssessments'][0]):

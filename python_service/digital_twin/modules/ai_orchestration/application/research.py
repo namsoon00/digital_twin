@@ -50,6 +50,15 @@ def execute_research(job, research_store, orchestrator_factory):
         # Purpose is already part of the source owner's immutable assessment
         # fingerprint and model input. Keep the original question intact.
         task["purpose"] = "원래 질문의 대상·기간·완료 기준을 모두 확인합니다: " + json.dumps(job["questionContract"], ensure_ascii=False, sort_keys=True)
+    previous_answer = job.get("knownSourceAnswer") or {}
+    if previous_answer.get("status") == "partial":
+        task["purpose"] += ("\n이미 확인한 답변은 보존하고 아래 미확인 항목만 추가 탐색하세요. "
+            "이전 답변은 역사적 작업 기록이며 이번 답변의 근거를 대신하지 않습니다. "
+            "완료 판단은 원래 질문 전체 기준을 유지합니다: " + json.dumps({
+                "previousAnswer": previous_answer.get("text", ""),
+                "missingRequirements": previous_answer.get("missingRequirements", []),
+                "sourceEvidenceIds": [row.get("evidenceId") for row in previous_answer.get("sources", [])],
+            }, ensure_ascii=False, sort_keys=True))
     orchestrator = orchestrator_factory()
     # Keep the authored collection scope, but allow the source owner to review
     # the collected answer independently of market-observation quality gates.

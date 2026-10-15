@@ -1,5 +1,6 @@
 """A cited source review is an answer artifact, not a market hypothesis verdict."""
 from urllib.parse import urlsplit
+from digital_twin.modules.news_intelligence.contracts import research_material_fingerprint
 
 
 BLOCKERS = {
@@ -66,6 +67,7 @@ def documentary_answer(run, task_id):
             except ValueError:
                 safe = False
             sources.append({"evidenceId": key, "sourceUrl": url if safe else "",
+                "materialFingerprint": packet.get("researchMaterialFingerprint") or research_material_fingerprint(packet),
                 **{name: str(packet.get(name) or "")[:160] for name in (
                     "title", "publishedAt", "periodEnd", "reportDate", "inputFingerprint")}})
     return {"version": "documentary-answer-v1", "taskId": task_id, "status": status,

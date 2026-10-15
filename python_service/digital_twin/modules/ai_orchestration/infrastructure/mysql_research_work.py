@@ -6,11 +6,12 @@ import json
 from ..domain.planning import identity, stamp
 from ..domain.brain_management import case_identity, later
 from ..domain import research_work as work
+from ..domain import research_repeat as repeat
 from ..domain.research_request import validate_research_request
 
 
 def record_plan(store, connection, job, result, children):
-    if result.get("status") in {"research-plan-obsolete", "retired"}:
+    if result.get("status") in {"research-plan-obsolete", "research-plan-suppressed", "retired"}:
         return {"status": "obsolete"}
     row = connection.execute("SELECT i.artifact_gzip FROM ai_control_inputs i JOIN ai_control_input_calls l ON l.input_id=i.input_id "
         "JOIN ai_control_calls c ON c.call_id=l.call_id AND c.task_id=i.task_id AND c.prompt_hash=i.prompt_hash "
@@ -33,6 +34,11 @@ def record_plan(store, connection, job, result, children):
                 or not work.needs_research_plan(case)):
             receipt["deferred"].append({"caseId": review["caseId"], "reason": "case-changed-after-capture"})
             continue
+        repeat.initialize(case)
+        if repeat.admission(case, "planned"):
+            receipt["deferred"].append({"caseId": case["caseId"], "reason": "unchanged-research-material"})
+            continue
+        repeat.remember(case, "planned")
         if review["action"] == "merge":
             target = store.read(connection, review["duplicateOf"], job["accountId"], job["symbol"], lock=True)
             if (not target or target["worldId"] != job["worldId"] or not work.needs_research_plan(target)
@@ -54,6 +60,8 @@ def record_plan(store, connection, job, result, children):
             store.save(connection, target, job["taskId"], "question-linked", {"sourceCaseId": case["caseId"], "authority": "research-planning-only"})
         else:
             case["status"] = "blocked" if review["action"] == "blocked" else "waiting"
+        if review["action"] in {"wait", "blocked"}:
+            case["researchRepeat"]["waitReason"] = "planner-" + review["action"]
         previous = case.get("researchPlan") or {}
         state = identity(review["action"], review["researchRequest"], case.get("answerResolution", {}))
         repeats = int(previous.get("unchangedPlans", 0)) + 1 if previous.get("stateKey") == state else 0
@@ -82,6 +90,10 @@ def record_plan(store, connection, job, result, children):
         if duplicate or store.read(connection, key, job["accountId"], job["symbol"], lock=True):
             receipt["deferred"].append({"question": item["question"], "reason": "existing-question", "caseId": duplicate["caseId"] if duplicate else key})
             continue
+        stalled = repeat.stalled_question(active, item["research"], item["contract"])
+        if stalled:
+            receipt["deferred"].append({"question": item["question"], "reason": "existing-source-work-stalled", "caseId": stalled})
+            continue
         if len(active) >= 12:
             receipt["deferred"].append({"question": item["question"], "reason": "active-case-limit"})
             continue
@@ -105,7 +117,7 @@ def reconcile_and_schedule(store, connection, subjects):
     from .mysql_control import MySQLAIControlStore
     from .mysql_business_research import expire_business
     now = stamp()
-    counts = {"answersReconciled": 0, "plansScheduled": 0, "thesesExpired": 0}
+    counts = {"answersReconciled": 0, "plansScheduled": 0, "thesesExpired": 0, "repeatPlansSuppressed": 0}
     for subject in subjects:
         scope = tuple(subject[key] for key in ("accountId", "symbol", "worldId"))
         counts["thesesExpired"] += expire_business(store, connection, *scope, now)
@@ -129,7 +141,21 @@ def reconcile_and_schedule(store, connection, subjects):
                         store.save(connection, case, task_id, "answer-reconciled", case["answerResolution"])
                         counts["answersReconciled"] += 1
             if work.needs_research_plan(case) and case.get("nextCheckAt", "") <= now:
-                due.append(case)
+                before = deepcopy(case)
+                store.refresh_research_material(case)
+                reason = repeat.admission(case, "planned")
+                if reason:
+                    case["researchRepeat"]["waitReason"] = reason
+                    case.update(nextCheckAt=later(now, repeat.WAIT_MINUTES), reason=repeat.WAIT_REASON)
+                    store.save(connection, case, case.get("researchPlan", {}).get("taskId", "repeat-guard"),
+                        "research-repeat-suppressed", {"reason": reason, "modelCalled": False})
+                    counts["repeatPlansSuppressed"] += 1
+                else:
+                    # Persist the exact source-content admission state before a
+                    # planner is queued. The worker checks it again before AI.
+                    if case != before:
+                        store.save(connection, case, "research-material-check", "research-material-ready", {"modelCalled": False})
+                    due.append(case)
         if not due:
             continue
         existing = connection.execute("SELECT task_id FROM ai_control_tasks WHERE account_id=%s AND symbol=%s "

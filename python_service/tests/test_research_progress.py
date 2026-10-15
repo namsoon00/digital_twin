@@ -1,5 +1,6 @@
 """Research lifecycle visibility must not imply empirical or delivery success."""
 import unittest
+from copy import deepcopy
 from unittest.mock import Mock
 
 from digital_twin.modules.ai_orchestration.domain.research_progress import research_progress
@@ -19,6 +20,34 @@ def event(stage="created", key="event-1"):
 
 
 class ResearchProgressTests(unittest.TestCase):
+    def test_partial_notice_requires_new_source_content_not_rewording_or_fetch_id(self):
+        value = case()
+        answer = {"status": "partial", "text": "확인한 수치", "missingRequirements": ["전년 현금흐름"],
+                  "sources": [{"evidenceId": "fetch-1", "materialFingerprint": "same-report"}]}
+        value["lastResearch"] = {"result": {"documentaryAnswer": answer}}
+        self.assertIsNotNone(research_progress(value, event("research-returned")))
+        answer.update(text="같은 수치에 대한 다른 표현", missingRequirements=["전년 비교 자료", "단위 확인"])
+        answer["sources"][0]["evidenceId"] = "fetch-2"
+        self.assertIsNone(research_progress(value, event("research-returned", "another-fetch")))
+        answer["sources"][0]["materialFingerprint"] = "corrected-report"
+        self.assertIsNotNone(research_progress(value, event("research-returned", "correction")))
+        answer["status"] = "answered"
+        answer["missingRequirements"] = []
+        self.assertIsNotNone(research_progress(value, event("research-returned", "resolved")))
+        self.assertIsNone(research_progress(value, event("research-returned", "resolved-again")))
+        answer.update(status="unavailable", sources=[], text="수집에 실패했습니다.")
+        self.assertIsNone(research_progress(value, event("research-returned", "failure")))
+
+    def test_legacy_milestone_is_seeded_without_sending_it_again(self):
+        value = case()
+        value["researchProgressMarkers"] = {"answer": "old-prose-and-source-id-signature"}
+        value["lastResearch"] = {"result": {"documentaryAnswer": {
+            "status": "partial", "text": "기존 답변", "sources": [{"materialFingerprint": "report"}]}}}
+        self.assertIsNone(research_progress(value, event("research-returned")))
+        copied = deepcopy(value)
+        self.assertIsNone(research_progress(value, event("research-returned", "retry")))
+        self.assertEqual(copied, value)
+
     def test_real_milestones_only_and_snapshot_does_not_mutate(self):
         value = case()
         notice = research_progress(value, event())

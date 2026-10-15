@@ -393,8 +393,9 @@ class BrainAgendaStorageTests(unittest.TestCase):
             same["lastResearch"]["result"]["status"] = "completed"
             reworded = {**rejected, "input": {**rejected["input"], "questionsToCheck": ["다른 다음 질문을 정하더라도 근거가 변한 것은 아닙니다."]}}
             self.brain.schedule_research(c, same, follow, reworded, jobs, stamp())
-            self.assertIn("같은 근거", same["reason"])
+            self.assertEqual("unchanged-research-material", same["researchRepeat"]["waitReason"])
             cooldown = copy.deepcopy(saved); cooldown["lastResearch"]["inputFingerprint"] = "previous-input"
+            cooldown["researchSourceState"] = {"status": "ready", "fingerprints": ["new-official-body"]}
             self.brain.schedule_research(c, cooldown, follow, rejected, jobs, stamp())
             self.assertIn("재시도 간격", cooldown["reason"])
         self.assertEqual([], jobs)
@@ -408,6 +409,9 @@ class BrainAgendaStorageTests(unittest.TestCase):
                     retry_case["lastResearch"]["result"]["status"] = "completed"
                     retry_case["researchRequest"]["queryTerms"] = ["공식 사업보고서 매출 구성"]
                 retry_jobs = []
+                self.brain.schedule_research(c, retry_case, follow, rejected, retry_jobs, stamp())
+                self.assertEqual([], retry_jobs, "time or changed search terms cannot reopen the same source work")
+                retry_case["researchSourceState"] = {"status": "ready", "fingerprints": ["new-official-body"]}
                 self.brain.schedule_research(c, retry_case, follow, rejected, retry_jobs, stamp())
                 self.assertEqual(1, len(retry_jobs))
                 self.assertEqual(2, retry_case["researchAttempts"])

@@ -5,6 +5,7 @@ from digital_twin.modules.reasoning.contracts import EvidenceContractError, Evid
 from digital_twin.modules.ai_orchestration.application.retrieval import RetrievalLeaseLost, RetrievalContractFailure
 from .working_retrieval import retrieve_working_evidence
 from ..domain.observation_wait import retry_key, disposition, unchanged_wait
+from ..domain import research_repeat as repeat
 from digital_twin.modules.ai_orchestration.domain.planning import enabled, identity, stamp, validate_plan, observation_fingerprint
 from digital_twin.modules.ai_orchestration.domain.execution_input import freeze_execution_input, freeze_review_input, freeze_repair_input, PROMPT_VERSION
 from digital_twin.modules.ai_orchestration.domain.insight_repair import correction_warranted
@@ -19,7 +20,7 @@ from digital_twin.modules.ai_orchestration.domain.validation_diagnostic import t
 
 
 class AIControlService:
-    def __init__(self, store, subjects, evidence, planner, researcher, research_memory, settings=None, delivery_memory=None, reviewer=None, development_memory=None, brain_memory=None, brain_waker=None, read_planner=None, evidence_waker=None, read_round_budget=None, company_memory=None, research_plan_memory=None):
+    def __init__(self, store, subjects, evidence, planner, researcher, research_memory, settings=None, delivery_memory=None, reviewer=None, development_memory=None, brain_memory=None, brain_waker=None, read_planner=None, evidence_waker=None, read_round_budget=None, company_memory=None, research_plan_memory=None, research_gate=None):
         self.store, self.subjects, self.evidence = store, subjects, evidence
         self.planner, self.researcher, self.research_memory = planner, researcher, research_memory
         self.settings = dict(settings or {})
@@ -33,6 +34,7 @@ class AIControlService:
         self.read_round_budget = read_round_budget or (lambda: 3)
         self.company_memory = company_memory or (lambda account, symbol, cutoff: {})
         self.research_plan_memory = research_plan_memory or self.brain_memory
+        self.research_gate = research_gate or (lambda job: {"allowed": True})
 
     def run_once(self):
         self.store.record_runtime_pulse()
@@ -83,24 +85,25 @@ class AIControlService:
                     packet["followUpEvaluations"] = evaluate_observation_conditions(packet, packet["lastDeliveredNotification"],
                         (history[0] if history else {}).get("followUpEvaluations", []))
                     fingerprint = observation_fingerprint(packet, research)
+                    repeat_key = repeat.observation_key(packet, research)
                     retry_identity = retry_key(packet, research)
                     previous_outcome = getattr(self.store, "last_processing_outcome", lambda *_: {})(job["accountId"], job["symbol"])
                     if unchanged_wait(previous_outcome, retry_identity) and not any(row.get("transitionVerified") for row in packet["followUpEvaluations"]):
                         return self.complete_wait(job, packet, previous_outcome, [], "unchanged-wait")
                     previous = history[0] if history else {}
                     from digital_twin.modules.ai_orchestration.domain.brain_management import due_memory
-                    if (not due_memory(research) and not any(row.get("reviewDue") for row in research if row.get("kind") == "business-thesis") and previous.get("inputFingerprint") == fingerprint and previous.get("observedAt")
+                    if (not due_memory(research) and not any(row.get("reviewDue") for row in research if row.get("kind") == "business-thesis")
+                            and (previous.get("inputFingerprint") == fingerprint or previous.get("observationRepeatKey") == repeat_key) and previous.get("observedAt")
                             and previous.get("executionPromptVersion") == PROMPT_VERSION
                             and previous.get("quality", {}).get("status") in {"accepted", "observation-only"}
+                            and datetime.fromisoformat(previous["observedAt"].replace("Z", "+00:00")) <= datetime.now(timezone.utc)
                             and not any(row.get("transitionVerified") for row in packet["followUpEvaluations"])):
-                        age = (datetime.now(timezone.utc) - datetime.fromisoformat(previous["observedAt"].replace("Z", "+00:00"))).total_seconds()
-                        if 0 <= age < 21600:
-                            due = (datetime.now(timezone.utc) + timedelta(hours=3)).isoformat().replace("+00:00", "Z")
-                            child = {**self.subject(job), "capability": "observe", "watchQuestions": job.get("watchQuestions", []), "taskId": identity(job["taskId"], "unchanged"), "availableAt": due}
-                            saved = self.store.complete(job, {"status": "unchanged", "reason": "새 근거가 없어 AI 호출을 생략했습니다.",
-                                "resumption": observation_resume(job, packet),
-                                "followUpEvaluations": packet["followUpEvaluations"]}, [child])
-                            return {"status": "unchanged" if saved else "lease-lost", "taskId": job["taskId"]}
+                        due = (datetime.now(timezone.utc) + timedelta(hours=6)).isoformat().replace("+00:00", "Z")
+                        child = {**self.subject(job), "capability": "observe", "watchQuestions": job.get("watchQuestions", []), "taskId": identity(job["taskId"], "unchanged"), "availableAt": due}
+                        saved = self.store.complete(job, {"status": "unchanged", "reason": "새 근거가 없어 AI 호출을 생략했습니다.",
+                            "resumption": observation_resume(job, packet),
+                            "followUpEvaluations": packet["followUpEvaluations"]}, [child])
+                        return {"status": "unchanged" if saved else "lease-lost", "taskId": job["taskId"]}
                     retrieval_trace = []
                     stage = "evidence-retrieval"
                     if session and self.read_planner:
@@ -137,7 +140,7 @@ class AIControlService:
                     from .author_validation import validate_author
                     plan, raw, envelope, input_id, validation_repair = validate_author(raw, envelope, input_id,
                         self.planner, lambda value: self.store.save_execution_input(job, value))
-                    result = {**plan, "input": packet, "inputFingerprint": fingerprint, "observedAt": stamp(),
+                    result = {**plan, "input": packet, "inputFingerprint": fingerprint, "observationRepeatKey": repeat_key, "observedAt": stamp(),
                               "executionInputId": input_id, "executionPromptVersion": PROMPT_VERSION,
                               "wordingVersion": OBSERVATION_WORDING_VERSION,
                               "memoryCoverage": envelope["memoryCoverage"],
@@ -219,17 +222,19 @@ class AIControlService:
                     # Operational source planning has no dependency on graph
                     # readiness, narrative novelty or notification acceptance.
                     stage = "research-planning"
-                    self.store.execution_wait()
                     from ..domain.research_work import freeze, validate_plan as validate_research_plan, needs_research_plan
                     memories = list(self.research_plan_memory(job["accountId"], job["symbol"], job["worldId"]))
                     cases = [row for row in memories if row.get("kind") == "brain-case" and needs_research_plan(row)]
                     for row in cases:
-                        row["planDue"] = row.get("nextCheckAt", "") <= stamp()
+                        repeat.initialize(row)
+                        row["planDue"] = repeat.planning_due(row, stamp())
+                    cases = [repeat.planning_memory(row) for row in cases]
                     envelope = freeze(job, cases, job.get("researchGaps", []),
                                       self.settings.get("aiObservationPromptMaxBytes", 256 * 1024))
-                    if not any(row.get("planDue") for row in cases) and not envelope["gaps"]:
+                    if not any(row.get("planDue") for row in cases) and (cases or not envelope["gaps"]):
                         result, children = {"status": "research-plan-obsolete"}, []
                     else:
+                        self.store.execution_wait()
                         input_id = self.store.save_execution_input(job, envelope)
                         if not input_id:
                             return {"status": "lease-lost", "taskId": job["taskId"]}
@@ -238,7 +243,11 @@ class AIControlService:
                         children = []
                 elif job["capability"] == "research":
                     stage = "research"
-                    result = self.researcher(job)
+                    admission = self.research_gate(job)
+                    result = (self.researcher({**job, "knownSourceAnswer": admission.get("knownSourceAnswer", {})})
+                              if admission["allowed"] else {"status": "research-repeat-suppressed", "reason": admission["reason"]})
+                    if admission.get("version"):
+                        result["researchAdmission"] = {key: value for key, value in admission.items() if key != "knownSourceAnswer"}
                     children = []
                 else:
                     raise ValueError("unsupported AI capability")
@@ -279,6 +288,9 @@ class AIControlService:
     def complete_wait(self, job, packet, outcome, trace, status="awaiting-evidence"):
         # No authored judgment, case resolution, hypothesis or notification is
         # manufactured from an incomplete read. Only the leased task advances.
+        if status == "unchanged-wait":
+            outcome = {**outcome, "retryAt": (datetime.now(timezone.utc) + timedelta(hours=6)).isoformat().replace("+00:00", "Z"),
+                       "repeatPolicy": "source-change-only-v1"}
         result = {"status": status, "processingOutcome": outcome, "input": packet,
                   "retrievalInputIds": [row["inputId"] for row in trace],
                   "followUpEvaluations": packet.get("followUpEvaluations", []),

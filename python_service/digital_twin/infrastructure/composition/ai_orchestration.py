@@ -101,6 +101,9 @@ def build_ai_control_service(settings=None):
     store.development_writer = development.record
     from digital_twin.modules.ai_orchestration.infrastructure.mysql_brain_agenda import MySQLBrainAgendaStore
     agenda = MySQLBrainAgendaStore(configured)
+    from digital_twin.infrastructure.operational_store import research_evidence_store
+    from digital_twin.modules.news_intelligence.infrastructure.research_material_reader import ResearchMaterialReader
+    agenda.research_source_reader = ResearchMaterialReader(research_evidence_store(configured))
     from digital_twin.infrastructure.transactions.research_progress_publication import ResearchProgressPublication
     agenda.progress_writer = ResearchProgressPublication(publication.notifications, configured).publish
     store.agenda_writer, store.agenda_failure = agenda.record, agenda.failed
@@ -115,7 +118,8 @@ def build_ai_control_service(settings=None):
                             delivery_memory=publication.memory, reviewer=planner, development_memory=development.memory,
                             brain_memory=agenda.memory, brain_waker=wake_brain, read_planner=planner,
                             evidence_waker=evidence_wake.run_once, read_round_budget=store.retrieval_round_budget, company_memory=company_memory,
-                            research_plan_memory=lambda account, symbol, world: agenda.memory(account, symbol, world, research_only=True))
+                            research_plan_memory=lambda account, symbol, world: agenda.memory(account, symbol, world, research_only=True),
+                            research_gate=agenda.research_admission)
 
 
 def ai_control_status(settings=None, account_id=""):

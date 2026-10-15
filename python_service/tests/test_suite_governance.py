@@ -330,7 +330,10 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # scope, receipt-backed stages, source clocks, bounded restart recovery,
         # the normal two-slot pool, and atomic monitor/TypeDB queue handoffs.
         # Twelve price-path/episode regressions and one receipt-backed conversation test.
-        self.assertLessEqual(total, 2322)
+        # Nine conservative-repeat contracts cover source identity, bounded cached
+        # reads, pre-model admission, partial-answer retention and progress,
+        # legacy/paraphrased questions, and material-driven storage resumption.
+        self.assertLessEqual(total, 2331)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

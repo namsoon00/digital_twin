@@ -26,15 +26,14 @@ def disposition(packet, key, status, requirements, now=None):
     now = now or datetime.now(timezone.utc)
     return {"version": POLICY, "status": status, "retryKey": key,
         "requirements": list(requirements), "retryAt": (now+timedelta(hours=3)).isoformat().replace("+00:00", "Z"),
-        "resumeOn": ["changed-source-evidence", "changed-question-or-research-result", "scheduled-review", "changed-runtime-policy"],
+        "resumeOn": ["changed-source-evidence", "changed-question-or-research-result", "changed-runtime-policy"],
         "sourceSnapshotId": packet.get("sourceSnapshotId"), "authority": "operational-only"}
 
 
 def unchanged_wait(previous, key, now=None):
     if not isinstance(previous, dict) or previous.get("version") != POLICY or previous.get("retryKey") != key:
         return False
-    try:
-        return (previous.get("status") in {"data-wait", "retrieval-blocked", "output-invalid"}
-                and (now or datetime.now(timezone.utc)) < datetime.fromisoformat(previous["retryAt"].replace("Z", "+00:00")))
-    except (KeyError, ValueError, TypeError):
-        return False
+    # retryAt schedules a cheap source check, not permission to spend another
+    # model call on identical failed input. Genuine evidence/work changes alter
+    # key; verified follow-up transitions are admitted separately by the caller.
+    return previous.get("status") in {"data-wait", "retrieval-blocked", "output-invalid"}

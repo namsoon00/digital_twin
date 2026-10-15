@@ -213,6 +213,19 @@ class AIControlTests(unittest.TestCase):
                 planner.reset_mock()
                 self.assertEqual("completed", service.run_once()["status"])
                 planner.assert_called_once()
+        from digital_twin.modules.ai_orchestration.domain import research_repeat as repeat
+        memory = {"kind": "brain-case", "caseId": "stalled", "status": "waiting", "revision": 1,
+                  "nextCheckAt": stamp(), "reviewDue": False, "question": "원래 질문", "latestSourceAnswer": {"status": "partial"}}
+        original_key = repeat.observation_key(PACKET, [memory])
+        memory.update(revision=99, nextCheckAt="2099-01-01T00:00:00Z", reason="같은 자료 확인", lastAssessment={"text": "기존 검토"})
+        self.assertEqual(original_key, repeat.observation_key(PACKET, [memory]))
+        service, store, planner = self.runner(brain_memory=lambda *_: [memory])
+        store.memory.return_value = [{"observationRepeatKey": original_key, "observedAt": "2026-01-01T00:00:00Z",
+                                     "executionPromptVersion": PROMPT_VERSION, "quality": {"status": "observation-only"}}]
+        self.assertEqual("unchanged", service.run_once()["status"])
+        planner.assert_not_called()
+        memory["latestSourceAnswer"] = {"status": "answered", "sources": [{"materialFingerprint": "new-body"}]}
+        self.assertNotEqual(original_key, repeat.observation_key(PACKET, [memory]))
 
     def test_graph_reader_rejects_scope_mismatch_and_changing_generation(self):
         from digital_twin.modules.reasoning.public import ObservationEvidenceReader

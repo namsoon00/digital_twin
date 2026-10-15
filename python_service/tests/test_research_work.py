@@ -2,7 +2,7 @@
 from copy import deepcopy
 import os
 import unittest
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 from digital_twin.modules.ai_orchestration.domain import research_work as work
 from digital_twin.modules.ai_orchestration.domain.planning import identity, stamp
@@ -142,6 +142,9 @@ class ResearchWorkTests(unittest.TestCase):
         value["researchRequest"] = {**REQUEST, "queryTerms": ["공식 분기 보고서 현금흐름 부록"]}
         value["questionContract"] = CONTRACT
         MySQLBrainAgendaStore.schedule_research(connection, value, job, {"researchBasis": "question-basis"}, children, stamp())
+        self.assertEqual([], children, "rephrasing a search is not new evidence")
+        value["researchSourceState"] = {"status": "ready", "fingerprints": ["new-report-body"]}
+        MySQLBrainAgendaStore.schedule_research(connection, value, job, {"researchBasis": "question-basis"}, children, stamp())
         self.assertEqual(1, len(children))
         self.assertEqual(4, value["researchAttempts"])
         self.assertEqual(CONTRACT, children[0]["questionContract"])
@@ -156,9 +159,128 @@ class ResearchWorkTests(unittest.TestCase):
         self.assertEqual([], children)
         self.assertEqual("blocked", value["status"])
 
+    def test_no_model_or_source_call_for_unchanged_queued_work(self):
+        from test_ai_control import AIControlTests
+        from digital_twin.modules.ai_orchestration.domain import research_repeat as repeat
+        value = case()
+        repeat.initialize(value)
+        repeat.remember(value, "planned")
+        service, store, planner = AIControlTests().runner(research_plan_memory=lambda *_: [deepcopy(value)])
+        store.claim.return_value["capability"] = "research-plan"
+        self.assertEqual("completed", service.run_once()["status"])
+        self.assertEqual("research-plan-obsolete", store.complete.call_args.args[1]["status"])
+        planner.assert_not_called()
+        store.save_execution_input.assert_not_called()
+        store.execution_wait.assert_not_called()
+        store.claim.return_value["capability"] = "research"
+        service.research_gate = lambda job: {"allowed": False, "reason": "legacy-repeat-not-authorized"}
+        self.assertEqual("completed", service.run_once()["status"])
+        self.assertEqual("research-repeat-suppressed", store.complete.call_args.args[1]["status"])
+        service.researcher.assert_not_called()
+
+    def test_replanning_requires_new_content_not_clock_query_wording_or_lost_rows(self):
+        from digital_twin.modules.ai_orchestration.domain import research_repeat as repeat
+        value = {**case(), "researchAttempts": 1, "researchSourceState": {"status": "ready", "fingerprints": ["body-1", "body-2"]}}
+        repeat.initialize(value)
+        self.assertTrue(repeat.planning_due(value, later(stamp(), 100)))
+        repeat.remember(value, "planned")
+        value.update(reason="새 문장", nextCheckAt=later(stamp(), -100000), researchRequest={**REQUEST, "queryTerms": ["다르게 쓴 검색어"]})
+        value["answerResolution"]["missingRequirements"] = ["같은 미확인 항목을 다시 표현"]
+        value["researchSourceState"]["fingerprints"] = ["body-2", "body-1", "body-1"]
+        self.assertFalse(repeat.planning_due(value, stamp()))
+        value["researchSourceState"]["fingerprints"] = ["body-1"]
+        self.assertFalse(repeat.planning_due(value, stamp()), "retention is not new research")
+        value["researchSourceState"]["fingerprints"].append("corrected-body")
+        self.assertTrue(repeat.planning_due(value, stamp()))
+        repeat.remember(value, "planned")
+        self.assertFalse(repeat.planning_due(value, stamp()))
+        value["researchSourceState"]["fingerprints"].append("another-new-body")
+        value["researchAttempts"] = 6
+        self.assertFalse(repeat.planning_due(value, stamp()), "new content cannot bypass lifetime limit")
+
+    def test_failed_followup_keeps_partial_answer_and_compact_planning_context(self):
+        from digital_twin.modules.ai_orchestration.domain import research_repeat as repeat
+        original = answer("original", "partial")
+        value = {**case(), "latestSourceAnswer": original, "lastResearch": {"result": {"documentaryAnswer": deepcopy(original)}},
+                 "answerMemory": [{"taskId": "original", "answer": deepcopy(original)}], "origin": {"large": "immutable audit"}}
+        self.assertFalse(repeat.preserve_answer(value, answer("failed", "unavailable")))
+        self.assertEqual(original, value["latestSourceAnswer"])
+        self.assertFalse(repeat.answer_changed({}, original), "legacy source IDs alone cannot wake the author")
+        enriched = {**original, "sources": [{**original["sources"][0], "materialFingerprint": "report-body"}]}
+        self.assertTrue(repeat.answer_changed({}, enriched))
+        self.assertFalse(repeat.answer_changed(enriched, {**enriched, "text": "같은 자료의 새 표현"}))
+        repeat.initialize(value)
+        compact = repeat.planning_memory(value)
+        self.assertEqual(original, compact["latestSourceAnswer"])
+        self.assertEqual(value["answerResolution"], compact["answerResolution"])
+        self.assertNotIn("documentaryAnswer", compact["lastResearch"]["result"])
+        for field in ("answerMemory", "origin", "researchRepeat", "researchSourceState"):
+            self.assertNotIn(field, compact)
+        self.assertIn("documentaryAnswer", value["lastResearch"]["result"], "immutable history stays intact")
+
+    def test_legacy_plan_and_paraphrased_new_question_cannot_reset_budget(self):
+        from digital_twin.modules.ai_orchestration.domain import research_repeat as repeat
+        value = {**case(), "researchAttempts": 4, "researchPlan": {"action": "research"},
+                 "researchRequest": REQUEST, "questionContract": CONTRACT,
+                 "researchSourceState": {"status": "ready", "fingerprints": ["existing"]}}
+        repeat.initialize(value)
+        self.assertFalse(repeat.planning_due(value, later(stamp(), 100)))
+        value["researchRepeat"]["waitReason"] = repeat.admission(value, "planned")
+        self.assertEqual(value["caseId"], repeat.stalled_question([value], REQUEST))
+        self.assertEqual(value["caseId"], repeat.stalled_question([value], REQUEST, {**CONTRACT, "period": "2026년 2분기"}),
+                         "period paraphrasing must not bypass a stalled question")
+        value["questionContract"] = {**CONTRACT, "period": "2026-06-30"}
+        self.assertEqual("", repeat.stalled_question([value], REQUEST, {**CONTRACT, "period": "2027-06-30"}))
+        value["researchSourceState"] = {"status": "unavailable", "fingerprints": []}
+        self.assertEqual("source-state-unavailable", repeat.admission(value, "planned"))
+
 
 @unittest.skipUnless(os.environ.get("MYSQL_DATABASE") == "orbit_alpha_test", "isolated MySQL required")
 class ResearchWorkStorageTests(unittest.TestCase):
+    def test_timer_checks_do_not_replan_but_new_cached_content_reopens_once(self):
+        from test_ai_brain_agenda import BrainAgendaStorageTests
+        from digital_twin.modules.ai_orchestration.infrastructure.mysql_research_work import reconcile_and_schedule
+        fixture = BrainAgendaStorageTests(); fixture.setUp()
+        try:
+            fixture.brain.research_source_reader = Mock(return_value={"status": "ready", "fingerprints": ["same-body"]})
+            job, result, children = fixture.observation()
+            fixture.control.complete(job, result, children)
+            research = fixture.control.claim()
+            fixture.control.complete(research, {"status": "completed", "documentaryAnswer": answer(research["taskId"], "partial")}, [])
+            with fixture.brain.transaction() as connection:
+                self.assertEqual(1, reconcile_and_schedule(fixture.brain, connection, [fixture.subject])["plansScheduled"])
+            task = fixture.control.claim()
+            memories = [row for row in fixture.brain.memory(*[task[key] for key in ("accountId", "symbol", "worldId")], research_only=True) if row["kind"] == "brain-case"]
+            for row in memories: row["planDue"] = True
+            envelope = work.freeze(task, memories)
+            input_id = fixture.control.save_execution_input(task, envelope)
+            call = fixture.control.begin_call("independent-observation", envelope["promptHash"], task["taskId"], input_id)
+            fixture.control.finish_call(call)
+            fixture.control.complete(task, {"status": "research-planned", "executionInputId": input_id,
+                "researchPlan": work.validate_plan(plan(memories[0]), envelope)}, [])
+            future = later(stamp(), 1500)
+            with patch("digital_twin.modules.ai_orchestration.infrastructure.mysql_research_work.stamp", return_value=future):
+                with fixture.brain.transaction() as connection:
+                    first = reconcile_and_schedule(fixture.brain, connection, [fixture.subject])
+                    second = reconcile_and_schedule(fixture.brain, connection, [fixture.subject])
+            self.assertEqual(1, first["repeatPlansSuppressed"])
+            self.assertEqual(0, first["plansScheduled"])
+            self.assertEqual(0, second["plansScheduled"])
+            fixture.brain.research_source_reader.return_value = {"status": "ready", "fingerprints": ["same-body", "new-body"]}
+            with patch("digital_twin.modules.ai_orchestration.infrastructure.mysql_research_work.stamp", return_value=later(future, 400)):
+                with fixture.brain.transaction() as connection:
+                    first = reconcile_and_schedule(fixture.brain, connection, [fixture.subject])
+                    second = reconcile_and_schedule(fixture.brain, connection, [fixture.subject])
+            self.assertEqual(1, first["plansScheduled"])
+            self.assertEqual(0, second["plansScheduled"], "pending work must coalesce")
+            saved = next(row for row in fixture.brain.status()["cases"] if row["caseId"] == memories[0]["caseId"])
+            self.assertEqual("partial", saved["answerResolution"]["status"])
+            observation_memory = fixture.brain.memory(fixture.subject["accountId"], fixture.subject["symbol"], fixture.subject["worldId"])
+            self.assertFalse(any("researchRepeat" in row or "researchSourceState" in row for row in observation_memory),
+                             "operational content ledgers must not grow the author's prompt")
+        finally:
+            fixture.tearDown()
+
     def test_partial_answer_planning_atomic_retry_and_wait_deadline(self):
         from test_ai_brain_agenda import BrainAgendaStorageTests
         from digital_twin.modules.ai_orchestration.infrastructure.mysql_research_work import reconcile_and_schedule

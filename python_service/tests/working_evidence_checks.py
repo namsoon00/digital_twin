@@ -111,5 +111,9 @@ def check_working_evidence(test):
     planner.assert_not_called()
     test.assertTrue(unchanged_wait(state, key))
     test.assertFalse(unchanged_wait(state, "changed"))
-    test.assertFalse(unchanged_wait(state, key, datetime.now(timezone.utc)+timedelta(hours=4)))
+    test.assertTrue(unchanged_wait(state, key, datetime.now(timezone.utc)+timedelta(days=7)),
+                    "time alone cannot spend another model call on identical failed input")
+    next_task = store.complete.call_args.args[2][0]
+    test.assertGreater(datetime.fromisoformat(next_task["availableAt"].replace("Z", "+00:00")), datetime.now(timezone.utc),
+                       "suppressed work must not enqueue a past-due busy loop")
     test.assertFalse(unchanged_wait({**state, "version": "old-policy"}, key))

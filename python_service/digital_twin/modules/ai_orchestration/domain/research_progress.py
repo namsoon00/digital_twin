@@ -31,10 +31,25 @@ def research_progress(case, event):
         result = case.get("lastResearch", {}).get("result", {})
         answer = result.get("documentaryAnswer") or {}
         if answer:
-            category, state = "answer", [answer.get("status"), answer.get("text"),
-                answer.get("missingRequirements"), answer.get("blockers"),
-                [[row.get("evidenceId"), row.get("sourceUrl"), row.get("periodEnd"), row.get("reportDate")]
-                 for row in answer.get("sources", [])]]
+            # Text, requirement regrouping and immutable fetch IDs do not prove
+            # progress. A newly completed answer is meaningful even on old facts.
+            material = sorted({row["materialFingerprint"] for row in answer.get("sources", [])
+                               if row.get("materialFingerprint")})
+            answer_status = answer.get("status")
+            markers = case.setdefault("researchProgressMarkers", {})
+            previous = markers.get("answerMaterial")
+            if previous:
+                if answer_status == previous["status"] and not set(material) - set(previous["materials"]):
+                    return None
+                if answer_status == "unavailable" and previous["status"] in {"partial", "answered"}:
+                    return None  # Collection failure is not loss of known facts.
+            elif markers.get("answer") and answer_status != "answered":
+                # Seed legacy state without replaying its last customer update.
+                markers["answerMaterial"] = {"status": answer_status, "materials": material}
+                return None
+            markers["answerMaterial"] = {"status": answer_status,
+                "materials": sorted(set(material) | set((previous or {}).get("materials", [])))[:256]}
+            category, state = "answer", [answer_status, material]
             label = {"answered": "연구 질문 답변", "partial": "연구 질문 부분 답변"}.get(answer.get("status"), "연구 답변 미확보 · 원인 확인")
         elif result.get("status") in {"failed", "research-cooldown"}:
             return None  # Transport/cooldown churn is not research progress.

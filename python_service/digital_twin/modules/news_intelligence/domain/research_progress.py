@@ -13,6 +13,7 @@ from typing import Dict, Iterable, List
 from digital_twin.modules.market_data.contracts import parse_datetime
 from .investment_research import ResearchEvidence
 from .financial_reporting import financial_report_contract_assessment
+from .research_material import research_material_fingerprint, research_source_packet
 
 
 RESEARCH_PROGRESS_VERSION = "question-evidence-coverage-v2"
@@ -135,6 +136,7 @@ def evidence_packets(items: Iterable[ResearchEvidence], claims: Iterable[object]
                 documentType=str(raw.get("officialDocumentType") or ""),
                 reportDate=str(raw.get("reportDate") or ""),
                 documentScope=str(raw.get("officialDocumentScope") or ""))
+        packet["researchMaterialFingerprint"] = research_material_fingerprint(research_source_packet(item))
         packet["inputFingerprint"] = fingerprint(packet)
         result.append(packet)
     return sorted(result, key=lambda row: row["evidenceId"])

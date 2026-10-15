@@ -196,6 +196,7 @@ def assert_research_admission(t):
     with t.control.transaction() as c:
         case = t.brain.read(c, research["brainCaseId"], t.subject["accountId"], "TEST", lock=True)
         case["lastResearch"]["requestedAt"] = later(stamp(), -361)
+        case["researchSourceState"] = {"status": "ready", "fingerprints": ["new-official-body"]}
         t.brain.save(c, case, research["taskId"], "test-retry-due")
         # A source failure no longer wakes the market author. Explicitly make
         # this observation due to exercise its separate quality gate.

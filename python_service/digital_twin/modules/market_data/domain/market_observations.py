@@ -133,6 +133,10 @@ def market_observation_delivery_admission(
     metadata = dict(getattr(event, "metadata", {}) or {})
     if bool(metadata.get("deliveryDeferred")):
         return {"accepted": True, "reasonCode": "delivery-deferred"}
+    from .price_observation_episodes import admit_transition
+    transition = admit_transition(event, authoritative_state or {})
+    if transition is not None:
+        return transition
     observation = (
         dict(metadata.get("marketObservation") or {})
         if isinstance(metadata.get("marketObservation"), dict)

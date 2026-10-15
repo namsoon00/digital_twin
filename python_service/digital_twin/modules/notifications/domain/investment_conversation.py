@@ -41,7 +41,13 @@ def conversation_sources(job):
     if not symbol or context.get("accountId", job.account_id) != job.account_id:
         return None
     world, sources, parent = "", [], ""
-    if job.message_type == "investmentInsight":
+    if job.message_type == "marketObservation":
+        movement = context.get("priceMovement") or (context.get("metadata") or {}).get("priceMovement") or {}
+        if movement.get("version") == "price-movement-episode-v1" and movement.get("episodeId"):
+            sources.append(("price-movement", "", movement["episodeId"]))
+            if movement.get("reversalOf"):
+                sources.append(("price-movement", "", movement["reversalOf"]))
+    elif job.message_type == "investmentInsight":
         origin = context.get("notificationAnalysisSources") or {}
         relation = context.get("ontologyRelationContext") or (context.get("metadata") or {}).get("ontologyRelationContext") or {}
         world = relation.get("worldId") or origin.get("worldId") or ""

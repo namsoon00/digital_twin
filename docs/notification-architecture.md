@@ -65,6 +65,11 @@ AI-authored narrative-only publications are `AI 해석`, not `투자 판단`.
 
 ### Delivery Cadence
 
+Factual price observations additionally use the source-clock windows and
+durable movement transitions described in [Smart price notifications](smart-price-notifications.md).
+Holding/watchlist thresholds, bounded recovery confirmation and receipt-linked
+replies do not create investment action authority.
+
 Investment delivery uses four explicit classes. The class is delivery policy,
 not investment evidence, and can only consume TypeDB-authored action authority,
 notification severity, relation transitions, source-event identity, and stored

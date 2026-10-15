@@ -138,6 +138,8 @@ def notification_title_icon(rule: str, raw_lines: List[str], event: AlertEvent) 
 
     if key == "marketObservation":
         observation = metadata.get("marketObservation") if isinstance(metadata.get("marketObservation"), dict) else {}
+        if (metadata.get("priceMovement") or {}).get("stage") == "recovery":
+            return "↔️"
         direction = str(observation.get("direction") or "").strip().lower()
         if direction not in {"up", "down", "flat"}:
             value = signed_direction(data_value(raw_lines, "기준 대비"))
@@ -278,6 +280,10 @@ def notification_title_headline(rule: str, raw_lines: List[str], event: AlertEve
         return "관심종목 시세 갱신"
     if key == "marketObservation":
         observation = metadata.get("marketObservation") if isinstance(metadata.get("marketObservation"), dict) else {}
+        movement = metadata.get("priceMovement") or {}
+        if movement.get("version") == "price-movement-episode-v1":
+            from .price_movement_presentation import price_movement_headline
+            return price_movement_headline(movement)
         change_text = percent_text(data_value(raw_lines, "기준 대비"))
         direction = str(observation.get("direction") or "").strip().lower()
         if direction not in {"up", "down", "flat"}:

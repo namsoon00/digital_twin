@@ -197,6 +197,27 @@ class InvestmentConversationStorageTests(StabilizationDatabaseCase):
         again = self.register(self.value("aiObservation"))
         self.assertEqual(self.thread(first), self.thread(again))
 
+    def test_price_episode_expansion_and_recovery_reply_to_delivered_root(self):
+        values = []
+        for stage in ("initial", "expanded", "recovery"):
+            value = self.value("marketObservation")
+            value.context["priceMovement"] = {"version": "price-movement-episode-v1", "episodeId": "price-episode", "stage": stage}
+            values.append(self.register(value))
+        self.assertEqual(1, len({self.thread(value) for value in values}))
+        notifier = TelegramNotifier("123:fake", "456")
+        notifier.post_message = Mock(side_effect=[receipt(str(i)) for i in (70, 71, 72)])
+        service = NotificationDispatchService(self.notifications, lambda _: notifier)
+        for value in values:
+            service.deliver(value, {self.account: object()}, value.text)
+            self.notifications.mark_done(value)
+        self.assertEqual(70, notifier.post_message.call_args.args[0]["reply_parameters"]["message_id"])
+        reversal = self.value("marketObservation")
+        reversal.context["priceMovement"] = {"version": "price-movement-episode-v1", "episodeId": "reversed-episode", "reversalOf": "price-episode"}
+        self.assertEqual(self.thread(values[0]), self.thread(self.register(reversal)))
+        unrelated = self.value("marketObservation")
+        unrelated.context["priceMovement"] = {"version": "price-movement-episode-v1", "episodeId": "different"}
+        self.assertNotEqual(self.thread(values[0]), self.thread(self.register(unrelated)))
+
     def test_registration_rolls_back_without_orphan_sources(self):
         value = self.value("investmentInsight", events=["rollback-event"])
         with self.assertRaisesRegex(RuntimeError, "rollback"):

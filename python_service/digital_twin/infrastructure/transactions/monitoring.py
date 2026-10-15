@@ -24,6 +24,8 @@ from digital_twin.modules.news_intelligence.domain.event_types import RESEARCH_E
 from digital_twin.modules.notifications.domain.message_types import MARKET_OBSERVATION
 from digital_twin.modules.market_data.domain.market_observations import apply_market_observation_outbox_baselines, apply_market_observation_reasoning_baselines, hydrate_market_observation_baselines, market_observation_delivery_admission, market_observation_delivery_cadence_minutes, market_observation_reasoning_candidates, market_observation_reasoning_symbols
 from digital_twin.modules.market_data.domain.market_signal_transitions import prepare_market_signal_transition_metadata
+from digital_twin.modules.market_data.domain.price_observation_episodes import persist_price_state, acknowledge_transitions
+from digital_twin.modules.market_data.domain.smart_price_observations import movement_cadence
 from digital_twin.modules.reasoning.domain.ontology_projection_input import compact_monitor_state_for_ontology, compact_monitor_state_for_reasoning_base, compact_monitor_state_for_reasoning_symbol, reasoning_snapshot_symbols
 from digital_twin.modules.portfolio.domain.portfolio import AccountSnapshot, AlertEvent, account_snapshot_from_monitor_state, monitor_state_has_live_account_data
 from digital_twin.modules.reasoning.domain.reasoning_source_snapshot import build_reasoning_source_snapshot
@@ -42,7 +44,7 @@ from digital_twin.modules.notifications.infrastructure.mysql_notification_config
 from digital_twin.infrastructure.mysql_market_stores import MySQLModelReviewJobStore
 
 
-def snapshot_state_for_persistence(snapshot: AccountSnapshot, previous: Dict[str, object] = None) -> Dict[str, object]:
+def snapshot_state_for_persistence(snapshot: AccountSnapshot, previous: Dict[str, object] = None, settings=None) -> Dict[str, object]:
     """Keep the last verified account data when a provider request fails.
 
     A temporary authentication failure is operational state, not a new
@@ -70,6 +72,7 @@ def snapshot_state_for_persistence(snapshot: AccountSnapshot, previous: Dict[str
     current["metadata"] = current_metadata
     if snapshot.has_live_account_data():
         current = hydrate_market_observation_baselines(current, previous or {})
+        current = persist_price_state(current, previous or {}, settings)
     if snapshot.has_live_account_data() or not monitor_state_has_live_account_data(previous or {}):
         return current
 
@@ -1199,12 +1202,13 @@ class MySQLMonitoringCycleRecorder(MySQLOperationalConnection):
                     )
                 except ValueError:
                     elapsed_seconds = None
-            if elapsed_seconds is not None and elapsed_seconds < cadence_minutes * 60:
+            event_cadence = movement_cadence(event, cadence_minutes)
+            if elapsed_seconds is not None and elapsed_seconds < event_cadence * 60:
                 suppressed.append({
                     **admission,
                     "accepted": False,
                     "reasonCode": "market-observation-cadence",
-                    "cadenceMinutes": cadence_minutes,
+                    "cadenceMinutes": event_cadence,
                     "elapsedSeconds": round(elapsed_seconds, 3),
                 })
                 continue
@@ -1277,6 +1281,7 @@ class MySQLMonitoringCycleRecorder(MySQLOperationalConnection):
                     snapshot.account_id: snapshot_state_for_persistence(
                         snapshot,
                         previous_states.get(snapshot.account_id),
+                        self.runtime_settings,
                     )
                     for snapshot in snapshots
                 }
@@ -1341,7 +1346,7 @@ class MySQLMonitoringCycleRecorder(MySQLOperationalConnection):
                 if not source_snapshot_replay:
                     sent_entries = self.monitor_store.mark_sent_with_connection(
                         connection,
-                        guarded_events,
+                        [event for event in guarded_events if not event.metadata.get("priceMovement") or event in outboxed_events],
                         stamp,
                     )
             if outboxed_events:
@@ -1349,6 +1354,7 @@ class MySQLMonitoringCycleRecorder(MySQLOperationalConnection):
                     account_events = [event for event in outboxed_events if event.account_id == account_id]
                     if account_events:
                         snapshot_states[account_id] = apply_market_observation_outbox_baselines(state, account_events)
+                        snapshot_states[account_id] = acknowledge_transitions(snapshot_states[account_id], account_events)
             # Ordinary price candidates are TypeDB-first. Persist only their
             # pending anchors at the same durable source boundary that creates
             # replay work. The completed anchor advances after TypeDB succeeds.

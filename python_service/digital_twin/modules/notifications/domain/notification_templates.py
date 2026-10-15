@@ -102,7 +102,7 @@ DEFAULT_NOTIFICATION_TEMPLATES = {
     },
     "marketObservation": {
         "template": DEFAULT_TEMPLATE,
-        "description": "설정한 누적 변동 기준을 충족하면 즉시 발송하는 시세 변동 알림 (투자 판단 없음)",
+        "description": "누적·시간 구간 변동과 확대·되돌림을 보유·관심 기준으로 알림 (투자 판단 없음)",
     },
     "portfolioHoldingsSnapshot": {
         "template": DEFAULT_TEMPLATE,

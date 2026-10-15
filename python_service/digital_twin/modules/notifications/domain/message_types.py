@@ -343,7 +343,7 @@ TRIGGER_SUMMARIES = {
     AI_OBSERVATION: "AI가 추세와 이전 발송을 비교해 새로운 해석을 제안할 때 보냅니다.",
     AI_OBSERVATION_DIAGNOSTIC: "AI가 발송을 제안했지만 검증을 통과하지 못한 초안과 보류 이유를 운영 채널에 보냅니다.",
     INVESTMENT_INSIGHT: "종료된 규칙 기반 투자 알림의 과거 기록입니다.",
-    MARKET_OBSERVATION: "마지막 알림 기준 시세와 비교해 설정한 폭 이상 누적 변동하면 가격 변동 사실을 즉시 알립니다. 매수·매도 판단은 TypeDB 추론 완료 후 별도로 보냅니다.",
+    MARKET_OBSERVATION: "설정한 누적·시간 구간 변동이나 같은 움직임의 확대·되돌림을 확인하면 가격 사실을 알립니다. 보유·관심 기준을 구분하며 투자 판단은 별도 분석으로 확인합니다.",
     PORTFOLIO_HOLDINGS_SNAPSHOT: "사용자가 명시적으로 요청한 경우에만 투자 판단 없이 모든 보유 종목의 현재 상태를 한 번에 보여줍니다.",
     PORTFOLIO_ACTIVITY_OBSERVATION: "완전한 실계좌 잔고 두 시점 사이에서 수량 또는 현금 변화가 확인되면 사실 알림으로 보냅니다.",
     INVESTMENT_CALENDAR_REMINDER: "등록한 투자 이벤트가 설정한 리마인더 시점에 도달하면 보냅니다. 투자 판단은 별도 온톨로지 인사이트로만 보냅니다.",

@@ -261,7 +261,8 @@ class RealtimeMonitor(MonitoringSampleDataMixin, MonitoringPositionContextMixin,
         if event.rule == MARKET_OBSERVATION:
             metadata = dict(event.metadata or {}) if isinstance(event.metadata, dict) else {}
             if not bool(metadata.get("deliveryDeferred")):
-                return market_observation_delivery_cadence_minutes(self.settings)
+                from .smart_price_observations import movement_cadence
+                return movement_cadence(event, market_observation_delivery_cadence_minutes(self.settings))
         if event.rule == INVESTMENT_INSIGHT:
             raw = self.settings.get("notificationCooldownMinutes")
             if str(raw or "").strip():
@@ -916,7 +917,8 @@ class RealtimeMonitor(MonitoringSampleDataMixin, MonitoringPositionContextMixin,
                     "reasoningFollowup": "queued-from-persisted-snapshot",
                 },
             ))
-        return events
+        from .smart_price_observations import smart_market_observations
+        return smart_market_observations(snapshot, previous or {}, events, self.settings)
 
     def observation_followup_events(
         self,

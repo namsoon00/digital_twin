@@ -66,6 +66,10 @@ def rulebox_semantic_violations(rules: Iterable[GraphInferenceRule]) -> List[str
             violations.append(rule_id + ": any_condition_min_count exceeds independent evidence groups")
 
         for derivation in rule.derivations or []:
+            response = derivation.management_response
+            if response:
+                from digital_twin.modules.model_registry.domain.management_response import management_response_violations
+                violations.extend(rule_id + ": " + message for message in management_response_violations(rule, derivation))
             evidence_role = str(derivation.evidence_role or "").strip().lower()
             if evidence_role not in RULEBOX_EVIDENCE_ROLES:
                 violations.append(rule_id + ": derivation has no valid evidence_role")

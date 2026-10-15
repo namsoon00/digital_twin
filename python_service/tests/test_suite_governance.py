@@ -337,7 +337,9 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # receipt novelty, policy-only changes and registered outcome replies.
         # Two policy-guidance regressions protect native weight denominators,
         # excluded-vs-admitted candidates and the final transport heading.
-        self.assertLessEqual(total, 2342)
+        # Five native management-response regressions cover persistence,
+        # evidence admission, allocation arithmetic and RuleBox governance.
+        self.assertLessEqual(total, 2347)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

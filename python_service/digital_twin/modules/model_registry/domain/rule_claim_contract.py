@@ -446,6 +446,15 @@ def resolved_rule_claim_contract(
 
 def _rule_semantic_fingerprint(rule: object) -> str:
     source = dict(rule) if isinstance(rule, Mapping) else asdict(rule) if is_dataclass(rule) else {}
+    # Adding an optional response must not change unrelated/legacy claim
+    # revisions or detach their recorded outcomes. Nonempty responses are
+    # executable policy semantics and remain part of the fingerprint.
+    if isinstance(source.get("derivations"), (list, tuple)):
+        source["derivations"] = [
+            {key: value for key, value in derivation.items()
+             if key != "management_response" or value}
+            for derivation in source["derivations"]
+        ]
     if not source.get("conditions"):
         return ""
     semantics = {key: source.get(key) for key in (

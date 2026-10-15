@@ -9,7 +9,7 @@ from digital_twin.modules.notifications.domain.relation_observation_proof import
 from digital_twin.modules.notifications.domain.rulebox_decision_presentation import decision_brief_presentation, threshold
 
 
-PRESENTATION_VERSION = "readable-relation-change-v12"
+PRESENTATION_VERSION = "readable-relation-change-v13"
 
 CHANGE = {
     "observed": "조건이 새로 확인됐습니다.",
@@ -487,7 +487,7 @@ def readable_relation_change(packet):
     if policy_only:
         stories = [("policy-context", "가설과 매매 판단의 범위", [
             "이번 알림은 관리 조건의 변화입니다. 가설 " + str(len(hypotheses))
-            + "개의 기간별 분석은 상세 근거에 보존했습니다. 보유 유지·축소 의견을 확정한 알림은 아닙니다."])]
+            + "개의 기간별 분석은 상세 근거에 보존했습니다. 가격 전망에 따른 매매 의견과 계정 정책에 따른 관리 대응은 구분합니다."])]
     if not stories and not policy_only:
         stories = [("hypotheses", "이번에 확인한 내용", ["연결된 가설 설명이 기록되지 않았습니다.",
                     *[str(rule.get("label") or "규칙") + " — " + " · ".join(rule_conditions(rule, facts, currency)) for rule in rules[:3]]])]

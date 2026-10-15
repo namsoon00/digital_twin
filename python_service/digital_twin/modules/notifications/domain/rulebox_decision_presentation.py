@@ -116,6 +116,41 @@ def unavailable_candidate_rows(brief):
             for action, reasons in grouped.items()]
 
 
+def management_decision_presentation(decision):
+    if decision.get("version") != "management-decision-v1" or decision.get("status") != "POLICY_RESPONSE_SELECTED":
+        return {}
+    responses = decision.get("responses") or []
+    if not responses:
+        return {}
+    lead, guidance, basis, rechecks = [], [], [], []
+    for response in responses:
+        lead.append(str(response.get("label") or "") + ".")
+        guidance.append(str(response.get("label") or "") + ": " + str(response.get("reason") or ""))
+        target, actual = numeric(response.get("targetValue")), numeric(response.get("observedValue"))
+        scenario = response.get("adjustmentScenario") or {}
+        if scenario:
+            basis.append("계좌 전체 대비 비중 " + decimal(actual) + "% → 관리 목표 " + decimal(target) + "% 이하"
+                         + " · 상한 초과 " + decimal(scenario.get("excessWeightPercentagePoints")) + "%p")
+            adjustment = "일부 매도로 목표를 맞추는 경우: 현재 보유분의 약 " + decimal(scenario.get("positionReductionPct")) + "%를 줄이는 규모"
+            quantity = numeric(scenario.get("equivalentQuantity"))
+            if quantity is not None:
+                adjustment += " (약 " + decimal(quantity) + "주에 해당)"
+            guidance.append(adjustment + ".")
+            guidance.append("현재 가격·환율이 유지되고 매도 대금이 계좌에 남는다는 가정의 계산입니다. 세금·비용·거래 단위 적용 전이며 확정 주문 수량은 아닙니다.")
+            guidance.append("매도 없이 외부 자금으로만 맞추려면 현재 계좌 전체 자산의 약 "
+                            + decimal(scenario.get("externalDepositPctOfAccount")) + "%를 추가해야 합니다.")
+        elif actual is not None and target is not None:
+            basis.append("이 추가매수 제한의 손익 조건: 현재 " + decimal(actual, signed=True) + "% · 해소 경계 " + decimal(target, signed=True) + "% 이상")
+        guidance.append(str(response.get("executionBoundary") or ""))
+        rechecks.append(str(response.get("releaseCondition") or ""))
+    return {"lead": "관리 대응 결정: " + " ".join(lead), "sections": [
+        ("decision-guidance", "결정된 관리 대응과 조정 규모", _unique(guidance)),
+        ("decision-basis", "결정에 사용한 관리 기준", _unique(basis)),
+        ("decision-review", "이 결정의 적용 범위", ["위 대응은 계정의 관리 정책을 충족하기 위한 결정입니다. 가격 전망에 따른 유지·추가 축소 판단은 별도로 검증하며, 주문은 실행하지 않습니다."]),
+        ("decision-recheck", "관리 대응을 해제할 조건", _unique(rechecks)),
+    ]}
+
+
 def decision_brief_presentation(packet):
     current, previous = packet.get("current") or {}, packet.get("previous") or {}
     brief = current.get("decisionBrief") or {}
@@ -123,6 +158,21 @@ def decision_brief_presentation(packet):
         return {}
     if any(brief.get(k) != current.get(k) for k in ("accountId", "symbol", "worldId", "inferenceGenerationId", "sourceAboxSnapshotId")):
         return {}
+    management = brief.get("managementDecision") or {}
+    if management and all(management.get(k) == current.get(k) for k in ("accountId", "symbol", "worldId", "inferenceGenerationId", "sourceAboxSnapshotId")):
+        presentation = management_decision_presentation(management)
+        if presentation:
+            # Policy objectives do not replace the forecast comparison or
+            # erase why a previously reported candidate became unavailable.
+            forecast = unavailable_candidate_rows(brief)
+            candidates = [LABELS[a] for a in brief.get("candidateActions", []) if a in LABELS]
+            if candidates:
+                forecast.append("가격 전망에 따른 별도 검토 후보: " + "·".join(candidates)
+                                + (" · 근거 가설의 운영 검증 미충족으로 선택 보류." if brief.get("qualificationPending")
+                                   else " · 대안 비교를 거쳐 최종 선택 전."))
+            if forecast:
+                presentation["sections"].append(("decision-forecast-review", "가격 전망에 따른 별도 판단", _unique(forecast)))
+            return presentation
     facts, old = snapshot_facts(current), snapshot_facts(previous)
     held = facts.get("isHolding") is True or (numeric(facts.get("quantity")) or 0) > 0
     choice = "보유 유지·축소" if held else "매수·매도"

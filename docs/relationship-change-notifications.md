@@ -479,3 +479,39 @@ TypeDB가 확인한 변화가 연결돼야 `rule-notification-event-v1` 사건�
 재생, 실행 중인 프로세스 확인, 새 코드로 생성된 실제 알림의 전송 확인은
 서로 다른 검증 결과로 보고한다. 과거 메시지 재생만으로 실운영 전송까지
 확인했다고 간주하지 않는다.
+
+### 계정 정책의 관리 대응 결정 (2026-10-15)
+
+`ActionabilityAssessment` / `RiskInvariantClaim`의 비예측 의미를 사용한다.
+`graph.position.concentration.guard.v1`과
+`graph.instrument_profile.averaging_down_policy.v1`의 v2 파생 계약은
+`management-response-v1`을 소유한다. TypeDB의 직접 조건 판정이 이 계약을
+InferenceBox에 물질화할 때만 `RESTORE_POSITION_LIMIT`(비중 상한 복원),
+`PAUSE_AVERAGING_DOWN`(손실 구간 추가매수 중단)이 발생한다. 렌더러에 정책
+조건이나 종목별 행동 매핑을 추가하지 않는다. 같은 규칙의 기존 ADD 차단과
+경쟁 가설의 실행 자격은 유지한다.
+
+`management-decision-v1`은 계좌·종목·world·ABox·추론 세대를 확인하고, 해당
+규칙의 신선하고 사용 가능한 근거만 받아들인다. `DecisionSynthesis` v9와
+`SubjectDecisionCase.synthesis`에 저장한 뒤 compact subject context, decision
+brief, 고객 문서로 전달한다. 원천 값만 있거나 대상 정책값을 보존하지 못하면
+대응을 새로 만들지 않는다. 가격 전망 가설이 아직 미검증이어도 독립적으로
+확인된 계정 정책의 대응은 사라지지 않는다. 관리 대응이 가격 전망의 최종
+TRIM/HOLD 판단이나 주문 허가를 대신하지는 않는다.
+
+비중 상한 복원의 산술 시나리오는 현재 계좌 비중 w, 상한 t일 때
+`보유분 조정 비율=(w-t)/w`, `상한 초과=w-t %p`,
+`매도 없이 필요한 외부 입금/현재 계좌자산=w/t-1`이다. 해당 세대에 실제
+보유 수량이 있을 때만 등가 수량을 표시한다. 가격·환율 고정, 매도 대금의
+계좌 잔류, 세금·비용 제외라는 가정을 명시하며 거래 단위/매도 가능 수량을
+확인하지 않은 등가 수량을 주문 수량으로 반올림하거나 전송하지 않는다.
+
+대응 코드·목표·해제 계약의 변경은 의미 있는 정책 변화로 알린다. 같은 목표가
+계속 적용되는 동안 시세나 산술 수량만 바뀐 경우에는 새 정책 알림을 만들지
+않는다. 자료가 오래됐거나 규칙이 사라진 것만으로 기존 대응을 해제하지
+않으며, 기존 신선한 불성립 증거에 따른 해제 경로를 유지한다.
+
+이 변경은 네이티브 엔진 v10과 새 불변 RuleBox 릴리스에서 사용한다. 기존
+배포의 정적 artifact를 제자리에서 수정하지 않는다. 과거 artifact에는 대응
+필드를 주입하지 않는다. 검증: `NativeManagementResponseTests`와 기존
+RuleBox·독립 TypeDB·알림 목적 회귀, 네이티브 후보 실행 및 배포 게이트.

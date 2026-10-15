@@ -1135,6 +1135,8 @@ def entity_row_from_typeql(
             or derivation.get("nextChecks")
             or merged.get("derivationNextChecks")
         ),
+        **({"derivationManagementResponse": dict(derivation.get("management_response") or derivation.get("managementResponse") or merged.get("derivationManagementResponse") or {})}
+           if (derivation.get("management_response") or derivation.get("managementResponse") or merged.get("derivationManagementResponse")) else {}),
         "derivationNotificationCategory": str(
             derivation.get("notification_category")
             or derivation.get("notificationCategory")

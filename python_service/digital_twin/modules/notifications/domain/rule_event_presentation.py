@@ -12,6 +12,8 @@ ACTION_LABELS = {"BUY": "신규 매수", "ADD": "추가매수", "HOLD": "보유 
 
 def event_conclusion(event):
     if event.get("purpose") in {"management-policy", "execution-constraint"}:
+        if event.get("managementResponses"):
+            return "관리 규칙의 대응: " + " · ".join(r.get("label") or "" for r in event["managementResponses"]) + ". 적용 기준과 규모는 ‘결정된 관리 대응과 조정 규모’에 표시했습니다."
         actions = "·".join(ACTION_LABELS[a] for a in event.get("blockedActions", []) if a in ACTION_LABELS)
         if event.get("policyState") == "released":
             released = "·".join(ACTION_LABELS[a] for a in event.get("previousBlockedActions", []) if a in ACTION_LABELS)
@@ -74,7 +76,9 @@ def event_impact(event, brief=None):
                 parts.append("검토 후보: " + actions(before, "candidateActions") + " → " + actions(after, "candidateActions"))
         if after.get("candidateActions") and before.get("qualificationPending") != after.get("qualificationPending"):
             parts.append("후보 가설의 검증 상태가 달라져 사용 가능 범위를 다시 확인합니다.")
-        if not parts and after.get("blockedActions"):
+        if event.get("managementResponseChanged"):
+            parts.append("이번에는 이 규칙이 요구하는 관리 대응 또는 목표가 새로 정해졌습니다.")
+        elif not parts and after.get("blockedActions"):
             parts.append("관리 제한은 계속 적용됩니다. 이번에는 제한을 뒷받침하는 규칙 조건이 바뀌었습니다.")
         return " · ".join(parts)
     if after.get("blockedActions"):

@@ -88,6 +88,10 @@ def rulebox_decision_brief(context):
     identity = _identity(context, relation, case)
     if not identity:
         return {}
+    management = mapping(case.get("managementDecision")) or mapping(mapping(case.get("synthesis")).get("management_decision"))
+    if (management.get("authority") != "typedb-materialized-account-policy"
+            or any(management.get(k) != identity.get(k) for k in ("accountId", "symbol", "worldId", "inferenceGenerationId", "sourceAboxSnapshotId"))):
+        management = {}
     envelope = mapping(relation.get("actionEnvelope"))
     eligibility = {r.get("ruleId"): r for r in rows(envelope.get("inferenceEligibilityAssessments"))}
     allowed = set(strings(case.get("allowedActions")))
@@ -171,12 +175,13 @@ def rulebox_decision_brief(context):
             "executionEligible": h.get("hypothesisId") in execution_hypotheses}
             for h in hypotheses if entry["ruleId"] in strings(h.get("supportingRuleIds"))]
         excluded[(entry["ruleId"], entry["action"])] = entry
-    if not (candidates or restrictions or checks or excluded):
+    if not (candidates or restrictions or checks or excluded or management):
         return {}
     candidate_actions = strings([r["action"] for r in candidates])
     restricted_actions = strings([r["action"] for r in restrictions])
     return {"version": VERSION, "authority": "typedb-materialized-decision-effects", **identity,
             "action": "NO_ACTION", "finalActionSelected": False,
+            "managementDecision": deepcopy(management),
             "status": "restricted-review" if restrictions else "candidate-review" if candidates else "evidence-review",
             "candidateActions": candidate_actions, "blockedActions": restricted_actions,
             "candidates": candidates, "restrictions": restrictions, "checks": checks,

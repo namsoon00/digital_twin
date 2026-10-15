@@ -334,5 +334,147 @@ class RuleBoxDecisionBriefTests(unittest.TestCase):
         self.assertIn("실제 비교값 또는 기준이 보존되지", missing)
 
 
+class NativeManagementResponseTests(unittest.TestCase):
+    def response_context(self):
+        from digital_twin.modules.model_registry.contracts import default_graph_inference_rules
+        ctx = fixture()
+        rel = ctx['ontologyRelationContext']
+        facts = rel['facts']
+        facts.update(positionAccountWeight=78.45, positionWeight=96.03,
+                     strategyMaxPositionWeightPct=45, quantity=203,
+                     currentPrice=139.26, averagePrice=143.86, currency='USD')
+        rule = next(r for r in default_graph_inference_rules() if r.rule_id == 'graph.position.concentration.guard.v1')
+        response = deepcopy(rule.derivations[0].management_response)
+        response['boundFacts'] = {k: facts[k] for k in ('positionAccountWeight', 'strategyMaxPositionWeightPct', 'quantity', 'currentPrice', 'currency')}
+        rel['matchedRules'][0]['managementResponse'] = response
+        return ctx
+
+    def test_policy_decision_survives_unqualified_forecasts_and_persists_with_synthesis(self):
+        from digital_twin.modules.decisions.contracts import decision_synthesis_from_relation_context
+        from digital_twin.modules.decisions.domain.investment_reasoning.contracts import DecisionSynthesis
+        ctx = self.response_context()
+        synthesis = decision_synthesis_from_relation_context(ctx['accountId'], ctx['ontologyRelationContext'])
+        restored = DecisionSynthesis.from_dict(synthesis.to_dict())
+        decision = restored.management_decision
+        self.assertEqual('POLICY_RESPONSE_SELECTED', decision['status'])
+        self.assertFalse(decision['forecastActionSelected'])
+        self.assertFalse(decision['orderAuthorized'])
+        scenario = decision['responses'][0]['adjustmentScenario']
+        self.assertAlmostEqual(33.45, scenario['excessWeightPercentagePoints'])
+        self.assertAlmostEqual(42.638623326959846, scenario['positionReductionPct'])
+        self.assertAlmostEqual(86.55640535372848, scenario['equivalentQuantity'])
+        self.assertAlmostEqual(74.33333333333333, scenario['externalDepositPctOfAccount'])
+        self.assertIsNone(scenario['orderQuantity'])
+        ctx['investmentSubjectDecisionCase']['managementDecision'] = decision
+        rendered = message(ctx)
+        for phrase in ('관리 대응 결정', '계좌 비중을 설정 상한 이내로 조정', '78.45%', '45%', '42.64%', '86.56주', '74.33%', '확정 주문 수량은 아닙니다'):
+            self.assertIn(phrase, rendered)
+        self.assertNotIn('유지·축소를 결정하지 못한 이유', rendered)
+        self.assertIn('가격 전망에 따른 별도 검토 후보: 일부 축소', rendered)
+        self.assertIn('운영 검증 미충족으로 선택 보류', rendered)
+        self.assertEqual('passed', ctx['customerInvestmentDocumentQuality']['status'])
+        from digital_twin.modules.notifications.domain.rule_policy_event import _signature
+        response = decision['responses'][0]
+        signature = _signature({'id':'rule:policy'}, ['ADD'], [], [response])
+        later = deepcopy(response)
+        later['observedValue'] = 80
+        later['adjustmentScenario']['equivalentQuantity'] = 90
+        later['boundFacts']['currentPrice'] = 150
+        self.assertEqual(signature, _signature({'id':'rule:policy'}, ['ADD'], [], [later]))
+        later['targetValue'] = 40
+        self.assertNotEqual(signature, _signature({'id':'rule:policy'}, ['ADD'], [], [later]))
+        self.assertNotEqual(signature, _signature({'id':'rule:policy'}, ['ADD'], []))
+        from digital_twin.modules.notifications.domain.rule_event_presentation import event_impact
+        impact = event_impact({'managementResponseChanged': True, 'decisionImpact': {
+            'status': 'changed', 'previous': {'blockedActions': ['ADD']}, 'current': {'blockedActions': ['ADD']}}})
+        self.assertIn('관리 대응 또는 목표가 새로 정해졌습니다', impact)
+        self.assertNotIn('규칙 조건이 바뀌었습니다', impact)
+
+    def test_raw_weights_or_stale_mismatched_unbound_evidence_cannot_create_policy_decision(self):
+        from digital_twin.modules.decisions.domain.investment_reasoning.management import management_decision_from_relation
+        for variant in ('no-native-response', 'stale', 'unusable', 'unmatched', 'reference', 'wrong-account', 'wrong-generation', 'missing-target', 'mixed-facts'):
+            with self.subTest(variant=variant):
+                ctx = self.response_context()
+                rel = ctx['ontologyRelationContext']
+                rule = rel['matchedRules'][0]
+                assessment = rel['actionEnvelope']['inferenceEligibilityAssessments'][0]
+                if variant == 'no-native-response': rule.pop('managementResponse')
+                if variant == 'stale': assessment['freshnessStatus'] = 'stale'
+                if variant == 'unusable': assessment['evidenceUsableForJudgement'] = False
+                if variant == 'unmatched': rule['matched'] = False
+                if variant == 'reference': rule['reference_only'] = True
+                if variant == 'wrong-account': rel['accountId'] = 'other'
+                if variant == 'wrong-generation': rel['graphStoreInference']['inferenceGenerationId'] = 'other'
+                if variant == 'missing-target': rule['managementResponse']['boundFacts'].pop('strategyMaxPositionWeightPct')
+                if variant == 'mixed-facts': rule['managementResponse']['boundFacts']['positionAccountWeight'] = 96.03
+                self.assertEqual({}, management_decision_from_relation(ctx['accountId'], rel))
+
+    def test_policy_scenario_does_not_fabricate_quantity_or_permit_invalid_account_weights(self):
+        from digital_twin.modules.decisions.domain.investment_reasoning.management import management_decision_from_relation
+        ctx = self.response_context()
+        rel = ctx['ontologyRelationContext']
+        bound = rel['matchedRules'][0]['managementResponse']['boundFacts']
+        bound.pop('quantity')
+        result = management_decision_from_relation(ctx['accountId'], rel)
+        self.assertNotIn('equivalentQuantity', result['responses'][0]['adjustmentScenario'])
+        for value in (0, -1, 78.45, 110, True, float('nan')):
+            rel['facts']['strategyMaxPositionWeightPct'] = bound['strategyMaxPositionWeightPct'] = value
+            self.assertEqual({}, management_decision_from_relation(ctx['accountId'], rel))
+
+    def test_policy_contract_rejects_prediction_or_unrelated_target_and_freezes_old_payloads(self):
+        from dataclasses import replace
+        from digital_twin.modules.model_registry.contracts import default_graph_inference_rules, GraphInferenceRule
+        from digital_twin.modules.model_registry.domain.ontology_rulebox_governance import rulebox_semantic_violations, rulebox_rules_hash
+        rules = default_graph_inference_rules()
+        rule = next(r for r in rules if r.rule_id == 'graph.position.concentration.guard.v1')
+        self.assertEqual([], rulebox_semantic_violations([rule]))
+        invalid = deepcopy(rule.derivations[0].management_response)
+        invalid['objective']['field'] = 'positionWeight'
+        broken = replace(rule, derivations=[replace(rule.derivations[0], management_response=invalid)])
+        self.assertTrue(rulebox_semantic_violations([broken]))
+        predictive = next(r for r in rules if r.resolved_knowledge_basis.rule_kind == 'predictive-hypothesis')
+        broken = replace(predictive, derivations=[replace(predictive.derivations[0], management_response=rule.derivations[0].management_response)])
+        self.assertTrue(any('risk-invariant' in v for v in rulebox_semantic_violations([broken])))
+        legacy = rule.to_dict()
+        legacy['derivations'][0].pop('management_response')
+        frozen_hash = rulebox_rules_hash([legacy])
+        # Authored and normalized runtime hashes are deliberately distinct.
+        # Loading a legacy release must never synthesize the new response.
+        restored = GraphInferenceRule.from_dict(legacy).to_dict()
+        self.assertTrue(all('management_response' not in d for d in restored['derivations']))
+        self.assertNotEqual(frozen_hash, rulebox_rules_hash([rule.to_dict()]))
+
+    def test_rulebox_storage_round_trip_and_materialized_response_bind_the_native_fact_basis(self):
+        import json
+        from digital_twin.modules.model_registry.contracts import default_graph_inference_rules
+        from digital_twin.infrastructure.graph_store_rulebox import rulebox_graph_from_rules, build_rulebox_rules_from_rows
+        from digital_twin.modules.reasoning.domain.ontology_contracts import OntologyEntity, PortfolioOntology
+        from digital_twin.modules.reasoning.domain.ontology_inference_materializer import materialize_rule_inference
+        rule = next(r for r in default_graph_inference_rules() if r.rule_id == 'graph.position.concentration.guard.v1')
+        graph = rulebox_graph_from_rules([rule], include_tbox=False)
+        from unittest.mock import patch
+        from digital_twin.infrastructure import typedb_ontology as api
+        with patch.object(api, 'runtime_settings', return_value={}):
+            repository = api.TypeDBOntologyGraphRepository('fixture.invalid', retry_count=0)
+        template = next(e for e in graph.entities if e.kind == 'relation-template' and e.properties.get('derivation', {}).get('management_response'))
+        native_row = repository.entity_row_from_typeql({
+            'id': template.entity_id, 'kind': template.kind, 'ruleId': rule.rule_id,
+            'json': json.dumps(template.properties),
+        }, 'RuleBox')
+        self.assertEqual(rule.derivations[0].management_response, native_row['derivationManagementResponse'])
+        rows = lambda kind: [{'ruleId': rule.rule_id, 'propertiesJson': json.dumps(e.properties), **{k:e.properties.get(k) for k in ('conditionId', 'conditionIndex', 'derivationIndex')}} for e in graph.entities if e.kind == kind]
+        restored = build_rulebox_rules_from_rows(rows('rule'), rows('rule-condition'), rows('relation-template'))[0]
+        self.assertEqual(rule.derivations[0].management_response, restored.derivations[0].management_response)
+        properties = {'symbol':'MSTR', 'source':'holding', 'positionAccountWeight':78.45, 'positionWeight':96.03,
+                      'strategyMaxPositionWeightPct':45, 'quantity':203, 'currentPrice':139.26, 'currency':'USD'}
+        stock = OntologyEntity('stock:MSTR', 'Strategy', 'stock', properties)
+        output = PortfolioOntology('test:policy', entities=[stock])
+        materialize_rule_inference(output, restored, stock, {'matchedConditions':[{'conditionId':c.condition_id} for c in restored.conditions]})
+        response = next(r.properties['managementResponse'] for r in output.relations if r.properties.get('managementResponse'))
+        self.assertEqual(78.45, response['boundFacts']['positionAccountWeight'])
+        self.assertNotIn('positionWeight', response['boundFacts'])
+        self.assertEqual(45, response['boundFacts']['strategyMaxPositionWeightPct'])
+
+
 if __name__ == "__main__":
     unittest.main()

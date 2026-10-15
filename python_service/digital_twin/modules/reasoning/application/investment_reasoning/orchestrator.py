@@ -1545,6 +1545,7 @@ class InvestmentReasoningOrchestrator:
             "actionAuthority": subject_case.synthesis.action_authority,
             "executionQualified": subject_case.synthesis.execution_qualified,
             "executionDisposition": subject_case.synthesis.execution_disposition,
+            "managementDecision": dict(subject_case.synthesis.management_decision),
             "hypothesisQualificationState": (
                 subject_case.synthesis.hypothesis_qualification_state
             ),

@@ -19,7 +19,7 @@ FACT_DELTA_VERSION = "investment-fact-delta-v2"
 INFERENCE_RESULT_VERSION = "investment-inference-result-v2"
 RULE_EVALUATION_RECORD_VERSION = "investment-rule-evaluation-record-v1"
 AI_JUDGMENT_RESULT_VERSION = "investment-ai-judgment-result-v3"
-DECISION_SYNTHESIS_VERSION = "investment-decision-synthesis-v8"
+DECISION_SYNTHESIS_VERSION = "investment-decision-synthesis-v9"
 
 REASONING_LANE_REALTIME = "REALTIME"
 REASONING_LANE_CONTEXT = "CONTEXT"
@@ -477,6 +477,7 @@ class DecisionSynthesis:
     hypothesis_qualification_reasons: Tuple[str, ...] = ()
     judgement_blocked: bool = False
     graph_trace_complete: bool = False
+    management_decision: Dict[str, object] = field(default_factory=dict)
     evidence_state: str = ""
     hypothesis_state: str = ""
     action_state: str = ""
@@ -552,6 +553,7 @@ class DecisionSynthesis:
             ),
             judgement_blocked=bool(payload.get("judgement_blocked") or payload.get("judgementBlocked")),
             graph_trace_complete=bool(payload.get("graph_trace_complete") or payload.get("graphTraceComplete")),
+            management_decision=dict(payload.get("management_decision") or payload.get("managementDecision") or {}),
             evidence_state=str(payload.get("evidence_state") or payload.get("evidenceState") or ""),
             hypothesis_state=str(payload.get("hypothesis_state") or payload.get("hypothesisState") or ""),
             action_state=str(payload.get("action_state") or payload.get("actionState") or ""),

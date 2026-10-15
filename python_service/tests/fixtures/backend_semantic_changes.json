@@ -70,5 +70,11 @@
     "optionalParameters": [
       "candidate_cursor"
     ]
+  },
+  "TypeDBOntologyGraphRepository.entity_row_from_typeql": {
+    "baselineHash": "269511ecb49af0424388de7922c5e43438771806a01d60f69e5008b33ba9ce14",
+    "bodyHash": "72d7da052b6c8ae1833f1a50776d569d3691c9730d7c1ee0667c1435d89cf50f",
+    "reason": "Carry optional authored management response metadata through native RuleBox JSON reads; absent metadata leaves legacy row contracts unchanged.",
+    "regressionTest": "test_rulebox_decision_brief.NativeManagementResponseTests.test_rulebox_storage_round_trip_and_materialized_response_bind_the_native_fact_basis"
   }
 }

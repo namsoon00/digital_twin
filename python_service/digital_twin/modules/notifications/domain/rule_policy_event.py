@@ -5,11 +5,19 @@ from digital_twin.modules.model_registry.contracts import rule_notification_inte
 from .rule_notification_event import VERSION, decision_state, fingerprint, rows
 
 
-def _signature(rule, actions, conditions):
-    return fingerprint({"ruleId": rule.get("id"), "actions": actions,
+def _signature(rule, actions, conditions, responses=()):
+    payload = {"ruleId": rule.get("id"), "actions": actions,
         "claim": (rule.get("claimContract") or {}).get("ruleFingerprint"),
         "criteria": [{k: c.get(k) for k in ("conditionId", "field", "operator", "expectedValue", "resolvedThreshold")}
-                     for c in conditions]})
+                     for c in conditions]}
+    if responses:
+        # A new policy response/target is meaningful. A fresh price or a new
+        # arithmetic quantity while the same objective applies is not a new
+        # management decision and must not cause repetitive pushes.
+        payload["managementResponses"] = [{k: r.get(k) for k in
+            ("version", "code", "authority", "objective", "targetValue", "calculation", "releaseCondition")}
+            for r in responses]
+    return fingerprint(payload)
 
 
 def policy_events(current, previous):
@@ -43,8 +51,10 @@ def policy_events(current, previous):
         elif not actions or not any((c.get("matchedByTypeDB") is True or c.get("matched") is True)
                                    and c.get("judgementEvidenceUsable") is not False for c in conditions):
             continue
-        signature = _signature(rule, actions, conditions)
-        if old_actions == actions and signature == _signature(old_rule, old_actions, rows(old_rule.get("conditions"))):
+        responses = [r for r in rows((brief.get("managementDecision") or {}).get("responses")) if r.get("ruleId") == rule_id]
+        old_responses = [r for r in rows((prior.get("managementDecision") or {}).get("responses")) if r.get("ruleId") == rule_id]
+        signature = _signature(rule, actions, conditions, responses)
+        if old_actions == actions and signature == _signature(old_rule, old_actions, rows(old_rule.get("conditions")), old_responses):
             continue
         key = fingerprint({**scope, "claimId": intent["claimContractId"], "purpose": intent["purpose"]})
         old_event = (previous.get("notificationIntentContinuity") or {}).get(key) or {}
@@ -58,6 +68,8 @@ def policy_events(current, previous):
             "hypothesis": {}, "sourceRuleIds": [rule_id], "conditions": deepcopy(conditions),
             "ruleLabel": rule.get("label") or intent["expectedOutcome"],
             "blockedActions": actions, "previousBlockedActions": old_actions,
+            **({"managementResponses": deepcopy(responses),
+                "managementResponseChanged": _signature({}, [], [], responses) != _signature({}, [], [], old_responses)} if responses else {}),
             "decisionImpact": {"status": "changed" if prior else "first-observation",
                                "previous": decision_state(previous), "current": decision_state(current)},
             "nextCheck": {"condition": intent["falsificationContract"], "conditions": deepcopy(conditions),

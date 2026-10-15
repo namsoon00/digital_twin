@@ -677,6 +677,8 @@ class GraphStoreOntologyRowMapperMixin:
                 "derivationStrengthenConditions": list_of_strings(derivation.get("strengthen_conditions") or derivation.get("strengthenConditions")),
                 "derivationWeakenConditions": list_of_strings(derivation.get("weaken_conditions") or derivation.get("weakenConditions")),
                 "derivationNextChecks": list_of_strings(derivation.get("next_checks") or derivation.get("nextChecks")),
+                **({"derivationManagementResponse": dict(derivation.get("management_response") or derivation.get("managementResponse") or {})}
+                   if (derivation.get("management_response") or derivation.get("managementResponse")) else {}),
                 "derivationNotificationCategory": str(derivation.get("notification_category") or derivation.get("notificationCategory") or ""),
                 "derivationNotificationSeverity": str(derivation.get("notification_severity") or derivation.get("notificationSeverity") or ""),
                 "propertiesJson": json.dumps(properties, ensure_ascii=False, sort_keys=True),

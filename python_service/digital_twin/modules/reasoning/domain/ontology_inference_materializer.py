@@ -327,6 +327,15 @@ def materialize_rule_inference(
         data_state,
     ))
     for index, derivation in enumerate(rule.derivations):
+        management_response = dict(derivation.management_response or {})
+        if management_response:
+            objective = management_response.get("objective") or {}
+            management_response["boundFacts"] = {
+                key: properties.get(key) for key in {
+                    objective.get("field"), objective.get("valueField"),
+                    "quantity", "sellableQuantity", "currentPrice", "currency",
+                } if key and properties.get(key) is not None
+            }
         target_key = fill_template(derivation.target_key, symbol, display_name, subject_key)
         target_label = fill_template(derivation.target_label, symbol, display_name, subject_key)
         target_id = entity_id(derivation.target_kind, target_key)
@@ -357,6 +366,7 @@ def materialize_rule_inference(
             "strengthenConditions": list(derivation.strengthen_conditions or []),
             "weakenConditions": list(derivation.weaken_conditions or []),
             "nextChecks": list(derivation.next_checks or []),
+            **({"managementResponse": management_response} if management_response else {}),
             "notificationCategory": derivation.notification_category,
             "notificationSeverity": derivation.notification_severity,
             "evidenceRole": evidence_role,
@@ -391,6 +401,7 @@ def materialize_rule_inference(
             "strengthenConditions": list(derivation.strengthen_conditions or []),
             "weakenConditions": list(derivation.weaken_conditions or []),
             "nextChecks": list(derivation.next_checks or []),
+            **({"managementResponse": management_response} if management_response else {}),
             "notificationCategory": derivation.notification_category,
             "notificationSeverity": derivation.notification_severity,
             "reviewLevel": derivation_review_level,

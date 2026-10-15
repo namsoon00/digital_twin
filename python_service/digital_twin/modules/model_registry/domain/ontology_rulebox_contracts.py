@@ -270,9 +270,15 @@ class GraphRuleDerivation:
     # code from reclassifying rule IDs or action groups in Python.
     notification_category: str = ""
     notification_severity: str = ""
+    # Non-predictive policy response. It is selected by the native rule match,
+    # never by a message renderer or by market-hypothesis qualification.
+    management_response: Dict[str, object] = dataclass_field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, object]:
-        return asdict(self)
+        payload = asdict(self)
+        if not self.management_response:
+            payload.pop("management_response", None)
+        return payload
 
     @staticmethod
     def from_dict(payload: Dict[str, object]):
@@ -308,6 +314,7 @@ class GraphRuleDerivation:
             next_checks=string_list(payload.get("next_checks") or payload.get("nextChecks")),
             notification_category=str(payload.get("notification_category") or payload.get("notificationCategory") or ""),
             notification_severity=str(payload.get("notification_severity") or payload.get("notificationSeverity") or ""),
+            management_response=dict(payload.get("management_response") or payload.get("managementResponse") or {}),
         )
 
 
@@ -412,6 +419,9 @@ class GraphInferenceRule:
         payload["domain_manifest"] = dict(self.resolved_domain_manifest)
         payload["conditionCount"] = len(self.conditions)
         payload["derivationCount"] = len(self.derivations)
+        for derivation in payload["derivations"]:
+            if not derivation.get("management_response"):
+                derivation.pop("management_response", None)
         return payload
 
     @staticmethod

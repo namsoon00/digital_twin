@@ -10,6 +10,7 @@ from digital_twin.modules.decisions.domain.decision_evidence_contract import hyp
 from digital_twin.modules.reasoning.contracts import GraphActionAuthorization
 from digital_twin.modules.decisions.domain.investment_brain import is_research_reviewable_hypothesis_payload
 from digital_twin.modules.decisions.domain.investment_reasoning.contracts import ActionAlternative, DataGap, DecisionSynthesis
+from digital_twin.modules.decisions.domain.investment_reasoning.management import management_decision_from_relation
 
 
 def _mapping(value: object) -> Dict[str, object]:
@@ -521,6 +522,7 @@ def decision_synthesis_from_relation_context(
         else "RESEARCH_ONLY"
     )
     return DecisionSynthesis(
+        management_decision=management_decision_from_relation(account_id, relation),
         synthesis_id=_stable_id(
             account_id,
             symbol,

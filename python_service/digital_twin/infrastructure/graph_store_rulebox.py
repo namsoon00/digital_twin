@@ -479,6 +479,8 @@ def derivation_payload_from_row(row: Dict[str, object]) -> Dict[str, object]:
         "strengthen_conditions": list_of_strings(row.get("strengthenConditions") or row.get("derivationStrengthenConditions") or derivation.get("strengthen_conditions") or derivation.get("strengthenConditions")),
         "weaken_conditions": list_of_strings(row.get("weakenConditions") or row.get("derivationWeakenConditions") or derivation.get("weaken_conditions") or derivation.get("weakenConditions")),
         "next_checks": list_of_strings(row.get("nextChecks") or row.get("derivationNextChecks") or derivation.get("next_checks") or derivation.get("nextChecks")),
+        **({"management_response": dict(derivation.get("management_response") or derivation.get("managementResponse") or row.get("derivationManagementResponse") or {})}
+           if (derivation.get("management_response") or derivation.get("managementResponse") or row.get("derivationManagementResponse")) else {}),
         "notification_category": str(row.get("notificationCategory") or row.get("derivationNotificationCategory") or derivation.get("notification_category") or derivation.get("notificationCategory") or ""),
         "notification_severity": str(row.get("notificationSeverity") or row.get("derivationNotificationSeverity") or derivation.get("notification_severity") or derivation.get("notificationSeverity") or ""),
     }

@@ -335,7 +335,9 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # legacy/paraphrased questions, and material-driven storage resumption.
         # Rule-authored notification purposes protect evidence polarity,
         # receipt novelty, policy-only changes and registered outcome replies.
-        self.assertLessEqual(total, 2340)
+        # Two policy-guidance regressions protect native weight denominators,
+        # excluded-vs-admitted candidates and the final transport heading.
+        self.assertLessEqual(total, 2342)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

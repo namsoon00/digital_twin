@@ -16,6 +16,10 @@ def event_conclusion(event):
         if event.get("policyState") == "released":
             released = "·".join(ACTION_LABELS[a] for a in event.get("previousBlockedActions", []) if a in ACTION_LABELS)
             return "앞서 " + released + "를 제한했던 관리 조건이 해제됐습니다. 매수·매도가 적절하다는 판단은 별도로 확인해야 합니다."
+        prior = ((event.get("decisionImpact") or {}).get("previous") or {}).get("blockedActions") or []
+        if actions and set(event.get("blockedActions") or []).issubset(prior):
+            return actions + " 제한은 계속 적용됩니다. 이번에는 이 제한의 관리 조건이 " + (
+                "추가로 확인됐습니다." if event.get("policyState") == "applied" else "변경됐습니다.")
         return "관리 기준에 따라 " + (actions + "를 제한하는 조건이 확인됐습니다." if actions else "현재 적용되는 제약을 다시 확인합니다.")
     topic, claim = hypothesis_words(event.get("hypothesis") or {})
     name = topic if topic != "관찰 가설" else claim
@@ -42,7 +46,7 @@ def event_conclusion(event):
     return "‘" + name + "’" + meanings.get(event.get("changeKind"), "의 근거를 다시 점검합니다.")
 
 
-def event_impact(event):
+def event_impact(event, brief=None):
     impact = event.get("decisionImpact") or {}
     state = impact.get("status")
     before, after = impact.get("previous") or {}, impact.get("current") or {}
@@ -57,9 +61,21 @@ def event_impact(event):
         if before.get("blockedActions") != after.get("blockedActions"):
             parts.append("관리 제한: " + actions(before, "blockedActions") + " → " + actions(after, "blockedActions"))
         if before.get("candidateActions") != after.get("candidateActions"):
-            parts.append("검토 후보: " + actions(before, "candidateActions") + " → " + actions(after, "candidateActions"))
-        if before.get("qualificationPending") != after.get("qualificationPending"):
+            removed = set(before.get("candidateActions") or []) - set(after.get("candidateActions") or [])
+            unavailable = {row.get("action") for row in (brief or {}).get("unavailableCandidates", [])}
+            if removed:
+                names = "·".join(ACTION_LABELS[a] for a in before.get("candidateActions", []) if a in removed and a in ACTION_LABELS)
+                parts.append("이전 ‘" + names + "’ 후보는 이번 판단에 사용할 수 없습니다. "
+                             + ("제외 이유는 대응 판단 설명에 표시했습니다." if removed.issubset(unavailable) else "제외 사유는 이번 기록에서 확인되지 않습니다.")
+                             + " 보유 유지로 바뀌었거나 위험이 해소됐다는 뜻은 아닙니다.")
+                if after.get("candidateActions"):
+                    parts.append("이번에 남은 검토 후보: " + actions(after, "candidateActions"))
+            else:
+                parts.append("검토 후보: " + actions(before, "candidateActions") + " → " + actions(after, "candidateActions"))
+        if after.get("candidateActions") and before.get("qualificationPending") != after.get("qualificationPending"):
             parts.append("후보 가설의 검증 상태가 달라져 사용 가능 범위를 다시 확인합니다.")
+        if not parts and after.get("blockedActions"):
+            parts.append("관리 제한은 계속 적용됩니다. 이번에는 제한을 뒷받침하는 규칙 조건이 바뀌었습니다.")
         return " · ".join(parts)
     if after.get("blockedActions"):
         return "현재 관리 제한: " + actions(after, "blockedActions") + ". 이전에 전달한 적용 상태와의 비교는 미확인입니다."
@@ -99,9 +115,9 @@ def tracking_rows(events):
     return list(dict.fromkeys(result))
 
 
-def customer_event_summary(events):
+def customer_event_summary(events, brief=None):
     conclusions = list(dict.fromkeys(event_conclusion(e) for e in events))
-    impacts = list(dict.fromkeys(event_impact(e) for e in events))
+    impacts = list(dict.fromkeys(event_impact(e, brief) for e in events))
     purposes = list(dict.fromkeys(PURPOSE_LABELS.get(e.get("purpose"), "근거 변화 확인") for e in events))
     return {"title": " · ".join(purposes[:2]), "lead": " ".join(conclusions[:2]),
             "sections": [("notification-purpose", "이번 알림의 목적", conclusions),

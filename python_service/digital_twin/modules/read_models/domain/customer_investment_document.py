@@ -763,6 +763,12 @@ def customer_investment_document_quality(
         # together. Market measurements and source notes are grouped too.
         required = (("hypotheses", "investor-flow", "next-update") if "trading" in section_keys else
                     ("change", "hypotheses", "rules", "investor-flow", "market-activity", "execution-flow", "provenance", "limitations"))
+        if "policy-context" in section_keys:
+            # A management restriction is not a market hypothesis. Its own
+            # purpose, observed rule conditions, consequence and recheck are
+            # required instead of forcing unrelated forecasts into the alert.
+            required = ("notification-purpose", "decision-impact", "delivery-cause",
+                        "next-check-contract", "investor-flow", "next-update")
         for key in required:
             if key not in section_keys:
                 issues.append("missing-observation-" + key)

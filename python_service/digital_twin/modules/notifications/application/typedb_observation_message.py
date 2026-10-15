@@ -927,6 +927,7 @@ def typedb_observation_telegram_message(
     relation_packet = _mapping(context.get("relationChangeEvidence"))
     relation_sections = None
     compact_follow_up = False
+    policy_notice = False
     if relation_packet.get("version") == "relation-change-evidence-v1":
         from digital_twin.modules.notifications.domain.relation_change import relation_change_summary
         from digital_twin.modules.notifications.domain.relation_change_presentation import PRESENTATION_VERSION
@@ -936,6 +937,7 @@ def typedb_observation_telegram_message(
             headline = "🔗 " + summary["title"] + (" · " + target_name if target_name else "")
         compact_follow_up = bool(summary.get("compactFollowUp"))
         relation_sections = list(summary["sections"])
+        policy_notice = any(key == "policy-context" for key, _, _ in relation_sections)
         if not summary.get("compactFollowUp"):
             relation_sections.insert(-1, ("financial-evidence", "재무 참고 · 보고 기간 기준", financial_evidence_rows(context, include_context=True)))
             relation_sections.insert(-1, ("tracking", "자동으로 확인 중인 조건", follow_up_rows))
@@ -950,7 +952,7 @@ def typedb_observation_telegram_message(
         role="typedb-observation",
         headline=headline,
         target=target,
-        role_label="앞선 알림의 근거를 계속 확인할 수 있는지 안내합니다." if kind.key == "data-status" else "가설과 규칙, 실제 측정값을 함께 확인하는 관계 변화 알림입니다." if relation_sections else "관계 분석 결과 · 관계가 바뀌었는지와 기존 근거가 유지됐는지를 구분해 보여드립니다.",
+        role_label="앞선 알림의 근거를 계속 확인할 수 있는지 안내합니다." if kind.key == "data-status" else "관리 기준의 적용 변화와 필요한 대응 점검을 안내합니다." if policy_notice else "가설과 규칙, 실제 측정값을 함께 확인하는 관계 변화 알림입니다." if relation_sections else "관계 분석 결과 · 관계가 바뀌었는지와 기존 근거가 유지됐는지를 구분해 보여드립니다.",
         lead=lead,
         sections=tuple(
             CustomerInvestmentSection(key, title, tuple(rows))

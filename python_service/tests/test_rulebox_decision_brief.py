@@ -80,6 +80,22 @@ class RuleBoxDecisionBriefTests(unittest.TestCase):
         self.assertEqual(["TRIM", "HOLD"], brief["candidateActions"])
         self.assertTrue(brief["comparisonRequired"])
 
+    def test_excluding_one_rule_does_not_remove_another_rules_valid_candidate(self):
+        context = fixture()
+        relation = context["ontologyRelationContext"]
+        relation["matchedRules"].append({**deepcopy(relation["matchedRules"][1]), "rule_id": "rule:stale"})
+        relation["actionEnvelope"]["inferenceEligibilityAssessments"].append({
+            "ruleId": "rule:stale", "status": "reference-only", "freshnessStatus": "stale",
+            "evidenceUsableForJudgement": False})
+        relation["hypothesisSet"]["hypotheses"][0]["supportingRuleIds"].append("rule:stale")
+        brief = rulebox_decision_brief(context)
+        self.assertEqual(["TRIM"], brief["candidateActions"])
+        self.assertEqual(["rule:stale"], [r["ruleId"] for r in brief["unavailableCandidates"]])
+        text = message(context)
+        self.assertIn("일부 축소 후보의 일부 근거 제외", text)
+        self.assertIn("일부 축소 검토 보류", text)
+        self.assertNotIn("일부 축소 판단에 사용하지 못한 이유", text)
+
     def test_scope_or_generation_mismatch_cannot_explain_another_decision(self):
         for where, key, value in (("context", "accountId", "other"), ("relation", "accountId", "other"),
                                   ("relation", "inferenceGenerationId", "other"), ("relation", "sourceAboxSnapshotId", "other"),
@@ -139,12 +155,13 @@ class RuleBoxDecisionBriefTests(unittest.TestCase):
         context = fixture()
         text = message(context)
         for value in ("현재 판단", "관리 원칙: 추가매수 제한", "일부 축소 검토 보류", "손실 관리 기준 -15%",
-                      "기준보다 손실 3%p", "이전 알림에서도", "손실이 2%p 확대", "설정 상한 45%", "상한 이내",
+                      "기준보다 손실 3%p", "이전 알림에서도", "손실이 2%p 확대",
                       "-15% 초과", "8,500원", "운영 검증 미충족", "반등 확인이나 추가매수 허용을 뜻하지"):
             self.assertIn(value, text)
         for value in ("세부값 미기록 이하", "AI 가설 비교 필요", "확률 100%", "매도를 권장합니다"):
             self.assertNotIn(value, text)
         self.assertEqual("passed", context["customerInvestmentDocumentQuality"]["status"])
+        self.assertNotIn("설정 상한 45%", text, "a settings value alone is not proof of which denominator a rule compared")
 
     def test_missing_policy_is_explicit_and_changed_policy_is_not_a_price_transition(self):
         context = fixture()
@@ -236,6 +253,85 @@ class RuleBoxDecisionBriefTests(unittest.TestCase):
         self.assertNotIn("직전 분석 미보존 → 이번 1", text)
         self.assertIn("손실이 2%p 확대", text)
         self.assertEqual("passed", context["customerInvestmentDocumentQuality"]["status"])
+
+    def test_policy_notice_explains_excluded_actions_and_uses_the_native_weight_denominator(self):
+        from dataclasses import replace
+        from test_investment_insight_dispatch_service import frozen_notification_claim
+        from digital_twin.modules.read_models.contracts import customer_investment_document_from_dict, customer_investment_document_quality
+        context = fixture()
+        relation = context["ontologyRelationContext"]
+        original_case = deepcopy(context["investmentSubjectDecisionCase"])
+        relation["hypothesisLifecycle"]["transitions"] = []
+        relation["facts"].update(positionAccountWeight=78, positionWeight=96, accountNumber="private-account-number")
+        policy = relation["matchedRules"][0]
+        policy.update(claimContract=frozen_notification_claim("rule:policy", "risk-invariant"),
+                      nextChecks=["회복 가격대와 보유 비중 한도를 함께 확인"])
+        relation["graphStoreInference"]["traces"][-1]["matchedConditions"][0].update(expectedValue=0, operator="<")
+        concentration = {**deepcopy(policy), "rule_id": "rule:concentration", "label": "비중 한도 초과",
+                         "claimContract": frozen_notification_claim("rule:concentration", "risk-invariant"),
+                         "nextChecks": ["한도 초과 비중, 줄일 경우의 수량과 현금 비중, 세금·거래비용을 함께 확인"]}
+        relation["matchedRules"].append(concentration)
+        relation["graphStoreInference"]["traces"].append({"ruleId": "rule:concentration", "matchedConditions": [{
+            "conditionId": "position-over-policy", "field": "positionAccountWeight", "operator": ">", "observedValue": 78,
+            "expectedValue": {"field": "strategyMaxPositionWeightPct", "default": 30},
+            "matchedByTypeDB": True, "judgementEvidenceUsable": True, "freshnessStatus": "fresh"}]})
+        relation["actionEnvelope"]["inferenceEligibilityAssessments"].append({
+            "ruleId": "rule:concentration", "status": "eligible", "evidenceUsableForJudgement": True, "freshnessStatus": "fresh"})
+        relation["actionEnvelope"]["inferenceEligibilityAssessments"][1].update(
+            status="reference-only", evidenceUsableForJudgement=False, freshnessStatus="stale")
+        context["investmentSubjectDecisionCase"].update(allowedActions=[], eligibleHypothesisIds=[],
+                                                      dispositionCode="HYPOTHESIS_RESEARCH_ONLY")
+        first = relation["hypothesisSet"]["hypotheses"][0]
+        first.update(expectedOutcome="반등이 유지되지 못하고 이전 위험 경로로 복귀", evidenceState="blocked",
+                     qualification={"status": "observed", "decisiveOutcomeCount": 6,
+                                    "policy": {"activeFloor": 12}})
+        for identity, outcome in (("h2", "현재 추세가 약화되거나 반대 방향으로 전환"),
+                                  ("h3", "거시·연관자산 충격이 종목 위험으로 전이")):
+            relation["hypothesisSet"]["hypotheses"].append({**deepcopy(first), "hypothesisId": identity, "expectedOutcome": outcome})
+        source = deepcopy(relation)
+        text = message(context)
+        packet = context["relationChangeEvidence"]
+        brief = packet["current"]["decisionBrief"]
+        self.assertEqual(["TRIM"], [r["action"] for r in brief["unavailableCandidates"]])
+        self.assertEqual([], brief["candidateActions"])
+        self.assertEqual(["ADD"], brief["blockedActions"])
+        self.assertFalse(brief["finalActionSelected"])
+        for value in ("추가매수 제한은 계속 적용", "이전 ‘일부 축소’ 후보는 이번 판단에 사용할 수 없습니다",
+                      "원천 자료가 허용 시간을 넘었습니다", "운영 검증 미충족", "6건 / 운영 기준 12건 이상",
+                      "계좌 전체 대비 비중 78% / 설정 상한 45%", "상한보다 33%p 높음", "보유 종목 평가액 내 비중 96%",
+                      "줄일 경우의 수량과 현금 비중", "평가 수익률 0% 이상", "비중 45% 이하"):
+            self.assertIn(value, text)
+        for value in ("검토 후보: 일부 축소 → 없음", "살펴볼 가설", "구간 고점", "계좌 비중 96%", "private-account-number"):
+            self.assertNotIn(value, text)
+        self.assertEqual(3, len(packet["current"]["hypotheses"]), "full audit claims remain frozen")
+        self.assertEqual(source, relation)
+        self.assertEqual(original_case["executionEligibleHypothesisIds"], context["investmentSubjectDecisionCase"]["executionEligibleHypothesisIds"])
+        self.assertEqual("passed", context["customerInvestmentDocumentQuality"]["status"])
+        doc = customer_investment_document_from_dict(context["customerInvestmentDocument"])
+        self.assertLess(text.index("지금 적용할 대응"), text.index("현재 전체 데이터"))
+        for key in ("notification-purpose", "decision-impact", "delivery-cause", "next-check-contract"):
+            broken = replace(doc, sections=tuple(s for s in doc.sections if s.key != key))
+            self.assertIn("missing-observation-" + key, customer_investment_document_quality(broken)["issues"])
+        from digital_twin.modules.notifications.application.notification.rendering import NotificationRenderingService
+        from digital_twin.modules.notifications.domain.notifications import NotificationJob
+        from digital_twin.modules.notifications.domain.notification_templates import NotificationTemplate, render_notification
+        from digital_twin.modules.notifications.domain.notification.presentation import presentation_metadata
+        job = NotificationJob.create("preview", message_type="investmentInsight", context=deepcopy(context))
+        renderer = NotificationRenderingService(template_renderer=lambda j: render_notification(NotificationTemplate.default("investmentInsight"), j.context))
+        delivered = renderer.render(job)
+        self.assertTrue(delivered.startswith("<b>🔗 관리 기준 점검"), "the final template must keep the admitted policy purpose")
+        self.assertEqual("relation-change", presentation_metadata(job.message_type, job.context)["kind"], "label changes cannot reroute transport")
+        self.assertNotIn("살펴볼 가설", delivered)
+        self.assertIn("계좌 전체 대비 비중은 78%", delivered)
+        self.assertEqual("passed", job.context["customerInvestmentDocumentQuality"]["status"])
+        job.context["transportDelivery"] = {"message": delivered, "relationChangeEvidence": deepcopy(packet)}
+        self.assertEqual(delivered, renderer.render(job), "a partial retry must preserve the exact frozen body")
+        # Missing total-account data must never borrow the holdings-only weight.
+        relation["facts"].pop("positionAccountWeight")
+        relation["graphStoreInference"]["traces"][-1]["matchedConditions"][0]["observedValue"] = None
+        missing = message(context)
+        self.assertNotIn("계좌 전체 대비 비중 96%", missing)
+        self.assertIn("실제 비교값 또는 기준이 보존되지", missing)
 
 
 if __name__ == "__main__":

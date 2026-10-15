@@ -49,7 +49,7 @@ def _previous_condition(previous, rule, condition):
 def qualification_rows(current, brief):
     """Describe stored qualification; never promote a candidate in a renderer."""
     by_id = {h.get("id"): h for h in current.get("hypotheses", [])}
-    pending = {h.get("id"): h for row in brief.get("candidates", [])
+    pending = {h.get("id"): h for row in [*brief.get("candidates", []), *brief.get("unavailableCandidates", [])]
                for h in row.get("hypotheses", []) if not h.get("executionEligible")}
     result = []
     for identity, captured in list(pending.items())[:3]:
@@ -89,6 +89,33 @@ def qualification_rows(current, brief):
     return result
 
 
+def unavailable_candidate_rows(brief):
+    """Explain recorded exclusions without treating them as a change of view."""
+    grouped = {}
+    for row in brief.get("unavailableCandidates", []):
+        action = LABELS.get(row.get("action"))
+        if not action:
+            continue
+        codes = row.get("exclusionReasons") or []
+        eligibility = row.get("eligibility") or {}
+        reasons = []
+        if "unusable-rule-evidence" in codes:
+            reasons.append("관련 규칙의 원천 자료가 허용 시간을 넘었습니다."
+                           if eligibility.get("freshnessStatus") in {"stale", "expired"}
+                           else eligibility.get("reason") or "이번 기록에서 규칙 근거의 사용 가능 여부를 확인하지 못했습니다.")
+        if "blocked-action" in codes:
+            reasons.append("현재 관리 규칙이 이 행동을 제한합니다.")
+        if "no-eligible-linked-hypothesis" in codes:
+            reasons.append("판단에 사용할 수 있는 근거 가설이 연결되지 않았습니다.")
+        if not reasons:
+            reasons.append("규칙이 참고용으로 분류됐습니다." if "reference-only-rule" in codes
+                           else "이번 판단에서 허용된 대응 범위에 포함되지 않습니다.")
+        grouped.setdefault(action, []).extend(reasons)
+    admitted = {LABELS[a] for a in brief.get("candidateActions", []) if a in LABELS}
+    return [action + (" 후보의 일부 근거 제외: " if action in admitted else " 판단에 사용하지 못한 이유: ") + " ".join(_unique(reasons))
+            for action, reasons in grouped.items()]
+
+
 def decision_brief_presentation(packet):
     current, previous = packet.get("current") or {}, packet.get("previous") or {}
     brief = current.get("decisionBrief") or {}
@@ -97,6 +124,8 @@ def decision_brief_presentation(packet):
     if any(brief.get(k) != current.get(k) for k in ("accountId", "symbol", "worldId", "inferenceGenerationId", "sourceAboxSnapshotId")):
         return {}
     facts, old = snapshot_facts(current), snapshot_facts(previous)
+    held = facts.get("isHolding") is True or (numeric(facts.get("quantity")) or 0) > 0
+    choice = "보유 유지·축소" if held else "매수·매도"
     blocked = [LABELS[a] for a in brief.get("blockedActions", []) if a in LABELS]
     candidates = [LABELS[a] for a in brief.get("candidateActions", []) if a in LABELS]
     lead = []
@@ -106,7 +135,7 @@ def decision_brief_presentation(packet):
         lead.append("대응 판단: " + "·".join(candidates) + " 검토 보류."
                     if brief.get("qualificationPending") else "대응 후보: " + "·".join(candidates) + " · 최종 선택 전.")
     else:
-        lead.append("대응 판단: 확인된 매매 의견 없음.")
+        lead.append(choice + " 중 어느 쪽이 나은지는 이번 규칙 결과로 결정하지 못했습니다.")
     basis, rechecks = [], []
     seen = set()
     for rule, condition in _conditions(current, brief):
@@ -114,17 +143,35 @@ def decision_brief_presentation(packet):
         resolved = threshold(condition, facts)
         value, actual = numeric(resolved.get("value")), numeric(condition.get("observedValue"))
         operator = condition.get("operator")
-        if field != "profitLossRate" or (field, value, operator) in seen:
+        if field not in {"profitLossRate", "positionAccountWeight", "positionWeight"} or (field, value, operator) in seen:
             continue
         seen.add((field, value, operator))
+        if field in {"positionAccountWeight", "positionWeight"}:
+            label = "계좌 전체 대비 비중" if field == "positionAccountWeight" else "보유 종목 평가액 내 비중"
+            if actual is None or value is None or operator not in {">", ">="}:
+                basis.append(label + " 제한은 확인됐지만 실제 비교값 또는 기준이 보존되지 않았습니다.")
+                continue
+            basis.append(label + " " + decimal(actual) + "% / 설정 상한 " + decimal(value) + "%"
+                         + (" · 상한보다 " + decimal(actual - value) + "%p 높음" if actual > value else " · 규칙의 제한 조건 충족"))
+            if actual > value:
+                lead.insert(1, label + "은 " + decimal(actual) + "%로 설정 상한 " + decimal(value)
+                            + "%보다 " + decimal(actual - value) + "%p 높습니다.")
+            rechecks.append("비중 제한 조건 해소: " + label + " " + decimal(value)
+                            + ("% 이하" if operator == ">" else "% 미만")
+                            + ". 비중 조건만의 경계이며, 다른 추가매수 제한의 해제까지 뜻하지 않습니다.")
+            continue
         if value is None:
             basis.append("손실 조건은 확인됐지만 실제 적용 기준값이 보존되지 않아, 기준과의 차이는 표시하지 않습니다.")
             continue
-        if actual is None or value >= 0 or operator not in {"<=", "<"}:
+        if actual is None or value > 0 or operator not in {"<=", "<"}:
             continue
-        basis.append("손실 관리 기준 " + decimal(value, signed=True) + "% · 현재 평가 수익률 "
-                     + decimal(actual, signed=True) + "%"
-                     + (" · 기준보다 손실 " + decimal(value - actual) + "%p 큼" if actual < value else ""))
+        if value == 0:
+            basis.append("규칙의 손익 조건: 평가 수익률 0% " + ("미만" if operator == "<" else "이하")
+                         + " · 현재 " + decimal(actual, signed=True) + "%")
+        else:
+            basis.append("손실 관리 기준 " + decimal(value, signed=True) + "% · 현재 평가 수익률 "
+                         + decimal(actual, signed=True) + "%"
+                         + (" · 기준보다 손실 " + decimal(value - actual) + "%p 큼" if actual < value else ""))
         prior = numeric(old.get(field))
         old_condition = _previous_condition(previous, rule, condition)
         old_resolved = threshold(old_condition, old)
@@ -139,7 +186,7 @@ def decision_brief_presentation(packet):
                             if delta else "이번 평가 수익률은 같습니다."))
         elif old_condition and numeric(old_resolved.get("value")) is not None and not same_threshold:
             basis.append("손실 기준 또는 비교 방식이 이전 알림과 달라, 기준 이탈의 지속 여부는 비교하지 않습니다.")
-        recheck = "손실 기준 초과 해소: 평가 수익률 " + decimal(value, signed=True) + ("% 초과" if operator == "<=" else "% 이상") + "."
+        recheck = ("손익 조건 해소: 평가 수익률 " if value == 0 else "손실 기준 초과 해소: 평가 수익률 ") + decimal(value, signed=True) + ("% 초과" if operator == "<=" else "% 이상") + "."
         average, price = numeric(facts.get("averagePrice")), numeric(facts.get("currentPrice"))
         # Only translate a threshold into price when the captured P/L is
         # demonstrably on that price/cost basis. FX/account-adjusted returns
@@ -149,21 +196,30 @@ def decision_brief_presentation(packet):
             currency = facts.get("currency") or ("USD" if current.get("market") == "US" else "KRW")
             recheck += " 현재 평균매입가로 환산한 손실 기준 경계는 약 " + price_money(average * (1 + value / 100), currency) + "."
         rechecks.append(recheck + " 손실 기준만의 경계이며, 반등 확인이나 추가매수 허용을 뜻하지 않습니다.")
-    weight, cap = numeric(facts.get("positionWeight")), numeric(facts.get("strategyMaxPositionWeightPct"))
-    if weight is not None and cap is not None and cap > 0 and (numeric(facts.get("quantity")) or 0) > 0:
-        basis.append("계좌 비중 " + decimal(weight) + "% / 설정 상한 " + decimal(cap)
-                     + "% · " + ("상한 이내" if weight <= cap else "상한 초과") + " (손실 기준과 별도)")
-    reasons = []
+    guidance = []
+    if blocked:
+        guidance.append("현재 관리 기준상 " + "·".join(blocked) + " 제한을 적용합니다.")
+    for entry in brief.get("restrictions", []):
+        guidance.extend("관리 규칙이 요청한 점검: " + value + "." for value in entry.get("nextChecks", []))
+    reasons = unavailable_candidate_rows(brief)
     if brief.get("qualificationPending"):
         reasons.append("·".join(candidates) + "는 규칙이 제시한 후보입니다. 근거 가설의 검증이 끝나지 않아 매매 의견으로 확정하지 않았습니다.")
-        reasons.extend(qualification_rows(current, brief))
-        reasons.append("판단을 다시 확인할 조건: 가설의 운영 검증 기준 충족 여부와 그때의 지지·반대 근거. 결과 건수만 채워도 매매가 확정되는 것은 아닙니다.")
+    qualification = qualification_rows(current, brief)
+    reasons.extend(qualification)
+    if qualification:
+        rechecks.append("대응 판단을 다시 확인할 조건: 규칙에 필요한 최신 원천 자료와 가설별 운영 검증 기준을 모두 확인해야 합니다. 시세 갱신이나 결과 건수 충족만으로 매매 판단이 확정되지는 않습니다.")
     if brief.get("comparisonRequired"):
         reasons.append("서로 다른 대응을 뒷받침하는 근거가 함께 있어 대안 비교가 남아 있습니다.")
     if not reasons:
-        reasons.append("현재 근거와 반대 근거의 비교 결과가 필요합니다. 매매 시점·수량을 확정한 판단은 아직 없습니다.")
+        reasons.append("규칙이 제시한 후보의 최종 선택과 매매 시점·수량은 아직 확정되지 않았습니다."
+                       if candidates else "이번 기록에는 " + choice + "를 선택할 수 있는 대응 후보가 없습니다.")
+    if not candidates:
+        guidance.append(choice + " 결정은 미확정입니다. 관리 조건의 제한이 보유 유지 권고나 즉시 매도 지시를 뜻하지는 않습니다.")
+    elif not guidance:
+        guidance.append("규칙이 제시한 대응 후보: " + "·".join(candidates) + ". 아래 검증 상태와 남은 조건을 확인합니다.")
     return {"lead": " ".join(lead), "sections": [
+        ("decision-guidance", "지금 적용할 대응과 점검", _unique(guidance)),
         ("decision-basis", "내 관리 기준과 비교", _unique(basis)),
-        ("decision-review", "대응 판단과 남은 조건", _unique(reasons)),
+        ("decision-review", "대응 판단과 남은 조건" if candidates else ("유지·축소" if held else "매매 여부") + "를 결정하지 못한 이유", _unique(reasons)),
         ("decision-recheck", "관리 기준을 다시 볼 조건", _unique(rechecks)),
     ]}

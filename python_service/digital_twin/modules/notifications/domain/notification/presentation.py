@@ -133,6 +133,14 @@ def notification_kind(message_type: str, context: Mapping = None) -> Notificatio
         if changes and all(mapping(row).get("changeCategory") == "data-availability" for row in changes):
             from digital_twin.modules.notifications.domain.relation_follow_up_presentation import data_follow_up_label
             return NotificationKind("data-status", data_follow_up_label(changes), "↪")
+        events = packet.get("customerEvents") or []
+        if (mapping(packet.get("current")).get("proofIdentityVerified") and events
+                and all(mapping(row).get("eligible") is True and mapping(row).get("purpose")
+                        in {"management-policy", "execution-constraint"} for row in events)):
+            # Keep the existing queue/transport kind while retaining the
+            # admitted event's purpose through the final heading decorator.
+            label = "관리 기준 점검" if any(row.get("purpose") == "management-policy" for row in events) else "거래 제약 확인"
+            return NotificationKind("relation-change", label, "🔗")
         rules = mapping(context_value(values, "ontologyRelationContext"))
         if not rules and not mode and requested != "relation-change":
             return NOTIFICATION_KINDS["notice"]

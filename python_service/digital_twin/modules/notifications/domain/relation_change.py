@@ -16,6 +16,7 @@ VERSION = "relation-change-evidence-v1"
 STATE_LABELS = {"observed": "새로 성립", "maintained": "유지", "strengthened": "강화",
                 "weakened": "약화", "invalidated": "반증·해소", "expired": "근거 만료"}
 FACT_LABELS = {"currentPrice": "현재가", "profitLossRate": "수익률(%)", "tradeStrength": "체결강도",
+               "positionAccountWeight": "계좌 전체 대비 비중(%)", "positionWeight": "보유 종목 평가액 내 비중(%)",
                "volumeRatio": "거래량 비율", "timeAdjustedVolumeRatio": "시간 보정 거래량 비율",
                "ma20Distance": "20일선 이격(%)", "ma60Distance": "60일선 이격(%)",
                "bidAskImbalance": "호가 불균형(%)"}
@@ -148,7 +149,11 @@ def relation_change_snapshot(context):
     for key, value in facts.items():
         # Structured/vendor payloads are not an ABox fact table. Never copy
         # secrets or opaque raw responses into a customer explanation.
-        if any(part in key.lower() for part in ("token", "secret", "password", "credential", "account", "apikey", "api_key", "authorization", "rawresponse")):
+        # This named numeric investment fact is not an account credential.
+        # Losing it made readers substitute invested-only positionWeight for
+        # the total-account denominator used by the native concentration rule.
+        public_account_weight = key == "positionAccountWeight" and type(value) in (int, float)
+        if not public_account_weight and any(part in key.lower() for part in ("token", "secret", "password", "credential", "account", "apikey", "api_key", "authorization", "rawresponse")):
             continue
         if value is None or not isinstance(value, (str, int, float, bool)):
             continue

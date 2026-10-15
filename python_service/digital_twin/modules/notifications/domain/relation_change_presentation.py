@@ -9,7 +9,7 @@ from digital_twin.modules.notifications.domain.relation_observation_proof import
 from digital_twin.modules.notifications.domain.rulebox_decision_presentation import decision_brief_presentation, threshold
 
 
-PRESENTATION_VERSION = "readable-relation-change-v11"
+PRESENTATION_VERSION = "readable-relation-change-v12"
 
 CHANGE = {
     "observed": "조건이 새로 확인됐습니다.",
@@ -22,6 +22,7 @@ CHANGE = {
 FIELDS = {
     "currentPrice": ("가격", "price"), "priceChangeRate": ("전일 대비", "%"),
     "profitLossRate": ("평가 수익률", "%"), "ma5Distance": ("5일 평균 가격 대비", "%"),
+    "positionAccountWeight": ("계좌 전체 대비 비중", "%"), "positionWeight": ("보유 종목 평가액 내 비중", "%"),
     "ma20Distance": ("20일 평균 가격 대비", "%"), "ma60Distance": ("60일 평균 가격 대비", "%"),
     "tradeStrength": ("체결강도", ""), "volumeRatio": ("거래량 비율", "배"),
     "timeAdjustedVolumeRatio": ("시간 보정 거래량", "배"),
@@ -79,6 +80,8 @@ def rule_conditions(rule, facts, currency):
         field, actual = condition.get("field"), condition.get("observedValue")
         if field == "source" and actual == "holding":
             result.append("보유 종목 조건 확인")
+        elif isinstance(actual, dict) and actual.get("avoidAveragingDown") is True:
+            result.append("종목 관리 설정: 손실 상태의 추가매수 제한 사용")
         elif condition.get("modelSignalMatched"):
             result.append("분석 신호 조건 확인")
         elif field in FIELDS and not isinstance(actual, (dict, list)):
@@ -435,8 +438,9 @@ def readable_relation_change(packet):
     lead = " ".join(part for part in (" ".join(changes[:3]) or "새로운 근거 변화 없이 현재 기록을 확인합니다.", market_sentence(current, currency)) if part)
     decision = decision_brief_presentation(packet)
     from .rule_event_presentation import customer_event_summary
-    event_summary = customer_event_summary(packet.get("customerEvents") or []) if packet.get("customerEvents") else {}
     events = packet.get("customerEvents") or []
+    event_summary = customer_event_summary(events, current.get("decisionBrief")) if events else {}
+    policy_only = bool(events) and all(e.get("purpose") in {"management-policy", "execution-constraint"} for e in events)
     if events and all(e.get("outcome") for e in events):
         parent = (packet.get("followUp") or {}).get("parentJobId") or ""
         result_rows = []
@@ -458,7 +462,9 @@ def readable_relation_change(packet):
             causes = causes[1:]
     if event_summary:
         lead = event_summary["lead"] + " " + market_sentence(current, currency)
-        if decision.get("lead"):
+        if policy_only and decision.get("lead"):
+            lead = decision["lead"] + " " + market_sentence(current, currency)
+        elif decision.get("lead"):
             event_summary["sections"][1][2].append(decision["lead"])
         # The lead owns the claim's meaning; every changed rule stays in the
         # numeric evidence section, including counter-evidence and endings.
@@ -475,14 +481,20 @@ def readable_relation_change(packet):
     displayed = sorted(hypotheses, key=lambda h: h.get("id") not in changed_ids)
     if changed_ids:
         displayed = [h for h in displayed if h.get("id") in changed_ids]
+    if policy_only:
+        displayed = []
     stories = hypothesis_sections(displayed, rules, facts, currency, current)
-    if not stories:
+    if policy_only:
+        stories = [("policy-context", "가설과 매매 판단의 범위", [
+            "이번 알림은 관리 조건의 변화입니다. 가설 " + str(len(hypotheses))
+            + "개의 기간별 분석은 상세 근거에 보존했습니다. 보유 유지·축소 의견을 확정한 알림은 아닙니다."])]
+    if not stories and not policy_only:
         stories = [("hypotheses", "이번에 확인한 내용", ["연결된 가설 설명이 기록되지 않았습니다.",
                     *[str(rule.get("label") or "규칙") + " — " + " · ".join(rule_conditions(rule, facts, currency)) for rule in rules[:3]]])]
     notes = []
     if not packet.get("baselineAvailable"):
         notes.append("이전 알림의 측정값이 없어 전후 비교는 미제공")
-    if len(hypotheses) > 3:
+    if not policy_only and len(hypotheses) > 3:
         notes.append("추가 가설 " + str(len(hypotheses) - 3) + "개는 상세 근거에서 확인")
     if current.get("evidenceComparisonPartial"):
         notes.append("일부 근거의 의미를 연결하지 못해 전후 비교가 제한됩니다. 해당 근거의 개수는 강화·약화 판정에 사용하지 않았습니다.")
@@ -495,9 +507,10 @@ def readable_relation_change(packet):
     parent = (packet.get("followUp") or {}).get("parentJobId")
     return {"lead": lead, "title": event_summary.get("title"), "sections": [
         *(([("previous-alert", "이전 알림의 후속 변화", ["원본 알림 N-" + parent[:8].upper()])]) if parent else []),
+        *(decision.get("sections", []) if policy_only else []),
         *event_summary.get("sections", []),
         ("delivery-cause", "이번에 달라진 근거 · 규칙 데이터", causes),
-        *decision.get("sections", []),
+        *([] if policy_only else decision.get("sections", [])),
         *stories,
         ("holding", "내 보유 상황 · 시세 등락과 구분", [" · ".join(market["holding"][1])] if market["holding"][1] else []),
         ("current-price", "현재 전체 데이터 · 시세와 가격 흐름", quote),

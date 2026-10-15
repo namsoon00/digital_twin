@@ -92,14 +92,16 @@ def rulebox_decision_brief(context):
     eligibility = {r.get("ruleId"): r for r in rows(envelope.get("inferenceEligibilityAssessments"))}
     allowed = set(strings(case.get("allowedActions")))
     blocked = set(strings(case.get("blockedActions"))) & set(strings(envelope.get("blockedActions"))) & ACTIONS
-    candidates, restrictions, checks = [], [], []
+    hypotheses = rows(mapping(relation.get("hypothesisSet")).get("hypotheses"))
+    if not hypotheses:
+        hypotheses = rows(mapping(mapping(relation.get("investmentBrain")).get("hypothesisSet")).get("hypotheses"))
+    eligible_hypotheses = set(strings(case.get("eligibleHypothesisIds")))
+    execution_hypotheses = set(strings(case.get("executionEligibleHypothesisIds")))
+    candidates, restrictions, checks, unavailable = [], [], [], []
     for item in rows(relation.get("matchedRules")):
         rule_id = item.get("ruleId") or item.get("rule_id")
         eligible = eligibility.get(rule_id, {})
-        if (eligible.get("status") != "eligible" or eligible.get("evidenceUsableForJudgement") is not True
-                or eligible.get("freshnessStatus") != "fresh" or item.get("matched") is False
-                or item.get("referenceOnly") or item.get("reference_only")
-                or mapping(item.get("knowledgeBasis")).get("decisionEligibility") == "reference-only"):
+        if not rule_id or item.get("matched") is False:
             continue
         effect = item.get("decisionEffect") or item.get("decision_effect")
         kind = item.get("relationType") or item.get("relation_type") or item.get("type")
@@ -111,6 +113,28 @@ def rulebox_decision_brief(context):
                  "invalidationContract": deepcopy(mapping(item.get("ruleInvalidationContract"))),
                  "nextChecks": strings(item.get("nextChecks")),
                  "invalidationConditions": strings(item.get("weakenConditions"))}
+        predictive_action = (entry["ruleKind"] in {"predictive-hypothesis", "predictive"}
+                             and action in ACTIONS and effect in {"support", "constrain"}
+                             and kind != "REQUIRES_NEXT_CHECK" and not (action == "HOLD" and effect != "support"))
+        reasons = []
+        if (eligible.get("status") != "eligible" or eligible.get("evidenceUsableForJudgement") is not True
+                or eligible.get("freshnessStatus") != "fresh"):
+            reasons.append("unusable-rule-evidence")
+        if (item.get("referenceOnly") or item.get("reference_only")
+                or mapping(item.get("knowledgeBasis")).get("decisionEligibility") == "reference-only"):
+            reasons.append("reference-only-rule")
+        if predictive_action:
+            action_reasons = [*reasons]
+            if action not in allowed:
+                action_reasons.append("outside-allowed-actions")
+            if action in blocked:
+                action_reasons.append("blocked-action")
+            if action_reasons:
+                unavailable.append({**entry, "action": action, "exclusionReasons": action_reasons,
+                                    "eligibility": {k: eligible.get(k) for k in
+                                                    ("status", "freshnessStatus", "reason", "evidenceUsableForJudgement")}})
+        if reasons:
+            continue
         for code in strings(item.get("blockedActions")):
             if code in blocked:
                 restrictions.append({**entry, "action": code})
@@ -121,19 +145,13 @@ def rulebox_decision_brief(context):
         elif (entry["ruleKind"] in {"predictive-hypothesis", "predictive"}
               and action in ACTIONS and action in allowed and action not in blocked and effect in {"support", "constrain"}):
             candidates.append({**entry, "action": action})
-    if not (candidates or restrictions or checks):
-        return {}
-    hypotheses = rows(mapping(relation.get("hypothesisSet")).get("hypotheses"))
-    if not hypotheses:
-        hypotheses = rows(mapping(mapping(relation.get("investmentBrain")).get("hypothesisSet")).get("hypotheses"))
-    eligible_hypotheses = set(strings(case.get("eligibleHypothesisIds")))
-    execution_hypotheses = set(strings(case.get("executionEligibleHypothesisIds")))
     admitted_candidates = []
     for entry in candidates:
         linked = [h for h in hypotheses if entry["ruleId"] in strings(h.get("supportingRuleIds"))
                   and h.get("hypothesisId") in eligible_hypotheses]
         if not linked:
             checks.append({**entry, "candidateExcludedReason": "no-eligible-linked-hypothesis"})
+            unavailable.append({**entry, "exclusionReasons": ["no-eligible-linked-hypothesis"]})
             continue
         entry["hypotheses"] = [{"id": h.get("hypothesisId"),
             "qualification": mapping(h.get("qualification")).get("status") or "unknown",
@@ -142,6 +160,19 @@ def rulebox_decision_brief(context):
         entry["executionEligible"] = bool(linked) and any(h.get("hypothesisId") in execution_hypotheses for h in linked)
         admitted_candidates.append(entry)
     candidates = admitted_candidates
+    excluded = {}
+    for entry in unavailable:
+        # An audit of excluded graph-authored actions, never another candidate
+        # list. Keep qualification separate from source freshness: a new quote
+        # alone cannot qualify an unvalidated hypothesis.
+        entry["hypotheses"] = [{"id": h.get("hypothesisId"),
+            "qualification": mapping(h.get("qualification")).get("status") or "unknown",
+            "outcomeCount": number(mapping(h.get("qualification")).get("decisiveOutcomeCount")),
+            "executionEligible": h.get("hypothesisId") in execution_hypotheses}
+            for h in hypotheses if entry["ruleId"] in strings(h.get("supportingRuleIds"))]
+        excluded[(entry["ruleId"], entry["action"])] = entry
+    if not (candidates or restrictions or checks or excluded):
+        return {}
     candidate_actions = strings([r["action"] for r in candidates])
     restricted_actions = strings([r["action"] for r in restrictions])
     return {"version": VERSION, "authority": "typedb-materialized-decision-effects", **identity,
@@ -149,6 +180,7 @@ def rulebox_decision_brief(context):
             "status": "restricted-review" if restrictions else "candidate-review" if candidates else "evidence-review",
             "candidateActions": candidate_actions, "blockedActions": restricted_actions,
             "candidates": candidates, "restrictions": restrictions, "checks": checks,
+            "unavailableCandidates": list(excluded.values()),
             "qualificationPending": any(not r["executionEligible"] for r in candidates),
             "comparisonRequired": len(candidate_actions) > 1,
             "dispositionCode": case.get("dispositionCode") or "",

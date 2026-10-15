@@ -252,7 +252,9 @@ def market_snapshot_sections(current, previous=None):
         average = numeric(facts.get("averagePrice"))
         if average is not None and average > 0:
             holding.append("평균 매입가 " + price_money(average, currency))
-        for field, label, unit in (("quantity", "보유", quantity_unit), ("profitLossRate", "평가 수익률", "%"), ("positionWeight", "계좌 비중", "%")):
+        for field, label, unit in (("quantity", "보유", quantity_unit), ("profitLossRate", "평가 수익률", "%"),
+                                   ("positionAccountWeight", "계좌 전체 대비 비중", "%"),
+                                   ("positionWeight", "보유 종목 평가액 내 비중", "%")):
             value = numeric(facts.get(field))
             if value is not None:
                 holding.append(label + " " + decimal(value, signed=field == "profitLossRate") + unit)

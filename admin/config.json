@@ -1622,7 +1622,7 @@
         },
         {
           "key": "newsAiAnalysisUseCodex",
-          "label": "기사 분석 GPT-5.6 Sol · max 사용",
+          "label": "기사 분석 GPT-6.1 Sol 사용",
           "type": "toggle",
           "default": "1"
         },
@@ -2701,7 +2701,7 @@
         },
         {
           "key": "dartDisclosureAiUseCodex",
-          "label": "공시 해석 GPT-5.6 Sol · max 사용",
+          "label": "공시 해석 GPT-6.1 Sol 사용",
           "type": "toggle",
           "default": "1"
         },
@@ -3545,7 +3545,7 @@
       "settings": [
         {
           "key": "modelReviewUseCodex",
-          "label": "GPT-5.6 Sol · max 리뷰 사용",
+          "label": "GPT-6.1 Sol · high 리뷰 사용",
           "default": "1"
         },
         {

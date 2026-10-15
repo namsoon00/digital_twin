@@ -15,7 +15,7 @@ from typeql_contract_fixture import WORLD, contract_fingerprints, enabled_rules,
 ROOT = Path(__file__).resolve().parents[1] / "digital_twin"
 PACKAGE = "digital_twin.modules.reasoning.infrastructure.typeql"
 COMPILER = ROOT / "modules/reasoning/infrastructure/typeql"
-GOLDEN = Path(__file__).parent / "fixtures/typeql_compiler_v10.json"
+GOLDEN = Path(__file__).parent / "fixtures/typeql_compiler_v11.json"
 
 
 class TypeQLCompilerTests(unittest.TestCase):
@@ -44,7 +44,7 @@ class TypeQLCompilerTests(unittest.TestCase):
             typedb_value_match("$s", "ontology-profit-loss-rate", {"field": "typo", "default": -8}, "<=", "$v")
 
     def test_compiler_matches_versioned_account_policy_contract(self):
-        # V9 remains frozen; V10 adds native account-policy response payloads.
+        # V10 remains frozen. V11 fixes response interpretation, not predicates.
         expected = json.loads(GOLDEN.read_text())
         actual = contract_fingerprints(typeql)
         self.assertEqual(expected["engineVersion"], typeql.TYPEDB_NATIVE_RULE_ENGINE_VERSION)
@@ -52,6 +52,9 @@ class TypeQLCompilerTests(unittest.TestCase):
         for group, fingerprint in expected["groups"].items():
             with self.subTest(group=group, original=expected["sourceRevision"]):
                 self.assertEqual(fingerprint, actual[group])
+        previous = json.loads((GOLDEN.parent / 'typeql_compiler_v10.json').read_text())
+        for group in set(actual) - {'profiles'}:
+            self.assertEqual(previous['groups'][group], actual[group], group)
 
     def test_typeql_exports_compile_without_loading_runtime_or_database_implementations(self):
         result = subprocess.run(

@@ -241,9 +241,10 @@ class IndependentTypeDBTests(unittest.TestCase):
         previous = context["relationChangeEvidence"]["previous"]
         context["relationChangeEvidence"] = relation_change_evidence(context, previous)
         text = typedb_observation_telegram_message(context)
-        self.assertIn("이번에 달라진 근거", text)
-        self.assertIn("이전 알림 -1.25% → 이번 +0.8%", text)
-        self.assertIn("판정 기준 20일 평균 가격 대비 0% 초과", text)
+        self.assertIn("핵심 수치", text)
+        self.assertIn("20일 평균 가격 대비 현재 +0.8% / 기준 0% 초과", text)
+        self.assertNotIn('-1.25% →', text, 'an ambient prior value is not a preserved condition comparison')
+        self.assertIn("이전 알림 -1.25% → 이번 +0.8%", context['customerInvestmentDetailText'])
 
     def test_material_graph_observation_never_calls_retired_ai_and_passes_transport_guard(self):
         result, queue, handoff, case = independent_fixture()
@@ -281,7 +282,8 @@ class IndependentTypeDBTests(unittest.TestCase):
 
     def test_render_keeps_linked_proof_current_data_and_distinct_clocks(self):
         context = readable_fixture()
-        text = typedb_observation_telegram_message(context)
+        typedb_observation_telegram_message(context)
+        text = context['customerInvestmentDetailText']
         for value in ("살펴볼 가설", "반등이 이어지지 않을 가능성", "11,000원", "+2.5%", "10,000원 → 11,000원", "외국인: 순매도 500주",
                       "기관: 순매수·매도 차이 0주", "개인: 아직 집계 전", "장중 누적 추정", "10/02 10:00 KST", "10/02 10:10 KST",
                       "체결강도 120", "매수 체결 6,000주", "매수 대기 500주", "매도 대기 600주", "110,000,000원", "보유 종목 평가액 내 비중 2.5%",
@@ -293,7 +295,7 @@ class IndependentTypeDBTests(unittest.TestCase):
         self.assertEqual("passed", context["customerInvestmentDocumentQuality"]["status"])
         context["ontologyRelationContext"]["facts"]["currentPrice"] = 999
         self.assertIn("11,000원", typedb_observation_telegram_message(context))
-        doc = customer_investment_document_from_dict(context["customerInvestmentDocument"])
+        doc = customer_investment_document_from_dict(context["customerInvestmentDetailDocument"])
         broken = replace(doc, lead="강화 · 강화", sections=tuple(row for row in doc.sections if row.key != "investor-flow"))
         issues = customer_investment_document_quality(broken)["issues"]
         self.assertIn("missing-observation-investor-flow", issues)
@@ -306,10 +308,12 @@ class IndependentTypeDBTests(unittest.TestCase):
         from digital_twin.modules.notifications.domain.notification_templates import NotificationTemplate, render_notification
         renderer = NotificationRenderingService(template_renderer=lambda job: render_notification(NotificationTemplate.default("investmentInsight"), job.context))
         first = renderer.render(job)
-        self.assertIn("살펴볼 가설", first, "the transport template must not rewrite the normalized document")
+        self.assertIn("핵심 수치", first, "the transport template must not rewrite the normalized document")
+        self.assertNotIn("살펴볼 가설", first)
         previous_price = next(row for row in job.context["relationChangeEvidence"]["previous"]["facts"] if row["id"] == "currentPrice")
         previous_price["value"] = 10500
-        self.assertIn("10,500원 → 11,000원", renderer.render(job))
+        renderer.render(job)
+        self.assertIn("10,500원 → 11,000원", job.context['customerInvestmentDetailText'])
         job.context["transportDelivery"] = {"message": first, "relationChangeEvidence": deepcopy(context["relationChangeEvidence"])}
         self.assertEqual(first, renderer.render(job), "partial delivery must keep its exact original body")
 
@@ -336,7 +340,7 @@ class IndependentTypeDBTests(unittest.TestCase):
         packet = deepcopy(context["relationChangeEvidence"])
         self.assertEqual(["h2"], packet["transitions"][0]["hypothesisIds"])
         text = typedb_observation_telegram_message(context)
-        doc = context["customerInvestmentDocument"]
+        doc = context["customerInvestmentDetailDocument"]
         self.assertIn("외부 시장의 위험 전달 가능성", doc["lead"])
         self.assertNotIn("가격 회복", doc["lead"], "do not assign another hypothesis's change to this one")
         self.assertIn("더 이상 성립하지", doc["lead"])
@@ -358,8 +362,10 @@ class IndependentTypeDBTests(unittest.TestCase):
         context["relationChangeEvidence"]["transitions"].append({**deepcopy(packet["transitions"][0]), "hypothesisIds": ["h1"]})
         job = NotificationJob.create("preview", message_type="investmentInsight", context=context)
         rendered = NotificationRenderingService(template_renderer=lambda j: render_notification(NotificationTemplate.default("investmentInsight"), j.context)).render(job)
-        self.assertEqual(2, rendered.count("현재 판단 근거로 사용 보류"))
-        self.assertEqual(2, rendered.count("검증 상태: 아직 검증 중"), "equal statuses still belong to separate hypotheses")
+        detail = job.context['customerInvestmentDetailText']
+        self.assertEqual(2, detail.count("현재 판단 근거로 사용 보류"))
+        self.assertEqual(2, detail.count("검증 상태: 아직 검증 중"), "equal statuses still belong to separate hypotheses")
+        self.assertNotIn('살펴볼 가설', rendered)
 
     def test_complete_flow_shows_reported_buy_sell_and_zero_but_never_estimates_amount(self):
         from digital_twin.modules.notifications.domain.observation_market_snapshot import investor_rows
@@ -404,8 +410,8 @@ class IndependentTypeDBTests(unittest.TestCase):
         from digital_twin.modules.notifications.domain.notification_templates import NotificationTemplate, render_notification
         context["telegramMessage"] = typedb_observation_telegram_message(context)
         rendered = render_notification(NotificationTemplate.default("investmentInsight"), context)
-        self.assertIn("거래량 비율 0.004배", rendered)
-        self.assertNotIn("거래량 비율 0배", rendered)
+        self.assertIn("거래량 비율 0.004배", context['customerInvestmentDetailText'])
+        self.assertNotIn("거래량 비율 0배", context['customerInvestmentDetailText'])
 
 
 if __name__ == "__main__":

@@ -152,10 +152,11 @@ class RelationMarketTrackingTests(unittest.TestCase):
         facts.update(position_volume_pace_snapshot(position_fixture()))
         previous = deepcopy(context["relationChangeEvidence"]["previous"])
         context["relationChangeEvidence"] = relation_change_evidence(context, previous)
-        text = typedb_observation_telegram_message(context)
+        typedb_observation_telegram_message(context)
+        text = context['customerInvestmentDetailText']
         for expected in ("체결강도와 대기 주문", "거래량과 시간 보정", "체결강도 추적", "기대 누적 비중 55%", "정규장 50% 경과", "실제 과거 동시간"):
             self.assertIn(expected, text)
-        sections = {row["key"]: row for row in context["customerInvestmentDocument"]["sections"]}
+        sections = {row["key"]: row for row in context["customerInvestmentDetailDocument"]["sections"]}
         self.assertIn("volume", sections)
         legacy = " ".join(volume_pace_rows(snapshot({"volumeRatio": 1.64068, "timeAdjustedVolumeRatio": 1.549})))
         self.assertIn("기존 시간 보정 기록 1.55배", legacy)

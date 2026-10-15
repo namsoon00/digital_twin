@@ -12,6 +12,20 @@ def render_customer_investment_document(
 ) -> str:
     """Render a document that was normalized at its creation boundary."""
 
+    if document.layout == "compact-rulebox-v1":
+        parts = ["<b>" + html.escape(document.headline, quote=False) + "</b>", html.escape(document.lead, quote=False)]
+        for section in document.sections:
+            if section.rows:
+                parts.append("<b>" + html.escape(section.title, quote=False) + ":</b> "
+                             + html.escape(" · ".join(section.rows), quote=False))
+        if document.detail_url:
+            parts.append('<a href="' + html.escape(document.detail_url, quote=True) + '">전체 판단 근거·현재 데이터 보기</a>')
+        footer = " · ".join(v for v in ["기준 " + document.reference_at if document.reference_at else "",
+                                      "발송 " + document.sent_at if document.sent_at else "",
+                                      document.notification_number] if v)
+        if footer:
+            parts.append("<i>" + html.escape(footer, quote=False) + "</i>")
+        return "\n".join(parts)
     parts = ["<b>" + html.escape(document.headline, quote=False) + "</b>"]
     if document.target:
         parts.append("<code>" + html.escape(document.target, quote=False) + "</code>")

@@ -19,7 +19,7 @@ FACT_DELTA_VERSION = "investment-fact-delta-v2"
 INFERENCE_RESULT_VERSION = "investment-inference-result-v2"
 RULE_EVALUATION_RECORD_VERSION = "investment-rule-evaluation-record-v1"
 AI_JUDGMENT_RESULT_VERSION = "investment-ai-judgment-result-v3"
-DECISION_SYNTHESIS_VERSION = "investment-decision-synthesis-v9"
+DECISION_SYNTHESIS_VERSION = "investment-decision-synthesis-v10"
 
 REASONING_LANE_REALTIME = "REALTIME"
 REASONING_LANE_CONTEXT = "CONTEXT"
@@ -478,6 +478,7 @@ class DecisionSynthesis:
     judgement_blocked: bool = False
     graph_trace_complete: bool = False
     management_decision: Dict[str, object] = field(default_factory=dict)
+    rulebox_judgment: Dict[str, object] = field(default_factory=dict)
     evidence_state: str = ""
     hypothesis_state: str = ""
     action_state: str = ""
@@ -554,6 +555,7 @@ class DecisionSynthesis:
             judgement_blocked=bool(payload.get("judgement_blocked") or payload.get("judgementBlocked")),
             graph_trace_complete=bool(payload.get("graph_trace_complete") or payload.get("graphTraceComplete")),
             management_decision=dict(payload.get("management_decision") or payload.get("managementDecision") or {}),
+            rulebox_judgment=dict(payload.get("rulebox_judgment") or payload.get("ruleboxJudgment") or {}),
             evidence_state=str(payload.get("evidence_state") or payload.get("evidenceState") or ""),
             hypothesis_state=str(payload.get("hypothesis_state") or payload.get("hypothesisState") or ""),
             action_state=str(payload.get("action_state") or payload.get("actionState") or ""),
@@ -574,6 +576,8 @@ class DecisionSynthesis:
             payload[key] = list(payload[key])
         payload["alternatives"] = [item.to_dict() for item in self.alternatives]
         payload["data_gaps"] = [item.to_dict() for item in self.data_gaps]
+        if not self.rulebox_judgment:
+            payload.pop("rulebox_judgment")
         return payload
 
 

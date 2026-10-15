@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import html
 import re
+from dataclasses import replace
 from typing import Dict, Iterable, List, Mapping
 
 from digital_twin.modules.notifications.domain.alert_formatting import compact_multiple, compact_number, price_money, signed_pct, trade_strength_label
@@ -1001,6 +1002,24 @@ def typedb_observation_telegram_message(
         language_level=level,
     )
     normalized = normalized_customer_investment_document(document)
+    if relation_sections and not compact_follow_up and kind.key != "data-status":
+        from digital_twin.modules.notifications.domain.rulebox_notification_summary import compact_rulebox_summary
+        summary_packet = relation_packet
+        if not ((relation_packet.get("current") or {}).get("decisionBrief") or {}).get("judgment"):
+            from digital_twin.modules.decisions.contracts import rulebox_decision_brief
+            brief = rulebox_decision_brief(context)
+            current = relation_packet.get("current") or {}
+            if brief and all(brief.get(k) == current.get(k) for k in ("accountId", "symbol", "worldId", "inferenceGenerationId", "sourceAboxSnapshotId")):
+                summary_packet = {**relation_packet, "current": {**current, "decisionBrief": brief}}
+        compact = compact_rulebox_summary(summary_packet)
+        context["customerInvestmentDetailDocument"] = normalized.to_dict()
+        context["customerInvestmentDetailText"] = render_customer_investment_document(normalized)
+        context["customerInvestmentDetailDocumentQuality"] = customer_investment_document_quality(normalized)
+        context["ruleboxNotificationSummary"] = compact
+        normalized = normalized_customer_investment_document(replace(
+            document, layout="compact-rulebox-v1", role_label="", target="", lead=compact["lead"], links=(),
+            sections=tuple(CustomerInvestmentSection(key, title, tuple(rows)) for key, title, rows in compact["sections"]),
+        ))
     context["customerInvestmentDocument"] = normalized.to_dict()
     context["customerInvestmentDocumentQuality"] = customer_investment_document_quality(
         normalized, required_sections=("notification-purpose", "decision-impact", "next-check-contract")

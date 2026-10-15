@@ -342,7 +342,8 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # Twelve knowledge contracts cover method content, source/time/scope,
         # immutable revision and observation lineage, budgeted graph context,
         # frozen AI review, native atomic rollback and next-research recall.
-        self.assertLessEqual(total, 2359)
+        # Six scoped judgment, compact transport and immutable detail regressions.
+        self.assertLessEqual(total, 2365)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

@@ -873,7 +873,17 @@ def matches_from_inference(
         rule_id = str(relation.get("ruleId") or "").strip()
         if not rule_id:
             continue
-        key = inference_causal_path_key(relation)
+        response = relation.get("managementResponse")
+        response = response if isinstance(response, dict) else {}
+        # A policy response and a request to check it again are separate native
+        # conclusions, even when the old causal grouping gives them one key.
+        # Preserve legacy/predictive grouping and never upgrade a check to HOLD.
+        response_code = response.get("code") if (
+            response.get("version") == "management-response-v1"
+            and response.get("authority") == "account-policy"
+            and (relation.get("knowledgeBasis") or {}).get("ruleKind") == "policy-constraint"
+        ) else ""
+        key = (inference_causal_path_key(relation), response_code or "")
         if key in seen:
             continue
         seen.add(key)

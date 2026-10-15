@@ -86,9 +86,11 @@ class DeliveryReliabilityTests(unittest.TestCase):
         packet = relation_change_evidence(context, previous)
         context["relationChangeEvidence"] = packet
         context["messageDeliveryLevel"] = "intermediate"
-        message = typedb_observation_telegram_message(context)
+        body = typedb_observation_telegram_message(context)
+        message = context['customerInvestmentDetailText']
         for value in ("가설", "규칙의 비교 기준과 실제 값", "가격 $100 초과 / 확인값 $132.38", "$100 → $132.38", "반대 근거", "확인 시점"):
             self.assertIn(value, message)
+        self.assertNotIn('살펴볼 가설', body)
         relation["facts"]["currentPrice"] = 999
         self.assertEqual(132.38, next(row["value"] for row in packet["current"]["facts"] if row["id"] == "currentPrice"))
         self.assertEqual(["e2"], packet["current"]["hypotheses"][0]["counterEvidenceIds"])

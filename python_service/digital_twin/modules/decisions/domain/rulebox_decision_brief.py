@@ -179,7 +179,7 @@ def rulebox_decision_brief(context):
         return {}
     candidate_actions = strings([r["action"] for r in candidates])
     restricted_actions = strings([r["action"] for r in restrictions])
-    return {"version": VERSION, "authority": "typedb-materialized-decision-effects", **identity,
+    result = {"version": VERSION, "authority": "typedb-materialized-decision-effects", **identity,
             "action": "NO_ACTION", "finalActionSelected": False,
             "managementDecision": deepcopy(management),
             "status": "restricted-review" if restrictions else "candidate-review" if candidates else "evidence-review",
@@ -191,3 +191,11 @@ def rulebox_decision_brief(context):
             "dispositionCode": case.get("dispositionCode") or "",
             "executionDisposition": case.get("executionDisposition") or "",
             "validity": "same-account-subject-generation-abox"}
+    from digital_twin.modules.decisions.domain.investment_reasoning.rulebox_judgment import judgment_from_frozen_brief
+    saved = mapping(case.get("ruleboxJudgment")) or mapping(mapping(case.get("synthesis")).get("rulebox_judgment"))
+    if (saved.get("version") == "rulebox-judgment-v1" and saved.get("authority") == "typedb-materialized-synthesis"
+            and all(saved.get(k) == identity[k] for k in ("accountId", "symbol", "worldId", "inferenceGenerationId", "sourceAboxSnapshotId"))):
+        result["judgment"] = deepcopy(saved)
+    else:
+        result["judgment"] = judgment_from_frozen_brief(result, relation)
+    return result

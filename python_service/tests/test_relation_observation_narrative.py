@@ -39,7 +39,14 @@ def temporal_fixture():
 def freeze_and_render(context):
     context["relationChangeEvidence"] = relation_change_evidence(context)
     context["telegramMessage"] = typedb_observation_telegram_message(context)
-    return render_notification(NotificationTemplate.default("investmentInsight"), context)
+    from digital_twin.modules.notifications.application.notification.rendering import NotificationRenderingService
+    from digital_twin.modules.notifications.domain.notifications import NotificationJob
+    job = NotificationJob.create('preview', message_type='investmentInsight', context=context)
+    rendered = NotificationRenderingService(template_renderer=lambda j: render_notification(NotificationTemplate.default('investmentInsight'), j.context)).render(job)
+    context.update(job.context)
+    assert '살펴볼 가설' not in rendered
+    assert len([line for line in rendered.splitlines() if line]) <= 9
+    return context['customerInvestmentDetailText']
 
 
 class RelationObservationNarrativeTests(unittest.TestCase):
@@ -52,7 +59,8 @@ class RelationObservationNarrativeTests(unittest.TestCase):
                 "previous": {"score": .81869, "minimumScore": .7},
                 "current": {"score": .538025, "minimumScore": .7}}]})
         context["relationChangeEvidence"] = relation_change_evidence(context)
-        text = typedb_observation_telegram_message(context)
+        typedb_observation_telegram_message(context)
+        text = context['customerInvestmentDetailText']
         for value in ("직전 분석 약 0.8187 → 이번 약 0.538", "규칙 기준 0.7 이상", "확률 아님",
                       "규칙 데이터", "현재 전체 데이터"):
             self.assertIn(value, text)
@@ -81,7 +89,7 @@ class RelationObservationNarrativeTests(unittest.TestCase):
                       "후반 등락률 변화 -7.2%p", "10/02 10:10 KST", "회복한 가격대와 이를 뒷받침하는 거래가 유지되는지",
                       "현재 판단 근거로 사용 보류", "원천 데이터가 허용 시간보다 오래되었습니다"):
             self.assertIn(value, text)
-        hypothesis_text = " ".join(next(s for s in context["customerInvestmentDocument"]["sections"] if s["key"] == "hypotheses")["rows"])
+        hypothesis_text = " ".join(next(s for s in context["customerInvestmentDetailDocument"]["sections"] if s["key"] == "hypotheses")["rows"])
         self.assertIn("외국인 순매도 500주", hypothesis_text)
         self.assertIn("기관 순매수·매도 차이 0주", hypothesis_text)
         self.assertIn("10/02 10:00 KST", hypothesis_text)
@@ -94,8 +102,13 @@ class RelationObservationNarrativeTests(unittest.TestCase):
         self.assertNotIn("unrelatedPrivateField", condition["sourceTemporalWindows"][0])
         proof["sourceTemporalWindows"][0]["startPrice"] = 9999
         self.assertEqual(packet, context["relationChangeEvidence"])
-        self.assertIn("$153.09 → $156.72", typedb_observation_telegram_message(context))
+        typedb_observation_telegram_message(context)
+        self.assertIn("$153.09 → $156.72", context['customerInvestmentDetailText'])
         self.assertEqual("passed", context["customerInvestmentDocumentQuality"]["status"])
+        fresh, _ = temporal_fixture()
+        fresh['ontologyRelationContext']['graphStoreInference']['traces'][0]['evidenceUsableForJudgement'] = True
+        freeze_and_render(fresh)
+        self.assertIn('규칙 입력: 3일 구간 가격 등락 +2.37%', fresh['telegramMessage'])
 
     def test_wrong_subject_version_link_or_future_window_cannot_explain_this_hypothesis(self):
         for field, value, reason in (
@@ -107,10 +120,12 @@ class RelationObservationNarrativeTests(unittest.TestCase):
         ):
             with self.subTest(field=field, value=value):
                 context, proof = temporal_fixture()
+                context['ontologyRelationContext']['graphStoreInference']['traces'][0]['evidenceUsableForJudgement'] = True
                 proof["sourceTemporalWindows"][0][field] = value
                 text = freeze_and_render(context)
                 self.assertIn(reason, text)
                 self.assertNotIn("$153.09", text)
+                self.assertNotIn('규칙 입력: 3일', context['telegramMessage'])
                 self.assertIn("반등이 이어지지 못하고", text, "a proof limitation must not block the entire message")
 
     def test_missing_comparison_history_and_watchlist_return_are_not_fabricated(self):
@@ -131,7 +146,9 @@ class RelationObservationNarrativeTests(unittest.TestCase):
         for rule in packet["current"]["rules"]:
             for condition in rule["conditions"]:
                 condition.pop("sourceTemporalWindows", None)
-        old = typedb_observation_telegram_message(context)
+        compact = typedb_observation_telegram_message(context)
+        old = context['customerInvestmentDetailText']
+        self.assertNotIn('보유 수익률', compact, 'watchlist defaults cannot become a holding return')
         self.assertNotIn("$153.09", old)
         self.assertIn("전일 대비 -2.36%", old)
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+from dataclasses import replace
 from typing import Dict, Iterable, Mapping, Tuple
 
 from digital_twin.modules.notifications.contracts import typedb_context_observation_contract
@@ -11,6 +12,7 @@ from digital_twin.modules.reasoning.contracts import GraphActionAuthorization
 from digital_twin.modules.decisions.domain.investment_brain import is_research_reviewable_hypothesis_payload
 from digital_twin.modules.decisions.domain.investment_reasoning.contracts import ActionAlternative, DataGap, DecisionSynthesis
 from digital_twin.modules.decisions.domain.investment_reasoning.management import management_decision_from_relation
+from digital_twin.modules.decisions.domain.investment_reasoning.rulebox_judgment import judgment_from_synthesis
 
 
 def _mapping(value: object) -> Dict[str, object]:
@@ -521,7 +523,7 @@ def decision_synthesis_from_relation_context(
         if judgement_blocked
         else "RESEARCH_ONLY"
     )
-    return DecisionSynthesis(
+    synthesis = DecisionSynthesis(
         management_decision=management_decision_from_relation(account_id, relation),
         synthesis_id=_stable_id(
             account_id,
@@ -603,6 +605,7 @@ def decision_synthesis_from_relation_context(
         ),
         ai_state=ai_state,
     )
+    return replace(synthesis, rulebox_judgment=judgment_from_synthesis(synthesis, relation))
 
 
 def synthesis_index(values: Iterable[DecisionSynthesis]) -> Dict[str, DecisionSynthesis]:

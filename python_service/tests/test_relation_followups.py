@@ -245,12 +245,14 @@ class RelationFollowUpTests(unittest.TestCase):
             "conditionId": "trade-condition", "field": "tradeStrength", "observedValue": 92,
             "expectedValue": 110, "operator": ">=", "observedAt": "2026-10-13T01:25:00Z"})
         self.context["relationChangeEvidence"] = relation_change_evidence(self.context, self.original)
-        text = typedb_observation_telegram_message(self.context)
+        body = typedb_observation_telegram_message(self.context)
+        text = self.context['customerInvestmentDetailText']
         self.assertIn("체결강도: 이전 알림 120 → 이번 92", text)
         self.assertIn("판정 기준 체결강도 110 이상", text)
         self.assertIn("10/13 10:25 KST", text)
         self.assertLess(text.index("체결강도: 이전"), text.index("현재 전체 데이터"))
-        self.assertTrue(self.context["customerInvestmentDocument"]["lead"].startswith("‘"))
+        self.assertTrue(self.context["customerInvestmentDetailDocument"]["lead"].startswith("‘"))
+        self.assertNotIn('120 →', body, 'a missing previous rule condition cannot become a native condition comparison')
 
     def test_model_input_deltas_explain_score_changes_without_invented_thresholds(self):
         from digital_twin.modules.notifications.domain.relation_change_presentation import model_input_change_rows

@@ -48,9 +48,11 @@ def fixture():
 
 
 def message(context):
+    """Full evidence view; compact transport has separate end-to-end checks."""
     previous = context["relationChangeEvidence"]["previous"]
     context["relationChangeEvidence"] = relation_change_evidence(context, previous)
-    return typedb_observation_telegram_message(context)
+    rendered = typedb_observation_telegram_message(context)
+    return context.get("customerInvestmentDetailText") or rendered
 
 
 class RuleBoxDecisionBriefTests(unittest.TestCase):
@@ -244,7 +246,7 @@ class RuleBoxDecisionBriefTests(unittest.TestCase):
                      "modelInputWindows": {"1D": {"sampleCount": 4, "priceReturn": -.02, "recentReturn": -.01,
                                                  "latestObservedAt": "2026-10-02T01:10:00Z"}}}}]})
         text = message(context)
-        doc = context["customerInvestmentDocument"]
+        doc = context["customerInvestmentDetailDocument"]
         self.assertIn("뒷받침하는 근거가 추가", doc["lead"])
         cause = next(s for s in doc["sections"] if s["key"] == "delivery-cause")
         self.assertIn("‘장중 하락 속도가 빨라짐’ 규칙이 가설의 지지 근거에 추가", str(cause))
@@ -307,7 +309,7 @@ class RuleBoxDecisionBriefTests(unittest.TestCase):
         self.assertEqual(source, relation)
         self.assertEqual(original_case["executionEligibleHypothesisIds"], context["investmentSubjectDecisionCase"]["executionEligibleHypothesisIds"])
         self.assertEqual("passed", context["customerInvestmentDocumentQuality"]["status"])
-        doc = customer_investment_document_from_dict(context["customerInvestmentDocument"])
+        doc = customer_investment_document_from_dict(context["customerInvestmentDetailDocument"])
         self.assertLess(text.index("지금 적용할 대응"), text.index("현재 전체 데이터"))
         for key in ("notification-purpose", "decision-impact", "delivery-cause", "next-check-contract"):
             broken = replace(doc, sections=tuple(s for s in doc.sections if s.key != key))
@@ -322,7 +324,7 @@ class RuleBoxDecisionBriefTests(unittest.TestCase):
         self.assertTrue(delivered.startswith("<b>🔗 관리 기준 점검"), "the final template must keep the admitted policy purpose")
         self.assertEqual("relation-change", presentation_metadata(job.message_type, job.context)["kind"], "label changes cannot reroute transport")
         self.assertNotIn("살펴볼 가설", delivered)
-        self.assertIn("계좌 전체 대비 비중은 78%", delivered)
+        self.assertIn("계좌 전체 대비 비중 현재 78%", delivered)
         self.assertEqual("passed", job.context["customerInvestmentDocumentQuality"]["status"])
         job.context["transportDelivery"] = {"message": delivered, "relationChangeEvidence": deepcopy(packet)}
         self.assertEqual(delivered, renderer.render(job), "a partial retry must preserve the exact frozen body")
@@ -474,6 +476,140 @@ class NativeManagementResponseTests(unittest.TestCase):
         self.assertEqual(78.45, response['boundFacts']['positionAccountWeight'])
         self.assertNotIn('positionWeight', response['boundFacts'])
         self.assertEqual(45, response['boundFacts']['strategyMaxPositionWeightPct'])
+        # The production native path reads both in-memory and persisted rows
+        # through this boundary before matches_from_inference. A formatter-only
+        # fixture would miss a response silently dropped by that projection.
+        from digital_twin.infrastructure.graph_store_inferencebox import inferencebox_relation_payload, inferencebox_entity_payload
+        for project in (inferencebox_relation_payload, inferencebox_entity_payload):
+            projected = project({'propertiesJson': json.dumps({'managementResponse': response})})
+            self.assertEqual(response, projected['managementResponse'])
+            projected['managementResponse']['boundFacts']['positionAccountWeight'] = 1
+            self.assertEqual(78.45, response['boundFacts']['positionAccountWeight'])
+            self.assertNotIn('managementResponse', project({'propertiesJson': '{}'}))
+            self.assertNotIn('managementResponse', project({'managementResponse': 'malformed'}))
+        from digital_twin.modules.reasoning.domain.ontology_inference_context import matches_from_inference
+        projected_relations = [inferencebox_relation_payload(row) for row in repository.rows_for_relations(output)]
+        matches = matches_from_inference(projected_relations, [])
+        self.assertEqual(['RESTORE_POSITION_LIMIT'], [m.management_response['code'] for m in matches if m.management_response])
+        self.assertTrue(any(m.relation_type == 'REQUIRES_NEXT_CHECK' for m in matches),
+                        'the follow-up derivation must not hide the separate native management response')
+
+
+class CompactRuleBoxJudgmentTests(unittest.TestCase):
+    def test_persisted_judgment_keeps_native_policy_independent_of_forecast_qualification(self):
+        from digital_twin.modules.decisions.contracts import decision_synthesis_from_relation_context
+        from digital_twin.modules.decisions.domain.investment_reasoning.contracts import DecisionSynthesis
+        ctx = NativeManagementResponseTests().response_context()
+        synthesis = decision_synthesis_from_relation_context(ctx['accountId'], ctx['ontologyRelationContext'])
+        restored = DecisionSynthesis.from_dict(synthesis.to_dict())
+        judgment = restored.rulebox_judgment
+        self.assertEqual('decision-synthesis', judgment['source'])
+        self.assertEqual('management-response', judgment['status'])
+        self.assertEqual(['ADD'], judgment['blockedActions'])
+        self.assertEqual(45, judgment['managementDecision']['responses'][0]['targetValue'])
+        self.assertFalse(judgment['finalMarketActionSelected'])
+        self.assertFalse(judgment['orderAuthorized'])
+        self.assertEqual('world:fixture', judgment['worldId'])
+        self.assertEqual(-15, judgment['conditions'][0]['resolvedThreshold']['value'])
+        self.assertEqual(synthesis.rulebox_judgment, judgment)
+        legacy = synthesis.to_dict()
+        legacy.pop('rulebox_judgment')
+        legacy['version'] = 'investment-decision-synthesis-v9'
+        self.assertEqual(legacy, DecisionSynthesis.from_dict(legacy).to_dict())
+        ctx['investmentSubjectDecisionCase']['ruleboxJudgment'] = judgment
+        self.assertEqual(judgment, rulebox_decision_brief(ctx)['judgment'])
+
+    def test_different_native_candidates_are_compared_without_inventing_a_winner(self):
+        ctx = fixture()
+        row = ctx['ontologyRelationContext']['matchedRules'][-1]
+        row.update(decision_effect='support', relation_type='SUPPORTS_THESIS')
+        previous = ctx['relationChangeEvidence']['previous']
+        ctx['relationChangeEvidence'] = relation_change_evidence(ctx, previous)
+        body = typedb_observation_telegram_message(ctx)
+        judgment = ctx['ruleboxNotificationSummary']['judgment']
+        self.assertEqual(['HOLD', 'TRIM'], [g['action'] for g in judgment['candidateGroups']])
+        self.assertTrue(judgment['comparisonRequired'])
+        self.assertFalse(judgment['finalMarketActionSelected'])
+        self.assertIn('근거가 엇갈려 최종 판단을 확정하지 않았습니다', body)
+        self.assertNotIn('살펴볼 가설', body)
+
+    def test_compact_measurements_use_same_rule_comparison_and_keep_full_data_in_detail(self):
+        ctx = fixture()
+        packet = ctx['relationChangeEvidence']
+        condition = deepcopy(ctx['ontologyRelationContext']['graphStoreInference']['traces'][-1]['matchedConditions'][0])
+        ctx['ontologyRelationContext']['graphStoreInference']['traces'][0]['matchedConditions'].append(condition)
+        old_rule = next(r for r in packet['previous']['rules'] if r['id'] == 'rule:linked')
+        old_rule['conditions'].append({**deepcopy(condition), 'observedValue': -16})
+        next(f for f in packet['previous']['facts'] if f['id'] == 'profitLossRate')['value'] = -2
+        ctx['relationChangeEvidence'] = relation_change_evidence(ctx, packet['previous'])
+        body = typedb_observation_telegram_message(ctx)
+        self.assertIn('평가 수익률 -16% → -18% / 기준 -15% 이하', body)
+        self.assertNotIn('-2% → -18%', body)
+        self.assertIn('가격 8,200원', body)
+        self.assertIn('보유 수익률 -18%', body)
+        self.assertLessEqual(len([line for line in body.splitlines() if line]), 7)
+        self.assertLess(len(body), 850)
+        self.assertEqual('passed', ctx['customerInvestmentDocumentQuality']['status'])
+        for value in ('외국인: 순매도 500주', '체결강도 120', '매수 대기 500주', '살펴볼 가설'):
+            self.assertIn(value, ctx['customerInvestmentDetailText'])
+            self.assertNotIn(value, body)
+
+    def test_transport_replaces_old_cached_long_document_but_preserves_partial_retry_bytes(self):
+        from unittest.mock import Mock
+        from digital_twin.modules.notifications.public import NotificationRenderingService
+        from digital_twin.modules.notifications.domain.notifications import NotificationJob
+        ctx = fixture()
+        typedb_observation_telegram_message(ctx)
+        ctx['customerInvestmentDocument'] = deepcopy(ctx['customerInvestmentDetailDocument'])
+        ctx['customerInvestmentDocumentRelationRevision'] = 'readable-relation-change-v13'
+        ctx['notifyLinkUrl'] = 'https://example.test/'
+        template = Mock(return_value='legacy template with long debug sections')
+        job = NotificationJob.create('old queued long body', message_type='investmentInsight', context=ctx)
+        renderer = NotificationRenderingService(template_renderer=template)
+        body = renderer.render(job)
+        template.assert_not_called()
+        self.assertNotIn('old queued long body', body)
+        self.assertNotIn('관계 판단', body)
+        self.assertLessEqual(len([line for line in body.splitlines() if line]), 9)
+        self.assertIn('전체 판단 근거·현재 데이터 보기', body)
+        job.context['transportDelivery'] = {'message': body, 'relationChangeEvidence': deepcopy(job.context['relationChangeEvidence'])}
+        job.context['ontologyRelationContext']['facts']['currentPrice'] = 999
+        self.assertEqual(body, renderer.render(job))
+
+    def test_web_detail_preserves_full_evidence_and_receipt_without_mutating_the_job(self):
+        from digital_twin.infrastructure.web.adapters.notification_presentation import notification_job_public_payload
+        from digital_twin.modules.notifications.public import NotificationRenderingService
+        from digital_twin.modules.notifications.domain.notifications import NotificationJob
+        job = NotificationJob.create('original', message_type='investmentInsight', context=fixture())
+        body = NotificationRenderingService().render(job)
+        saved = deepcopy(job.to_dict())
+        payload = notification_job_public_payload(job, detail=True, settings={'notificationProcessingStaleMinutes': 2})
+        self.assertEqual(saved, job.to_dict())
+        self.assertEqual(body, job.text)
+        self.assertEqual('compact-rulebox-v1', payload['customerInvestmentNotificationDocument']['layout'])
+        self.assertNotIn('layout', payload['customerInvestmentDocument'])
+        self.assertIn('체결강도 120', payload['fullText'])
+        self.assertIn('외국인: 순매도 500주', payload['fullText'])
+        self.assertIn('살펴볼 가설', str(payload['customerInvestmentDocument']))
+
+    def test_judgment_scope_and_semantic_repeat_identity_do_not_borrow_unrelated_decisions(self):
+        from digital_twin.modules.decisions.contracts import decision_synthesis_from_relation_context
+        ctx = NativeManagementResponseTests().response_context()
+        relation = ctx['ontologyRelationContext']
+        first = decision_synthesis_from_relation_context(ctx['accountId'], relation).rulebox_judgment
+        relation['matchedRules'][0]['managementResponse']['boundFacts']['positionAccountWeight'] = 80
+        relation['facts']['positionAccountWeight'] = 80
+        later = decision_synthesis_from_relation_context(ctx['accountId'], relation).rulebox_judgment
+        self.assertEqual(first['conclusionFingerprint'], later['conclusionFingerprint'])
+        self.assertNotEqual(first['managementDecision']['decisionId'], later['managementDecision']['decisionId'])
+        bad = deepcopy(first)
+        bad['worldId'] = 'other-private-world'
+        ctx['investmentSubjectDecisionCase']['ruleboxJudgment'] = bad
+        judgment = rulebox_decision_brief(ctx)['judgment']
+        self.assertNotEqual('other-private-world', judgment['worldId'])
+        self.assertEqual({}, judgment['managementDecision'], 'a foreign persisted response cannot be used by the legacy adapter')
+        relation['graphStoreInference']['inferenceGenerationId'] = 'other-generation'
+        self.assertEqual({}, decision_synthesis_from_relation_context(ctx['accountId'], relation).rulebox_judgment)
 
 
 if __name__ == "__main__":

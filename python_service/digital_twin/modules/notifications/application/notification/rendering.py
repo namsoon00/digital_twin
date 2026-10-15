@@ -114,7 +114,11 @@ class NotificationRenderingService:
         except (KeyError, TypeError, ValueError, AttributeError) as error:
             warnings.append("legacy-presentation:" + type(error).__name__)
         try:
+            compact_document = customer_investment_document_from_dict(job.context.get("customerInvestmentDocument"))
             rendered = (
+                render_customer_investment_document(compact_document)
+                if compact_document and compact_document.layout == "compact-rulebox-v1"
+                else
                 str(self.template_renderer(job) or "").strip()
                 if self.template_renderer else str(job.context.get("telegramMessage") or job.text).strip()
             )
@@ -141,7 +145,10 @@ class NotificationRenderingService:
             )
             if is_investment and document_quality.get("status") != "passed":
                 rendered = enforce_customer_message_quality(rendered)
-            rendered = present_notification(job.message_type, context, rendered)
+            compact_document = customer_investment_document_from_dict(context.get("customerInvestmentDocument"))
+            rendered = (render_customer_investment_document(compact_document)
+                        if compact_document and compact_document.layout == "compact-rulebox-v1"
+                        else present_notification(job.message_type, context, rendered))
             quality_issues = customer_text_quality_issues(rendered) if is_investment else []
             job.text = rendered
             context["notificationPresentationAudit"] = {

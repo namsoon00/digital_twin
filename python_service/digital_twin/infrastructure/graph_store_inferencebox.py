@@ -1,4 +1,5 @@
 import json
+from copy import deepcopy
 from typing import Dict, List
 
 from digital_twin.modules.model_registry.domain.ontology_rulebox_contracts import GRAPH_REASONER_VERSION
@@ -18,6 +19,12 @@ def knowledge_basis_payload(properties: Dict[str, object], row: Dict[str, object
 def claim_contract_payload(properties: Dict[str, object], row: Dict[str, object]) -> Dict[str, object]:
     raw = properties.get("claimContract") or properties.get("claim_contract") or row.get("claimContract") or {}
     return dict(raw) if isinstance(raw, dict) else {}
+
+
+def management_response_payload(properties, row):
+    """Carry only an authored, already materialized response; legacy stays absent."""
+    response = properties.get("managementResponse", row.get("managementResponse"))
+    return {"managementResponse": deepcopy(response)} if isinstance(response, dict) and response else {}
 
 
 def inferencebox_snapshot_from_rows(rowsets: Dict[str, List[Dict[str, object]]], source: str, symbols: List[str] = None) -> Dict[str, object]:
@@ -69,6 +76,7 @@ def inferencebox_entity_payload(row: Dict[str, object]) -> Dict[str, object]:
         "hypothesisLifecycle": hypothesis_lifecycle_payload(properties),
         "knowledgeBasis": knowledge_basis,
         "claimContract": claim_contract,
+        **management_response_payload(properties, row),
         "ruleKind": str(knowledge_basis.get("ruleKind") or properties.get("ruleKind") or ""),
         "theoryFamily": str(knowledge_basis.get("theoryFamily") or properties.get("theoryFamily") or ""),
         "thesisFamily": str(knowledge_basis.get("thesisFamily") or properties.get("thesisFamily") or ""),
@@ -123,6 +131,7 @@ def inferencebox_relation_payload(row: Dict[str, object]) -> Dict[str, object]:
         "hypothesisLifecycle": hypothesis_lifecycle_payload(properties),
         "knowledgeBasis": knowledge_basis,
         "claimContract": claim_contract,
+        **management_response_payload(properties, row),
         "ruleKind": str(knowledge_basis.get("ruleKind") or properties.get("ruleKind") or ""),
         "theoryFamily": str(knowledge_basis.get("theoryFamily") or properties.get("theoryFamily") or ""),
         "thesisFamily": str(knowledge_basis.get("thesisFamily") or properties.get("thesisFamily") or ""),

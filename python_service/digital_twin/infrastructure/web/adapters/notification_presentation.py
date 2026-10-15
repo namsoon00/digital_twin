@@ -258,6 +258,7 @@ def notification_job_public_payload(
     include_customer_document: bool = False,
 ) -> Dict[str, object]:
     context = job.context or {}
+    presentation_context = context
     configured_settings = settings
     customer_document = (
         dict(context.get("customerInvestmentDocument") or {})
@@ -286,6 +287,7 @@ def notification_job_public_payload(
             customer_document_quality = dict(
                 (presentation_job.context or {}).get("customerInvestmentDocumentQuality") or {}
             )
+            presentation_context = presentation_job.context or {}
             customer_text = str(
                 (presentation_job.context or {}).get("telegramMessage")
                 or presentation_job.text
@@ -478,15 +480,20 @@ def notification_job_public_payload(
         "quietHoursTimezone": context.get("quietHoursTimezone") or "",
     }
     if detail or include_customer_document:
-        payload["customerInvestmentDocument"] = customer_document
-        payload["customerInvestmentDocumentQuality"] = customer_document_quality
+        full_document = presentation_context.get("customerInvestmentDetailDocument") if detail else None
+        payload["customerInvestmentDocument"] = dict(full_document or customer_document)
+        payload["customerInvestmentDocumentQuality"] = dict(
+            presentation_context.get("customerInvestmentDetailDocumentQuality") or customer_document_quality
+        ) if full_document else customer_document_quality
+        if full_document:
+            payload["customerInvestmentNotificationDocument"] = customer_document
         report = context.get("companyChangeReport")
         if isinstance(report, dict):
             payload["companyChangeReport"] = report
     if detail:
         payload["relationChangeEvidence"] = dict(context.get("relationChangeEvidence") or {})
         configured_settings = configured_settings or operational_read_settings()
-        payload["fullText"] = full_notification_text(customer_text)
+        payload["fullText"] = full_notification_text(presentation_context.get("customerInvestmentDetailText") or customer_text)
         payload["actionFlow"] = notification_action_flow(context)
         # The trace is rebuilt from the immutable context captured with this
         # job, never from the currently active graph generation.

@@ -58,6 +58,7 @@ class CustomerInvestmentDocument:
     sent_at: str = ""
     notification_number: str = ""
     language_level: str = "beginner"
+    layout: str = "standard"
     version: str = CUSTOMER_INVESTMENT_DOCUMENT_VERSION
 
     def to_dict(self) -> Dict[str, object]:
@@ -70,6 +71,8 @@ class CustomerInvestmentDocument:
         payload["roleLabel"] = payload.pop("role_label")
         payload["detailUrl"] = payload.pop("detail_url")
         payload["languageLevel"] = payload.pop("language_level")
+        if self.layout == "standard":
+            payload.pop("layout")
         return payload
 
 
@@ -136,6 +139,7 @@ def customer_investment_document_from_dict(
         language_level=_clean_spaces(
             payload.get("languageLevel") or payload.get("language_level") or "beginner"
         ),
+        layout="compact-rulebox-v1" if payload.get("layout") == "compact-rulebox-v1" else "standard",
         version=version,
     )
 
@@ -776,13 +780,22 @@ def customer_investment_document_quality(
             issues.append("unexplained-observation-change")
     if document.role in {"ai-judgement", "system-judgement"} and "action" not in section_keys:
         issues.append("missing-ai-action")
-    if "next-update" not in section_keys:
+    compact = document.layout == "compact-rulebox-v1"
+    if compact:
+        for key in ("notification-purpose", "decision-impact", "decision-basis", "current-snapshot", "next-check-contract"):
+            if key not in section_keys:
+                issues.append("missing-observation-" + key)
+        if len(document.sections) > 5:
+            issues.append("compact-observation-too-many-sections")
+    if "next-update" not in section_keys and not compact:
         issues.append("missing-next-update")
     values = [document.headline, document.role_label, document.lead]
     values.extend(section.title for section in document.sections)
     values.extend(row for section in document.sections for row in section.rows)
     values.extend(link.label for link in document.links)
     combined = "\n".join(_clean_spaces(value) for value in values if _clean_spaces(value))
+    if compact and len(combined) > 850:
+        issues.append("compact-observation-too-long")
     if re.search(r"[‘'\"]\s*[’'\"]\s*(?:규칙|가설|조건)", combined):
         issues.append("empty-rule-or-hypothesis-label")
     for issue in customer_text_quality_issues(combined):

@@ -932,6 +932,8 @@ def typedb_observation_telegram_message(
         from digital_twin.modules.notifications.domain.relation_change_presentation import PRESENTATION_VERSION
         summary = relation_change_summary(relation_packet)
         lead = summary["lead"]
+        if summary.get("title"):
+            headline = "🔗 " + summary["title"] + (" · " + target_name if target_name else "")
         compact_follow_up = bool(summary.get("compactFollowUp"))
         relation_sections = list(summary["sections"])
         if not summary.get("compactFollowUp"):
@@ -998,5 +1000,8 @@ def typedb_observation_telegram_message(
     )
     normalized = normalized_customer_investment_document(document)
     context["customerInvestmentDocument"] = normalized.to_dict()
-    context["customerInvestmentDocumentQuality"] = customer_investment_document_quality(normalized)
+    context["customerInvestmentDocumentQuality"] = customer_investment_document_quality(
+        normalized, required_sections=("notification-purpose", "decision-impact", "next-check-contract")
+        if relation_packet.get("customerEvents") else (),
+    )
     return render_customer_investment_document(normalized)

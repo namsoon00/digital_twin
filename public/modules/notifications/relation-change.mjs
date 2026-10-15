@@ -65,6 +65,19 @@ function renderRelationChangeEvidence(packet) {
     + '</p><p>관측: ' + text(current.observedAt ? notificationClock(current.observedAt) : "") + " · 출처: " + text(current.source)
     + " · 자료 상태: " + text(current.dataState) + '</p><p>ABox: ' + text(current.sourceAboxSnapshotId)
     + " · 추론 세대: " + text(current.inferenceGenerationId) + '</p>'
+    + (packet.customerEvents || []).map(function (event) {
+      var intent = event.intent || {};
+      var impact = event.decisionImpact || {};
+      var check = event.nextCheck || {};
+      var purpose = { "hypothesis-evidence": "가설 재점검", "management-policy": "관리 기준 점검", "execution-constraint": "거래 제약 확인", "context-evidence": "새 근거 확인" }[event.purpose] || "근거 변화 확인";
+      var change = { "support-added": "지지 근거 추가", "support-removed": "지지 근거 해제", "counter-added": "반대 근거 추가", "counter-removed": "반대 근거 해제", "mixed-evidence": "지지·반대 근거 동시 변화", "invalidated": "가설 조건 해제", "observed": "조건 확인", "reactivated": "조건 재확인", "policy-changed": "관리 조건 변화", "outcome-confirmed": "예상 결과 조건 충족", "outcome-contradicted": "가설 재검토 조건 충족", "outcome-inconclusive": "확인 구간 종료 · 결과 불확정" }[event.changeKind] || event.changeKind;
+      return '<details open><summary>' + text(purpose) + ' · ' + text(change) + '</summary><p>' + text(intent.customerQuestion)
+        + '<br>연결 가설: ' + text((event.hypothesis || {}).expectedOutcome || event.ruleLabel)
+        + '<br>이전 판단과 비교: ' + text({ unchanged: "관리 제한·검토 후보 유지", changed: "관리 제한·검토 후보 변경", "first-observation": "이전 발송 비교 없음", unavailable: "판단 비교 자료 없음", "outcome-only": "등록된 가설의 구간 결과" }[impact.status])
+        + '<br>후속 확인: ' + text({ registered: "자동 결과 확인 등록됨", "registration-unconfirmed": "자동 결과 확인 등록 기록 없음", "rule-reevaluation": "새 자료로 관리 조건 재검사" }[check.trackingStatus])
+        + (event.parentJobId ? '<br>원본 알림 N-' + text(event.parentJobId.slice(0, 8).toUpperCase()) : '')
+        + '</p></details>';
+    }).join("")
     + (current.marketSignalCoverage ? '<details><summary>자료별 집계 시각과 제공 범위</summary>'
       + Object.entries(current.marketSignalCoverage).map(function (entry) {
         var source = entry[1] || {};

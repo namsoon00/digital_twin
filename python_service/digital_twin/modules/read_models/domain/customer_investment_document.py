@@ -743,6 +743,7 @@ def normalized_customer_investment_document(
 
 def customer_investment_document_quality(
     document: CustomerInvestmentDocument,
+    *, required_sections=(),
 ) -> Dict[str, object]:
     """Validate the customer boundary without altering the audit vocabulary."""
 
@@ -754,6 +755,9 @@ def customer_investment_document_quality(
     if not _clean_spaces(document.lead):
         issues.append("missing-lead")
     section_keys = {section.key for section in document.sections if section.rows}
+    for key in required_sections:
+        if key not in section_keys:
+            issues.append("missing-observation-" + key)
     if document.role == "typedb-observation" and "current-price" in section_keys:
         # V3 keeps each claim, its rule proof, falsification and qualification
         # together. Market measurements and source notes are grouped too.
@@ -773,6 +777,8 @@ def customer_investment_document_quality(
     values.extend(row for section in document.sections for row in section.rows)
     values.extend(link.label for link in document.links)
     combined = "\n".join(_clean_spaces(value) for value in values if _clean_spaces(value))
+    if re.search(r"[‘'\"]\s*[’'\"]\s*(?:규칙|가설|조건)", combined):
+        issues.append("empty-rule-or-hypothesis-label")
     for issue in customer_text_quality_issues(combined):
         issues.append("customer-text:" + issue)
     forbidden = {

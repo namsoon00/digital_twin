@@ -7,7 +7,7 @@ from unittest.mock import Mock
 
 from test_investment_insight_dispatch_service import (
     subject_case, context_observation, alert, FakeOrchestrator, FakeIngress,
-    FakeNotificationQueue, FakeAIHandoff,
+    FakeNotificationQueue, FakeAIHandoff, frozen_notification_claim,
 )
 from digital_twin.modules.decisions.application.investment_insight_dispatch_service import InvestmentInsightDispatchService
 from digital_twin.modules.decisions.domain.investment_reasoning import PUBLISH_TYPEDB, ARCHIVE
@@ -106,10 +106,11 @@ def readable_fixture():
         "supportingRuleIds": ["rule:linked"], "evidenceState": "supported",
         "qualification": {"status": "shadow", "decisiveOutcomeCount": 1, "directionalHitRate": 1.0},
         "falsificationContract": "회복 가격대와 거래가 유지되는지 확인",
-        "claimContract": {"outcomeContract": {"outcomeHorizonMinutes": [60, 1440], "criteria": [{
+        "claimContract": {**frozen_notification_claim(), "outcomeContract": {"outcomeHorizonMinutes": [60, 1440], "criteria": [{
             "role": "result", "metric": "instrumentReturnPct", "operator": "<=", "threshold": -.5, "horizonMinutes": 0,
         }]}},
     }]}
+    relation["hypothesisLifecycle"]["transitions"][0].update(hypothesisIds=["h1"], sourceRuleIds=["rule:linked"])
     previous = relation_change_evidence(context)["current"]
     next(item for item in previous["facts"] if item["id"] == "currentPrice")["value"] = 10000
     previous["transitions"] = []
@@ -327,6 +328,7 @@ class IndependentTypeDBTests(unittest.TestCase):
                   "falsificationContract": "충격이 완화되거나 종목이 독립적인 상대 강도를 확인",
                   "evidenceState": "supported", "qualification": {"status": "observed", "decisiveOutcomeCount": 5}}
         relation["hypothesisSet"]["hypotheses"].append(second)
+        second["claimContract"].update(ruleId="rule:other", claimContractId="claim:rule:other")
         raw = relation["hypothesisLifecycle"]["transitions"][0]
         raw.update(currentState="invalidated", previousState="maintained")
         raw["record"] = {"snapshot": {"hypothesisIds": ["h2"], "sourceRuleIds": ["rule:linked"]}}
@@ -337,7 +339,7 @@ class IndependentTypeDBTests(unittest.TestCase):
         doc = context["customerInvestmentDocument"]
         self.assertIn("외부 시장의 위험 전달 가능성", doc["lead"])
         self.assertNotIn("가격 회복", doc["lead"], "do not assign another hypothesis's change to this one")
-        self.assertIn("더 이상 충족되지", doc["lead"])
+        self.assertIn("더 이상 성립하지", doc["lead"])
         self.assertNotIn("위험이 해소", text)
         sections = {s["key"]: s for s in doc["sections"]}
         self.assertIn("외부 시장", sections["hypotheses"]["title"], "the changed hypothesis is shown first")

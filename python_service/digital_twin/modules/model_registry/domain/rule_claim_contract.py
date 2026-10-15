@@ -169,6 +169,7 @@ class RuleClaimContract:
     source: str = "rulebox-governed-contract"
     version: str = RULE_CLAIM_CONTRACT_VERSION
     rule_fingerprint: str = ""
+    notification_intent: Dict[str, object] | None = None
 
     @property
     def is_predictive(self) -> bool:
@@ -198,11 +199,13 @@ class RuleClaimContract:
             "outcomeContract": self.outcome_contract.to_dict(),
             "source": self.source,
             **({"ruleFingerprint": self.rule_fingerprint} if self.rule_fingerprint else {}),
+            **({"notificationIntent": dict(self.notification_intent)} if self.notification_intent is not None else {}),
         }
 
     @staticmethod
     def from_dict(payload: Mapping[str, object] = None):
         item = dict(payload or {}) if isinstance(payload, Mapping) else {}
+        from .rule_notification_intent import parse_notification_intent
         return RuleClaimContract(
             claim_contract_id=_text(item.get("claimContractId") or item.get("claim_contract_id")),
             rule_id=_text(item.get("ruleId") or item.get("rule_id")),
@@ -226,6 +229,7 @@ class RuleClaimContract:
             source=_text(item.get("source")) or "rulebox-governed-contract",
             version=_text(item.get("version")) or RULE_CLAIM_CONTRACT_VERSION,
             rule_fingerprint=_text(item.get("ruleFingerprint") or item.get("rule_fingerprint")),
+            notification_intent=parse_notification_intent(item),
         )
 
 
@@ -454,6 +458,9 @@ def _rule_semantic_fingerprint(rule: object) -> str:
 def rule_claim_contract_violations(contract: RuleClaimContract, rule_id: str = "") -> List[str]:
     prefix = (_text(rule_id) or contract.rule_id or "<unknown-rule>") + ": "
     issues: List[str] = []
+    if contract.notification_intent is not None:
+        from .rule_notification_intent import intent_violations
+        issues.extend(prefix + issue for issue in intent_violations(contract.notification_intent, contract.to_dict()))
     if contract.claim_type not in CLAIM_TYPES:
         issues.append(prefix + "claim contract has invalid claim_type")
     if not contract.claim_contract_id or contract.rule_id != _text(rule_id or contract.rule_id):

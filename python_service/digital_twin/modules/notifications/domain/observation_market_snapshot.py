@@ -146,6 +146,11 @@ def execution_rows(current, previous=None):
     return rows
 
 
+def volume_multiple(value):
+    # Preserve a small nonzero observation without an unreadable decimal tail.
+    return "0.001배 미만" if 0 < value < .001 else decimal(value) + "배"
+
+
 def volume_pace_rows(current, previous=None):
     facts, before = snapshot_facts(current), snapshot_facts(previous or {})
     raw = numeric(facts.get("volumeRatio"))
@@ -155,7 +160,7 @@ def volume_pace_rows(current, previous=None):
     label = {"previous-session-total": "전 거래일 전체 대비 누적 거래량",
              "prior-completed-session-average": "완료된 과거 거래일 평균 대비 누적 거래량",
              "latest-positive-candle-average-including-current": "일봉 거래량 비율"}.get(basis, "거래량 비율")
-    rows = [label + " " + decimal(raw) + "배"]
+    rows = [label + " " + volume_multiple(raw)]
     numerator, denominator = numeric(facts.get("volumeRatioNumerator")), numeric(facts.get("volumeRatioDenominator"))
     if numerator is not None and denominator is not None and denominator > 0:
         sample = numeric(facts.get("volumeRatioSampleCount"))
@@ -177,13 +182,13 @@ def volume_pace_rows(current, previous=None):
                     + " · 정규장 " + decimal(facts.get("volumePaceElapsedPct")) + "% 경과")
         rows.append("고정된 장중 분포를 적용한 추정입니다. 실제 과거 동시간 거래량 비교가 아니며 단축장 등은 반영하지 못합니다.")
     elif adjusted is not None:
-        rows.append("기존 시간 보정 기록 " + decimal(adjusted) + "배 · 원자료와 집계 기준의 일치가 검증되지 않은 참고값입니다.")
+        rows.append("기존 시간 보정 기록 " + volume_multiple(adjusted) + " · 원자료와 집계 기준의 일치가 검증되지 않은 참고값입니다.")
     else:
         rows.append("시간 보정 미적용 · " + ("일봉 거래량을 장중 누적 거래량으로 보정하지 않습니다." if basis == "latest-positive-candle-average-including-current"
                     else str(facts.get("volumePaceBasis") or "거래량 원자료의 시각·집계 기준을 확인하지 못했습니다.")))
     old = numeric(before.get("volumeRatio"))
     if old is not None and basis and before.get("volumeRatioBasis") == basis and before.get("volumePaceProvider") == facts.get("volumePaceProvider"):
-        rows.append("거래량 비율 추적: 이전 알림 " + decimal(old) + "배 → 이번 " + decimal(raw) + "배 · 이전 기준 " + clock(before.get("volumePaceSourceAsOf")))
+        rows.append("거래량 비율 추적: 이전 알림 " + volume_multiple(old) + " → 이번 " + volume_multiple(raw) + " · 이전 기준 " + clock(before.get("volumePaceSourceAsOf")))
     return rows
 
 

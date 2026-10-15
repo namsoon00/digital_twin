@@ -6,10 +6,10 @@ import hashlib
 import json
 from typing import Dict, Iterable, List, Mapping
 
-from digital_twin.modules.model_registry.contracts import has_material_delta, relation_lifecycle_transition_contract
+from digital_twin.modules.model_registry.contracts import has_material_delta, relation_lifecycle_transition_contract, rule_notification_intent
 from digital_twin.modules.decisions.contracts import is_graph_backed_relation_context
 from digital_twin.modules.notifications.domain.follow_up_transition_evidence import follow_up_transition_evidence
-from digital_twin.modules.notifications.domain.relation_change import relation_change_evidence
+from digital_twin.modules.notifications.domain.relation_change import relation_change_evidence, relation_change_snapshot
 
 
 CONTEXT_OBSERVATION_NOTIFICATION_VERSION = "typedb-context-observation-notification-v2"
@@ -343,6 +343,23 @@ def typedb_context_observation_contract(value: object) -> Dict[str, object]:
             "inferenceGenerationId": generation_id,
             "aiHandoffPending": stage_observation.get("independent") is not True,
         }
+    # Purpose-bound notices can describe a constraint or a registered outcome
+    # without inventing a market hypothesis. Publication authority is unchanged.
+    publication = _mapping(payload.get("typedbObservationPublication")) or _mapping(payload.get("decisionPublication"))
+    if publication.get("outcomeKind") == "OBSERVATION":
+        current = relation_change_snapshot(payload)
+        purpose_rule_ids = {intent["ruleId"] for row in current["hypotheses"] + current["rules"]
+                            for intent in [rule_notification_intent(row.get("claimContract"))] if intent}
+        # Recognizing this message contract must not depend on novelty. The
+        # locked receipt check must still run after another worker delivered it.
+        if current["proofIdentityVerified"] and (purpose_rule_ids or current["outcomeTracking"]):
+            return {"schemaVersion": CONTEXT_OBSERVATION_NOTIFICATION_VERSION, "status": "eligible",
+                    "decisionMode": CONTEXT_OBSERVATION_DECISION_MODE, "messageClass": "rule-purpose-observation",
+                    "ruleKind": "purpose-bound-observation", "decisionEligibility": "purpose-observation",
+                    "requiresHypothesis": False, "requiresAiJudgement": False, "requiresAiNarrative": False,
+                    "action": "NO_ACTION", "validationState": "typedb-purpose-verified",
+                    **{key: current[key] for key in ("symbol", "market", "sourceAboxSnapshotId", "inferenceGenerationId")},
+                    "relationIds": sorted(purpose_rule_ids)}
     lifecycle_transition = relation_lifecycle_transition_contract(relation)
     if (
         relation.get("relationLifecycleOnly") is True
@@ -745,6 +762,8 @@ def context_observation_delivery_decision(value: object) -> Dict[str, object]:
         "relationLifecycleTransition": lifecycle_transition,
         "stageObservation": contract.get("decisionEligibility") == "stage-observation",
         "relationTransitionIds": [item["transitionId"] for item in relation_change["transitions"]],
+        "customerEventIds": [item["eventId"] for item in relation_change["customerEvents"]],
+        "notificationPurposes": sorted({item["purpose"] for item in relation_change["customerEvents"]}),
     }
     if decision["stageObservation"]:
         decision.pop("selectedRuleId", None)
@@ -765,7 +784,9 @@ def context_observation_delivery_decision(value: object) -> Dict[str, object]:
         stage_observation = contract.get("decisionEligibility") == "stage-observation"
         decision.update({
             "decision": "send",
-            "reason": ("자료 상태 변화: " if all(row.get("changeCategory") == "data-availability" for row in relation_change["transitions"]) else "룰박스 관계 변화: ") + relation_change["reason"],
+            "reason": ("자료 상태 변화: " if relation_change["transitions"] and not relation_change["customerEvents"]
+                       and all(row.get("changeCategory") == "data-availability" for row in relation_change["transitions"])
+                       else "규칙 근거 확인: ") + relation_change["reason"],
             "suppressionReason": "",
             "pushValueClass": (
                 "material-typedb-stage-observation"

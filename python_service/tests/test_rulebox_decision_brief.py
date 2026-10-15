@@ -228,8 +228,9 @@ class RuleBoxDecisionBriefTests(unittest.TestCase):
                                                  "latestObservedAt": "2026-10-02T01:10:00Z"}}}}]})
         text = message(context)
         doc = context["customerInvestmentDocument"]
-        self.assertIn("‘장중 하락 속도가 빨라짐’ 규칙이 가설의 지지 근거에 추가", doc["lead"])
+        self.assertIn("뒷받침하는 근거가 추가", doc["lead"])
         cause = next(s for s in doc["sections"] if s["key"] == "delivery-cause")
+        self.assertIn("‘장중 하락 속도가 빨라짐’ 규칙이 가설의 지지 근거에 추가", str(cause))
         self.assertNotIn("평가 수익률", str(cause))
         self.assertIn("1일 -2% (4건)", str(cause))
         self.assertNotIn("직전 분석 미보존 → 이번 1", text)

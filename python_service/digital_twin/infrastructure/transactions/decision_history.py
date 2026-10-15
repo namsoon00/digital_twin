@@ -221,6 +221,11 @@ class MySQLInvestmentDecisionEpisodeStore(MySQLOperationalConnection):
             _connect=self.connect,
         )
 
+    def shadow_observation_results_for_episodes(self, account_id, symbol, episode_ids):
+        return shadow_observations.shadow_observation_results_for_episodes(
+            account_id, symbol, episode_ids, _connect=self.connect,
+        )
+
     @staticmethod
     def upsert_outcome_target(
         connection,

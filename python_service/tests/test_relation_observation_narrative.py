@@ -53,9 +53,11 @@ class RelationObservationNarrativeTests(unittest.TestCase):
                 "current": {"score": .538025, "minimumScore": .7}}]})
         context["relationChangeEvidence"] = relation_change_evidence(context)
         text = typedb_observation_telegram_message(context)
-        for value in ("직전 분석 0.81869 → 이번 0.538025", "규칙 기준 0.7 이상", "확률 아님",
+        for value in ("직전 분석 약 0.8187 → 이번 약 0.538", "규칙 기준 0.7 이상", "확률 아님",
                       "규칙 데이터", "현재 전체 데이터"):
             self.assertIn(value, text)
+        self.assertEqual(.81869, context["relationChangeEvidence"]["transitions"][0]["changeBasis"]["ruleComparisons"][0]["previous"]["score"])
+        self.assertEqual("passed", context["customerInvestmentDocumentQuality"]["status"])
         self.assertTrue(context["relationChangeEvidence"]["eligible"])
         transition.update(materialChange=False, changeBasis={"category": "reassessment"})
         self.assertFalse(relation_change_evidence(context)["eligible"])

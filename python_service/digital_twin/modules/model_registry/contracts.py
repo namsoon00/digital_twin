@@ -8,6 +8,7 @@ _EXPORTS = {'MODEL_REVIEW_PROMPT_VERSION': ('digital_twin.modules.model_registry
  'ModelReviewJob': ('digital_twin.modules.model_registry.domain.model_review', 'ModelReviewJob')}
 
 _EXPORTS['HypothesisLifecycleRepository'] = ('digital_twin.modules.model_registry.domain.repositories', 'HypothesisLifecycleRepository')
+_EXPORTS['rule_notification_intent'] = ('digital_twin.modules.model_registry.domain.rule_notification_intent', 'rule_notification_intent')
 
 
 _EXPORTS.update({

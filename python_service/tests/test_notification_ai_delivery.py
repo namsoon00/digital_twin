@@ -313,8 +313,14 @@ def review_observation_context(outcome="REVIEW_ONLY"):
 
 
 def lifecycle_observation_context(outcome="OBSERVATION"):
+    from test_investment_insight_dispatch_service import subject_case, frozen_notification_claim
     context = context_observation_context(outcome=outcome)
+    context.update(accountId="main", investmentSubjectDecisionCase=subject_case("subject:lifecycle").to_dict())
     relation = context["ontologyRelationContext"]
+    relation["worldId"] = "world:fixture"
+    relation["hypothesisSet"] = {"hypotheses": [{"hypothesisId": "hypothesis:mstr-risk",
+        "supportingRuleIds": ["rule:risk"], "expectedOutcome": "반등 실패 가능성",
+        "claimContract": frozen_notification_claim("rule:risk")}]}
     relation.update({
         "relationLifecycleOnly": True,
         "activeRules": [],
@@ -334,6 +340,7 @@ def lifecycle_observation_context(outcome="OBSERVATION"):
                 "occurredAt": "2026-08-16T00:00:00Z",
                 "reason": "이전 위험 관계가 현재 TypeDB 세대에서 더 이상 성립하지 않습니다.",
                 "materialChange": True,
+                "hypothesisIds": ["hypothesis:mstr-risk"], "sourceRuleIds": ["rule:risk"],
             }],
         },
     })

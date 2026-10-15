@@ -73,6 +73,20 @@ def subject_case(case_id, *, action_authority="observe", eligible=(), outcome="O
     )
 
 
+def frozen_notification_claim(rule_id="rule:linked", claim_type="market-hypothesis"):
+    from digital_twin.modules.model_registry.domain.rule_claim_contract import (
+        RuleClaimContract, CLAIM_VALIDATION_MODES, CLAIM_DECISION_AUTHORITIES, predictive_outcome_contract,
+    )
+    from digital_twin.modules.outcomes.contracts import HypothesisOutcomeContract
+    return RuleClaimContract(claim_contract_id="claim:" + rule_id, rule_id=rule_id, claim_type=claim_type,
+        statement="연결된 근거로 확인할 가설", theory_family="price-path", thesis_family="failed-recovery",
+        prediction_target="instrument-return", expected_outcome="반등이 이어지지 않을 가능성",
+        falsification_contract="회복 가격대와 거래가 유지되는지 확인", expected_direction="risk",
+        validation_mode=CLAIM_VALIDATION_MODES[claim_type], decision_authority=CLAIM_DECISION_AUTHORITIES[claim_type],
+        outcome_contract=predictive_outcome_contract("failed-recovery", "risk", rule_id)
+        if claim_type == "market-hypothesis" else HypothesisOutcomeContract()).to_dict()
+
+
 def context_observation(case):
     rule = {
         "ruleId": "graph.benchmark.beta.context.v1",
@@ -93,6 +107,7 @@ def context_observation(case):
         },
     }
     return {
+        "accountId": case.account_id,
         "investmentSubjectDecisionCaseId": case.subject_case_id,
         "investmentSubjectDecisionCase": case.to_dict(),
         "decisionPublication": case.publication.to_dict(),
@@ -108,6 +123,7 @@ def context_observation(case):
             },
         },
         "ontologyRelationContext": {
+            "worldId": "world:fixture",
             "source": "typedbInferenceBox",
             "graphStore": "typedb",
             "graphStoreUsed": True,
@@ -127,7 +143,11 @@ def context_observation(case):
                 "inferenceGenerationId": case.inference_generation_id,
                 "occurredAt": "2026-10-01T00:00:00Z",
                 "reason": "새 가설 관계가 성립했습니다.",
+                "hypothesisIds": ["hypothesis:fixture"], "sourceRuleIds": [rule["ruleId"]],
             }]},
+            "hypothesisSet": {"hypotheses": [{"hypothesisId": "hypothesis:fixture",
+                "expectedOutcome": "반등이 이어지지 않을 가능성", "supportingRuleIds": [rule["ruleId"]],
+                "claimContract": frozen_notification_claim(rule["ruleId"])}]},
             "activeRules": [rule],
             "matchedRules": [rule],
             "decision": {

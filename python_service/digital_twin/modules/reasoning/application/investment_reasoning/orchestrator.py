@@ -682,6 +682,25 @@ class InvestmentReasoningOrchestrator:
                 claim_contract_ids,
                 100,
             ) or []
+        enriched["ruleObservationTracking"] = [
+            {"version": "rule-outcome-registration-v1", "episodeId": row.get("episodeId"),
+             "projectionGenerationId": subject_case.inference_generation_id,
+             "projectionAboxSnapshotId": subject_case.source_abox_snapshot_id,
+             **{key: deepcopy(row.get(key)) for key in (
+                 "accountId", "symbol", "claimContractId", "hypothesisId", "inferenceGenerationId",
+                 "sourceAboxSnapshotId", "observedFromAt", "outcomeContract", "status")}}
+            for item in observations
+            for row in [item.to_dict() if hasattr(item, "to_dict") else dict(item or {})]
+            if row.get("episodeId") and (row.get("readiness") or {}).get("eligible") is True
+            and row.get("accountId") == subject_case.account_id and row.get("symbol") == subject_case.symbol
+        ]
+        result_loader = getattr(self.decision_episode_store, "shadow_observation_results_for_episodes", None)
+        if callable(result_loader) and enriched["ruleObservationTracking"]:
+            results = result_loader(subject_case.account_id, subject_case.symbol,
+                                    [r["episodeId"] for r in enriched["ruleObservationTracking"]])
+            for registration in enriched["ruleObservationTracking"]:
+                registration["results"] = [deepcopy(r) for r in results or []
+                                           if isinstance(r, dict) and r.get("episodeId") == registration["episodeId"]]
         enriched["investmentReasoningLineage"] = subject_reasoning_lineage(
             subject_case.to_dict(),
             reasoning_case.to_dict(),

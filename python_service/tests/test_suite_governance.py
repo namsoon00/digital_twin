@@ -333,7 +333,9 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # Nine conservative-repeat contracts cover source identity, bounded cached
         # reads, pre-model admission, partial-answer retention and progress,
         # legacy/paraphrased questions, and material-driven storage resumption.
-        self.assertLessEqual(total, 2331)
+        # Rule-authored notification purposes protect evidence polarity,
+        # receipt novelty, policy-only changes and registered outcome replies.
+        self.assertLessEqual(total, 2340)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

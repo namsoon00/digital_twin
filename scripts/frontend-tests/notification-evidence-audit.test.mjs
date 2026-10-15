@@ -2,6 +2,17 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { renderEvidenceValidation, renderDeliveredMessage } from "../../public/modules/notifications/evidence-audit.mjs";
 
+test("rule purpose detail keeps evidence polarity and registered follow-ups visible", async () => {
+  const { renderRelationChangeEvidence } = await import("../../public/modules/notifications/relation-change.mjs");
+  const html = renderRelationChangeEvidence({ version: "relation-change-evidence-v1", current: {}, customerEvents: [{
+    purpose: "hypothesis-evidence", changeKind: "counter-added", hypothesis: { expectedOutcome: "반등 실패 가능성" },
+    intent: { customerQuestion: "가설 재점검 <script>unsafe</script>" }, decisionImpact: { status: "unchanged" },
+    nextCheck: { trackingStatus: "registered" }, parentJobId: "original-alert"
+  }] });
+  for (const value of ["가설 재점검", "반대 근거 추가", "반등 실패 가능성", "관리 제한·검토 후보 유지", "자동 결과 확인 등록됨", "원본 알림 N-ORIGINAL"]) assert.ok(html.includes(value), value);
+  assert.doesNotMatch(html, /<script>|\[object Object\]/);
+});
+
 test("rejected claims expose their evidence gap without asserting predictive validation", () => {
   const html = renderEvidenceValidation({evidenceLedger: [{evidenceId: "m", kind: "model-signal", value: "<script>bad</script>", modelEvidenceIds: ["HAS_TEMPORAL_WINDOW:fixture"], sourceFeatureSnapshotId: "f", featureSummary: {measurementBasis: "condition-coverage"}}], validations: [{claimId: "c", status: "rejected", text: "충격 흡수", evidenceIds: ["m"], reasons: ["mechanism-needs-observed-state"]}]});
   assert.match(html, /제외/); assert.match(html, /예측 성과 검증 아님/);

@@ -95,7 +95,7 @@ def delivered_continuity(previous):
 
 
 def compact_names(hypotheses):
-    return [{key: deepcopy(h.get(key)) for key in ("id", "label", "claim", "ruleIds", "expectedOutcome")}
+    return [{key: deepcopy(h.get(key)) for key in ("id", "label", "claim", "ruleIds", "expectedOutcome", "claimContract")}
             for h in hypotheses[:3]]
 
 
@@ -159,6 +159,9 @@ def delivery_snapshot(packet, job_id, account_id):
     same_scope = (current.get("symbol") == previous.get("symbol") and current.get("worldId")
                   and current.get("worldId") == previous.get("worldId") and previous.get("accountId") == account_id)
     history = delivered_continuity(previous) if same_scope else {}
+    from .rule_notification_event import carry_intent_receipts
+    carry_intent_receipts(current, previous if same_scope else {}, packet.get("customerEvents") or [], job_id)
+    current["customerEvents"] = deepcopy(packet.get("customerEvents") or [])
     for row in packet.get("transitions") or []:
         identity = row.get("lifecycleKey")
         if not identity:

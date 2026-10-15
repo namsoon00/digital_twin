@@ -9,7 +9,7 @@ from digital_twin.modules.notifications.domain.relation_observation_proof import
 from digital_twin.modules.notifications.domain.rulebox_decision_presentation import decision_brief_presentation, threshold
 
 
-PRESENTATION_VERSION = "readable-relation-change-v10"
+PRESENTATION_VERSION = "readable-relation-change-v11"
 
 CHANGE = {
     "observed": "조건이 새로 확인됐습니다.",
@@ -41,6 +41,11 @@ def items(value):
 
 def unique(values):
     return list(dict.fromkeys(value for value in values if value))
+
+
+def model_score(value):
+    rounded = round(value, 4)
+    return ("약 " if rounded != value else "") + format(rounded, ".4f").rstrip("0").rstrip(".")
 
 
 def measurement(field, value, currency):
@@ -181,6 +186,8 @@ def model_input_change_rows(comparison):
 
 def rule_change_sentence(transition, comparison):
     label = str(comparison.get("label") or "연결 규칙").replace("->", "→")
+    if label.startswith(("graph.", "rule:", "inference-")):
+        label = "해당 가설의 연결 조건"
     # Show the authored condition name, not the stock prefix or bridge suffix.
     if "→" in label:
         label = label.split("→", 1)[0].split(" · ")[-1].strip()
@@ -202,7 +209,10 @@ def rule_change_sentence(transition, comparison):
     elif transition.get("currentState") == "invalidated":
         meaning = "규칙으로 뒷받침하던 조건이 더 이상 충족되지 않습니다."
     else:
-        meaning = "규칙의 근거 변화가 확인됐습니다."
+        if len(changes) == 1:
+            meaning = "규칙이 가설의 " + role + ("로 추가됐습니다." if changes[0].get("change") == "added" else "에서 해제됐습니다.")
+        else:
+            meaning = "규칙의 근거 변화가 확인됐습니다."
     return "‘" + label + "’ " + meaning
 
 
@@ -255,9 +265,9 @@ def delivery_cause_rows(packet, currency):
                 result.extend(current_input_rows(comparison))
                 result.append("이 규칙의 이전 입력값이 저장되지 않아 수치의 전후 비교는 미제공합니다.")
             elif old_score is not None and old_score != new_score and not input_changes:
-                text = "모델 점수 직전 분석 " + decimal(old_score, 8)
+                text = "모델 점수 직전 분석 " + model_score(old_score)
                 current_score = ("원천 조건 불성립으로 점수 미생성" if newer.get("status") == "not-supported" else "미확인")
-                text += " → 이번 " + (decimal(new_score, 8) if new_score is not None else current_score)
+                text += " → 이번 " + (model_score(new_score) if new_score is not None else current_score)
                 minimum = numeric(newer.get("minimumScore", older.get("minimumScore")))
                 if minimum is not None:
                     text += " · 규칙 기준 " + decimal(minimum, 2) + " 이상"
@@ -424,12 +434,38 @@ def readable_relation_change(packet):
     changes = unique(transition_sentence(row, named) for row in items(packet.get("transitions")))
     lead = " ".join(part for part in (" ".join(changes[:3]) or "새로운 근거 변화 없이 현재 기록을 확인합니다.", market_sentence(current, currency)) if part)
     decision = decision_brief_presentation(packet)
+    from .rule_event_presentation import customer_event_summary
+    event_summary = customer_event_summary(packet.get("customerEvents") or []) if packet.get("customerEvents") else {}
+    events = packet.get("customerEvents") or []
+    if events and all(e.get("outcome") for e in events):
+        parent = (packet.get("followUp") or {}).get("parentJobId") or ""
+        result_rows = []
+        for event in events:
+            for criterion in items((event["outcome"].get("payload") or {}).get("criterionAssessments")):
+                field = criterion.get("metric") or ""
+                result_rows.append(condition_clause(field, criterion.get("operator"), criterion.get("threshold"), currency)
+                    + " · 실제 " + measurement(field, criterion.get("observedValue"), currency)
+                    + " · " + {"passed": "충족", "failed": "미충족", "unknown": "확인 불가"}.get(criterion.get("state"), "상태 미기록"))
+        return {"lead": event_summary["lead"], "title": "가설 확인 결과", "compactFollowUp": True,
+                "sections": [("previous-alert", "이전 알림의 확인 결과", ["원본 알림 N-" + parent[:8].upper()]),
+                             *event_summary["sections"], ("outcome-evidence", "기준과 확인된 결과", result_rows),
+                             ("next-update", "이후 확인", ["정해진 다른 구간의 결과가 남아 있으면 확인 후 이어서 안내합니다. 이번 결과만으로 원인·결과 관계가 입증되지는 않습니다."])]}
     causes = delivery_cause_rows(packet, currency)
     if decision:
         headline = causes[0] if causes and causes[0].startswith("‘") else " ".join(changes[:2])
         lead = " ".join(value for value in (headline, decision["lead"], market_sentence(current, currency)) if value)
         if causes and causes[0] == headline:
             causes = causes[1:]
+    if event_summary:
+        lead = event_summary["lead"] + " " + market_sentence(current, currency)
+        if decision.get("lead"):
+            event_summary["sections"][1][2].append(decision["lead"])
+        # The lead owns the claim's meaning; every changed rule stays in the
+        # numeric evidence section, including counter-evidence and endings.
+        causes = delivery_cause_rows(packet, currency)
+        for event in events:
+            if event.get("conditions"):
+                causes.extend(rule_conditions({"conditions": event["conditions"]}, facts, currency))
     market = {key: (title, rows) for key, title, rows in market_snapshot_sections(current, previous)}
     quote = [*market["current-price"][1], *market["price-trend"][1]]
     changed_ids = {h.get("id") for transition in items(packet.get("transitions"))
@@ -457,8 +493,9 @@ def readable_relation_change(packet):
     notes.append("전체 근거: 가설 " + str(len(hypotheses)) + "개 · 규칙 " + str(len(rules)) + "개 · 측정 항목 " + str(len(current.get("facts") or [])) + "개")
     notes.append("다음 알림: 근거에 새로운 변화가 생기면 발송 간격을 확인해 알려드립니다.")
     parent = (packet.get("followUp") or {}).get("parentJobId")
-    return {"lead": lead, "sections": [
+    return {"lead": lead, "title": event_summary.get("title"), "sections": [
         *(([("previous-alert", "이전 알림의 후속 변화", ["원본 알림 N-" + parent[:8].upper()])]) if parent else []),
+        *event_summary.get("sections", []),
         ("delivery-cause", "이번에 달라진 근거 · 규칙 데이터", causes),
         *decision.get("sections", []),
         *stories,

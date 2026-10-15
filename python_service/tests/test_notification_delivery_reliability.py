@@ -393,7 +393,10 @@ class DeliveryHistoryDatabaseTests(StabilizationDatabaseCase):
         from digital_twin.modules.notifications.domain.relation_change import relation_change_evidence
         from digital_twin.modules.notifications.domain.notification_rules import notification_subject_group_key
         store = self.notifications
-        first = NotificationJob.create("relation", account_id="relation-fixture", message_type="investmentInsight", context=lifecycle_observation_context())
+        context = lifecycle_observation_context()
+        context["accountId"] = "relation-fixture"
+        context["investmentSubjectDecisionCase"]["accountId"] = "relation-fixture"
+        first = NotificationJob.create("relation", account_id="relation-fixture", message_type="investmentInsight", context=deepcopy(context))
         first.context["relationChangeEvidence"] = relation_change_evidence(first.context)
         first.context["deliverySubjectGroupKey"] = notification_subject_group_key(first)
         store.upsert_job(first)
@@ -403,7 +406,7 @@ class DeliveryHistoryDatabaseTests(StabilizationDatabaseCase):
         attempts = store.delivery_attempts_for_job(first.job_id)
         self.assertEqual("delivered", attempts[0]["status"])
         self.assertEqual("MSTR", attempts[0]["metadata"]["relationChangeSnapshot"]["symbol"])
-        second = NotificationJob.create("same", account_id=first.account_id, message_type=first.message_type, context=lifecycle_observation_context())
+        second = NotificationJob.create("same", account_id=first.account_id, message_type=first.message_type, context=deepcopy(context))
         with store.connect() as connection:
             baseline = store.relation_delivery_snapshot_with_connection(connection, second)
             self.assertTrue(baseline["deliveredAt"])

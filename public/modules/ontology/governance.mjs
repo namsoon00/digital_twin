@@ -197,7 +197,8 @@ function renderTypeDBRuleboxPanel() {
     '</div>',
     '</div>',
     '<div class="model-section">',
-    '<div class="flow-title"><div><strong>TypeDB 저장 원본 JSON</strong><span>GraphInferenceRule 배열입니다. 조건과 derivation을 추가하면 다음 실행부터 관계 추론 대상이 됩니다.</span></div></div>',
+    '<div class="flow-title"><div><strong>TypeDB 저장 원본 JSON</strong><span>GraphInferenceRule 배열입니다. 규칙 변경은 배포 검증과 활성화 이후 적용됩니다.</span></div></div>',
+    '<p class="subtle">claimContract.notificationIntent에서 알림 목적(purpose), 고객 질문(customerQuestion), 알릴 변화(notifyOn)를 설정합니다. 비교 기준은 last-successful-delivery, 후속 확인은 rule-claim-contract입니다. 목적을 비워 둔 기존 배포는 저장된 가설 계약으로 목적을 연결하며, internal-only는 웹 이력에만 남깁니다.</p>',
     '<label class="setting-field wide"><textarea data-ontology-rulebox-json rows="18" autocomplete="off">' + escapeHtml(ontologyState.ontologyRuleboxJson || JSON.stringify(rules, null, 2)) + '</textarea></label>',
     '</div>',
     '<div class="model-section">',
@@ -236,12 +237,17 @@ function renderTypeDBRuleboxRuleRow(rule) {
     return item.relation_type || item.relationType || "";
   }).filter(Boolean);
   var knowledge = rule.knowledge_basis || rule.knowledgeBasis || {};
+  var claim = rule.claimContract || rule.claim_contract || {};
+  var intent = claim.notificationIntent || claim.notification_intent || {};
+  var purpose = intent.purpose || ({ "market-hypothesis": "hypothesis-evidence", "risk-invariant": "management-policy", "execution-feasibility": "execution-constraint", "data-reliability": "data-continuity", "causal-context": "context-evidence" }[claim.claimType] || "");
+  var purposeLabel = { "hypothesis-evidence": "가설의 지지·반대 근거 변화", "management-policy": "관리 기준 적용·해제", "execution-constraint": "거래 제약 변화", "data-continuity": "원본 알림의 자료 확인", "context-evidence": "새 참고 근거", "internal-only": "웹 이력만 저장" }[purpose] || "목적 연결 미확인";
   return [
     '<div class="source-row rulebox-rule-row">',
     '<span>' + escapeHtml(rule.enabled === false ? "disabled" : (rule.action_group || rule.actionGroup || "enabled")) + '</span>',
     '<strong>' + escapeHtml(rule.label || rule.rule_id || rule.ruleId || "Rule") + '</strong>',
     '<em>' + escapeHtml((rule.rule_id || rule.ruleId || "") + " · " + (knowledge.ruleKind || "역할 미지정") + " · " + (knowledge.theoryFamily || "이론 미지정") + " · " + (knowledge.validationStatus || "검증 미지정") + " · " + conditions.length + " conditions · " + (relationTypes.join(", ") || derivations.length + " derivations")) + '</em>',
     renderRecordChangedAt(rule),
+    '<small>' + escapeHtml("알림 목적: " + purposeLabel + (intent.purpose ? " · 규칙에 직접 설정" : " · 저장된 가설 계약 기준") + (intent.customerQuestion ? " · " + intent.customerQuestion : "")) + '</small>',
     '</div>'
   ].join("");
 }

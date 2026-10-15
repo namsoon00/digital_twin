@@ -116,5 +116,6 @@
     "functions": ["renderAdminMessageRow", "renderMessageScheduleSummary", "renderNotificationStateCooldownEditor"]
   },
   {"reason": "Show immutable relation-change hypothesis, rule and ABox comparisons from the last delivered snapshot with explicit missing evidence and counter-evidence. notification-evidence-audit.test.mjs.", "functions": ["renderNotificationSummaryTab"]},
-  {"functions": ["renderRelationChangeEvidence", "renderDeliveredMessage"], "reason": "Display notification evidence clocks in Asia/Seoul; preserve receipt message bytes. Covered by notification-evidence-audit.test.mjs."}
+  {"functions": ["renderRelationChangeEvidence", "renderDeliveredMessage"], "reason": "Display notification evidence clocks in Asia/Seoul; preserve receipt message bytes. Covered by notification-evidence-audit.test.mjs."},
+  {"functions": ["renderTypeDBRuleboxPanel", "renderTypeDBRuleboxRuleRow"], "reason": "Display RuleBox notification purposes and frozen-claim defaults without mutating active deployments. test_rule_notification_intent; notification-evidence-audit.test.mjs."}
 ]

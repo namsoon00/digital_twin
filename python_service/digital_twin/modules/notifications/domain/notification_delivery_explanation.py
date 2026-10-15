@@ -385,6 +385,18 @@ def _context_observation_cause(context: Mapping[str, object]) -> CustomerDeliver
         from digital_twin.modules.notifications.domain.relation_change import relation_change_evidence
         packet = relation_change_evidence(context, _mapping(context.get("relationChangeEvidence")).get("previous"))
         transitions = packet["transitions"]
+        events = packet.get("customerEvents") or []
+        if events:
+            from .rule_event_presentation import event_conclusion, PURPOSE_LABELS
+            event = events[0]
+            impact = event.get("decisionImpact") or {}
+            return _cause(
+                "verified-rulebox-customer-event", "relation-transition",
+                event_conclusion(event), label=PURPOSE_LABELS.get(event["purpose"], "규칙 근거 확인"),
+                previous_value=impact.get("previous"), current_value=impact.get("current"),
+                observed_at=event.get("observedAt"), source_references=[row["eventId"] for row in events],
+                basis="rulebox-notification-intent",
+            )
         if not transitions:
             return None
         transition = transitions[0]

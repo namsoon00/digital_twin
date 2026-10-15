@@ -207,6 +207,21 @@ def shadow_observation_episodes_for_claims(
     return result
 
 
+def shadow_observation_results_for_episodes(account_id, symbol, episode_ids, *, _connect):
+    """Bounded read of persisted evaluations; never evaluate at presentation time."""
+    identities = list(dict.fromkeys(str(v) for v in episode_ids if v))[:100]
+    if not identities:
+        return []
+    with _connect() as connection:
+        records = connection.execute(
+            "SELECT payload_json FROM investment_hypothesis_observation_outcomes "
+            "WHERE account_id = %s AND symbol = %s AND observation_episode_id IN ("
+            + ",".join(["%s"] * len(identities)) + ") ORDER BY observed_at DESC LIMIT 400",
+            (account_id, symbol, *identities),
+        ).fetchall()
+    return [_json_loads(row.get("payload_json"), {}) for row in records or []]
+
+
 def record_shadow_hypothesis_outcome_observations(
     account_id: str,
     observations: Iterable[Dict[str, object]],

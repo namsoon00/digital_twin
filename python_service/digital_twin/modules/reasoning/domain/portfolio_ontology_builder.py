@@ -1,4 +1,5 @@
 from typing import Dict, Iterable, List
+from digital_twin.modules.reasoning.domain.account_policy_facts import native_account_weight_pct
 
 from digital_twin.modules.market_data.contracts import investor_flow_observation
 from digital_twin.modules.market_data.contracts import number
@@ -199,7 +200,7 @@ def build_portfolio_ontology(
         holding = is_holding_position(position)
         stock_tbox_classes = instrument_tbox_classes(position) + (["WatchlistCandidate"] if source == "watchlist" else [])
         position_policy_limit = number(strategy_profile.get("maxPositionWeightPct"))
-        position_weight_pct = round(position_weight(position, portfolio), 2)
+        position_weight_pct = native_account_weight_pct(position_weight(position, portfolio))
         investor_observation = investor_flow_observation(position)
         investor_root_properties = {
             key: investor_observation[key]

@@ -256,6 +256,7 @@ def notification_job_public_payload(
     stale_minutes: int = None,
     settings: Dict[str, object] = None,
     include_customer_document: bool = False,
+    include_detail_document: bool = False,
 ) -> Dict[str, object]:
     context = job.context or {}
     presentation_context = context
@@ -480,13 +481,14 @@ def notification_job_public_payload(
         "quietHoursTimezone": context.get("quietHoursTimezone") or "",
     }
     if detail or include_customer_document:
-        full_document = presentation_context.get("customerInvestmentDetailDocument") if detail else None
+        full_document = presentation_context.get("customerInvestmentDetailDocument") if detail or include_detail_document else None
         payload["customerInvestmentDocument"] = dict(full_document or customer_document)
         payload["customerInvestmentDocumentQuality"] = dict(
             presentation_context.get("customerInvestmentDetailDocumentQuality") or customer_document_quality
         ) if full_document else customer_document_quality
         if full_document:
             payload["customerInvestmentNotificationDocument"] = customer_document
+            payload["fullText"] = full_notification_text(presentation_context.get("customerInvestmentDetailText") or customer_text)
         report = context.get("companyChangeReport")
         if isinstance(report, dict):
             payload["companyChangeReport"] = report

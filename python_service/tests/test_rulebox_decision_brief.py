@@ -391,6 +391,16 @@ class NativeManagementResponseTests(unittest.TestCase):
             'status': 'changed', 'previous': {'blockedActions': ['ADD']}, 'current': {'blockedActions': ['ADD']}}})
         self.assertIn('관리 대응 또는 목표가 새로 정해졌습니다', impact)
         self.assertNotIn('규칙 조건이 바뀌었습니다', impact)
+        # Actual ABox weights are stored at two decimals; context arithmetic
+        # retains full precision. This representation difference is not a new
+        # account snapshot or a reason to discard a native selected response.
+        ctx = self.response_context()
+        ctx['ontologyRelationContext']['facts']['positionAccountWeight'] = 78.45006234912685
+        normalized = decision_synthesis_from_relation_context(ctx['accountId'], ctx['ontologyRelationContext']).management_decision
+        self.assertEqual(78.45, normalized['responses'][0]['observedValue'])
+        self.assertAlmostEqual(86.55640535372848, normalized['responses'][0]['adjustmentScenario']['equivalentQuantity'])
+        ctx['ontologyRelationContext']['facts']['positionAccountWeight'] = 78.456
+        self.assertEqual({}, decision_synthesis_from_relation_context(ctx['accountId'], ctx['ontologyRelationContext']).management_decision)
 
     def test_raw_weights_or_stale_mismatched_unbound_evidence_cannot_create_policy_decision(self):
         from digital_twin.modules.decisions.domain.investment_reasoning.management import management_decision_from_relation
@@ -591,6 +601,20 @@ class CompactRuleBoxJudgmentTests(unittest.TestCase):
         self.assertIn('체결강도 120', payload['fullText'])
         self.assertIn('외국인: 순매도 500주', payload['fullText'])
         self.assertIn('살펴볼 가설', str(payload['customerInvestmentDocument']))
+        # The browser opens the summary route first; it does not request the
+        # expensive full reasoning projection just to render the document.
+        from types import SimpleNamespace
+        from unittest.mock import patch
+        from digital_twin.infrastructure.web.adapters import notification_inbox
+        with patch.object(notification_inbox, 'operational_read_settings', return_value={'notificationProcessingStaleMinutes': 2}), \
+             patch.object(notification_inbox, 'notification_queue_store', return_value=SimpleNamespace(get=lambda _: job)):
+            page = notification_inbox.notification_job_detail_payload(job.job_id)['job']
+        self.assertIn('체결강도 120', page['fullText'])
+        self.assertIn('살펴볼 가설', str(page['customerInvestmentDocument']))
+        self.assertEqual('compact-rulebox-v1', page['customerInvestmentNotificationDocument']['layout'])
+        self.assertEqual(saved, job.to_dict())
+        listed = notification_job_public_payload(job, include_customer_document=True, settings={'notificationProcessingStaleMinutes': 2})
+        self.assertEqual('compact-rulebox-v1', listed['customerInvestmentDocument']['layout'])
 
     def test_judgment_scope_and_semantic_repeat_identity_do_not_borrow_unrelated_decisions(self):
         from digital_twin.modules.decisions.contracts import decision_synthesis_from_relation_context

@@ -12,6 +12,7 @@ import json
 import math
 
 from digital_twin.modules.decisions.domain.notification_ai_context import is_graph_backed_relation_context
+from digital_twin.modules.reasoning.contracts import native_account_weight_pct
 
 
 def _number(value):
@@ -57,7 +58,8 @@ def management_decision_from_relation(account_id, relation):
         if observed is None or target is None:
             continue
         # A snapshot from another input cannot supplement this native proof.
-        if any((relation.get("facts") or {}).get(key) != value for key, value in facts.items()
+        if any((native_account_weight_pct((relation.get("facts") or {}).get(key))
+                if key == "positionAccountWeight" else (relation.get("facts") or {}).get(key)) != value for key, value in facts.items()
                if key in (relation.get("facts") or {})):
             continue
         response.update(ruleId=rule_id, observedValue=observed, targetValue=target)

@@ -59,6 +59,7 @@ _EXPORTS.update({
     'build_ontology_decision_quality_snapshot': ('digital_twin.modules.reasoning.domain.ontology_decision_quality', 'build_ontology_decision_quality_snapshot'),
     'build_ontology_quality_sample': ('digital_twin.modules.reasoning.domain.ontology_quality', 'build_ontology_quality_sample'),
     'build_portfolio_ontology': ('digital_twin.modules.reasoning.domain.portfolio_ontology_builder', 'build_portfolio_ontology'),
+    'native_account_weight_pct': ('digital_twin.modules.reasoning.domain.account_policy_facts', 'native_account_weight_pct'),
     'compact_monitor_state_for_ontology': ('digital_twin.modules.reasoning.domain.ontology_projection_input', 'compact_monitor_state_for_ontology'),
     'compact_snapshot_event_metadata': ('digital_twin.modules.reasoning.domain.event_payloads', 'compact_snapshot_event_metadata'),
     'conflict_state_from_roles': ('digital_twin.modules.reasoning.domain.ontology_decision_state', 'conflict_state_from_roles'),

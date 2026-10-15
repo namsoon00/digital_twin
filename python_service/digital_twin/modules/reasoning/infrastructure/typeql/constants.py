@@ -15,9 +15,9 @@ NATIVE_RULE_INDEXED_QUERY_MAX_STORAGE_IDS = NATIVE_RULE_EVIDENCE_READ_INDEX_BATC
 
 TYPEDB_NATIVE_REASONING_PROFILE_VERSION = "typedb-native-rule-profile-v10"
 
-# V11 preserves native management responses through InferenceBox reads. Do not
-# reuse coverage/projection caches that were interpreted by the V10 reader.
-TYPEDB_NATIVE_RULE_ENGINE_VERSION = "typedb-direct-typeql-rule-engine-v11"
+# V12 also compares allocation facts using the existing ABox precision, so a
+# full-precision context cannot discard a native policy response after reading.
+TYPEDB_NATIVE_RULE_ENGINE_VERSION = "typedb-direct-typeql-rule-engine-v12"
 
 TYPEDB_NATIVE_REASONING_LAYER = "typedb-native-rule"
 

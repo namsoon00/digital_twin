@@ -281,10 +281,11 @@ def notification_job_detail_payload(
         detail=include_full_reasoning,
         settings=configured,
         include_customer_document=True,
+        include_detail_document=normalized_section == "summary",
     )
     if not include_full_reasoning:
         customer_text = notification_customer_text(job)
-        payload["fullText"] = full_notification_text(customer_text)
+        payload.setdefault("fullText", full_notification_text(customer_text))
         payload["actionFlow"] = notification_action_flow(job.context or {})
         payload["reasoningTrace"] = build_notification_reverse_reasoning_trace(
             job.context or {},

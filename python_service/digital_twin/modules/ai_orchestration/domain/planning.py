@@ -2,7 +2,7 @@
 import hashlib
 import json
 from datetime import datetime, timezone
-from digital_twin.modules.reasoning.contracts import evidence_change_identity
+from digital_twin.modules.reasoning.contracts import evidence_change_identity, content_hash
 
 
 CAPABILITIES = {
@@ -32,6 +32,10 @@ def enabled(settings):
 
 
 def observation_fingerprint(packet, research):
+    if packet.get("researchKnowledge"):
+        from digital_twin.modules.research_knowledge.contracts import knowledge_context_identity
+        return content_hash([evidence_change_identity(packet, research, packet.get("questionsToCheck", [])),
+                             knowledge_context_identity(packet["researchKnowledge"])])
     return evidence_change_identity(packet, research, packet.get("questionsToCheck", []))
 
 
@@ -40,7 +44,7 @@ def validate_plan(value, packet, research=(), require_research=False, require_re
         raise ValueError("AI plan must be an object")
     # No model-authored account, symbol, command, source URL or action is executable.
     allowed = {"summary", "hypothesis", "counterEvidence", "comparison", "evidenceIds", "questions", "nextCheckMinutes", "notification",
-               "insightVersion", "portfolioImpact", "claimEvidence", "observations", "followUpConditions", "caseReviews", "serviceFeedback", "businessResearch", "questionResolutions"}
+               "insightVersion", "portfolioImpact", "claimEvidence", "observations", "followUpConditions", "caseReviews", "serviceFeedback", "businessResearch", "questionResolutions", "knowledgeResearch"}
     if set(value) - allowed:
         raise ValueError("AI plan contains unsupported fields")
     known = {str(row["id"]) for row in packet.get("facts", []) if row.get("id")}
@@ -108,6 +112,10 @@ def validate_plan(value, packet, research=(), require_research=False, require_re
     if "questionResolutions" in value or require_resolution:
         from .question_resolution import validate_resolutions
         result["questionResolutions"] = validate_resolutions(value.get("questionResolutions"), packet, research, result, required=require_resolution)
+    if "knowledgeResearch" in value or packet.get("researchKnowledge"):
+        from .knowledge_research import validate_research
+        result["knowledgeResearch"] = validate_research(value.get("knowledgeResearch"), packet,
+            (result.get("businessResearch") or {}).get("theses", []))
     return result
 
 

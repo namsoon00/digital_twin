@@ -238,5 +238,15 @@ def validate_evidence_packet(packet):
         raise EvidenceContractError("required quote evidence missing")
     if "quoteAssessment" in packet and packet["quoteAssessment"] != quote_clock_assessment(facts, packet["capturedAt"]):
         raise EvidenceContractError("quote assessment does not match source clock")
-    if len(canonical_json(packet).encode()) > EVIDENCE_PACKET_MAX_BYTES:
+    source_packet = packet
+    if "researchKnowledge" in packet:
+        from digital_twin.modules.research_knowledge.contracts import validate_knowledge_context
+        try:
+            validate_knowledge_context(packet["researchKnowledge"], packet)
+        except (ValueError, KeyError, TypeError) as error:
+            raise EvidenceContractError("invalid bounded research knowledge context") from error
+        # Knowledge is separately budgeted historical/methodological context.
+        # It is never added to the source facts or their coverage inventory.
+        source_packet = {key: value for key, value in packet.items() if key != "researchKnowledge"}
+    if len(canonical_json(source_packet).encode()) > EVIDENCE_PACKET_MAX_BYTES:
         raise EvidenceContractError("observation evidence exceeds context budget")

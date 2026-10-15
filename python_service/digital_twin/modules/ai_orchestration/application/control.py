@@ -20,7 +20,7 @@ from digital_twin.modules.ai_orchestration.domain.validation_diagnostic import t
 
 
 class AIControlService:
-    def __init__(self, store, subjects, evidence, planner, researcher, research_memory, settings=None, delivery_memory=None, reviewer=None, development_memory=None, brain_memory=None, brain_waker=None, read_planner=None, evidence_waker=None, read_round_budget=None, company_memory=None, research_plan_memory=None, research_gate=None):
+    def __init__(self, store, subjects, evidence, planner, researcher, research_memory, settings=None, delivery_memory=None, reviewer=None, development_memory=None, brain_memory=None, brain_waker=None, read_planner=None, evidence_waker=None, read_round_budget=None, company_memory=None, research_plan_memory=None, research_gate=None, knowledge_context=None, knowledge_refresh=None):
         self.store, self.subjects, self.evidence = store, subjects, evidence
         self.planner, self.researcher, self.research_memory = planner, researcher, research_memory
         self.settings = dict(settings or {})
@@ -35,6 +35,8 @@ class AIControlService:
         self.company_memory = company_memory or (lambda account, symbol, cutoff: {})
         self.research_plan_memory = research_plan_memory or self.brain_memory
         self.research_gate = research_gate or (lambda job: {"allowed": True})
+        self.knowledge_context = knowledge_context
+        self.knowledge_refresh = knowledge_refresh or (lambda context, packet: context)
 
     def run_once(self):
         self.store.record_runtime_pulse()
@@ -84,6 +86,9 @@ class AIControlService:
                     packet["lastDeliveredNotification"] = self.delivery_memory(job["accountId"], job["symbol"])
                     packet["followUpEvaluations"] = evaluate_observation_conditions(packet, packet["lastDeliveredNotification"],
                         (history[0] if history else {}).get("followUpEvaluations", []))
+                    knowledge = self.knowledge_context(packet) if self.knowledge_context else None
+                    if knowledge:
+                        packet["researchKnowledge"] = knowledge
                     fingerprint = observation_fingerprint(packet, research)
                     repeat_key = repeat.observation_key(packet, research)
                     retry_identity = retry_key(packet, research)
@@ -128,6 +133,8 @@ class AIControlService:
                             memory["observations"] = observations
                             business_memory.append(deepcopy(memory))
                     packet["businessThesisMemory"] = business_memory
+                    if knowledge:
+                        packet["researchKnowledge"] = self.knowledge_refresh(knowledge, packet)
                     stage = "input-freeze"
                     envelope = freeze_execution_input(packet, history, research,
                         max_prompt_bytes=self.settings.get("aiObservationPromptMaxBytes", 256 * 1024), retrieval_trace=retrieval_trace)
@@ -189,7 +196,8 @@ class AIControlService:
                     if result.get("repair", {}).get("status") == "pending":
                         result["repair"]["status"] = result["quality"]["status"]
                     from ..domain import research_review
-                    if research_review.needed(result) and result["quality"]["status"] not in {"accepted", "observation-only"}:
+                    if research_review.needed(result) and (result["quality"]["status"] not in {"accepted", "observation-only"}
+                            or (result.get("knowledgeResearch") or {}).get("claims")):
                         stage = "research-assessment-review"
                         result["researchQuality"] = {"version": research_review.VERSION, "status": "rejected"}
                         try:

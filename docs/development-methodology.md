@@ -8,7 +8,7 @@ This project uses a local-first, DDD-oriented, event-driven architecture. Future
 - Keep use-case orchestration in `application/`.
 - Keep database, files, HTTP APIs, external vendors, process management, and runtime composition in `infrastructure/`.
 - Use domain events as contracts between feature slices.
-- Organize business implementations under the thirteen packages in
+- Organize business implementations under the fourteen packages in
   `digital_twin/modules/`; see [Business Module Architecture](module-architecture.md).
   Call another module through its explicit `public.py` or `contracts.py` only.
   Keep immediate reads and transactional edits synchronous; use durable events
@@ -469,7 +469,7 @@ Ontology projection is a read-model boundary, not the source of truth. Aggregate
 
 ## Parallel Development Slices
 
-Use the thirteen ownership packages and sync/async table in
+Use the fourteen ownership packages and sync/async table in
 [Business Module Architecture](module-architecture.md) when multiple sessions
 work independently. Shared ontology contracts and runtime composition still
 need coordination; moving an application service does not isolate every shared

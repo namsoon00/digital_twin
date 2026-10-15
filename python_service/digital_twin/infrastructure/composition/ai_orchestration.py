@@ -107,6 +107,15 @@ def build_ai_control_service(settings=None):
     from digital_twin.infrastructure.transactions.research_progress_publication import ResearchProgressPublication
     agenda.progress_writer = ResearchProgressPublication(publication.notifications, configured).publish
     store.agenda_writer, store.agenda_failure = agenda.record, agenda.failed
+    knowledge = None
+    if str(configured.get("aiResearchKnowledgeEnabled", "false")).lower() not in {"false", "0", "off"}:
+        from digital_twin.modules.research_knowledge.public import ResearchKnowledgeService
+        from digital_twin.modules.research_knowledge.infrastructure.mysql_repository import MySQLResearchKnowledgeRepository
+        from digital_twin.modules.reasoning.public import research_knowledge_projection
+        from digital_twin.infrastructure.transactions.ai_control_research_knowledge import AIControlResearchKnowledge
+        knowledge = AIControlResearchKnowledge(ResearchKnowledgeService(MySQLResearchKnowledgeRepository(configured)),
+                                              agenda, research_knowledge_projection)
+        store.knowledge_writer = knowledge.record
     from digital_twin.infrastructure.transactions.ai_observation_wake import AIObservationEvidenceWake
     evidence_wake = AIObservationEvidenceWake(configured)
     def wake_brain(subjects):
@@ -119,7 +128,9 @@ def build_ai_control_service(settings=None):
                             brain_memory=agenda.memory, brain_waker=wake_brain, read_planner=planner,
                             evidence_waker=evidence_wake.run_once, read_round_budget=store.retrieval_round_budget, company_memory=company_memory,
                             research_plan_memory=lambda account, symbol, world: agenda.memory(account, symbol, world, research_only=True),
-                            research_gate=agenda.research_admission)
+                            research_gate=agenda.research_admission,
+                            knowledge_context=knowledge.context if knowledge else None,
+                            knowledge_refresh=knowledge.refresh if knowledge else None)
 
 
 def ai_control_status(settings=None, account_id=""):
@@ -132,6 +143,15 @@ def ai_control_status(settings=None, account_id=""):
     status = MySQLAIControlStore(configured).status(account_id)
     from digital_twin.modules.ai_orchestration.infrastructure.mysql_brain_agenda import MySQLBrainAgendaStore
     status["brain"] = MySQLBrainAgendaStore(configured).status(account_id)
+    knowledge_enabled = str(configured.get("aiResearchKnowledgeEnabled", "false")).lower() not in {"false", "0", "off"}
+    from digital_twin.modules.research_knowledge.public import ResearchKnowledgeService
+    from digital_twin.modules.research_knowledge.infrastructure.mysql_repository import MySQLResearchKnowledgeRepository
+    try:
+        repository = MySQLResearchKnowledgeRepository(configured, initialize=False)
+        status["researchKnowledge"] = {"status": "ready", "enabled": knowledge_enabled, **ResearchKnowledgeService(repository).status(account_id)}
+    except Exception:
+        status["researchKnowledge"] = {"status": "unavailable", "enabled": knowledge_enabled,
+                                      "reason": "연구 지식 저장소의 상태를 확인하지 못했습니다."}
     from digital_twin.infrastructure.transactions.ai_control_development import AIControlDevelopment
     from digital_twin.infrastructure.operational_store import hypothesis_development_store
     from digital_twin.modules.news_intelligence.infrastructure.mysql_observation_development import MySQLObservationDevelopmentStore
@@ -189,14 +209,14 @@ def ai_control_status(settings=None, account_id=""):
 
 def save_ai_control_settings(payload):
     from digital_twin.infrastructure.settings import save_runtime_settings
-    if not isinstance(payload, dict) or set(payload) - {"aiControlEnabled", "aiControlBudgetEnabled", "aiControlDailyTaskBudget", "aiControlDailyCallBudget", "aiObservationPromptMaxBytes"}:
+    if not isinstance(payload, dict) or set(payload) - {"aiControlEnabled", "aiResearchKnowledgeEnabled", "aiControlBudgetEnabled", "aiControlDailyTaskBudget", "aiControlDailyCallBudget", "aiObservationPromptMaxBytes"}:
         raise ValueError("지원하지 않는 중앙 AI 설정입니다.")
     if "aiObservationPromptMaxBytes" in payload and not 65536 <= int(payload["aiObservationPromptMaxBytes"]) <= 524288:
         raise ValueError("관찰 입력 한도는 64–512 KiB 범위여야 합니다.")
     for key, maximum in (("aiControlDailyTaskBudget", 200), ("aiControlDailyCallBudget", 300)):
         if key in payload and not 0 <= int(payload[key]) <= maximum:
             raise ValueError("작업 또는 호출 한도를 확인하세요.")
-    for key in ("aiControlEnabled", "aiControlBudgetEnabled"):
+    for key in ("aiControlEnabled", "aiControlBudgetEnabled", "aiResearchKnowledgeEnabled"):
         if key in payload and payload[key] not in {"true", "false"}:
             raise ValueError("관찰 또는 한도 사용 여부를 확인하세요.")
     save_runtime_settings(payload)

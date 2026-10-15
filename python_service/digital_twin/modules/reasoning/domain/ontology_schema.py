@@ -8,7 +8,7 @@ from digital_twin.modules.model_registry.contracts import BOUNDED_CONTEXTS, CLAS
 from digital_twin.modules.model_registry.contracts import ONTOLOGY_DOMAIN_TBOX_VERSION, tbox_domain_validation
 
 
-ONTOLOGY_TBOX_VERSION = "investment-tbox-v13-official-company-reference"
+ONTOLOGY_TBOX_VERSION = "investment-tbox-v14-research-knowledge"
 
 
 @lru_cache(maxsize=1)

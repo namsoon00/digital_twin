@@ -156,9 +156,13 @@ class ProjectionInputOwnershipTests(unittest.TestCase):
 
     def test_projection_input_execution_and_progress_match_policy_fact_contract(self):
         expected = json.loads(
-            (ROOT / "tests/fixtures/projection_input_execution_v10.json").read_text()
+            (ROOT / "tests/fixtures/projection_input_execution_v11.json").read_text()
         )["scenarios"]
         self.assertEqual(expected, contract_scenarios(api))
+        from research_knowledge_fixture import pre_research_knowledge_catalog
+        previous = json.loads((ROOT / "tests/fixtures/projection_input_execution_v10.json").read_text())["scenarios"]
+        with pre_research_knowledge_catalog():
+            self.assertEqual(previous, contract_scenarios(api))
 
     def test_projection_input_packages_import_without_runtime_or_drivers(self):
         script = """

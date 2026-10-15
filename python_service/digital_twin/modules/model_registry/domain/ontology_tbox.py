@@ -3,6 +3,7 @@ from typing import Dict, List, Optional
 
 from digital_twin.modules.model_registry.domain.ontology_tbox_contracts import TBoxBoundedContext, TBoxClassDef, TBoxRelationDef, TBoxRuleDef
 from digital_twin.modules.model_registry.domain.ontology_domain_tbox import apply_domain_tbox
+from digital_twin.modules.model_registry.domain.ontology_research_knowledge import RESEARCH_KNOWLEDGE_CLASSES, RESEARCH_KNOWLEDGE_RELATIONS
 
 
 BOUNDED_CONTEXTS: List[TBoxBoundedContext] = [
@@ -1098,6 +1099,9 @@ RULE_DEFS: List[TBoxRuleDef] = [
     TBoxRuleDef("user-facing investment terms keep stable internal identifiers while approved level-specific renderings are managed as TypeDB language-governance concepts", "operations-dispatch"),
     TBoxRuleDef("forbidden or unregistered expressions create review-required language proposals and never mutate approved terminology automatically", "operations-dispatch"),
 ]
+
+CLASS_DEFS.extend(RESEARCH_KNOWLEDGE_CLASSES)
+RELATION_DEFS.extend(RESEARCH_KNOWLEDGE_RELATIONS)
 
 BOUNDED_CONTEXTS, CLASS_DEFS, RELATION_DEFS, RULE_DEFS = apply_domain_tbox(
     BOUNDED_CONTEXTS,

@@ -1138,3 +1138,64 @@ self-authored review fields, so a suppressed source check cannot itself trigger
 another accepted observation. Source evidence, original questions, known answers
 and hypothesis resolutions remain in that key; frozen input fingerprints and
 historical replay validation are unchanged.
+
+## Source-linked research knowledge
+
+`modules/research_knowledge` owns professional research content independently of
+source collection and model execution. Its initial, versioned methods cover
+growth/cash conversion, price-implied conditions and portfolio common risks.
+Each method includes applicability, competing explanations, required evidence,
+limits and primary educational references. Methodology references are not
+empirical validation of a security, causal claim or trading threshold.
+
+The owner persists immutable method releases, scoped current claims and
+append-only claim revisions in `research_knowledge_frameworks`,
+`research_knowledge_claims` and `research_knowledge_revisions`. Every claim binds
+account/symbol/world/purpose, the original frozen AI input, source snapshot and
+evidence hashes, assumptions, counter-evidence, invalidation and next check.
+Point-in-time retrieval excludes records first known after its cutoff. Missing
+data, zero, source changes and omission from the selected input remain distinct.
+
+V17 freezes a bounded `current.researchKnowledge` containing the service purpose,
+methods, company source references, prior claims and observation assessments.
+The reasoning-owned graph projection uses the canonical TBox/ABox classes and
+relations for methods, claims, revisions, source references and method proposals.
+This research-memory graph is frozen with the AI input and exposed in the
+knowledge read model; it does not switch the active TypeDB investment generation
+or insert unqualified research into its evidence inventory. Current investment
+facts continue through the existing source-owner/TypeDB path. Every research
+node has `reasoningEligible=false`, `investmentJudgmentEligible=false` and no
+action authority. TBox additions do not mutate frozen engine release artifacts.
+
+The AI returns `knowledgeResearch={claims,coverageNote}`. Claims explicitly bind
+an admitted method and propose create/retain/revise/retire with current evidence,
+counter-evidence, gaps and an optional exact business-thesis link. Retain cannot
+silently rewrite a thesis. Independent, frozen research review is required for
+every authored knowledge change, including observations that do not notify.
+The completion coordinator verifies the reviewed proposal and writes knowledge,
+agenda, follow-up work, notification handoff and `research_knowledge.claim_revised`
+events in one existing MySQL transaction. Failure rolls them back together.
+
+Business checkpoint assessments reuse the existing source-owner observations.
+A direction miss creates a scoped, unadopted method-review proposal, never a
+causal verdict, success probability or automatic rule/prompt update. Purposes
+without an outcome contract remain awaiting observation. The next AI input
+receives these assessments and failed explanations. Self-authored rephrasing
+and timer changes cannot wake another AI call; method release changes and
+independent observations can. The portfolio method can use same-snapshot
+position weight/role and policy fields already on the stock fact, but marks
+whole-account common exposures missing when the producer has not supplied them.
+
+`GET /api/ai-control/status` includes owner-only `researchKnowledge` with the
+service policy, persisted methods and recent scoped claims, including when
+integration is disabled. Read failures are reported as unavailable, not empty
+knowledge. Source facts keep their existing input budget; validated research
+context has a separate 64,000-byte limit inside the unchanged total prompt
+budget. Graph projection includes at most three claims and lists omitted IDs;
+the full selected research records remain available in the frozen input.
+Integration defaults off for controlled activation. Set
+`AI_RESEARCH_KNOWLEDGE_ENABLED=true`, or save `aiResearchKnowledgeEnabled=true`,
+to activate it after validation. Set
+`AI_RESEARCH_KNOWLEDGE_ENABLED=false`, or save `aiResearchKnowledgeEnabled=false`
+through the existing control settings endpoint, to disable the new integration.
+V16 author/repair/review inputs and V1 research review remain replayable.

@@ -2,8 +2,8 @@
 
 ## Scope
 
-Orbit Alpha is a modular monolith with selectively asynchronous jobs. Twelve
-business packages do **not** mean twelve processes, twelve databases, or twelve
+Orbit Alpha is a modular monolith with selectively asynchronous jobs. Fourteen
+business packages do **not** mean fourteen processes, fourteen databases, or fourteen
 queues. Immediate reads and transactional edits remain synchronous. Collection,
 TypeDB inference, AI execution, delivery, and outcome observation retain their
 existing background job boundaries.
@@ -32,6 +32,8 @@ All paths below are relative to `python_service/digital_twin/modules/`.
 | `outcomes` | Follow-up observations, replay and calibration | Outcome and review queries | Scheduled observation, replay and hypothesis review |
 | `notifications` | Admission, rendering, quiet hours, delivery and inbox state | Read/important changes and policy checks | Existing durable delivery queue and retries |
 | `read_models` | Console, flow, timeline, case and valuation read projections | Bounded web queries | Projection refresh through existing runtime orchestration |
+| `ai_orchestration` | Independent AI observations, research scheduling and execution accounting | Frozen inputs and scoped work memory | Existing AI control worker |
+| `research_knowledge` | Versioned research methods, company explanations, counter-evidence and observation-linked revisions | Bounded point-in-time knowledge retrieval and transactional admission | Existing AI control worker; no additional process |
 
 The table describes responsibility, not a new queue for every cell. An event
 publication alone is not asynchronous execution.

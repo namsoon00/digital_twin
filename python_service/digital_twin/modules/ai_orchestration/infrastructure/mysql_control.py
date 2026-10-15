@@ -179,6 +179,9 @@ class MySQLAIControlStore(DiagnosticProgressPersistence, AITaskDispatchPersisten
             agenda = getattr(self, "agenda_writer", None)
             if agenda is not None:
                 saved_result["brain"] = agenda(connection, job, saved_result, saved_children)
+            knowledge = getattr(self, "knowledge_writer", None)
+            if knowledge is not None and job["capability"] == "observe" and saved_result.get("summary"):
+                saved_result["knowledge"] = knowledge(connection, job, saved_result)
             writer = getattr(self, "outbox_writer", None)
             if writer is not None and job["capability"] == "observe" and saved_result.get("summary"):
                 saved_result["publication"] = writer(connection, job, saved_result)

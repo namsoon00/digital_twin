@@ -339,7 +339,10 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # excluded-vs-admitted candidates and the final transport heading.
         # Five native management-response regressions cover persistence,
         # evidence admission, allocation arithmetic and RuleBox governance.
-        self.assertLessEqual(total, 2347)
+        # Twelve knowledge contracts cover method content, source/time/scope,
+        # immutable revision and observation lineage, budgeted graph context,
+        # frozen AI review, native atomic rollback and next-research recall.
+        self.assertLessEqual(total, 2359)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

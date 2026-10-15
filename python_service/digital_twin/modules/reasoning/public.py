@@ -3,7 +3,8 @@
 from digital_twin.modules._exports import resolve_export
 
 
-_EXPORTS = {'IndependentReasoningComparisonService': ('digital_twin.modules.reasoning.application.independent_reasoning_comparison_service',
+_EXPORTS = {'research_knowledge_projection': ('digital_twin.modules.reasoning.domain.research_knowledge_projection', 'research_knowledge_projection'),
+ 'IndependentReasoningComparisonService': ('digital_twin.modules.reasoning.application.independent_reasoning_comparison_service',
                                            'IndependentReasoningComparisonService'),
  'IndependentReasoningInputAssembler': ('digital_twin.modules.reasoning.application.independent_reasoning_engine',
                                         'IndependentReasoningInputAssembler'),

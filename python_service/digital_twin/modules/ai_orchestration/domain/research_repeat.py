@@ -88,7 +88,11 @@ def observation_key(packet, research):
                    "researchPlan", "researchRepeat", "researchSourceState", "answerMemory"}
     work = [{key: value for key, value in row.items() if key not in operational}
             if row.get("kind") == "brain-case" else row for row in research]
-    return identity(VERSION, evidence_change_identity(packet, work, packet.get("questionsToCheck", [])))
+    source = evidence_change_identity(packet, work, packet.get("questionsToCheck", []))
+    if packet.get("researchKnowledge"):
+        from digital_twin.modules.research_knowledge.contracts import knowledge_context_identity
+        return identity(VERSION, source, knowledge_context_identity(packet["researchKnowledge"]))
+    return identity(VERSION, source)
 
 
 def preserve_answer(case, answer):

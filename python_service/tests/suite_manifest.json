@@ -1,5 +1,7 @@
 {
   "tests": [
+    {"file": "test_research_knowledge_storage.py", "tier": "integration", "core": true},
+    {"file": "test_research_knowledge.py", "tier": "unit", "core": true},
     {"file": "test_smart_price_observations.py", "tier": "unit", "core": true},
     {"file": "test_company_preparation.py", "tier": "integration", "core": true},
     {"file": "test_ai_diagnostic_progress.py", "tier": "integration", "core": true},

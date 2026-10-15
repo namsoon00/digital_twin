@@ -1,0 +1,27 @@
+{
+  "sourceRevision": "2fcf6ff7a + source-linked research knowledge",
+  "contractVersion": "projection-input-execution-v11",
+  "reason": "Additive reference-only research TBox v14 changes catalog metadata in the source projection contract. Restoring the v13 catalog reproduces every v10 scenario exactly; no market facts, TypeQL decision rules, action permissions, or immutable engine artifacts change. test_research_knowledge and the paired legacy catalog assertions verify the boundary.",
+  "changedCases": [
+    "full",
+    "target",
+    "source-facts",
+    "live-context",
+    "memory-hit",
+    "persistent-hit",
+    "cache-errors",
+    "scoring-failure",
+    "world-identity"
+  ],
+  "scenarios": {
+    "full": "bb0d7db451d56c9217d40b7d1c11480466f12e468838253358724b4ac5c7f561",
+    "target": "9eb74873fda87e20b27857e3d044cda6844b819c425da466d07f91259c0a17f5",
+    "source-facts": "e4021c8a4b40e7646b20237b24c6c15fbf25856bcadefe9892e9d646372d0274",
+    "live-context": "3242f4e90c7123f8ca7743278bb65addee1ab58153e5aa80efa5a1ab43092af2",
+    "memory-hit": "dd90f0a425ac8eb612b2a8d5f8592d32786a95cd60cd83433732efae6b66bb5c",
+    "persistent-hit": "e6b6a8b5cf1bfee384378ce6daf2881f96dfc84ead1a386d5017b0692622a18b",
+    "cache-errors": "09e9ab00b6b4f6afd7818d78c1e07cb8c4c181daaeec4424fbe0c9df18c4f600",
+    "scoring-failure": "ef44eb85043a38841f8ac501133f8091d89ed2844c8d29afdf8e2ee246b4e088",
+    "world-identity": "330e0dc78dce2994b14c90338f8e26e58707ee61bc59bff3ba3e1df8a3cf3131"
+  }
+}

@@ -12,6 +12,7 @@ from digital_twin.modules.notifications.domain.display_time import notification_
 from digital_twin.modules.accounts.contracts import AccountConfig
 from digital_twin.infrastructure.external_signal_utils import guarded_external_call, root_api_error
 from digital_twin.infrastructure.settings import runtime_settings
+from digital_twin.modules.notifications.domain.message_types import AI_RESEARCH_DELIVERY_MESSAGE_TYPES
 
 
 TELEGRAM_HTML_PATTERN = re.compile(r"</?(?:b|strong|i|em|u|ins|s|strike|del|code|pre|a|blockquote)(?:\s+[^>]*)?>", re.IGNORECASE)
@@ -277,4 +278,25 @@ def notifier_for_operations(account: AccountConfig = None):
     ).strip()
     notifier = TelegramNotifier(token, chat_id)
     notifier.label = "Telegram Operations"
+    return notifier
+
+
+def notifier_for_ai_research(message_type: str, account: AccountConfig = None):
+    if message_type not in AI_RESEARCH_DELIVERY_MESSAGE_TYPES:
+        return None
+    settings = runtime_settings()
+    token = str(settings.get("aiResearchTelegramBotToken") or "").strip()
+    selected = {item.strip() for item in str(settings.get("aiResearchTelegramMessageTypes")
+        or "researchProgress,aiObservation,aiObservationDiagnostic").split(",")}
+    if not token or message_type not in selected:
+        return None
+    # A dedicated bot changes the sender, never another account's recipient.
+    # Operations drafts have no account argument and keep the operator scope.
+    chat_id = str((account.telegram_chat_id or "") if account is not None else
+        settings.get("aiResearchTelegramChatId") or settings.get("operationsTelegramChatId")
+        or settings.get("telegramChatId") or "").strip()
+    if not chat_id:
+        raise RuntimeError("AI 연구 봇의 수신 대상이 없어 다른 계정으로 대체 발송하지 않았습니다.")
+    notifier = TelegramNotifier(token, chat_id)
+    notifier.label = "Telegram AI Research"
     return notifier

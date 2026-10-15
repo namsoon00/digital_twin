@@ -235,6 +235,7 @@ for name in sys.modules:
         instance = recorder(api, snapshot)
         context = instance.runtime_context_overrides[snapshot.account_id]
         context["settings"]["telegramBotToken"] = "synthetic-secret-never-persist"
+        context["settings"]["aiResearchTelegramBotToken"] = "synthetic-secret-never-persist"
         instance.settings["tossClientSecret"] = "synthetic-secret-never-persist"
         graph, persisted, _ = instance.build_graph_assembly(snapshot, RULES)
         self.assertEqual(before, asdict(snapshot))

@@ -172,6 +172,52 @@ class DeliveryReliabilityTests(unittest.TestCase):
             other.post_message = Mock()
             self.assertFalse(other.send_resumable(text, checkpoint=checkpoint).delivered)
             other.post_message.assert_not_called()
+        self.assert_dedicated_research_route_preserves_audience()
+
+    def assert_dedicated_research_route_preserves_audience(self):
+        from digital_twin.modules.notifications.infrastructure.notification import transport
+        settings = {"aiResearchTelegramBotToken": "999:research-fixture", "aiResearchTelegramChatId": "222",
+                    "operationsTelegramChatId": "333", "telegramChatId": "444"}
+        account = SimpleNamespace(telegram_chat_id="111")
+        with patch.object(transport, "runtime_settings", return_value=settings):
+            self.assertEqual("111", transport.notifier_for_ai_research("researchProgress", account).chat_id)
+            self.assertEqual("222", transport.notifier_for_ai_research("aiObservationDiagnostic").chat_id)
+            self.assertIsNone(transport.notifier_for_ai_research("investmentInsight", account))
+            self.assertIsNone(transport.notifier_for_ai_research("workHandoff", account))
+            with self.assertRaisesRegex(RuntimeError, "수신 대상"):
+                transport.notifier_for_ai_research("researchProgress", SimpleNamespace(telegram_chat_id=""))
+            settings["aiResearchTelegramMessageTypes"] = "researchProgress"
+            self.assertIsNone(transport.notifier_for_ai_research("aiObservation", account))
+            settings["aiResearchTelegramBotToken"] = ""
+            self.assertIsNone(transport.notifier_for_ai_research("researchProgress", account))
+        default = SimpleNamespace(send=Mock(return_value=receipt()))
+        operations = SimpleNamespace(send=Mock(return_value=receipt()))
+        research = SimpleNamespace(send=Mock(return_value=receipt()))
+        selected = Mock(side_effect=lambda kind, recipient: research if kind in
+                        {"researchProgress", "aiObservation", "aiObservationDiagnostic"} else None)
+        fallback = Mock(return_value=default)
+        dispatcher = NotificationDispatchService(SimpleNamespace(), fallback,
+            operations_notifier_factory=lambda _: operations, ai_research_notifier_factory=selected)
+        for kind in ("researchProgress", "aiObservation", "aiObservationDiagnostic"):
+            job = NotificationJob.create("routing fixture", account_id="account", message_type=kind)
+            dispatcher.deliver(job, {"account": account}, job.text)
+            self.assertEqual("ai-research", job.context["deliveryRoute"])
+            self.assertIs(selected.call_args.args[1], None if kind == "aiObservationDiagnostic" else account)
+            self.assertEqual("operations" if kind == "aiObservationDiagnostic" else "account", job.context["deliveryAudience"])
+        self.assertEqual(3, research.send.call_count)
+        fallback.assert_not_called()
+        with self.assertRaisesRegex(RuntimeError, "수신 계정"):
+            dispatcher.deliver(NotificationJob.create("wrong scope", account_id="missing", message_type="researchProgress"), {"account": account}, "wrong scope")
+        for kind in ("marketObservation", "workHandoff"):
+            job = NotificationJob.create("unchanged channel", account_id="account", message_type=kind)
+            dispatcher.deliver(job, {"account": account}, job.text)
+        default.send.assert_called_once()
+        operations.send.assert_called_once()
+        failed = SimpleNamespace(send=Mock(return_value=NotificationResult(False, "research", "403")))
+        dispatcher.ai_research_notifier_factory = lambda *_: failed
+        with self.assertRaisesRegex(RuntimeError, "403"):
+            dispatcher.deliver(NotificationJob.create("no fallback", account_id="account", message_type="researchProgress"), {"account": account}, "no fallback")
+        default.send.assert_called_once()
 
     def test_only_format_errors_fallback_and_retry_after_is_honored(self):
         notifier = TelegramNotifier("123:fake", "456")

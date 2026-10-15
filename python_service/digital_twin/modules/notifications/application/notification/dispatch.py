@@ -19,11 +19,13 @@ class NotificationDispatchService:
         notifier_factory: Callable,
         operations_notifier_factory: Callable = None,
         delivery_guard: Callable = None,
+        ai_research_notifier_factory: Callable = None,
     ):
         self.queue = queue
         self.notifier_factory = notifier_factory
         self.operations_notifier_factory = operations_notifier_factory
         self.delivery_guard = delivery_guard
+        self.ai_research_notifier_factory = ai_research_notifier_factory
 
     def deliver(self, job: NotificationJob, accounts: Dict[str, object], message: str) -> None:
         with self.delivery_guard(job, message) if self.delivery_guard else nullcontext():
@@ -33,17 +35,22 @@ class NotificationDispatchService:
         operations_delivery = is_operations_delivery_message_type(job.message_type)
         if not operations_delivery and job.account_id and job.account_id not in accounts:
             raise RuntimeError("알림 수신 계정을 찾을 수 없어 다른 계정으로 대체 발송하지 않았습니다.")
-        if operations_delivery:
+        account = None if job.message_type == AI_OBSERVATION_DIAGNOSTIC else accounts.get(job.account_id)
+        notifier = self.ai_research_notifier_factory(job.message_type, account) if self.ai_research_notifier_factory else None
+        dedicated_research = notifier is not None
+        if notifier is None and operations_delivery:
             if job.message_type in {ONTOLOGY_REASONING_QUEUE, AI_OBSERVATION_DIAGNOSTIC} and not self.operations_notifier_factory:
                 raise RuntimeError("운영 알림 전송기가 구성되지 않아 계정 채널로 대체 발송하지 않았습니다.")
             factory = self.operations_notifier_factory or self.notifier_factory
-        else:
+        elif notifier is None:
             factory = self.notifier_factory
         audience = "operations" if operations_delivery else "account"
         channel = "operationsTelegram" if operations_delivery else "accountNotification"
         context = dict(job.context or {})
         # Unverified drafts must never fall back to an account's destination.
-        notifier = factory(None if job.message_type == AI_OBSERVATION_DIAGNOSTIC else accounts.get(job.account_id))
+        if notifier is None:
+            notifier = factory(account)
+        context["deliveryRoute"] = "ai-research" if dedicated_research else "operations" if operations_delivery else "account"
         research = job.message_type == "researchProgress"
         diagnostic = job.message_type == AI_OBSERVATION_DIAGNOSTIC and bool(context.get("aiDiagnosticProgress"))
         investment = ((context.get("notificationConversation") or {}).get("version") == "investment-conversation-v1"
@@ -87,6 +94,7 @@ class NotificationDispatchService:
         attempt_id = ""
         message_bytes = str(message or "").encode("utf-8")
         rendered_audit = {"messageBytes": len(message_bytes),
+            "deliveryRoute": context.get("deliveryRoute", ""),
             "accountId": job.account_id, "messageType": job.message_type,
             "messageSha256": hashlib.sha256(message_bytes).hexdigest(),
             "renderedMessage": str(message or "") if len(message_bytes) <= 65536 else "",

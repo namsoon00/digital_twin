@@ -146,6 +146,7 @@ class WebRouterPayloadTests(unittest.TestCase):
             "tossClientSecret", "tossAccountSeq", "kisAppKey", "telegramBotToken",
             "fredApiKey", "ecosApiKey", "kosisApiKey", "krxOpenApiKey",
             "typedbPassword", "mysqlPassword",
+            "aiResearchTelegramBotToken", "aiResearchTelegramChatId",
         ]}
         prompt_release = SimpleNamespace(to_public_dict=lambda: {"releaseId": "fixture"})
         with patch.object(configuration, "runtime_settings", return_value={"appTheme": "dark", **secrets}), patch.object(configuration, "share_runtime_status_payload", return_value={}), patch.object(configuration, "runtime_identity", return_value={}), patch("digital_twin.modules.decisions.domain.notification_ai_prompt_release.active_notification_ai_prompt_release", return_value=prompt_release):

@@ -242,6 +242,7 @@ class NotificationQueueRunner:
         delivery_comparison_refresher: Callable = None,
         delivery_guard: Callable = None,
         diagnostic_followup_reconciler: Callable = None,
+        ai_research_notifier_factory: Callable = None,
     ):
         self.queue = queue
         self.delivery_comparison_refresher = delivery_comparison_refresher
@@ -281,6 +282,7 @@ class NotificationQueueRunner:
             notifier_factory=notifier_factory,
             operations_notifier_factory=operations_notifier_factory,
             delivery_guard=delivery_guard,
+            ai_research_notifier_factory=ai_research_notifier_factory,
         )
         self.eligibility_service = NotificationDispatchEligibilityService(
             queue=queue,

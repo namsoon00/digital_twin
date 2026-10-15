@@ -118,6 +118,8 @@ TEXT_SETTING_KEYS = [
     "notifyProvider",
     "telegramChatId",
     "operationsTelegramChatId",
+    "aiResearchTelegramChatId",
+    "aiResearchTelegramMessageTypes",
     "notifyLinkUrl",
     "fxRates",
     "portfolioValuationBasis",
@@ -960,6 +962,7 @@ SECRET_SETTING_KEYS = [
     "tossClientSecret",
     "telegramBotToken",
     "operationsTelegramBotToken",
+    "aiResearchTelegramBotToken",
     "mysqlPassword",
     "kisAppKey",
     "kisAppSecret",
@@ -1243,6 +1246,9 @@ def save_runtime_settings(input_settings: Dict[str, object]) -> Dict[str, str]:
             next_settings.pop(key, None)
     if input_settings.get("clearOperationsTelegramCredentials"):
         for key in ["operationsTelegramBotToken", "operationsTelegramChatId"]:
+            next_settings.pop(key, None)
+    if input_settings.get("clearAiResearchTelegramCredentials"):
+        for key in ["aiResearchTelegramBotToken", "aiResearchTelegramChatId"]:
             next_settings.pop(key, None)
     for retired_key in {
         "buyScoreFormula",
@@ -1724,6 +1730,9 @@ def runtime_settings(fast_operational_read: bool = False) -> Dict[str, str]:
         "telegramChatId": value("telegramChatId", "TELEGRAM_CHAT_ID"),
         "operationsTelegramBotToken": value("operationsTelegramBotToken", "OPERATIONS_TELEGRAM_BOT_TOKEN"),
         "operationsTelegramChatId": value("operationsTelegramChatId", "OPERATIONS_TELEGRAM_CHAT_ID"),
+        "aiResearchTelegramBotToken": value("aiResearchTelegramBotToken", "AI_RESEARCH_TELEGRAM_BOT_TOKEN"),
+        "aiResearchTelegramChatId": value("aiResearchTelegramChatId", "AI_RESEARCH_TELEGRAM_CHAT_ID"),
+        "aiResearchTelegramMessageTypes": value("aiResearchTelegramMessageTypes", "AI_RESEARCH_TELEGRAM_MESSAGE_TYPES", "researchProgress,aiObservation,aiObservationDiagnostic"),
         "notifyLinkUrl": value("notifyLinkUrl", "NOTIFY_LINK_URL", "http://127.0.0.1:3000?tab=notifications"),
         "valuationAssumptions": value("valuationAssumptions", "VALUATION_ASSUMPTIONS", ""),
         "aiValuationAutoProposalEnabled": value("aiValuationAutoProposalEnabled", "AI_VALUATION_AUTO_PROPOSAL_ENABLED", "1"),

@@ -65,6 +65,24 @@ AI-authored narrative-only publications are `AI 해석`, not `투자 판단`.
 
 ### Delivery Cadence
 
+An optional `AI_RESEARCH_TELEGRAM_BOT_TOKEN` routes `researchProgress`,
+`aiObservation` and `aiObservationDiagnostic` through a dedicated bot.
+`AI_RESEARCH_TELEGRAM_MESSAGE_TYPES` can select a subset of those three types;
+other notification types retain their existing account/operations sender.
+Account messages retain that account's Telegram chat ID. Operator-only drafts
+use `AI_RESEARCH_TELEGRAM_CHAT_ID`, falling back to the existing operations/global
+chat ID, and never use an account destination. A configured route with no
+recipient fails closed. Tokens are secret settings and belong only in local
+private configuration, never Git or public settings responses.
+
+The delivery receipt records `deliveryRoute=ai-research` alongside the original
+audience/channel. Reply anchors and resumable chunks remain scoped by bot ID and
+chat ID, so a new bot cannot reuse the old bot's message IDs. A research update
+may establish a new anchor in the new destination; diagnostic follow-ups require
+a successfully delivered original in that same destination and otherwise remain
+in web history. Partially delivered messages are never replayed to a changed bot.
+Changing this route does not regenerate research or resend completed notices.
+
 Factual price observations additionally use the source-clock windows and
 durable movement transitions described in [Smart price notifications](smart-price-notifications.md).
 Holding/watchlist thresholds, bounded recovery confirmation and receipt-linked

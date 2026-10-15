@@ -31,6 +31,7 @@ def build_notification_queue_runner(dry_run: bool = False, lane: str = "all") ->
     from digital_twin.modules.notifications.infrastructure.notification.transport import (
         notifier_for_account,
         notifier_for_operations,
+        notifier_for_ai_research,
     )
     from digital_twin.modules.notifications.public import (
         CompositeNotificationContextEnricher,
@@ -211,6 +212,7 @@ def build_notification_queue_runner(dry_run: bool = False, lane: str = "all") ->
         account_repository=stores.account_reader(settings),
         notifier_factory=notifier_for_account,
         operations_notifier_factory=notifier_for_operations,
+        ai_research_notifier_factory=notifier_for_ai_research,
         dry_run=dry_run,
         send_gap_seconds=float(settings.get("notificationSendGapSeconds") or 0),
         stale_after_minutes=int(settings.get("notificationProcessingStaleMinutes") or 2),

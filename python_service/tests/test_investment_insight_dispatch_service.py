@@ -275,6 +275,47 @@ class FakeAIHandoff:
 
 
 class InvestmentInsightDispatchServiceTests(unittest.TestCase):
+    def assert_event_envelope_is_bound_before_observation_admission(self):
+        for conflict in (None, "event-account", "event-symbol", "metadata-account", "metadata-symbol",
+                         "missing-account", "missing-symbol"):
+            with self.subTest(envelope_identity=conflict):
+                case = subject_case("subject:envelope")
+                context = context_observation(case)
+                context.pop("accountId")
+                event = alert(case, context, "envelope")
+                if conflict == "event-account":
+                    event.account_id = "another-account"
+                elif conflict == "event-symbol":
+                    event.symbol = "NVDA"
+                elif conflict == "metadata-account":
+                    event.metadata["accountId"] = "another-account"
+                elif conflict == "metadata-symbol":
+                    event.metadata["symbol"] = "NVDA"
+                elif conflict == "missing-account":
+                    event.account_id = ""
+                elif conflict == "missing-symbol":
+                    event.symbol = ""
+                queue = FakeNotificationQueue()
+                handoff = FakeAIHandoff()
+                service = InvestmentInsightDispatchService(
+                    FakeIngress(), queue, handoff, FakeOrchestrator([case]),
+                    legacy_ai_handoff_enabled=False,
+                )
+                result = service.dispatch([event])
+                if conflict is None:
+                    self.assertEqual(1, result["typedbPublishedCount"])
+                    job = next(iter(queue.jobs.values()))
+                    self.assertEqual(case.account_id, job.context["accountId"])
+                    self.assertEqual(case.symbol, job.context["symbol"])
+                    self.assertTrue(typedb_context_observation_contract(job.context))
+                else:
+                    self.assertEqual(0, result["queuedCount"])
+                    self.assertFalse(queue.jobs)
+                    self.assertEqual(1, result["routeCounts"][INVALID])
+                    self.assertEqual("event-subject-identity-mismatch", result["outcomes"][0]["reasonCode"])
+                    self.assertFalse(case.inference_dispatch_decision)
+                self.assertFalse(handoff.events)
+
     def assert_queue_receipt_distinguishes_admission_from_dispatch_intent(self):
         for status, state in [
             ("awaiting-ai-insight", "awaiting-ai"), ("coalesced-material", "coalesced-ai"),
@@ -381,6 +422,7 @@ class InvestmentInsightDispatchServiceTests(unittest.TestCase):
         self.assert_queue_receipt_distinguishes_admission_from_dispatch_intent()
         self.assert_late_queue_receipt_does_not_regress_delivery()
         self.assert_dispatch_failure_is_recorded_and_remains_retryable()
+        self.assert_event_envelope_is_bound_before_observation_admission()
         observation = subject_case("subject:observation")
         actionable = subject_case(
             "subject:actionable",
@@ -619,6 +661,8 @@ class InvestmentInsightDispatchServiceTests(unittest.TestCase):
             outcome="READY",
         )
         stage_context = context_observation(actionable)
+        # Live producers carry the account on AlertEvent, not in its metadata.
+        stage_context.pop("accountId")
         predictive_basis = {
             "owner": "market-hypothesis",
             "ruleKind": "predictive",

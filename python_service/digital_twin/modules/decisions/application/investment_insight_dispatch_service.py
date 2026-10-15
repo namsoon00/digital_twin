@@ -82,6 +82,31 @@ class InvestmentInsightDispatchService:
                 continue
 
             subject_case = self.reasoning_orchestrator.required_subject(subject_case_id)
+            # AlertEvent owns account/symbol identity before notification ingress
+            # duplicates it into the message context. Bind that envelope before
+            # either direct or stage-observation admission checks the proof.
+            # Never repair a conflicting envelope or metadata with the case ID.
+            event_account = str(getattr(event, "account_id", "") or "").strip()
+            event_symbol = str(getattr(event, "symbol", "") or "").strip().upper()
+            metadata_account = str(metadata.get("accountId") or "").strip()
+            metadata_symbol = str(metadata.get("symbol") or "").strip().upper()
+            if (not event_account or event_account != subject_case.account_id
+                    or not event_symbol or event_symbol != subject_case.symbol.upper()
+                    or (metadata_account and metadata_account != event_account)
+                    or (metadata_symbol and metadata_symbol != event_symbol)):
+                outcomes.append({
+                    "status": "invalid-event-subject-identity",
+                    "route": INVALID,
+                    "eventKey": str(getattr(event, "key", "") or ""),
+                    "symbol": event_symbol,
+                    "reasonCode": "event-subject-identity-mismatch",
+                    "reason": "알림 이벤트의 계좌·종목이 원본 판단과 일치하지 않습니다.",
+                    "queued": False,
+                })
+                route_counts[INVALID] += 1
+                continue
+            metadata["accountId"] = event_account
+            metadata["symbol"] = event_symbol
             if subject_case.publication:
                 metadata["decisionPublication"] = subject_case.publication.to_dict()
             metadata["investmentSubjectDecisionCase"] = (

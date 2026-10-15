@@ -49,8 +49,10 @@ def research_knowledge_projection(context):
             edge(revision, previous, "SUPERSEDES")
         for evidence in row.get("evidence", []):
             ref = node("research-evidence-reference", row["claimId"] + ":" + evidence["factId"], "판단 당시 근거 참조", "Evidence",
-                       {"factId": evidence["factId"], "sourceSnapshotId": evidence["sourceSnapshotId"], "contentHash": evidence["contentHash"], "evidenceRole": "historical-reference"})
-            edge(claim, ref, "CONTRADICTS" if evidence["role"] == "contradicts" else "SUPPORTED_BY")
+                       {"factId": evidence["factId"], "sourceSnapshotId": evidence["sourceSnapshotId"], "contentHash": evidence["contentHash"],
+                        "independenceKey": evidence.get("independenceKey", evidence["contentHash"]), "evidenceRole": "historical-reference"})
+            for role in evidence.get("roles", [evidence["role"]]):
+                edge(claim, ref, "CONTRADICTS" if role == "contradicts" else "SUPPORTED_BY")
         assessment = row.get("currentAssessment") or row.get("assessment") or {}
         if assessment.get("assessmentId"):
             assessed = node("research-knowledge-assessment", assessment["assessmentId"], "후속 지표 관측", "ResearchKnowledgeAssessment",

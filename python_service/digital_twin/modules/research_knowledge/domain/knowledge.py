@@ -116,8 +116,6 @@ def validate_proposals(value, context, packet, usable_ids, business_theses=()):
             if (not isinstance(ids, list) or len(ids) > 6 or any(not isinstance(key, str) or key not in known or key not in usable_ids for key in ids)):
                 raise ValueError("knowledge claim requires usable captured evidence")
             row[key] = list(dict.fromkeys(ids))
-        if set(row["evidenceIds"]) & set(row["counterEvidenceIds"]):
-            raise ValueError("one evidence item cannot independently support and contradict the same claim")
         if not isinstance(row["missingEvidence"], list) or len(row["missingEvidence"]) > 3:
             raise ValueError("invalid knowledge evidence gaps")
         row["missingEvidence"] = [text(item) for item in row["missingEvidence"]]
@@ -179,7 +177,11 @@ def revise_claim(previous, proposal, packet, input_id, now, business_thesis_id="
     if not instant(now) or instant(packet["capturedAt"]) > instant(now):
         raise ValueError("knowledge revision cannot precede its input")
     now = canonical_time(now)
-    basis = [{"factId": fact["id"], "role": "supports" if fact["id"] in proposal["evidenceIds"] else "contradicts",
+    basis = [{"factId": fact["id"], "role": "mixed" if fact["id"] in proposal["evidenceIds"] and fact["id"] in proposal["counterEvidenceIds"] else
+              "supports" if fact["id"] in proposal["evidenceIds"] else "contradicts",
+              "roles": [role for role, field in (("supports", "evidenceIds"), ("contradicts", "counterEvidenceIds")) if fact["id"] in proposal[field]],
+              "independenceKey": digest((fact.get("historicalDocumentReference") or {}).get("evidenceId")
+                  or fact.get("sourceDocumentId") or fact.get("reportObservationId") or fact.get("sourceEntityId") or fact["id"]),
               "sourceSnapshotId": fact.get("sourceSnapshotId", packet["sourceSnapshotId"]),
               "sourceWorldId": fact.get("sourceWorldId", packet["worldId"]), "contentHash": digest(fact)}
              for fact in packet["facts"] if fact["id"] in proposal["evidenceIds"] + proposal["counterEvidenceIds"]]

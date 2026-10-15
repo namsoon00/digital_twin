@@ -80,7 +80,7 @@ class ResearchKnowledgeTests(unittest.TestCase):
         p = business_packet(); c = context(p); usable = {row["id"] for row in p["facts"]}
         validated = validate_proposals(proposal(), c, p, usable)
         self.assertEqual(proposal(), raw_proposals(validated))
-        for bad in (proposal(evidenceIds=["invented"]), proposal(counterEvidenceIds=["report-2025"]),
+        for bad in (proposal(evidenceIds=["invented"]),
                     proposal(evidenceIds=[], missingEvidence=[]), proposal(businessThesisIndex=0),
                     proposal(mechanism="성장률 99가 반드시 지속됩니다.")):
             with self.subTest(bad=bad), self.assertRaises(ValueError):
@@ -92,6 +92,16 @@ class ResearchKnowledgeTests(unittest.TestCase):
         future = copy.deepcopy(p); future["facts"][-1]["publishedAt"] = "2027-01-01T00:00:00Z"
         with self.assertRaises(ValueError):
             validate_proposals(proposal(), c, future, usable)
+        # One filing may contain both growing revenue and cash-flow concerns.
+        # Preserve both roles while retaining one independent source reference.
+        mixed = validate_proposals(proposal(counterEvidenceIds=["report-2025"]), c, p, usable)
+        record = revise_claim(None, mixed["claims"][0], p, "mixed-report", "2026-03-02T00:00:00Z")
+        self.assertEqual(1, len(record["evidence"]))
+        self.assertEqual(["supports", "contradicts"], record["evidence"][0]["roles"])
+        self.assertTrue(record["evidence"][0]["independenceKey"])
+        graph = research_knowledge_projection(context({**p, "capturedAt": "2026-03-03T00:00:00Z"}, [record]))
+        links = [row for row in graph["relations"] if row["type"] in {"SUPPORTED_BY", "CONTRADICTS"}]
+        self.assertEqual(2, len(links)); self.assertEqual(links[0]["target"], links[1]["target"])
 
     def test_revisions_preserve_parent_and_reject_stale_updates(self):
         first = registered()
@@ -107,7 +117,7 @@ class ResearchKnowledgeTests(unittest.TestCase):
             revise_claim(second, validated["claims"][0], p, "stale-input", "2026-03-05T00:00:00Z")
         self.assertEqual(first["revisionId"], context(p, [first, second])["claims"][0]["revisionId"])
         updated_methods = methods()
-        updated_methods[0]["version"] = 2
+        updated_methods[0]["version"] = first["frameworkVersion"] + 1
         updated_methods[0]["contentHash"] = digest(updated_methods[0])
         changed_method = build_context(p, updated_methods, [first], usable_ids=[row["id"] for row in p["facts"]])
         with self.assertRaises(ValueError):
@@ -116,7 +126,7 @@ class ResearchKnowledgeTests(unittest.TestCase):
         by_id = {row["id"]: row for row in graph["entities"]}
         claim_node = next(row for row in graph["entities"] if row["kind"] == "research-knowledge-claim")
         link = next(row for row in graph["relations"] if row["source"] == claim_node["id"] and row["type"] == "USES_RESEARCH_FRAMEWORK")
-        self.assertEqual(1, by_id[link["target"]]["properties"]["frameworkVersion"])
+        self.assertEqual(first["frameworkVersion"], by_id[link["target"]]["properties"]["frameworkVersion"])
 
     def test_failed_metric_creates_scoped_unadopted_method_proposal_without_causal_qualification(self):
         claim = {**registered(), "businessThesisId": "thesis"}

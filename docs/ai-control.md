@@ -1155,6 +1155,12 @@ account/symbol/world/purpose, the original frozen AI input, source snapshot and
 evidence hashes, assumptions, counter-evidence, invalidation and next check.
 Point-in-time retrieval excludes records first known after its cutoff. Missing
 data, zero, source changes and omission from the selected input remain distinct.
+Method editions are append-only: the completed catalog is edition two and
+preserves any previously registered edition-one content. Existing claims stay
+bound to their original method edition until explicitly revised. A composite
+filing may support one part of a claim and contradict another; both graph roles
+point to one source reference with one independence key, never two independent
+observations.
 
 V17 freezes a bounded `current.researchKnowledge` containing the service purpose,
 methods, company source references, prior claims and observation assessments.

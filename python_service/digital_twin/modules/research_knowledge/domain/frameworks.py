@@ -16,7 +16,7 @@ SERVICE_POLICY = {
 # threshold, causal conclusion, or permission to trade. These are paraphrases.
 FRAMEWORKS = (
     {
-        "id": "growth-cash-conversion-v1", "version": 1, "purpose": "company-value",
+        "id": "growth-cash-conversion-v1", "version": 2, "purpose": "company-value",
         "label": "성장의 질과 현금 전환",
         "mechanism": "손익과 현금흐름은 다른 측정입니다. 성장의 설명을 이익, 운전자본, 투자 지출과 연결해 확인합니다.",
         "applicability": "비금융 사업의 비교 가능한 보고 자료. 금융회사에는 산업별 보고·평가 방법을 먼저 확인합니다.",
@@ -31,7 +31,7 @@ FRAMEWORKS = (
         "references": [{"title": "SEC: Beginners' Guide to Financial Statements", "url": "https://www.sec.gov/about/reports-publications/investorpubsbegfinstmtguide", "role": "methodology"}],
     },
     {
-        "id": "price-expectations-v1", "version": 1, "purpose": "opportunity",
+        "id": "price-expectations-v1", "version": 2, "purpose": "opportunity",
         "label": "가격의 요구 조건과 확인 사건",
         "mechanism": "가치평가의 성장·수익성·재투자 가정을 명시하고, 현재 가격을 설명하는 조건과 실제 자료를 비교합니다.",
         "applicability": "기존 가치평가 모듈에 출처와 가정 버전이 있는 대상. 역산 결과는 다른 입력을 고정한 조건부 결과입니다.",
@@ -45,7 +45,7 @@ FRAMEWORKS = (
         "references": [{"title": "Aswath Damodaran: Growth Companies — Value Drivers", "url": "https://pages.stern.nyu.edu/~adamodar/New_Home_Page/littlebook/growthvaluedrivers.htm", "role": "methodology"}],
     },
     {
-        "id": "portfolio-common-risk-v1", "version": 1, "purpose": "portfolio-risk",
+        "id": "portfolio-common-risk-v1", "version": 2, "purpose": "portfolio-risk",
         "label": "공통 위험 노출과 개인 투자 정책",
         "mechanism": "자산 개수와 위험 분산은 다릅니다. 공통 산업·통화·금리 노출을 개인 투자 기간과 정책 맥락에서 조사합니다.",
         "applicability": "현재 계정의 검증된 포지션·노출·정책 자료. 다른 계정의 비중이나 정책을 가져오지 않습니다.",

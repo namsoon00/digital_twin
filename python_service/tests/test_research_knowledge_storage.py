@@ -89,6 +89,22 @@ class ResearchKnowledgeStorageTests(unittest.TestCase):
             self.assertEqual(1, c.execute("SELECT COUNT(*) AS n FROM domain_events WHERE aggregate_id=%s AND name='research_knowledge.claim_revised'", (rows[0]["claimId"],)).fetchone()["n"])
         before = self.repository.records(p, result["input"]["capturedAt"])
         self.assertEqual([], before)
+        # Existing method editions survive startup and remain addressable.
+        # A current release is appended, never written over an older edition.
+        import json
+        from digital_twin.modules.research_knowledge.domain.frameworks import framework_catalog
+        from digital_twin.modules.research_knowledge.domain.knowledge import digest
+        legacy = copy.deepcopy(framework_catalog()[0]); legacy["version"] = 1
+        legacy["mechanism"] = "과거 연구 틀의 설명과 당시 적용 조건을 변경하지 않고 보존합니다."
+        with self.repository.transaction() as c:
+            c.execute("INSERT IGNORE INTO research_knowledge_frameworks "
+                "(framework_id,version,content_hash,known_at,payload_json) VALUES (%s,%s,%s,%s,%s)",
+                (legacy["id"], 1, digest(legacy), "2026-01-01T00:00:00.000000Z", json.dumps(legacy, ensure_ascii=False)))
+        from digital_twin.modules.research_knowledge.infrastructure.mysql_repository import MySQLResearchKnowledgeRepository
+        reopened = MySQLResearchKnowledgeRepository(self.control.runtime_settings)
+        editions = reopened.frameworks()
+        self.assertEqual(digest(legacy), next(row["contentHash"] for row in editions if row["id"] == legacy["id"] and row["version"] == 1))
+        self.assertEqual(2, next(row["version"] for row in self.handoff.context({**p, "capturedAt": stamp()})["frameworks"] if row["id"] == legacy["id"]))
         # A later source-owner checkpoint is a new immutable assessment, not a
         # rewrite of the earlier prediction or empirical qualification.
         from digital_twin.modules.research_knowledge.infrastructure.transaction_writes import write_research
@@ -112,7 +128,6 @@ class ResearchKnowledgeStorageTests(unittest.TestCase):
             repeated = write_research(c, observed, empty, "independent-checkpoint", stamp())
             original = c.execute("SELECT payload_json FROM research_knowledge_revisions WHERE claim_id=%s AND revision=1", (evaluated["claimId"],)).fetchone()
         self.assertEqual([], repeated["revisionIds"])
-        import json
         self.assertEqual("awaiting-observation", json.loads(original["payload_json"])["assessment"]["status"])
 
     def test_unreviewed_claim_cannot_commit_and_reviewed_content_is_frozen(self):

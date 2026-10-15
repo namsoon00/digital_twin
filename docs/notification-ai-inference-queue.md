@@ -21,7 +21,7 @@ ai_inference_requests: pending
        +--------+--------+
        |                 |
  AI worker 1         AI worker 2
- gpt-5.6-sol max     gpt-5.6-sol max
+ gpt-6.1-sol max     gpt-6.1-sol max
        |                 |
        +--------+--------+
                 |

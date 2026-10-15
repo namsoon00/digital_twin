@@ -183,18 +183,20 @@ class AIInferenceQueueTests(unittest.TestCase):
             {"notificationAiAttemptWatchdogSeconds": "300"},
         )
 
-        self.assertEqual(
-            900,
-            runner.effective_attempt_watchdog_seconds(
-                SimpleNamespace(model="gpt-5.6-sol", reasoning_effort="max")
-            ),
-        )
-        self.assertEqual(
-            300,
-            runner.effective_attempt_watchdog_seconds(
-                SimpleNamespace(model="gpt-5.6-sol", reasoning_effort="high")
-            ),
-        )
+        for model in ("gpt-5.6-sol", "gpt-6.1-sol"):
+            with self.subTest(model=model):
+                self.assertEqual(
+                    900,
+                    runner.effective_attempt_watchdog_seconds(
+                        SimpleNamespace(model=model, reasoning_effort="max")
+                    ),
+                )
+                self.assertEqual(
+                    300,
+                    runner.effective_attempt_watchdog_seconds(
+                        SimpleNamespace(model=model, reasoning_effort="high")
+                    ),
+                )
 
     def create_detached_request(self, subject_case_id="subject:detached:1"):
         job = NotificationJob.create(
@@ -1390,7 +1392,7 @@ class AIInferenceQueueTests(unittest.TestCase):
         self.assertEqual("completed", delivered.context["notificationAiQueue"]["status"])
         prompt_audit = delivered.context["notificationAiExecutionAudit"]
         self.assertEqual(request.request_id, prompt_audit["requestId"])
-        self.assertEqual("gpt-5.6-sol", prompt_audit["model"])
+        self.assertEqual("gpt-6.1-sol", prompt_audit["model"])
         self.assertTrue(prompt_audit["prompt"].startswith("너는 자동 주문자가 아니라 TypeDB 경쟁 가설을 비교하는"))
         self.assertEqual("investment-ai-decision-brief-v6", prompt_audit["decisionBriefVersion"])
         self.assertEqual("investment-ai-decision-core-v5", prompt_audit["decisionCore"]["schemaVersion"])
@@ -1421,7 +1423,7 @@ class AIInferenceQueueTests(unittest.TestCase):
         trace = self.queue.trace_for_notification(job.job_id)
         self.assertTrue(trace["executionAuditRetained"])
         self.assertEqual(prompt_audit["promptHash"], trace["executionAudit"]["promptHash"])
-        self.assertEqual("gpt-5.6-sol", trace["executionAudit"]["model"])
+        self.assertEqual("gpt-6.1-sol", trace["executionAudit"]["model"])
         self.assertTrue(prompt_audit["contextRouting"]["fullDecisionBriefRetainedForAudit"])
         self.assertEqual("deepResearch", prompt_audit["executionProfile"]["name"])
         self.assertEqual(64, len(prompt_audit["promptHash"]))

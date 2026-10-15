@@ -1050,7 +1050,7 @@ DEFAULT_STRATEGY_SETTINGS = {
     "notificationAiGateEnabled": "1",
     "notificationAiGateMessageTypes": "investmentInsight",
     "notificationAiUseCodex": "1",
-    "notificationAiModel": "gpt-5.6-sol",
+    "notificationAiModel": "gpt-6.1-sol",
     "notificationAiReasoningEffort": "auto",
     "notificationAiStandardReasoningEffort": "medium",
     "notificationAiDeepReasoningEffort": "high",

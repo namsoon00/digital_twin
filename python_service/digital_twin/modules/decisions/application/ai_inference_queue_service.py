@@ -461,7 +461,7 @@ class NotificationAIRequestEnqueuer:
         context["ontologyQualityGate"] = ontology_quality_gate_context(context, self.settings)
         execution_profile = notification_ai_execution_profile(context, self.settings)
         context["notificationAiExecutionProfile"] = execution_profile
-        model = str(self.settings.get("notificationAiModel") or "gpt-5.6-sol")
+        model = str(self.settings.get("notificationAiModel") or "gpt-6.1-sol")
         context["notificationAiReplayManifest"] = {
             "promptVersion": AI_DECISION_PROMPT_VERSION,
             "modelVersion": model,
@@ -634,7 +634,7 @@ class NotificationAIRequestEnqueuer:
         )
         execution_profile = notification_ai_execution_profile(context, self.settings)
         context["notificationAiExecutionProfile"] = execution_profile
-        model = str(self.settings.get("notificationAiModel") or "gpt-5.6-sol").strip()
+        model = str(self.settings.get("notificationAiModel") or "gpt-6.1-sol").strip()
         reasoning_effort = str(execution_profile.get("reasoningEffort") or "medium")
         context["notificationAiReplayManifest"] = {
             "promptVersion": AI_DECISION_PROMPT_VERSION,
@@ -1555,7 +1555,8 @@ class AIInferenceQueueRunner:
         """Give the configured highest-quality model enough time to finish.
 
         gpt-5.6-sol at max reasoning regularly needs more than the historical
-        five-minute worker watchdog. Keeping that limit silently converted a
+        five-minute worker watchdog. Preserve the same headroom for GPT-6.1 Sol.
+        Keeping that limit silently converted a
         valid TypeDB case into a fallback narrative and made the web UI look as
         if AI had completed. The lease heartbeat still protects worker recovery.
         """
@@ -1564,7 +1565,7 @@ class AIInferenceQueueRunner:
         effort = str(
             getattr(request, "reasoning_effort", "") or ""
         ).strip().lower()
-        if model == "gpt-5.6-sol" and effort == "max":
+        if model in {"gpt-5.6-sol", "gpt-6.1-sol"} and effort == "max":
             return max(self.attempt_watchdog_seconds, 900)
         return self.attempt_watchdog_seconds
 

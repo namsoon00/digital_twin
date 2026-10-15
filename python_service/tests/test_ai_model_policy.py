@@ -17,7 +17,15 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from digital_twin.infrastructure.disclosure_analyzer import disclosure_analyzer_from_settings  # noqa: E402
 from digital_twin.infrastructure.hypothesis_proposal_ai import hypothesis_proposal_advisor_from_settings  # noqa: E402
 from digital_twin.infrastructure.hypothesis_research_planner_ai import hypothesis_research_planning_advisor_from_settings  # noqa: E402
-from digital_twin.modules.model_registry.infrastructure.model_reviewer import _CODEX_PREFLIGHT_CACHE, healthy_codex_executable, reviewer_from_settings
+from digital_twin.modules.model_registry.infrastructure.model_reviewer import (
+    _CODEX_PREFLIGHT_CACHE,
+    codex_command,
+    codex_model_label,
+    codex_process_arguments,
+    healthy_codex_executable,
+    reviewer_from_settings,
+)
+from digital_twin.infrastructure.settings import DEFAULT_STRATEGY_SETTINGS
 from digital_twin.infrastructure.news_ai_analyzer import news_ai_analyzer_from_settings  # noqa: E402
 from digital_twin.infrastructure.local_ai_process_guard import (  # noqa: E402
     LocalAICapacityUnavailable,
@@ -135,7 +143,18 @@ class AiModelPolicyTests(unittest.TestCase):
                         validate.assert_not_called()
 
     def test_all_application_ai_factories_ignore_custom_commands_and_use_the_fixed_codex_policy(self):
-        fixed_command = ["codex", "--model", "gpt-5.6-sol", "exec", "-"]
+        self.assertEqual("gpt-6.1-sol", DEFAULT_STRATEGY_SETTINGS["notificationAiModel"])
+        with patch("digital_twin.modules.model_registry.infrastructure.model_reviewer.healthy_codex_executable", return_value="codex"):
+            for effort in ("low", "medium", "high", "max"):
+                with self.subTest(effort=effort):
+                    arguments = codex_process_arguments(effort, self.runtime_directory)
+                    self.assertEqual("gpt-6.1-sol", arguments[arguments.index("--model") + 1])
+                    self.assertIn('model_reasoning_effort="' + effort + '"', arguments)
+                    self.assertEqual("GPT-6.1 Sol · " + effort, codex_model_label(effort))
+            command = codex_command("gpt-5.6-sol", "high")
+            self.assertIn("--model gpt-6.1-sol", command)
+            self.assertNotIn("gpt-5.6-sol", command)
+        fixed_command = ["codex", "--model", "gpt-6.1-sol", "exec", "-"]
         with patch("digital_twin.modules.model_registry.infrastructure.model_reviewer.background_codex_process_arguments", return_value=fixed_command) as model_command, \
              patch("digital_twin.infrastructure.notification_ai_reviewer.codex_process_arguments", return_value=["codex", "exec", "-"]) as notification_command, \
              patch("digital_twin.infrastructure.news_ai_analyzer.background_codex_process_arguments", return_value=fixed_command) as news_command, \
@@ -171,16 +190,25 @@ class AiModelPolicyTests(unittest.TestCase):
 
         _CODEX_PREFLIGHT_CACHE.clear()
         fake_stat = type("Stat", (), {"st_mtime_ns": 1, "st_size": 2})()
-        with patch("digital_twin.modules.model_registry.infrastructure.model_reviewer.shutil.which", return_value="/tmp/codex"), \
+        with patch.dict(os.environ, {"CODEX_BIN": "/tmp/service codex"}), \
+             patch("digital_twin.modules.model_registry.infrastructure.model_reviewer.shutil.which", return_value="/tmp/service codex") as which, \
+             patch("digital_twin.modules.model_registry.infrastructure.model_reviewer.os.stat", return_value=fake_stat), \
+             patch("digital_twin.modules.model_registry.infrastructure.model_reviewer.subprocess.run", return_value=subprocess.CompletedProcess([], 0, "codex-cli 0.162.0", "")):
+            self.assertEqual("/tmp/service codex", healthy_codex_executable())
+            which.assert_called_once_with("/tmp/service codex")
+        _CODEX_PREFLIGHT_CACHE.clear()
+        with patch.dict(os.environ, {"CODEX_BIN": ""}), \
+             patch("digital_twin.modules.model_registry.infrastructure.model_reviewer.shutil.which", return_value="/tmp/codex") as which, \
              patch("digital_twin.modules.model_registry.infrastructure.model_reviewer.os.stat", return_value=fake_stat), \
              patch(
                  "digital_twin.modules.model_registry.infrastructure.model_reviewer.subprocess.run",
                  side_effect=subprocess.TimeoutExpired(["codex", "--version"], 5),
              ):
             self.assertEqual("", healthy_codex_executable())
+            which.assert_called_once_with("codex")
 
     def test_notification_delivery_deadline_caps_codex_gate_wait(self):
-        fixed_command = "codex --model gpt-5.6-sol --config model_reasoning_effort=max exec -"
+        fixed_command = "codex --model gpt-6.1-sol --config model_reasoning_effort=max exec -"
         with patch(
             "digital_twin.infrastructure.notification_ai_reviewer.codex_process_arguments",
             return_value=["codex", "exec", "-"],
@@ -194,7 +222,7 @@ class AiModelPolicyTests(unittest.TestCase):
         self.assertEqual(15, reviewer.primary.timeout_seconds)
 
     def test_notification_ai_uses_separate_effort_and_configured_deadline(self):
-        fixed_command = "codex --model gpt-5.6-sol --config model_reasoning_effort=low exec -"
+        fixed_command = "codex --model gpt-6.1-sol --config model_reasoning_effort=low exec -"
         with patch(
             "digital_twin.infrastructure.notification_ai_reviewer.codex_process_arguments",
             return_value=["codex", "exec", "-"],
@@ -233,7 +261,7 @@ class AiModelPolicyTests(unittest.TestCase):
         self.assertGreater(direct_reviewer.last_execution_spans["modelProcessMs"], 0)
 
     def test_dedicated_notification_ai_queue_uses_primary_without_inline_fallback(self):
-        fixed_command = "codex --model gpt-5.6-sol --config model_reasoning_effort=max exec -"
+        fixed_command = "codex --model gpt-6.1-sol --config model_reasoning_effort=max exec -"
         with patch(
             "digital_twin.infrastructure.notification_ai_reviewer.codex_process_arguments",
             return_value=["codex", "exec", "-"],

@@ -610,7 +610,7 @@ class AIInferenceRequest:
     review_mode: str = AI_REVIEW_MODE_INVESTMENT_JUDGEMENT
     context: Dict[str, object] = field(default_factory=dict)
     prompt_version: str = NOTIFICATION_AI_GATE_VERSION
-    model: str = "gpt-5.6-sol"
+    model: str = "gpt-6.1-sol"
     reasoning_effort: str = "max"
     priority: int = 20
     status: str = AI_INFERENCE_PENDING
@@ -632,7 +632,7 @@ class AIInferenceRequest:
         job: NotificationJob,
         context: Dict[str, object],
         *,
-        model: str = "gpt-5.6-sol",
+        model: str = "gpt-6.1-sol",
         reasoning_effort: str = "max",
         prompt_version: str = NOTIFICATION_AI_GATE_VERSION,
     ) -> "AIInferenceRequest":
@@ -657,7 +657,7 @@ class AIInferenceRequest:
             review_mode=review_mode,
             context=captured,
             prompt_version=_clean(prompt_version) or NOTIFICATION_AI_GATE_VERSION,
-            model=_clean(model) or "gpt-5.6-sol",
+            model=_clean(model) or "gpt-6.1-sol",
             reasoning_effort=_clean(reasoning_effort).lower() or "max",
             priority=notification_ai_queue_priority(captured),
             available_at=stamp,
@@ -672,7 +672,7 @@ class AIInferenceRequest:
         context: Dict[str, object],
         handoff: AIInsightHandoff,
         *,
-        model: str = "gpt-5.6-sol",
+        model: str = "gpt-6.1-sol",
         reasoning_effort: str = "max",
         prompt_version: str = NOTIFICATION_AI_GATE_VERSION,
     ) -> "AIInferenceRequest":

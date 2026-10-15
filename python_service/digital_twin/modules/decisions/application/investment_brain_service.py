@@ -181,7 +181,7 @@ class InvestmentBrainService:
         context["notificationAiExecutionProfile"] = execution_profile
         context["notificationAiReplayManifest"] = {
             "promptVersion": AI_DECISION_PROMPT_VERSION,
-            "modelVersion": str(self.settings.get("notificationAiModel") or "gpt-5.6-sol"),
+            "modelVersion": str(self.settings.get("notificationAiModel") or "gpt-6.1-sol"),
             "decisionContractVersion": AI_DECISION_CONTRACT_VERSION,
             "reasoningEffort": str(execution_profile.get("reasoningEffort") or "medium"),
         }

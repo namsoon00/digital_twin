@@ -12,7 +12,7 @@ from digital_twin.infrastructure.local_ai_process_guard import run_ai_prompt_com
 from digital_twin.infrastructure.settings import ROOT_DIR, data_dir, runtime_settings
 
 
-ENFORCED_CODEX_MODEL = "gpt-5.6-sol"
+ENFORCED_CODEX_MODEL = "gpt-6.1-sol"
 ENFORCED_CODEX_REASONING_EFFORT = "max"
 VALID_CODEX_REASONING_EFFORTS = {"low", "medium", "high", "max"}
 _CODEX_PREFLIGHT_CACHE = {}
@@ -68,13 +68,13 @@ def normalized_codex_reasoning_effort(value: object = "") -> str:
 
 
 def codex_model_label(reasoning_effort: str = "") -> str:
-    return "GPT-5.6 Sol · " + normalized_codex_reasoning_effort(reasoning_effort)
+    return "GPT-6.1 Sol · " + normalized_codex_reasoning_effort(reasoning_effort)
 
 
 def healthy_codex_executable() -> str:
     """Return Codex only when the installed binary can finish local startup."""
 
-    executable = shutil.which("codex")
+    executable = shutil.which(str(os.environ.get("CODEX_BIN") or "").strip() or "codex")
     if not executable:
         return ""
     try:

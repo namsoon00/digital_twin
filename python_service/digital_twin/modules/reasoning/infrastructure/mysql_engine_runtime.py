@@ -14,7 +14,7 @@ from digital_twin.modules.reasoning.domain.independent_reasoning import independ
 from digital_twin.shared_kernel.events import DomainEvent
 from digital_twin.modules.decisions.contracts import FactDelta
 from digital_twin.modules.market_data.contracts import COMPLETION_MODE_VERIFIED_LATER_BOUNDARY, MARKET_OBSERVATION_REASONING_RECEIPT_VERSION, MarketObservationReasoningReceipt, completion_mode, market_observation_completion_scope
-from digital_twin.modules.reasoning.domain.ontology_reasoning_queue import work_class_for_fact_types
+from digital_twin.modules.reasoning.domain.ontology_reasoning_queue import event_work_class, work_class_for_fact_types
 from digital_twin.modules.market_data.contracts import canonical_json, payload_fingerprint
 from digital_twin.infrastructure.mysql_operational_connection import MySQLOperationalConnection, run_mysql_deadlock_retry
 
@@ -1716,9 +1716,12 @@ class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
                 "SELECT job_id, request_json FROM reasoning_engine_jobs "
                 "WHERE deployment_id = %s AND supersedable = 1 "
                 "AND job_status IN ('queued', 'retry', 'awaiting_source', 'awaiting_world_projection') "
-                "AND created_at < %s ORDER BY created_at, job_id LIMIT %s FOR UPDATE SKIP LOCKED",
+                "AND created_at < %s "
+                "AND (source_snapshot_at = '' OR source_snapshot_at < %s) "
+                "ORDER BY created_at, job_id LIMIT %s FOR UPDATE SKIP LOCKED",
                 (
                     str(deployment_id or ""),
+                    cutoff,
                     cutoff,
                     max(1, min(5000, int(limit or 500))),
                 ),
@@ -1727,6 +1730,7 @@ class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
                 stored = json_value(row.get("request_json"), {})
                 source = stored.get("sourceEvent") if isinstance(stored, Mapping) else {}
                 payload = source.get("payload") if isinstance(source, Mapping) else {}
+                payload = payload if isinstance(payload, Mapping) else {}
                 request = stored.get("request") if isinstance(stored, Mapping) else {}
                 request = request if isinstance(request, Mapping) else {}
                 context = request.get("context") if isinstance(request, Mapping) else {}
@@ -1741,6 +1745,23 @@ class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
                 ).strip().upper()
                 if not work_class and len(set(context_work_classes)) == 1:
                     work_class = context_work_classes[0]
+                by_symbol = payload.get("factTypesBySymbol")
+                symbols = request.get("symbols") or []
+                if not work_class and symbols and isinstance(by_symbol, Mapping):
+                    # A shard retains its parent's batch-wide factTypes for
+                    # audit. Classify every actual subject with the existing
+                    # per-symbol contract; another subject's research must
+                    # not turn an obsolete quote into durable evidence.
+                    event = DomainEvent.from_dict(dict(source))
+                    classes = {event_work_class(event, symbol) for symbol in symbols}
+                    if classes and classes <= {"MARKET", "PORTFOLIO"}:
+                        work_class = "PORTFOLIO" if "PORTFOLIO" in classes else "MARKET"
+                    else:
+                        continue
+                if not work_class and len(set(context_work_classes)) > 1:
+                    # An ambiguous mixed request is not replaceable merely
+                    # because its fallback fact list contains a quote.
+                    continue
                 if not work_class:
                     fact_types = (
                         (payload or {}).get("factTypes")
@@ -3129,13 +3150,18 @@ class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
             ).fetchall()
             completed_where = cohort_where + (" AND" if cohort_where else " WHERE") + " job_status = 'completed'"
             rows = connection.execute(
-                "SELECT * FROM reasoning_engine_jobs" + completed_where + " ORDER BY completed_at DESC LIMIT %s",
+                # Request/source packets are not health metrics. Avoid loading
+                # them, while preserving the exact result used by the gates.
+                "SELECT job_id, completed_at, duration_ms, queue_wait_ms, result_json "
+                "FROM reasoning_engine_jobs" + completed_where + " ORDER BY completed_at DESC LIMIT %s",
                 (*cohort_params, max(1, min(2000, int(lookback or 200)))),
             ).fetchall()
             pending_where = where + (" AND" if where else " WHERE") + " job_status IN ('queued', 'retry', 'processing')"
             pending_lanes = connection.execute(
                 "SELECT job_status, reasoning_lane, current_stage, "
                 "COUNT(*) AS row_count, MIN(created_at) AS oldest, "
+                "MIN(NULLIF(source_snapshot_at, '')) AS oldest_source_at, "
+                "SUM(CASE WHEN source_snapshot_at = '' THEN 1 ELSE 0 END) AS missing_source_clock_count, "
                 "MIN(stage_started_at) AS stage_started_at, MAX(stage_updated_at) AS stage_updated_at "
                 "FROM reasoning_engine_jobs" + pending_where
                 + " GROUP BY job_status, reasoning_lane, current_stage",
@@ -3145,7 +3171,10 @@ class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
                 " AND" if cohort_where else " WHERE"
             ) + " job_status IN ('failed', 'completed', 'excluded', 'superseded')"
             terminal_rows = connection.execute(
-                "SELECT job_id, scope_key, job_status, updated_at, last_error, result_json "
+                # Successful rows settle earlier failures by scope; only
+                # failed rows need their result for the diagnostic reason.
+                "SELECT job_id, scope_key, job_status, updated_at, last_error, "
+                "CASE WHEN job_status = 'failed' THEN result_json ELSE '{}' END AS result_json "
                 "FROM reasoning_engine_jobs" + terminal_where
                 + " ORDER BY updated_at DESC, job_id DESC LIMIT %s",
                 (
@@ -3219,9 +3248,14 @@ class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
                     continue
         pending_by_lane = {}
         oldest_pending_by_lane = {}
+        pending_source_times = []
+        pending_source_clock_missing_count = 0
         processing_stages = {}
         now = utc_now()
         for row in pending_lanes or []:
+            if row.get("oldest_source_at"):
+                pending_source_times.append(str(row["oldest_source_at"]))
+            pending_source_clock_missing_count += int(row.get("missing_source_clock_count") or 0)
             lane = str(row.get("reasoning_lane") or "unclassified")
             pending_by_lane[lane] = (
                 int(pending_by_lane.get(lane) or 0)
@@ -3262,6 +3296,16 @@ class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
             terminal_rows,
             total_failure_count=int(cohort_count_map.get("failed") or 0),
         )
+        oldest_pending_source_at = min(pending_source_times, default="")
+        oldest_pending_source_age = None
+        if oldest_pending_source_at:
+            try:
+                source_at = datetime.fromisoformat(oldest_pending_source_at.replace("Z", "+00:00"))
+                if source_at.tzinfo is None:
+                    source_at = source_at.replace(tzinfo=timezone.utc)
+                oldest_pending_source_age = max(0, int((now - source_at.astimezone(timezone.utc)).total_seconds()))
+            except ValueError:
+                pass
         return {
             "deploymentId": str(deployment_id or ""),
             "releaseFingerprint": str(release_fingerprint or ""),
@@ -3297,6 +3341,11 @@ class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
             "awaitingWorldProjectionCount": int(count_map.get("awaiting_world_projection") or 0),
             "excludedCount": int(count_map.get("excluded") or 0),
             "oldestPendingAgeSeconds": oldest_pending_age,
+            # A coalesced mailbox retains its first queue timestamp. Expose
+            # its current source clock separately without resetting queue debt.
+            "oldestPendingSourceAt": oldest_pending_source_at,
+            "oldestPendingSourceAgeSeconds": oldest_pending_source_age,
+            "pendingSourceClockMissingCount": pending_source_clock_missing_count,
             "pendingByLane": pending_by_lane,
             "oldestPendingByLane": oldest_pending_by_lane,
             "processingStages": processing_stages,

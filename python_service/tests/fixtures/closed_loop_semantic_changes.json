@@ -575,6 +575,14 @@
       "hash": "35a690fa3b7c067b59c217133b5beaf2675a43ae2488e0317f589abccc7309ed",
       "reason": "Treat a recovered body after an empty source as a changed source; preserve authoritative same-source enrichment and metadata-only quality. test_research_evidence_store; docs/insight-evidence-flow-remediation.md."
     },
+    "modules/reasoning/infrastructure/mysql_engine_runtime.py::MySQLReasoningEngineJobStore.supersede_stale_observation_jobs": {
+      "hash": "424393b32addabe49b483963d230f9b212e279a46877637a15b1e4be1e68c6f2",
+      "reason": "Expire only replaceable observations whose current immutable source is old, classify sharded facts through the existing per-symbol work-class contract, and retain fresh coalesced sources and durable mixed evidence. test_independent_reasoning_engine; docs/reasoning-input-latency.md."
+    },
+    "modules/reasoning/infrastructure/mysql_engine_runtime.py::MySQLReasoningEngineJobStore.summary": {
+      "hash": "2c8c1fae9684fad9ec5deb08c8b61edb58459390042c02402d0a1aeff4f5641b",
+      "reason": "Exclude source request packets and successful terminal-result bodies from health reads while preserving exact metrics and failed diagnostics; expose immutable source age separately from original queue debt. test_reasoning_engine_versions; read-only same-transaction equality against active and candidate stored rows; docs/reasoning-input-latency.md."
+    },
     "modules/reasoning/infrastructure/mysql_engine_runtime.py::MySQLReasoningEngineJobStore.target_deployments_with_connection": {
       "hash": "321ef2f154b3bffca77fdaa78184f4ae3651289cb978d85d149acd62c6f41394",
       "reason": "Route isolated experiments from authoritative candidate control and their shadow ownership receipt, not a stale configured release ID; retain active/delivery routing and exclude retired or rollback-only releases. test_reasoning_ingress_router, test_ai_inference_worker_runtime and test_ontology_evolution."

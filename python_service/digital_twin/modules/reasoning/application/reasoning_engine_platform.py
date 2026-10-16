@@ -1012,6 +1012,9 @@ class ReasoningEnginePlatformService:
                     queue.get("unresolvedFailureReasonCounts") or {}
                 ),
                 "oldestPendingAgeSeconds": oldest_pending_age,
+                "oldestPendingSourceAt": str(queue.get("oldestPendingSourceAt") or ""),
+                "oldestPendingSourceAgeSeconds": queue.get("oldestPendingSourceAgeSeconds"),
+                "pendingSourceClockMissingCount": int(queue.get("pendingSourceClockMissingCount") or 0),
                 "uniqueCompletedRunCount": int(
                     queue.get("uniqueCompletedRunCount")
                     or queue.get("successfulRunCount")
@@ -1087,6 +1090,9 @@ class ReasoningEnginePlatformService:
             "resolvedFailureCount": int(values.get("resolvedFailureCount") or 0),
             "recentFailureCount24h": int(values.get("recentFailureCount24h") or 0),
             "oldestPendingAgeSeconds": int(values.get("oldestPendingAgeSeconds") or 0),
+            "oldestPendingSourceAt": str(values.get("oldestPendingSourceAt") or ""),
+            "oldestPendingSourceAgeSeconds": values.get("oldestPendingSourceAgeSeconds"),
+            "pendingSourceClockMissingCount": int(values.get("pendingSourceClockMissingCount") or 0),
             "uniqueCompletedRunCount": int(
                 values.get("uniqueCompletedRunCount")
                 or values.get("successfulRunCount")

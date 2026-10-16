@@ -1585,9 +1585,11 @@ class IndependentReasoningEngineTests(unittest.TestCase):
         class Connection:
             def __init__(self):
                 self.update_params = ()
+                self.select = ("", ())
 
             def execute(self, sql, params=()):
                 if sql.lstrip().startswith("SELECT"):
+                    self.select = (sql, tuple(params))
                     return SimpleNamespace(fetchall=lambda: [
                         {
                             "job_id": "job:market",
@@ -1610,6 +1612,29 @@ class IndependentReasoningEngineTests(unittest.TestCase):
                                     },
                                 },
                                 "sourceEvent": {"payload": {}},
+                            }),
+                        },
+                        {
+                            "job_id": "job:sharded-market",
+                            "request_json": json.dumps({
+                                "request": {"symbols": ["MSTR"]},
+                                "sourceEvent": {"payload": {
+                                    "factTypes": ["MarketQuote", "CompanyProfile"],
+                                    "factTypesBySymbol": {"MSTR": ["MarketQuote"]},
+                                }},
+                            }),
+                        },
+                        {
+                            "job_id": "job:mixed-evidence",
+                            "request_json": json.dumps({
+                                "request": {"symbols": ["MSTR", "NVDA"]},
+                                "sourceEvent": {"payload": {
+                                    "factTypes": ["MarketQuote", "CompanyProfile"],
+                                    "factTypesBySymbol": {
+                                        "MSTR": ["MarketQuote"],
+                                        "NVDA": ["CompanyProfile"],
+                                    },
+                                }},
                             }),
                         },
                         {
@@ -1640,11 +1665,54 @@ class IndependentReasoningEngineTests(unittest.TestCase):
             maximum_age_seconds=900,
         )
 
-        self.assertEqual(2, result["supersededCount"])
-        self.assertEqual({"MARKET": 1, "PORTFOLIO": 1}, result["workClassCounts"])
+        self.assertEqual(3, result["supersededCount"])
+        self.assertEqual({"MARKET": 2, "PORTFOLIO": 1}, result["workClassCounts"])
         self.assertIn("job:market", connection.update_params)
         self.assertIn("job:portfolio", connection.update_params)
+        self.assertIn("job:sharded-market", connection.update_params)
+        self.assertNotIn("job:mixed-evidence", connection.update_params)
         self.assertNotIn("job:calendar", connection.update_params)
+        # An old mailbox carrying a newly coalesced source must survive.
+        self.assertIn("source_snapshot_at = '' OR source_snapshot_at < %s", connection.select[0])
+        self.assertEqual(connection.select[1][1], connection.select[1][2])
+
+    def test_writer_contention_does_not_stop_bounded_queue_repair(self):
+        order = []
+        guard = SimpleNamespace(
+            acquire=lambda: order.append("writer") or {"acquired": False},
+            release=unittest.mock.Mock(),
+        )
+
+        class Queue:
+            def claim(self, *_args, **_kwargs):
+                raise AssertionError("A waiting worker must not claim graph work")
+
+        runner = IndependentReasoningJobRunner(
+            Queue(), SimpleNamespace(descriptor=descriptor), SimpleNamespace(),
+            graph_writer_guard=guard,
+        )
+        runner.supersede_stale_observations = lambda _id: order.append("cleanup") or {"supersededCount": 1}
+        runner.compact_backlog = lambda _id: order.append("compact") or {"compactedCount": 0}
+        with patch("digital_twin.modules.reasoning.application.independent_reasoning_engine.time.monotonic", return_value=100):
+            first = runner.run_once()
+            runner.run_once()
+        self.assertEqual(["cleanup", "compact", "writer", "writer"], order)
+        self.assertEqual("typedb-graph-writer-owned", first["reasonCode"])
+        self.assertEqual(1, first["queuePreparation"]["staleObservationCleanup"]["supersededCount"])
+        guard.release.assert_not_called()
+
+    def test_completed_watch_turn_yields_to_other_writers(self):
+        runner = IndependentReasoningJobRunner(
+            SimpleNamespace(), SimpleNamespace(descriptor=descriptor), SimpleNamespace(),
+            settings={"reasoningEngineV2IntervalSeconds": "5"},
+        )
+        runner.worker_liveness_loop = lambda *_args: None
+        runner.run_watch_turn = unittest.mock.Mock(return_value={"status": "completed"})
+        retire = iter([False, True])
+        with patch("digital_twin.modules.reasoning.application.independent_reasoning_engine.time.sleep") as sleep:
+            runner.watch(should_retire=lambda: next(retire))
+        sleep.assert_called_once_with(5)
+        self.assertEqual(2, runner.run_watch_turn.call_count)
 
     def test_mysql_queue_recovers_only_confirmed_dead_local_worker_leases(self):
         class Connection:
@@ -3051,7 +3119,8 @@ class IndependentReasoningEngineTests(unittest.TestCase):
                                 release=unittest.mock.Mock())
         runner = IndependentReasoningJobRunner(SimpleNamespace(), SimpleNamespace(),
                                                SimpleNamespace(), graph_writer_guard=guard)
-        runner._run_once = lambda: {"status": "deferred", "processedCount": 1}
+        runner.prepare_queue_turn = lambda: {"status": "ready"}
+        runner._run_once = lambda _preparation: {"status": "deferred", "processedCount": 1}
         runner.run_background_graph_turn = unittest.mock.Mock()
         result = runner.run_watch_turn()
         self.assertEqual(12, result["retryAfterSeconds"])
@@ -3083,18 +3152,20 @@ class IndependentReasoningEngineTests(unittest.TestCase):
             graph_writer_guard=guard,
         )
         background_turns = []
-        runner._run_once = lambda: {"status": "idle", "processedCount": 0}
+        runner.prepare_queue_turn = lambda: {"status": "ready"}
+        runner._run_once = lambda _preparation: {"status": "idle", "processedCount": 0}
+        runner.background_graph_tasks = [{"name": "test-background"}]
         runner.run_background_graph_turn = (
-            lambda: background_turns.append("ran") or {"status": "not-due"}
+            lambda: background_turns.append(("ran", guard.release_count, guard.acquired)) or {"status": "not-due"}
         )
 
         result = runner.run_watch_turn()
 
         self.assertEqual("idle", result["status"])
-        self.assertEqual(1, guard.acquire_count)
-        self.assertEqual(1, guard.release_count)
+        self.assertEqual(2, guard.acquire_count)
+        self.assertEqual(2, guard.release_count)
         self.assertFalse(guard.acquired)
-        self.assertEqual(["ran"], background_turns)
+        self.assertEqual([("ran", 1, True)], background_turns)
 
     def _assert_live_watch_turn_refreshes_published_writer_state_after_release(self):
         class Guard:
@@ -3136,7 +3207,8 @@ class IndependentReasoningEngineTests(unittest.TestCase):
             registry,
             graph_writer_guard=guard,
         )
-        runner._run_once = lambda: {"status": "idle", "processedCount": 0}
+        runner.prepare_queue_turn = lambda: {"status": "ready"}
+        runner._run_once = lambda _preparation: {"status": "idle", "processedCount": 0}
         runner.run_background_graph_turn = lambda: {"status": "not-due"}
         runner._last_published_graph_writer_acquired = True
 

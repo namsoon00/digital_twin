@@ -107,10 +107,11 @@ class MaintenanceFairnessTests(unittest.TestCase):
         )
         events = []
 
-        def inference():
+        def inference(_preparation):
             events.append("inference-completed")
             return {"status": "ready", "processedCount": 1}
 
+        runner.prepare_queue_turn = lambda: {"status": "ready"}
         runner._run_once = inference
         self.repository.acquire_projection_coordinator_lease.return_value = {"acquired": False}
         runner.run_watch_turn()

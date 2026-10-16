@@ -572,6 +572,17 @@ class ReasoningEngineVersionTests(unittest.TestCase):
 
             def execute(self, sql, params=()):
                 self.queries.append((sql, tuple(params)))
+                if "GROUP BY job_status, reasoning_lane, current_stage" in sql:
+                    return SimpleNamespace(fetchall=lambda: [{
+                        "job_status": "queued", "reasoning_lane": "REALTIME", "row_count": 1,
+                        "oldest": "2026-08-01T00:00:00Z",
+                        "oldest_source_at": "2026-08-26T08:27:29Z",
+                        "missing_source_clock_count": 0,
+                    }])
+                if "MIN(created_at) AS oldest, MAX(updated_at)" in sql:
+                    return SimpleNamespace(fetchall=lambda: [{
+                        "job_status": "queued", "row_count": 1, "oldest": "2026-08-01T00:00:00Z",
+                    }])
                 return SimpleNamespace(fetchall=lambda: [])
 
         connection = Connection()
@@ -593,6 +604,11 @@ class ReasoningEngineVersionTests(unittest.TestCase):
         self.assertTrue(cohort_queries)
         self.assertTrue(all("completed_at >= %s" not in sql for sql in cohort_queries))
         self.assertEqual(0, result["sampleCount"])
+        self.assertFalse(any("SELECT * FROM reasoning_engine_jobs" in sql for sql, _ in connection.queries))
+        terminal_sql = next(sql for sql, _ in connection.queries if "last_error" in sql)
+        self.assertIn("CASE WHEN job_status = 'failed' THEN result_json ELSE '{}' END", terminal_sql)
+        self.assertEqual("2026-08-26T08:27:29Z", result["oldestPendingSourceAt"])
+        self.assertLess(result["oldestPendingSourceAgeSeconds"], result["oldestPendingAgeSeconds"])
 
     def test_v2_release_preflight_reuses_exact_immutable_release_without_migration(self):
         from digital_twin.modules.model_registry.domain.ontology_rulebox_governance import rulebox_rules_hash

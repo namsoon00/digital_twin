@@ -84,3 +84,34 @@ Remaining latency must be measured by stage: source assembly, TypeDB persistence
 native inference, AI processing and delivery are distinct. Further optimization
 must preserve exact evidence and outcome qualification, rather than removing
 waiting controls or generating messages without investment evidence.
+
+## Writer Contention and Current-State Queue Maintenance
+
+The independent worker maintains ingress, expired observations, comparisons and
+dead leases before acquiring the physical TypeDB writer. These MySQL operations
+continue during writer contention, at most once per existing heartbeat interval.
+Job claims and graph execution still require the single server-wide writer lock;
+the control binding is rechecked immediately before claiming. Shared-world
+projection and maintenance take a separate lease after the inference turn.
+Every completed watch turn also yields for its configured polling interval.
+Previously a successful delivery turn could immediately reclaim the writer while
+the candidate slept, starving candidate validation even with no execution errors.
+
+Replaceable observation expiry uses both queue age and the current immutable
+source timestamp. A mailbox that has waited a long time but now contains fresh
+coalesced facts is retained. Shards use the existing per-symbol work-class
+contract, so an unrelated company's research cannot protect an obsolete quote.
+Mixed evidence, disclosures and research remain durable. Queue health exposes
+`oldestPendingSourceAt`, `oldestPendingSourceAgeSeconds` and missing source clocks
+separately from the original queue debt; no timestamps or latency gates are reset.
+
+Health queries exclude request packets and successful terminal-result bodies.
+Completed execution metrics and failed result diagnostics remain exact, preserving
+promotion counts, latency percentiles, failure resolution and source lineage.
+These operational changes do not promote a candidate or authorize its delivery.
+
+A read-only comparison on 2026-10-16 used one transaction and the same clock:
+all returned health metrics matched. The active deployment's returned row bytes
+fell from 98,054,187 to 7,919,754, and the candidate's from 7,956,191 to 1,434,251.
+The measured active read took 0.879 versus 0.320 seconds. This reduces health-read
+cost and memory; it is not evidence that total inference latency meets its SLO.

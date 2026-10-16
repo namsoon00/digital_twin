@@ -343,7 +343,8 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # immutable revision and observation lineage, budgeted graph context,
         # frozen AI review, native atomic rollback and next-research recall.
         # Six scoped judgment, compact transport and immutable detail regressions.
-        self.assertLessEqual(total, 2365)
+        # Two writer-contention regressions cover queue repair and live-turn yielding.
+        self.assertLessEqual(total, 2367)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

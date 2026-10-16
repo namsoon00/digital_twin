@@ -1974,6 +1974,8 @@ class IndependentReasoningJobRunner:
             "status": "not-run",
             "recordedCount": 0,
         }
+        self._queue_preparation_at = 0.0
+        self._queue_preparation: Dict[str, object] = {}
 
     def enabled(self) -> bool:
         return str(self.settings.get("reasoningEngineV2IndependentEnabled") or "1").strip().lower() not in {"0", "false", "no", "off", "disabled"}
@@ -2161,47 +2163,67 @@ class IndependentReasoningJobRunner:
         return dict(self._last_comparison_reconciliation)
 
     def run_once(self) -> Dict[str, object]:
+        preparation = self.prepare_queue_turn()
+        if preparation.get("status") != "ready":
+            return preparation
         ownership = self.acquire_graph_writer_ownership()
         if not bool(ownership.get("acquired")):
-            return self.graph_writer_deferred_result(ownership)
+            return {
+                **self.graph_writer_deferred_result(ownership),
+                "queuePreparation": preparation,
+            }
         try:
-            result = self._run_once()
+            result = self._run_once(preparation)
             self.record_graph_writer_result(result)
             return result
         finally:
             self.release_graph_writer_ownership()
+            self.publish_released_writer_state()
 
     def run_watch_turn(self) -> Dict[str, object]:
         """Run one live reasoning turn under a short-lived graph writer lock.
 
         A watch process is intentionally long-lived, but TypeDB writes are not.
-        Keeping the OS lock for the complete watch lifetime prevents projection,
-        maintenance, and administrative recovery from ever taking a turn while
-        the worker is idle.  One turn owns both inference and its due background
-        projection so their ordering remains deterministic, then releases the
-        lock before the polling sleep.
+        Queue repair and comparison use MySQL, so they run before acquiring
+        the physical TypeDB writer. Background projection takes a separate
+        lease after inference settles; it never extends an inference lease.
         """
 
-        ownership = self.acquire_graph_writer_ownership()
-        if not bool(ownership.get("acquired")):
-            deferred = self.graph_writer_deferred_result(ownership)
-            self._last_background_graph_turn = dict(deferred)
-            return deferred
-        try:
-            result = self._run_once()
-            backoff = self.record_graph_writer_result(result)
-            if result.get("status") != "inactive-control-binding" and not backoff.get("retryAfterSeconds"):
-                self.run_background_graph_turn()
-            return result
-        finally:
-            self.release_graph_writer_ownership()
-            if getattr(self, "_last_published_graph_writer_acquired", False):
-                self.publish_worker_heartbeat(
-                    self.engine.descriptor().deployment_id,
-                    force=True,
-                )
+        result = self.run_once()
+        if result.get("reasonCode") == "typedb-graph-writer-owned":
+            self._last_background_graph_turn = {
+                key: value for key, value in result.items() if key != "queuePreparation"
+            }
+        if (
+            result.get("status") not in {"disabled", "inactive-control-binding"}
+            and result.get("reasonCode") != "typedb-graph-writer-owned"
+            and not result.get("graphWriterBackoff")
+            and self.background_graph_tasks
+        ):
+            ownership = self.acquire_graph_writer_ownership()
+            if ownership.get("acquired"):
+                try:
+                    self.run_background_graph_turn()
+                finally:
+                    self.release_graph_writer_ownership()
+                    self.publish_released_writer_state()
+            else:
+                self._last_background_graph_turn = self.graph_writer_deferred_result(ownership)
+        return result
 
-    def _run_once(self) -> Dict[str, object]:
+    def publish_released_writer_state(self) -> None:
+        if getattr(self, "_last_published_graph_writer_acquired", False):
+            self.publish_worker_heartbeat(
+                self.engine.descriptor().deployment_id,
+                force=True,
+            )
+
+    def prepare_queue_turn(self) -> Dict[str, object]:
+        """Maintain durable ingress even while another process owns TypeDB.
+
+        No claims or TypeDB writes are allowed here. Bound repeat maintenance
+        during writer contention to the existing heartbeat cadence.
+        """
         if not self.enabled():
             return {"status": "disabled", "processedCount": 0}
         descriptor = self.engine.descriptor()
@@ -2215,18 +2237,56 @@ class IndependentReasoningJobRunner:
                 "controlBinding": control_binding,
             }
         self.publish_worker_heartbeat(descriptor.deployment_id)
-        validation_window = self.ensure_candidate_validation_window(
-            descriptor.deployment_id
-        )
-        market_anchor_reconciliation = self.reconcile_market_observation_completions()
-        case_expiry = self.expire_stale_reasoning_cases()
-        route_reconciliation = self.reconcile_ingress_route()
-        comparison_reconciliation = self.reconcile_engine_comparisons()
-        lease_recovery = self.recover_dead_local_leases(descriptor.deployment_id)
-        repaired = self.repair_ingress(descriptor.deployment_id)
-        self.recover_transient_failures(descriptor.deployment_id)
-        stale_observations = self.supersede_stale_observations(descriptor.deployment_id)
-        backlog_compaction = self.compact_backlog(descriptor.deployment_id)
+        now = time.monotonic()
+        interval = _int_setting(self.settings, "reasoningEngineV2HeartbeatSeconds", 15, 5, 30)
+        if (
+            self._queue_preparation.get("deploymentId") == descriptor.deployment_id
+            and now - self._queue_preparation_at < interval
+        ):
+            return dict(self._queue_preparation)
+        preparation = {
+            "status": "ready",
+            "deploymentId": descriptor.deployment_id,
+            "candidateValidationWindow": self.ensure_candidate_validation_window(descriptor.deployment_id),
+            "marketObservationAnchorReconciliation": self.reconcile_market_observation_completions(),
+            "reasoningCaseExpiry": self.expire_stale_reasoning_cases(),
+            "routeReconciliation": self.reconcile_ingress_route(),
+            "engineComparisonReconciliation": self.reconcile_engine_comparisons(),
+            "leaseRecovery": self.recover_dead_local_leases(descriptor.deployment_id),
+            "repairedIngressCount": self.repair_ingress(descriptor.deployment_id),
+            "failureRecovery": self.recover_transient_failures(descriptor.deployment_id),
+            "staleObservationCleanup": self.supersede_stale_observations(descriptor.deployment_id),
+            "backlogCompaction": self.compact_backlog(descriptor.deployment_id),
+        }
+        self._queue_preparation = preparation
+        self._queue_preparation_at = time.monotonic()
+        return dict(preparation)
+
+    def _run_once(self, preparation=None) -> Dict[str, object]:
+        preparation = dict(preparation or self.prepare_queue_turn())
+        if preparation.get("status") != "ready":
+            return preparation
+        descriptor = self.engine.descriptor()
+        # Control pointers may change while queue maintenance or writer
+        # acquisition runs. Recheck before claiming any executable work.
+        control_binding = self.control_binding_status(descriptor.deployment_id)
+        if not control_binding.get("selected"):
+            return {
+                "status": "inactive-control-binding",
+                "processedCount": 0,
+                "deploymentId": descriptor.deployment_id,
+                "workerRole": self.deployment_role,
+                "controlBinding": control_binding,
+            }
+        validation_window = preparation["candidateValidationWindow"]
+        market_anchor_reconciliation = preparation["marketObservationAnchorReconciliation"]
+        case_expiry = preparation["reasoningCaseExpiry"]
+        route_reconciliation = preparation["routeReconciliation"]
+        comparison_reconciliation = preparation["engineComparisonReconciliation"]
+        lease_recovery = preparation["leaseRecovery"]
+        repaired = preparation["repairedIngressCount"]
+        stale_observations = preparation["staleObservationCleanup"]
+        backlog_compaction = preparation["backlogCompaction"]
         guard = self.execution_readiness()
         if not bool(guard.get("ready", True)):
             health = dict((self.registry.get(descriptor.deployment_id) or {}).get("health") or {})
@@ -3412,16 +3472,10 @@ class IndependentReasoningJobRunner:
                     return
                 if result.get("status") == "inactive-control-binding":
                     return
-                if result.get("status") == "idle":
-                    time.sleep(interval)
-                elif result.get("status") in {
-                    "disabled",
-                    "deferred",
-                    "awaiting-graph-writer",
-                    "awaiting-target-scope-repair",
-                    "awaiting-world-projection",
-                }:
-                    time.sleep(interval)
+                # Successful delivery turns also yield. An immediate reclaim
+                # previously monopolized the single writer while a candidate
+                # polled at this same configured interval.
+                time.sleep(interval)
         finally:
             liveness_stop.set()
             liveness_thread.join(timeout=2)

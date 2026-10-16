@@ -107,9 +107,11 @@ class WorkerLifetimeTests(unittest.TestCase):
         engine.descriptor.return_value.deployment_id = 'test-deployment'
         runner = IndependentReasoningJobRunner(Mock(), engine, Mock())
         order = []
+        runner.prepare_queue_turn = lambda: {'status': 'ready'}
         runner.acquire_graph_writer_ownership = lambda: {'acquired': True}
-        runner._run_once = lambda: order.append('job-settled') or {'status': 'ok'}
+        runner._run_once = lambda _preparation: order.append('job-settled') or {'status': 'ok'}
         runner.record_graph_writer_result = lambda _result: {}
+        runner.background_graph_tasks = [{'name': 'test-background'}]
         runner.run_background_graph_turn = lambda: order.append('background-settled')
         runner.release_graph_writer_ownership = lambda: order.append('writer-released')
         def retire():
@@ -118,7 +120,7 @@ class WorkerLifetimeTests(unittest.TestCase):
         thread = Mock()
         with patch('digital_twin.modules.reasoning.application.independent_reasoning_engine.threading.Thread', return_value=thread):
             runner.watch(should_retire=retire)
-        self.assertEqual(['job-settled', 'background-settled', 'writer-released', 'retirement-check'], order)
+        self.assertEqual(['job-settled', 'writer-released', 'background-settled', 'writer-released', 'retirement-check'], order)
         thread.join.assert_called_once_with(timeout=2)
 
     def test_cli_exits_process_instead_of_reconstructing_dynamic_runner(self):

@@ -338,7 +338,30 @@ class DeliveryHistoryDatabaseTests(StabilizationDatabaseCase):
         self.assertEqual(context, restored.context)
         self.assertEqual(job.text, restored.text)
 
+    def assert_scoped_cadence_lookup_matches_exact_delivered_receipts(self):
+        own_key = "opaque:cadence:identifier:with:colons"
+        clocks = []
+        for account, symbol, key, delivered in [
+            ("fixture:account", "AAA", own_key, True),
+            ("fixture:account", "AAA", own_key, False),
+            ("other-account", "AAA", "other-key", True),
+            ("fixture:account", "BBB", "different-subject", True),
+        ]:
+            job = NotificationJob.create("receipt fixture", account_id=account, message_type="investmentInsight",
+                context={"symbol": symbol, "ontologyInsight": {"cadenceKey": key}})
+            self.notifications.upsert_job(job)
+            attempt = self.notifications.start_delivery_attempt(job, "test", "account")
+            self.notifications.complete_delivery_attempt(job, attempt, delivered)
+            if delivered and key == own_key:
+                with self.notifications.connect() as c:
+                    clocks.append(c.execute("SELECT completed_at FROM notification_delivery_attempts WHERE attempt_id=%s", (attempt,)).fetchone()["completed_at"])
+        scoped = self.notifications.delivered_cadence_timestamps([own_key], account_symbols=[("fixture:account", "AAA")])
+        self.assertEqual({own_key: max(clocks)}, scoped)
+        self.assertEqual(self.notifications.delivered_cadence_timestamps([own_key]), scoped)
+        self.assertEqual({}, self.notifications.delivered_cadence_timestamps([own_key], account_symbols=[("other-account", "AAA")]))
+
     def test_receipt_clock_and_scoped_history_survive_other_subject_traffic(self):
+        self.assert_scoped_cadence_lookup_matches_exact_delivered_receipts()
         store = self.notifications
         rule = default_notification_rule("monitorConnection")
         now = datetime.now(timezone.utc)

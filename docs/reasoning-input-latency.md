@@ -115,3 +115,19 @@ all returned health metrics matched. The active deployment's returned row bytes
 fell from 98,054,187 to 7,919,754, and the candidate's from 7,956,191 to 1,434,251.
 The measured active read took 0.879 versus 0.320 seconds. This reduces health-read
 cost and memory; it is not evidence that total inference latency meets its SLO.
+
+Receipt cooldown lookup was another live bottleneck: candidate construction
+repeatedly took about 30 seconds, while the original JSON-scanning SELECT was
+still executing on MySQL after 52 seconds. The V2 cadence reader now passes
+the actual event account/symbol pairs to the receipt store. The store uses the
+existing subject indexes, joins delivered receipts before inspecting JSON and
+keeps the opaque cadence-key comparison plus maximum receipt completion clock.
+The server execution deadline matches the existing MySQL connection timeout,
+so a timed-out client does not leave an indefinitely running read behind.
+Legacy readers and unscoped events retain their compatible lookup path.
+
+A same-transaction, read-only probe of 19 delivered jobs (90,249,873 source
+payload bytes) returned the exact original receipt clock in 4.782 seconds.
+This measures the scoped receipt query, not the full candidate-build stage.
+Regression coverage includes account IDs and opaque keys containing colons,
+failed receipts, other-account/subject traffic and legacy reader compatibility.

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import inspect
 from typing import Dict, Iterable, Mapping
 
 from digital_twin.modules.notifications.contracts import typedb_context_observation_contract, typedb_review_observation_contract
@@ -73,7 +74,19 @@ class V2NotificationCadence:
         )
         if callable(provider):
             try:
-                return dict(provider([event.cadence_key() for event in candidates]) or {})
+                # Use the subjects already owned by these events, rather than
+                # parsing opaque cadence keys or scanning every account's JSON.
+                scopes = sorted({
+                    (_text(event.account_id), _text(event.symbol).upper())
+                    for event in candidates
+                })
+                kwargs = (
+                    {"account_symbols": scopes}
+                    if scopes and all(account and symbol for account, symbol in scopes)
+                    and "account_symbols" in inspect.signature(provider).parameters
+                    else {}
+                )
+                return dict(provider([event.cadence_key() for event in candidates], **kwargs) or {})
             except Exception:  # noqa: BLE001 - retain the conservative legacy gate on storage failure.
                 pass
         return dict(getattr(self.monitor_store, "sent", {}) or {})

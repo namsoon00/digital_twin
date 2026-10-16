@@ -21,7 +21,7 @@ from digital_twin.modules.notifications.domain.notification_feedback import norm
 from digital_twin.modules.notifications.contracts import NotificationLifecycleEvent
 from digital_twin.modules.notifications.domain.ontology_relation_delivery import suppressed_relation_context_is_comparable
 from digital_twin.modules.notifications.domain.sent_article_filter import article_event_family_keys, article_filter_context_summary, collect_article_identity_keys_from_context, filter_sent_articles_from_context, suppressible_identity_key
-from digital_twin.infrastructure.mysql_operational_connection import MySQLConnectionProxy, MySQLOperationalConnection
+from digital_twin.infrastructure.mysql_operational_connection import MySQLConnectionProxy, MySQLOperationalConnection, mysql_operation_timeout_seconds
 from digital_twin.infrastructure.mysql_retention import sent_article_delivery_ledger_cutoff
 from digital_twin.infrastructure.mysql_operational_helpers import _is_duplicate_key_error, _json_loads
 from digital_twin.infrastructure.operational_common import MAX_NOTIFICATION_DELIVERY_ATTEMPTS, NOTIFICATION_HISTORY_LOOKBACK_LIMIT, json_dumps, notification_history_is_recent_in_flight, rule_from_row
@@ -285,6 +285,8 @@ class MySQLNotificationJobStore(DiagnosticThreadStore, InvestmentConversationSto
     def delivered_cadence_timestamps(
         self,
         cadence_keys: Iterable[str],
+        *,
+        account_symbols: Iterable[Tuple[str, str]] = None,
     ) -> Dict[str, str]:
         """Return cooldown clocks only for investment insights actually delivered."""
 
@@ -297,18 +299,38 @@ class MySQLNotificationJobStore(DiagnosticThreadStore, InvestmentConversationSto
             return {}
         cadence_path = "$.context.ontologyInsight.cadenceKey"
         placeholders = ",".join(["%s"] * len(keys))
+        scopes = sorted({
+            (str(account or "").strip()[:191], str(symbol or "").upper().strip()[:64])
+            for account, symbol in account_symbols or []
+        })
+        scope_filter = ""
+        scope_params = []
+        if scopes and len(scopes) <= 100 and all(account and symbol for account, symbol in scopes):
+            scope_filter = " AND (" + " OR ".join(
+                "(j.account_id = %s AND j.symbol = %s)" for _ in scopes
+            ) + ")"
+            scope_params = [value for scope in scopes for value in scope]
+        timeout_ms = mysql_operation_timeout_seconds(self.runtime_settings) * 1000
         with self.connect() as connection:
             rows = connection.execute(
-                """
-                SELECT JSON_UNQUOTE(JSON_EXTRACT(j.payload_json, %s)) AS cadence_key,
-                       MAX(a.completed_at) AS delivered_at
-                FROM notification_jobs j
-                JOIN notification_delivery_attempts a ON a.job_id = j.job_id AND a.status = 'delivered'
-                WHERE j.message_type = %s
-                  AND JSON_UNQUOTE(JSON_EXTRACT(j.payload_json, %s)) IN ("""
+                "SELECT /*+ MAX_EXECUTION_TIME(" + str(timeout_ms) + ") */ "
+                """JSON_UNQUOTE(JSON_EXTRACT(delivered.payload_json, %s)) AS cadence_key,
+                       MAX(delivered.delivered_at) AS delivered_at
+                FROM (
+                    SELECT j.job_id, MAX(j.payload_json) AS payload_json,
+                           MAX(a.completed_at) AS delivered_at
+                    FROM notification_jobs j
+                    JOIN notification_delivery_attempts a ON a.job_id = j.job_id AND a.status = 'delivered'
+                    WHERE j.message_type = %s
+                """ + scope_filter
+                # Aggregate identical job payloads only after delivered-receipt
+                # membership is known. The aggregate prevents MySQL from
+                # pushing costly JSON inspection ahead of the receipt join.
+                + " GROUP BY j.job_id) delivered "
+                "WHERE JSON_UNQUOTE(JSON_EXTRACT(delivered.payload_json, %s)) IN ("
                 + placeholders
                 + ") GROUP BY cadence_key",
-                [cadence_path, INVESTMENT_INSIGHT, cadence_path, *keys],
+                [cadence_path, INVESTMENT_INSIGHT, *scope_params, cadence_path, *keys],
             ).fetchall()
         return {
             str(row.get("cadence_key") or ""): str(row.get("delivered_at") or "")

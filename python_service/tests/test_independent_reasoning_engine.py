@@ -326,6 +326,7 @@ class IndependentReasoningEngineTests(unittest.TestCase):
             ))
 
     def test_delivery_cadence_does_not_remove_judgment_candidate(self):
+        self.assert_scoped_receipt_lookup_preserves_cooldown_and_legacy_reader()
         self._assert_non_originating_hypothesis_routes_to_review_observation()
         self._assert_qualification_pending_originating_hypothesis_routes_to_ai_review()
         self._assert_research_only_hypotheses_route_to_ai_review()
@@ -743,6 +744,30 @@ class IndependentReasoningEngineTests(unittest.TestCase):
         context = result["hypothesisCandidates"][0]["context"]["ontologyRelationContext"]
         self.assertEqual("hypothesis:quiet", context["hypothesisSet"]["hypotheses"][0]["hypothesisId"])
         self.assert_quiet_first_holding_review_is_recovered_until_delivery_starts()
+
+    def assert_scoped_receipt_lookup_preserves_cooldown_and_legacy_reader(self):
+        from digital_twin.modules.reasoning.application.investment_reasoning.decision_synthesis import V2NotificationCadence
+        from datetime import datetime, timezone
+        event = AlertEvent("account:with:colon", "Test", "observe", "investmentInsight", "event:1", "Test", [], symbol="NVDA")
+        key = event.cadence_key()
+        stamp = datetime.now(timezone.utc).isoformat()
+        calls = []
+
+        class ScopedHistory:
+            def delivered_cadence_timestamps(self, keys, *, account_symbols=None):
+                calls.append((keys, account_symbols))
+                return {key: stamp}
+
+        cadence = V2NotificationCadence({}, SimpleNamespace(sent={key: "2000-01-01T00:00:00Z"}), ScopedHistory())
+        self.assertEqual([], cadence.ready([event]))
+        self.assertEqual([([key], [("account:with:colon", "NVDA")])], calls)
+
+        class LegacyHistory:
+            def delivered_cadence_timestamps(self, keys):
+                return {keys[0]: stamp}
+
+        cadence.delivery_history_store = LegacyHistory()
+        self.assertEqual([], cadence.ready([event]))
 
     def assert_quiet_first_holding_review_is_recovered_until_delivery_starts(self):
         class DeliveryHistory:

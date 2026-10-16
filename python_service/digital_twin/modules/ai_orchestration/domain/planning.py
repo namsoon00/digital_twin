@@ -34,8 +34,11 @@ def enabled(settings):
 def observation_fingerprint(packet, research):
     if packet.get("researchKnowledge"):
         from digital_twin.modules.research_knowledge.contracts import knowledge_context_identity
-        return content_hash([evidence_change_identity(packet, research, packet.get("questionsToCheck", [])),
-                             knowledge_context_identity(packet["researchKnowledge"])])
+        parts = [evidence_change_identity(packet, research, packet.get("questionsToCheck", [])),
+                 knowledge_context_identity(packet["researchKnowledge"])]
+        if packet.get("researchExecutionPolicy"):
+            parts.append(packet["researchExecutionPolicy"])
+        return content_hash(parts)
     return evidence_change_identity(packet, research, packet.get("questionsToCheck", []))
 
 

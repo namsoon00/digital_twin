@@ -10,6 +10,7 @@ from digital_twin.modules.ai_orchestration.application.working_retrieval import 
 from digital_twin.modules.ai_orchestration.domain import scoped_retrieval, working_retrieval
 from digital_twin.modules.ai_orchestration.domain.execution_input import freeze_execution_input, validate_execution_input
 from digital_twin.modules.ai_orchestration.domain.planning import validate_plan
+from digital_twin.modules.ai_orchestration.domain.knowledge_research import knowledge_schema
 
 
 def scoped_decision(action, ids, scopes=(), missing=()):
@@ -75,11 +76,20 @@ class ScopedKnowledgeResearchTests(unittest.TestCase):
 
     def test_partial_research_requires_usable_source_and_cannot_emit_notification(self):
         p = business_packet(); p["researchKnowledge"] = context(p)
-        result = retrieve_working_evidence(research_session(p), p, [], [],
+        unrelated = [{**{key: p[key] for key in ("accountId", "symbol", "worldId")},
+            "kind": "brain-case", "capability": "observe", "caseId": "price-wait-" + str(i), "revision": 1,
+            "question": "평균선 전환과 수급 복원을 다음 관측에서 확인할 수 있는가?", "reviewDue": True,
+            "questionContract": {"target": "가격·수급 전환", "period": "다음 완결 거래 관측", "answerCriterion": "동일 기간 시세와 완결 수급 확인"}}
+            for i in range(3)]
+        result = retrieve_working_evidence(research_session(p), p, [], unrelated,
             Mock(return_value=scoped_decision("research", ["report-2025"], missing=["현금 회수 비교는 다음 공시가 필요합니다."])),
             lambda _: "read-partial", 262144)
         self.assertEqual("research-ready", result[0]["retrieval"]["status"])
         self.assertEqual("research-only", result[0]["researchScope"]["mode"])
+        self.assertFalse(any(row.get("kind") == "brain-case" for row in result[2]))
+        self.assertEqual(unrelated[0]["questionContract"], result[0]["researchDeferredQuestions"][0]["questionContract"])
+        self.assertTrue(unrelated[0]["reviewDue"])
+        self.assertEqual(0, knowledge_schema(result[0], result[2])["properties"]["caseReviews"]["maxItems"])
         validate_execution_input(freeze_execution_input(result[0], result[1], result[2], retrieval_trace=result[3]))
         raw = {**plan(), "businessResearch": raw_research(), "knowledgeResearch": proposal(), "questionResolutions": [],
                "followUpConditions": [], "observations": []}
@@ -88,6 +98,20 @@ class ScopedKnowledgeResearchTests(unittest.TestCase):
         raw["notification"]["send"] = True
         with self.assertRaises(ValueError):
             validate_plan(raw, result[0])
+        from digital_twin.modules.ai_orchestration.domain.scoped_research import validate_plan as guard
+        with self.assertRaises(ValueError):
+            guard({"notification": {"send": False}, "caseReviews": [{"caseId": unrelated[0]["caseId"], "action": "wait"}]}, result[0])
+        # Previously persisted V4/V17 inputs have no new author policy and
+        # preserve the original schema/prompt under replay.
+        old_trace = copy.deepcopy(result[3])
+        for step in old_trace:
+            step.pop("authorScopePolicy", None)
+        old_packet = copy.deepcopy(result[0])
+        old_packet["researchScope"] = scoped_retrieval.research_scope(old_trace, "research-ready")
+        old_packet["retrieval"] = scoped_retrieval.trace_summary(old_trace, "research-ready")
+        legacy = freeze_execution_input(old_packet, [], [], retrieval_trace=old_trace)
+        self.assertGreater(legacy["outputSchema"]["properties"]["caseReviews"]["maxItems"], 0)
+        validate_execution_input(legacy)
         from digital_twin.modules.ai_orchestration.domain.retrieval import ReadRequestError
         unusable = {"report-2025": {**p["facts"][-1], "judgementEvidenceUsable": False}}
         with self.assertRaises(ReadRequestError):
@@ -109,6 +133,12 @@ class ScopedKnowledgeResearchTests(unittest.TestCase):
         self.assertEqual(record["progressId"], recalled["progress"][0]["progressId"])
         self.assertEqual([], recalled["claims"])
         self.assertEqual(context_material_identity(early), context_material_identity(recalled))
+        from digital_twin.modules.ai_orchestration.domain.planning import observation_fingerprint
+        from digital_twin.modules.ai_orchestration.domain.research_repeat import observation_key
+        upgraded = {**p, "researchExecutionPolicy": scoped_retrieval.AUTHOR_SCOPE_POLICY}
+        self.assertNotEqual(observation_fingerprint(p, []), observation_fingerprint(upgraded, []))
+        self.assertNotEqual(observation_key(p, []), observation_key(upgraded, []))
+        self.assertEqual(observation_key(upgraded, []), observation_key({**upgraded, "researchKnowledge": recalled}, []))
         with self.assertRaises(ValueError):
             build_context(later, methods(), [], progress=[{**record, "accountId": "other-account"}])
         questions = [{"kind": "brain-case", "caseId": str(i), "questionContract": {"target": str(i)},

@@ -9,6 +9,7 @@ from .insight_schema import obj, array, choice
 VERSION = "independent-observation-retrieval-v4-scoped-research"
 POLICY = "question-working-set-v2"
 SCOPE_VERSION = "question-research-scope-v1"
+AUTHOR_SCOPE_POLICY = "provisional-knowledge-only-v1"
 INSTRUCTIONS = """질문별 연구 진행 계약:
 questionIndex의 원래 질문·기간·완료 기준을 유지하고 질문마다 questionScopes에 caseId,status(ready/waiting),selectedFactIds,missingEvidence를 기록하세요.
 ready는 선택한 현재 근거로 해당 질문을 평가할 수 있다는 뜻이며 답변 완료나 가설 검증 승인이 아닙니다. waiting에는 부족한 항목을 남기세요.
@@ -121,9 +122,12 @@ def trace_summary(trace, status):
 
 def research_scope(trace, status):
     decision = next((row["decision"] for row in reversed(trace) if row.get("decision")), {})
-    return {"version": SCOPE_VERSION, "mode": "research-only" if status == "research-ready" else "question-assessment",
+    value = {"version": SCOPE_VERSION, "mode": "research-only" if status == "research-ready" else "question-assessment",
         "questions": deepcopy(decision.get("questionScopes", [])), "missingEvidence": deepcopy(decision.get("missingEvidence", [])),
         "authority": "research-admission-only", "qualification": "not-empirically-qualified"}
+    if status == "research-ready" and trace and trace[-1].get("authorScopePolicy") == AUTHOR_SCOPE_POLICY:
+        value["assessmentPolicy"] = AUTHOR_SCOPE_POLICY
+    return value
 
 
 def prompt(current, context):

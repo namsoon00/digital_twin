@@ -1,5 +1,5 @@
 """Extra guards for the versioned partial-research route; legacy inputs unchanged."""
-from .scoped_retrieval import SCOPE_VERSION
+from .scoped_retrieval import SCOPE_VERSION, AUTHOR_SCOPE_POLICY
 from .validation_diagnostic import PlanValidationError
 
 INSTRUCTIONS = """진행 범위 검증 계약:
@@ -12,7 +12,14 @@ mode=research-only이면 notification.send=false입니다. 부분 근거에 기�
 
 
 def instructions(packet):
-    return INSTRUCTIONS if packet.get("researchScope", {}).get("version") == SCOPE_VERSION else ""
+    scope = packet.get("researchScope", {})
+    if scope.get("version") != SCOPE_VERSION:
+        return ""
+    extra = ("이번 입력은 잠정 지식 연구 전용입니다. caseReviews와 questionResolutions는 빈 배열입니다. "
+             "researchDeferredQuestions는 다음 질문 평가로 넘긴 원래 질문과 완료 기준입니다. 이를 수정·종료하거나 다른 문장으로 새로 만들지 마세요. "
+             "선택한 근거의 knowledgeResearch 및 관련 사업 설명만 연구하고, 독립 검토도 이 변경만 평가하세요.\n"
+             if scope.get("assessmentPolicy") == AUTHOR_SCOPE_POLICY else "")
+    return INSTRUCTIONS + extra
 
 
 def validate_plan(result, packet):
@@ -21,6 +28,8 @@ def validate_plan(result, packet):
         return
     ready = {row["caseId"] for row in scope["questions"] if row["status"] == "ready"}
     scoped = {row["caseId"] for row in scope["questions"]}
+    if scope.get("assessmentPolicy") == AUTHOR_SCOPE_POLICY and (result.get("caseReviews") or result.get("questionResolutions")):
+        raise PlanValidationError("provisional-knowledge-scope", "caseReviews", "잠정 지식 연구에서는 기존 질문을 갱신하지 말고 두 과제 평가 배열을 비우세요.")
     if scope["mode"] == "research-only" and result["notification"]["send"]:
         raise PlanValidationError("partial-research-notification", "notification.send", "잠정 연구는 내부 저장만 허용하므로 false로 작성하세요.")
     if any(row["action"] in {"answered", "dismissed"} and row["caseId"] in scoped - ready for row in result.get("caseReviews", [])):

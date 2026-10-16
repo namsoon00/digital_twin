@@ -88,7 +88,9 @@ class AIControlService:
                         (history[0] if history else {}).get("followUpEvaluations", []))
                     knowledge = self.knowledge_context(packet) if self.knowledge_context else None
                     if knowledge:
+                        from ..domain.scoped_retrieval import AUTHOR_SCOPE_POLICY
                         packet["researchKnowledge"] = knowledge
+                        packet["researchExecutionPolicy"] = AUTHOR_SCOPE_POLICY
                     fingerprint = observation_fingerprint(packet, research)
                     repeat_key = repeat.observation_key(packet, research)
                     retry_identity = retry_key(packet, research)

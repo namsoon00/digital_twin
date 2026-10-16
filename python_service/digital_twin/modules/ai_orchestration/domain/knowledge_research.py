@@ -29,6 +29,10 @@ def knowledge_schema(packet, research):
     if packet.get("researchKnowledge"):
         schema["properties"]["knowledgeResearch"] = knowledge_proposal_schema(packet["researchKnowledge"], [row["id"] for row in packet["facts"]])
         schema["required"].append("knowledgeResearch")
+    from .scoped_retrieval import AUTHOR_SCOPE_POLICY
+    if packet.get("researchScope", {}).get("assessmentPolicy") == AUTHOR_SCOPE_POLICY:
+        for key in ("caseReviews", "questionResolutions"):
+            schema["properties"][key]["maxItems"] = 0
     return schema
 
 

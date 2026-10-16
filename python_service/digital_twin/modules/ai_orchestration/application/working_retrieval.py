@@ -80,6 +80,7 @@ def retrieve_working_evidence(session, packet, history, research, decide, save_i
                "roundLimit": rounds, "selectionPolicy": contract.POLICY}
     if contract is scoped_retrieval:
         context["questionIndex"] = contract.question_index(research)
+        context["authorScopePolicy"] = contract.AUTHOR_SCOPE_POLICY
     trace, recalled, requests_seen = [], {"analyses": [], "memories": []}, set()
     used, corrections, status = 0, 0, "deferred"
     reports = {row["factId"]: row for row in context["reportIndex"]}
@@ -113,6 +114,8 @@ def retrieve_working_evidence(session, packet, history, research, decide, save_i
             raise RetrievalLeaseLost()
         raw = decide(envelope, input_id)
         step = {"inputId": input_id, "response": response_audit(raw), "reads": [], "correction": bool(context.get("correction"))}
+        if contract is scoped_retrieval:
+            step["authorScopePolicy"] = contract.AUTHOR_SCOPE_POLICY
         try:
             decision = contract.validate_decision(raw)
             chosen = set(decision["selectedFactIds"])
@@ -188,4 +191,12 @@ def retrieve_working_evidence(session, packet, history, research, decide, save_i
             step["reads"].append({"request": request, "result": result})
         record(step)
     final = author_packet(session, packet, selected, {**seen, **active}, research, trace, status, contract=contract)
-    return final, merge_recalled(continuity["previousAnalyses"], recalled["analyses"]), merge_recalled(continuity["researchResults"], recalled["memories"]), trace
+    memories = merge_recalled(continuity["researchResults"], recalled["memories"])
+    if final.get("researchScope", {}).get("assessmentPolicy") == scoped_retrieval.AUTHOR_SCOPE_POLICY:
+        final["researchDeferredQuestions"] = [{key: deepcopy(row[key]) for key in
+            ("caseId", "question", "questionContract", "capability", "reviewDue", "revision") if key in row}
+            for row in research if row.get("kind") == "brain-case"]
+        final["researchWindow"]["authorDeferredCaseIds"] = [row["caseId"] for row in final["researchDeferredQuestions"]]
+        memories = [row for row in memories if row.get("kind") != "brain-case"]
+        validate_evidence_packet(final)
+    return final, merge_recalled(continuity["previousAnalyses"], recalled["analyses"]), memories, trace

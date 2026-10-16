@@ -91,6 +91,8 @@ def observation_key(packet, research):
     source = evidence_change_identity(packet, work, packet.get("questionsToCheck", []))
     if packet.get("researchKnowledge"):
         from digital_twin.modules.research_knowledge.contracts import knowledge_context_identity
+        if packet.get("researchExecutionPolicy"):
+            return identity(VERSION, source, knowledge_context_identity(packet["researchKnowledge"]), packet["researchExecutionPolicy"])
         return identity(VERSION, source, knowledge_context_identity(packet["researchKnowledge"]))
     return identity(VERSION, source)
 

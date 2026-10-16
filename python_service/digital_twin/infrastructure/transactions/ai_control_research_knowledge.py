@@ -96,7 +96,8 @@ class AIControlResearchKnowledge:
                            for key in ("accountId", "symbol", "worldId", "taskId"))
                     or envelope["current"]["sourceSnapshots"] != packet["sourceSnapshots"]
                     or envelope["current"]["capturedAt"] != packet["capturedAt"]
-                    or envelope["current"].get("researchKnowledge") != packet.get("researchKnowledge")):
+                    or envelope["current"].get("researchKnowledge") != packet.get("researchKnowledge")
+                    or step.get("authorScopePolicy") != envelope["retrievalContext"].get("authorScopePolicy")):
                 raise ValueError("research progress input scope or trace mismatch")
             for fact in envelope["current"]["facts"]:
                 known.setdefault(fact["id"], fact)

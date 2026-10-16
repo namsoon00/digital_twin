@@ -1271,3 +1271,18 @@ means reads have been recorded but no claim has been saved; `knowledge-recorded`
 and `knowledge-recalled` report execution receipts, never investment performance.
 Operational qualification requires a real source-backed author/review/write and
 later recall, not just a ready store or a successful synthetic prompt freeze.
+
+Provisional authors additionally use `provisional-knowledge-only-v1`, frozen in
+the retrieval context/round and resulting research scope. Existing agenda
+questions are deferred from this author cohort, with their original IDs,
+contracts and due flags retained in `researchDeferredQuestions`; the owner rows
+are not updated. Its `caseReviews`/`questionResolutions` arrays are constrained
+to empty in both schema and validation. Thus an unrelated price/flow waiting
+question cannot invalidate a grounded documentary knowledge proposal or force
+a financial report to serve as price evidence. Independent research review is
+unchanged in authority and still rejects unsupported knowledge. Earlier V4/V17
+inputs without this explicit subpolicy retain their original schema and prompt.
+The policy is also frozen as `researchExecutionPolicy` in observation and
+repeat identities, so an earlier accepted observation cannot suppress the
+corrected author cohort. A subsequent identical policy does not create another
+call; self-authored progress and rephrasing remain non-material.

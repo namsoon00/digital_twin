@@ -63,6 +63,11 @@ def research_knowledge_projection(context):
                 proposed = node("research-method-proposal", proposal["id"], "검증 대기 연구 방법 제안", "ResearchMethodProposal",
                                 {"status": "proposed", "adopted": False})
                 edge(assessed, proposed, "PROPOSES_RESEARCH_METHOD")
+    for row in context.get("progress", [])[:2]:
+        task = node("research-read-progress", row["progressId"], "자료 조회 진행 기록", "ResearchTask",
+                    {"status": row["status"], "knownAt": row["knownAt"], "recordRole": "read-progress-only",
+                     "qualification": "not-an-answer-or-thesis", "executionInputIds": row["executionInputIds"]})
+        edge(company, task, "HAS_RESEARCH_PLAN")
     # Full rendering would duplicate the global TBox and all source facts.
     return {"version": "research-knowledge-projection-v1", "worldId": context["worldId"],
             "projectedClaimIds": [row["claimId"] for row in context["claims"][:3]],

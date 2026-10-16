@@ -4,7 +4,8 @@ import json
 from digital_twin.infrastructure.transaction_port import BoundWriteConnection
 from ..domain.knowledge import SCOPE, digest, revise_claim
 from ..domain.assessments import assessment_for_claim
-from ..domain.events import knowledge_revised_event
+from ..domain.events import knowledge_revised_event, progress_recorded_event
+from ..domain.progress import progress_record
 
 
 def read_claim(connection: BoundWriteConnection, claim_id, scope):
@@ -12,6 +13,21 @@ def read_claim(connection: BoundWriteConnection, claim_id, scope):
         "WHERE claim_id=%s AND account_id=%s AND symbol=%s AND world_id=%s FOR UPDATE",
         (claim_id, scope["accountId"], scope["symbol"], scope["worldId"])).fetchone()
     return json.loads(row["payload_json"]) if row else None
+
+
+def write_progress(connection: BoundWriteConnection, packet, trace, now):
+    record = progress_record(packet, trace, now)
+    if record is None:
+        return {"status": "no-completed-read"}
+    cursor = connection.execute("INSERT IGNORE INTO research_knowledge_progress "
+        "(progress_id,account_id,symbol,world_id,status,known_at,recalled_claim_count,recalled_progress_count,payload_json) "
+        "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+        (record["progressId"], *[record[key] for key in SCOPE], record["status"], record["knownAt"],
+         len(record["recalledClaimRevisionIds"]), len(record["recalledProgressIds"]), json.dumps(record, ensure_ascii=False, allow_nan=False)))
+    events = []
+    if cursor.rowcount:
+        events.append(progress_recorded_event(record))
+    return {"status": "recorded" if cursor.rowcount else "already-recorded", "progressId": record["progressId"], "events": events}
 
 
 def append_revision(connection: BoundWriteConnection, claim, kind):
@@ -27,7 +43,7 @@ def append_revision(connection: BoundWriteConnection, claim, kind):
         (claim["claimId"], *[claim[key] for key in SCOPE], claim["revision"], claim["status"], claim["knownAt"], payload))
 
 
-def write_research(connection: BoundWriteConnection, packet, proposals, input_id, now, business_ids=()):
+def write_research(connection: BoundWriteConnection, packet, proposals, input_id, now, business_ids=(), review_receipt=None):
     receipt = {"status": "recorded", "claimIds": [], "revisionIds": [], "assessmentIds": [], "events": []}
     changed = set()
     memories = packet.get("businessThesisMemory", [])
@@ -42,6 +58,8 @@ def write_research(connection: BoundWriteConnection, packet, proposals, input_id
         previous = read_claim(connection, claim_id, packet)
         index = proposal["businessThesisIndex"]
         claim = revise_claim(previous, proposal, packet, input_id, now, business_ids[index] if index >= 0 else "")
+        if review_receipt:
+            claim["reviewReceipt"] = deepcopy(review_receipt)
         claim["assessment"] = assessment_for_claim(claim, memories)
         # A replacement financial contract starts a new observation basis.
         if previous and claim["businessThesisId"] != previous.get("businessThesisId"):

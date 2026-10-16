@@ -16,6 +16,7 @@ from .business_research import business_prompt, business_schema, business_review
 from .question_resolution import resolution_prompt, resolution_schema, resolution_review_prompt
 from .knowledge_research import knowledge_prompt, knowledge_schema, knowledge_review_prompt
 from . import working_retrieval
+from . import scoped_retrieval
 from digital_twin.modules.ai_orchestration.domain.retrieval import (
     RETRIEVAL_PROMPT_VERSION, retrieval_prompt, retrieval_schema, directed_planning_prompt, trace_summary,
     LEGACY_RETRIEVAL_PROMPT_VERSION, legacy, validate_trace,
@@ -116,14 +117,15 @@ def validate_execution_input(envelope):
     from . import research_work
     if envelope.get("promptVersion") == research_work.PROMPT_VERSION:
         return research_work.validate_input(envelope)
-    if envelope.get("promptVersion") == working_retrieval.VERSION:
+    if envelope.get("promptVersion") in {working_retrieval.VERSION, scoped_retrieval.VERSION}:
+        contract = scoped_retrieval if envelope["promptVersion"] == scoped_retrieval.VERSION else working_retrieval
         if envelope.get("protocolVersion") != EXECUTION_INPUT_PROTOCOL:
             raise EvidenceContractError("unsupported AI execution input")
         validate_evidence_packet(envelope["current"])
-        working_retrieval.validate_trace(envelope["retrievalContext"].get("trace", []))
-        prompt = working_retrieval.prompt(envelope["current"], envelope["retrievalContext"])
+        contract.validate_trace(envelope["retrievalContext"].get("trace", []))
+        prompt = contract.prompt(envelope["current"], envelope["retrievalContext"])
         if (prompt != envelope["prompt"] or hashlib.sha256(prompt.encode()).hexdigest() != envelope["promptHash"]
-                or envelope["outputSchema"] != working_retrieval.schema(envelope["retrievalContext"])
+                or envelope["outputSchema"] != contract.schema(envelope["retrievalContext"])
                 or len(prompt.encode()) > prompt_budget(envelope.get("promptBudgetBytes"))):
             raise EvidenceContractError("frozen working retrieval input mismatch")
         return content_hash(envelope)
@@ -172,9 +174,12 @@ def validate_execution_input(envelope):
         if directed and envelope["current"].get("retrieval"):
             trace = envelope.get("retrievalTrace", [])
             version = envelope["current"]["retrieval"]["version"]
-            if version == working_retrieval.VERSION:
-                working_retrieval.validate_trace(trace)
-                summary = working_retrieval.trace_summary(trace, envelope["current"]["retrieval"]["status"])
+            if version in {working_retrieval.VERSION, scoped_retrieval.VERSION}:
+                contract = scoped_retrieval if version == scoped_retrieval.VERSION else working_retrieval
+                contract.validate_trace(trace)
+                summary = contract.trace_summary(trace, envelope["current"]["retrieval"]["status"])
+                if contract is scoped_retrieval and envelope["current"].get("researchScope") != contract.research_scope(trace, envelope["current"]["retrieval"]["status"]):
+                    raise EvidenceContractError("research scope does not match retrieval trace")
             else:
                 validate_trace(trace, version)
                 summary = trace_summary(trace, envelope["current"]["retrieval"]["status"], version)

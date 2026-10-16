@@ -19,7 +19,8 @@ businessThesisIndex는 이번 businessResearch.theses의 인덱스이며 관련�
 
 def knowledge_prompt(packet, history, research):
     from .question_resolution import resolution_prompt
-    return (INSTRUCTIONS if packet.get("researchKnowledge") else "") + resolution_prompt(packet, history, research)
+    from .scoped_research import instructions
+    return instructions(packet) + (INSTRUCTIONS if packet.get("researchKnowledge") else "") + resolution_prompt(packet, history, research)
 
 
 def knowledge_schema(packet, research):
@@ -57,5 +58,6 @@ def validate_research(value, packet, business_theses=()):
 
 def knowledge_review_prompt(packet, draft):
     from .question_resolution import resolution_review_prompt
+    from .scoped_research import instructions
     extra = "knowledgeResearch의 연결 과정·적용 범위·반론·철회 이유를 hypothesis 항목에서 함께 검토하세요. 방법론·과거 설명을 현재 사실이나 검증된 예측으로 승격하면 거부하세요.\n"
-    return (extra if packet.get("researchKnowledge") else "") + resolution_review_prompt(packet, draft)
+    return instructions(packet) + (extra if packet.get("researchKnowledge") else "") + resolution_review_prompt(packet, draft)

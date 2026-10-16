@@ -132,6 +132,8 @@ class MySQLBrainAgendaStore(MySQLOperationalConnection):
             if validate_resolutions(raw_resolutions(result["questionResolutions"]), result["input"],
                     envelope["researchResults"], result, required=True) != result["questionResolutions"]:
                 raise ValueError("question resolution changed after input capture")
+        from ..domain.scoped_research import validate_plan as validate_scope
+        validate_scope(result, result["input"])
         return envelope
 
     @staticmethod

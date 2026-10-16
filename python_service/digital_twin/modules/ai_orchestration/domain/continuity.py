@@ -74,7 +74,7 @@ def _work_summary(row):
     return result
 
 
-def continuity_memory(history, research):
+def continuity_memory(history, research, compact_cases=False):
     """Keep a dated judgment and work-state summaries; detailed claims need recall."""
     analyses, memories = [], []
     if history:
@@ -86,7 +86,15 @@ def continuity_memory(history, research):
         # the authored observation contract, never silently cut into false claims.
         analyses[0]["quality"] = {key: deepcopy(row.get("quality", {}).get(key)) for key in ("status", "errors")}
     for row in research:
-        if required_memory(row):
+        if compact_cases and row.get("kind") == "brain-case" and row.get("memoryRole") != MARKER:
+            selected = _work_summary(row)
+            preview = selected.get("answerPreview") or {}
+            text = preview.get("text")
+            if isinstance(text, str) and len(text) > 1200:
+                preview.update(text=text[:1200], textHash=content_hash(text), textTruncated=True)
+                selected["truncatedFields"].append("answerPreview.text")
+            memories.append(selected)
+        elif required_memory(row):
             memories.append(deepcopy(row))
         elif row.get("kind") in {"business-thesis", "company-research-record"}:
             memories.append({**deepcopy(row), "memoryRole": MARKER, "authority": "historical-context-only"})

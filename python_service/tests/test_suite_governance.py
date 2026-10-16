@@ -344,7 +344,10 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # frozen AI review, native atomic rollback and next-research recall.
         # Six scoped judgment, compact transport and immutable detail regressions.
         # Two writer-contention regressions cover queue repair and live-turn yielding.
-        self.assertLessEqual(total, 2367)
+        # Six scoped-knowledge regressions cover real read budgets, question
+        # isolation, partial-research authority, dated progress, SQL rollback
+        # and controller review/store/recall/revision across two source inputs.
+        self.assertLessEqual(total, 2373)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

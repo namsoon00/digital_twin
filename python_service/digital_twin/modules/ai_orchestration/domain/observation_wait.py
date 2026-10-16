@@ -13,7 +13,8 @@ def retry_key(packet, research):
              "checkpoints", "researchRequest", "lastResearch", "runId", "developmentProgress") if key in row}
             for row in research]
     from digital_twin.modules.research_knowledge.contracts import knowledge_context_identity
-    return content_hash({"policy": POLICY, "researchReviewPolicy": research_review_version,
+    from .scoped_retrieval import POLICY as knowledge_retrieval_policy
+    return content_hash({"policy": knowledge_retrieval_policy if packet.get("researchKnowledge") else POLICY, "researchReviewPolicy": research_review_version,
         "knowledgePolicy": knowledge_context_identity(packet["researchKnowledge"]) if packet.get("researchKnowledge") else "",
         "researchAssessmentScopePolicy": ASSESSMENT_SCOPE_VERSION,
         "questionDocumentReadPolicy": QUESTION_DOCUMENT_READ_VERSION,

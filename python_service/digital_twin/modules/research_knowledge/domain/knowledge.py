@@ -86,7 +86,7 @@ def validate_proposals(value, context, packet, usable_ids, business_theses=()):
         if value is not None:
             raise ValueError("knowledge proposal requires captured knowledge context")
         return None
-    if (context.get("version") != CONTEXT_VERSION or any(context.get(key) != packet.get(key) for key in SCOPE)
+    if (context.get("version") not in {CONTEXT_VERSION, "research-knowledge-context-v2"} or any(context.get(key) != packet.get(key) for key in SCOPE)
             or context.get("asOf") != packet.get("capturedAt") or not instant(context.get("asOf"))):
         raise ValueError("knowledge context scope or cutoff mismatch")
     if not isinstance(value, dict) or set(value) != {"claims", "coverageNote"}:

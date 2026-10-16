@@ -107,6 +107,11 @@ def canonical_json(value):
     return json.dumps(value, sort_keys=True, ensure_ascii=False, separators=(",", ":"), allow_nan=False)
 
 
+def source_packet_bytes(packet):
+    """The source-owner budget excludes separately validated research memory."""
+    return len(canonical_json({key: value for key, value in packet.items() if key != "researchKnowledge"}).encode())
+
+
 def content_hash(value):
     return hashlib.sha256(canonical_json(value).encode()).hexdigest()
 
@@ -248,5 +253,5 @@ def validate_evidence_packet(packet):
         # Knowledge is separately budgeted historical/methodological context.
         # It is never added to the source facts or their coverage inventory.
         source_packet = {key: value for key, value in packet.items() if key != "researchKnowledge"}
-    if len(canonical_json(source_packet).encode()) > EVIDENCE_PACKET_MAX_BYTES:
+    if source_packet_bytes(source_packet) > EVIDENCE_PACKET_MAX_BYTES:
         raise EvidenceContractError("observation evidence exceeds context budget")

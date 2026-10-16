@@ -116,7 +116,7 @@ class AIControlService:
                             self.read_planner, lambda value: self.store.save_execution_input(job, value),
                             self.settings.get("aiObservationPromptMaxBytes", 256 * 1024), self.read_round_budget(),
                             record_round=lambda step: self.store.save_retrieval_round(job, step))
-                        if packet["retrieval"]["status"] != "ready":
+                        if packet["retrieval"]["status"] not in {"ready", "research-ready"}:
                             missing = [item for step in retrieval_trace for item in (step.get("decision") or {}).get("missingEvidence", [])]
                             blocked = (not missing or packet["retrieval"]["status"] == "context-budget" or any(
                                 read["result"].get("status") in {"context-budget", "repeated-read"} for step in retrieval_trace for read in step["reads"]))
@@ -172,7 +172,8 @@ class AIControlService:
                             except Exception as error:
                                 result["quality"].update(status="rejected", errors=["독립 검토를 완료하지 못해 발송을 보류했습니다."])
                                 result["quality"]["failure"] = task_failure("independent-review", error)[1]
-                        if (verification or validation_repair or packet.get("retrieval", {}).get("status") in {"deferred", "repeated-read", "context-budget"}
+                        if (verification or validation_repair or packet.get("researchScope", {}).get("mode") == "research-only"
+                                or packet.get("retrieval", {}).get("status") in {"deferred", "repeated-read", "context-budget"}
                                 or not correction_warranted(result)):
                             break
                         result["repair"] = {"initialInputId": input_id, "initialErrors": result["quality"]["errors"], "status": "pending"}

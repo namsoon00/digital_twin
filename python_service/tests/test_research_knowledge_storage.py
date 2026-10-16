@@ -40,9 +40,9 @@ class ResearchKnowledgeStorageTests(unittest.TestCase):
 
     def clean_knowledge(self):
         with self.repository.transaction() as connection:
-            for table in ("research_knowledge_revisions", "research_knowledge_claims"):
+            for table in ("research_knowledge_revisions", "research_knowledge_claims", "research_knowledge_progress"):
                 connection.execute("DELETE FROM " + table + " WHERE account_id=%s", (self.fixture.subject["accountId"],))
-            connection.execute("DELETE FROM domain_events WHERE name='research_knowledge.claim_revised' AND "
+            connection.execute("DELETE FROM domain_events WHERE name IN ('research_knowledge.claim_revised','research_knowledge.progress_recorded') AND "
                 "JSON_UNQUOTE(JSON_EXTRACT(payload_json,'$.accountId'))=%s", (self.fixture.subject["accountId"],))
 
     def draft(self, reviewed=True):
@@ -142,3 +142,11 @@ class ResearchKnowledgeStorageTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.control.complete(job, altered, [])
         self.assertEqual([], self.repository.recent(self.fixture.subject["accountId"]))
+
+    def test_read_wait_progress_rolls_back_and_reloads_without_manufacturing_knowledge(self):
+        from scoped_knowledge_storage_checks import check_wait_progress
+        check_wait_progress(self)
+
+    def test_partial_research_real_controller_commits_recalls_and_revises_reviewed_knowledge(self):
+        from scoped_knowledge_storage_checks import check_partial_controller
+        check_partial_controller(self)

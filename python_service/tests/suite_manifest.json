@@ -1,5 +1,6 @@
 {
   "tests": [
+    {"file": "test_scoped_knowledge_research.py", "tier": "contract", "core": true},
     {"file": "test_research_knowledge_storage.py", "tier": "integration", "core": true},
     {"file": "test_research_knowledge.py", "tier": "unit", "core": true},
     {"file": "test_smart_price_observations.py", "tier": "unit", "core": true},

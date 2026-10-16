@@ -116,6 +116,8 @@ def validate_plan(value, packet, research=(), require_research=False, require_re
         from .knowledge_research import validate_research
         result["knowledgeResearch"] = validate_research(value.get("knowledgeResearch"), packet,
             (result.get("businessResearch") or {}).get("theses", []))
+    from .scoped_research import validate_plan as validate_scope
+    validate_scope(result, packet)
     return result
 
 

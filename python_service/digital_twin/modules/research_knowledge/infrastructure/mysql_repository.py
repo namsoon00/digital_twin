@@ -5,6 +5,12 @@ from ..domain.frameworks import framework_catalog
 from ..domain.knowledge import digest, stamp, canonical_time
 
 SCHEMA = (
+    """CREATE TABLE IF NOT EXISTS research_knowledge_progress (
+    progress_id CHAR(64) PRIMARY KEY, account_id VARCHAR(191) NOT NULL, symbol VARCHAR(64) NOT NULL,
+    world_id VARCHAR(191) NOT NULL, status VARCHAR(32) NOT NULL, known_at VARCHAR(40) NOT NULL,
+    recalled_claim_count INT NOT NULL, recalled_progress_count INT NOT NULL, payload_json LONGTEXT NOT NULL,
+    INDEX knowledge_progress_scope(account_id,symbol,world_id,known_at)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4""",
     """CREATE TABLE IF NOT EXISTS research_knowledge_frameworks (
     framework_id VARCHAR(96) NOT NULL, version INT NOT NULL, content_hash CHAR(64) NOT NULL,
     known_at VARCHAR(40) NOT NULL, payload_json LONGTEXT NOT NULL,
@@ -64,3 +70,33 @@ class MySQLResearchKnowledgeRepository(MySQLOperationalConnection):
                 "WHERE (%s='' OR account_id=%s) ORDER BY known_at DESC LIMIT %s",
                 (account_id, account_id, max(1, min(100, limit)))).fetchall()
         return [json.loads(row["payload_json"]) for row in rows]
+
+    def progress(self, scope, as_of, limit=4):
+        with self.connect() as connection:
+            rows = connection.execute("SELECT payload_json FROM research_knowledge_progress WHERE account_id=%s "
+                "AND symbol=%s AND world_id=%s AND known_at<=%s ORDER BY known_at DESC,progress_id LIMIT %s",
+                (*[scope[key] for key in ("accountId", "symbol", "worldId")], canonical_time(as_of), max(1, min(10, limit)))).fetchall()
+        return [json.loads(row["payload_json"]) for row in rows]
+
+    def activity(self, account_id=""):
+        with self.connect() as connection:
+            claims = connection.execute("SELECT COUNT(*) AS count,MAX(known_at) AS latest FROM research_knowledge_claims "
+                "WHERE (%s='' OR account_id=%s)", (account_id, account_id)).fetchone()
+            progress = connection.execute("SELECT COUNT(*) AS count,MAX(known_at) AS latest,"
+                "MAX(CASE WHEN recalled_claim_count>0 THEN known_at END) AS claim_included,"
+                "MAX(CASE WHEN recalled_progress_count>0 THEN known_at END) AS progress_included "
+                "FROM research_knowledge_progress WHERE (%s='' OR account_id=%s)", (account_id, account_id)).fetchone()
+            stages = connection.execute("SELECT status,COUNT(*) AS count FROM research_knowledge_progress "
+                "WHERE (%s='' OR account_id=%s) GROUP BY status", (account_id, account_id)).fetchall()
+            latest = connection.execute("SELECT payload_json FROM research_knowledge_progress WHERE (%s='' OR account_id=%s) "
+                "ORDER BY known_at DESC,progress_id LIMIT 1", (account_id, account_id)).fetchone()
+        last = json.loads(latest["payload_json"]) if latest else {}
+        return {"status": "knowledge-recalled" if progress["claim_included"] else "knowledge-recorded" if claims["count"]
+                else "awaiting-knowledge" if progress["count"] else "not-yet-observed",
+            "claimCount": claims["count"], "progressCount": progress["count"],
+            "lastClaimSavedAt": claims["latest"], "lastProgressSavedAt": progress["latest"],
+            "lastClaimIncludedAt": progress["claim_included"], "lastProgressIncludedAt": progress["progress_included"],
+            "stageCounts": {row["status"]: row["count"] for row in stages},
+            "lastReadStatus": last.get("status"), "lastMissingEvidence": last.get("missingEvidence", []),
+            "lastQuestionScopes": last.get("questionScopes", []),
+            "qualification": "execution-only-not-investment-performance"}

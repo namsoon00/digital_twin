@@ -1205,3 +1205,69 @@ to activate it after validation. Set
 `AI_RESEARCH_KNOWLEDGE_ENABLED=false`, or save `aiResearchKnowledgeEnabled=false`
 through the existing control settings endpoint, to disable the new integration.
 V16 author/repair/review inputs and V1 research review remain replayable.
+
+### Question-scoped progress and partial research
+
+When knowledge integration is enabled, retrieval uses
+`independent-observation-retrieval-v4-scoped-research`. V3 retrieval is retained
+unchanged for historical replay and the integration-disabled route. Both final
+source validation and retrieval's displayed `authorBudget` use the same
+reasoning-owned source byte measurement. Knowledge memory is excluded from that
+source allowance, validated within its own limit, and included in the actual
+whole-prompt measurement; adding memory cannot create extra source or model
+capacity. The author estimate includes the current knowledge instructions.
+
+Each retrieval decision carries `questionScopes` for the original question IDs,
+selected evidence and missing requirements. `finish` can advance an assessable
+question while other questions remain waiting. `research` is a distinct route
+for an internal provisional explanation grounded in usable company, documentary
+or valuation evidence. It requires explicit missing evidence, preserves the
+source/freshness/period checks, and cannot send an observation notification or
+mark questions answered/dismissed. Every new knowledge claim still requires the
+frozen independent review. No source fact, trading rule or prediction
+qualification is manufactured to make this route succeed.
+The internal route does not spend an extra narrative-repair call to satisfy
+customer-notification presentation checks; those checks remain unchanged and
+the separate frozen research review still decides knowledge admission. Stored
+claim revisions preserve the accepted review IDs, author/review input hashes
+and proposal hash as a small provenance receipt. Hash receipts do not recreate
+expired raw source/input bodies or establish empirical correctness.
+
+A window admits up to three original agenda questions, prioritizing available
+source answers, then due work and its existing check time. Included and excluded
+question IDs are explicit in the input; exclusion never closes, merges or changes
+a question's contract. The source agenda remains the owner of questions and
+collection. Further model calls still obey the existing capacity and repeat
+policies. Reading/storing a progress record does not itself wake another call.
+Due question memories keep their exact question contract, revision and due flag
+in the author input. Long historical answer previews are explicitly truncated
+with a content hash and detailed-recall reference; their raw histories do not
+consume the mandatory working context. Source document indexing and local
+recall still use the original captured records. Legacy continuity is unchanged.
+
+The existing task-completion transaction also appends
+`research_knowledge_progress`, including for data waits with no authored summary.
+The coordinator verifies the exact completed model calls, frozen retrieval
+inputs, immutable read rounds, subject/cutoff/snapshot, final evidence and scope
+before recording progress. A missing proof fails closed. Progress binds original
+question IDs, read-source references/hashes, selected-versus-unselected status,
+unresolved requirements and the captured read disposition. It is explicitly
+`read-progress-only` and `not-an-answer-or-thesis`, and emits
+`research_knowledge.progress_recorded` atomically. Rollback or task retry cannot
+create a duplicate record/event or a fake claim.
+
+Context V2 recalls bounded, same-account/symbol/world progress known by the input
+cutoff alongside prior claim revisions. Context V1 stays valid for replay. The
+read model reuses the existing `ResearchTask`/`HAS_RESEARCH_PLAN` vocabulary with
+zero reasoning/investment authority; the active TypeDB investment generation and
+frozen engine artifacts remain unchanged. Omitted references/questions are
+explicit and never interpreted as absent sources or answered questions.
+
+Owner-only `researchKnowledge.activity` separates store connectivity from
+pipeline activity: claim/progress counts, last saved timestamps, last confirmed
+inclusion of previous claim/progress records in a completed input, read-stage
+counts, latest question scopes and missing requirements. `awaiting-knowledge`
+means reads have been recorded but no claim has been saved; `knowledge-recorded`
+and `knowledge-recalled` report execution receipts, never investment performance.
+Operational qualification requires a real source-backed author/review/write and
+later recall, not just a ready store or a successful synthetic prompt freeze.

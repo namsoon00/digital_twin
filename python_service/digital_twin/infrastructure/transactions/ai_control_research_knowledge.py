@@ -1,6 +1,8 @@
 """Frozen AI research handoff; the control transaction owns commit/rollback."""
+import gzip
+import json
 from digital_twin.modules.research_knowledge.contracts import raw_knowledge_proposals
-from digital_twin.modules.research_knowledge.infrastructure.transaction_writes import write_research
+from digital_twin.modules.research_knowledge.infrastructure.transaction_writes import write_research, write_progress
 from digital_twin.modules.ai_orchestration.domain.knowledge_research import validate_research
 from digital_twin.modules.ai_orchestration.domain.research_evidence_use import usable_fact
 from digital_twin.modules.ai_orchestration.domain.business_research import thesis_case
@@ -21,7 +23,7 @@ class AIControlResearchKnowledge:
 
     def refresh(self, captured, packet):
         usable = {row["id"] for row in packet["facts"] if usable_fact(row)}
-        context = build_context(packet, captured["frameworks"], captured["claims"], usable_ids=usable)
+        context = build_context(packet, captured["frameworks"], captured["claims"], usable_ids=usable, progress=captured.get("progress", []))
         for claim in context["claims"]:
             claim["currentAssessment"] = assessment_for_claim(claim, packet.get("businessThesisMemory", []))
         context["contextHash"] = digest({key: value for key, value in context.items() if key != "contextHash"})
@@ -29,20 +31,94 @@ class AIControlResearchKnowledge:
         return context
 
     def record(self, connection, job, result):
+        from digital_twin.infrastructure.mysql_operational_events import insert_domain_event_with_connection
+        if not result.get("summary"):
+            trace = self.read_proof(connection, job, result)
+            receipt = write_progress(connection, result["input"], trace, stamp())
+            for event in receipt.pop("events", []):
+                insert_domain_event_with_connection(connection, event)
+            return {"status": "progress-only", "progress": receipt}
         if not result.get("knowledgeResearch"):
             return {"status": "not-requested"}
         envelope = self.agenda.proof(connection, job, result)
+        progress = write_progress(connection, result["input"], envelope.get("retrievalTrace", []), stamp())
+        for event in progress.pop("events", []):
+            insert_domain_event_with_connection(connection, event)
         reviewed = self.agenda.research_proof(connection, job, result, envelope)
         if not reviewed and result["knowledgeResearch"]["claims"]:
-            return {"status": "review-required"}
+            return {"status": "review-required", "progress": progress}
         theses = (result.get("businessResearch") or {}).get("theses", [])
         proposals = validate_research(raw_knowledge_proposals(result["knowledgeResearch"]), envelope["current"], theses)
         if proposals != result["knowledgeResearch"]:
             raise ValueError("knowledge research changed after validation")
         now = stamp()
         business_ids = [thesis_case(job, result, thesis, now)["caseId"] for thesis in theses]
-        receipt = write_research(connection, result["input"], proposals, result["executionInputId"], now, business_ids)
-        from digital_twin.infrastructure.mysql_operational_events import insert_domain_event_with_connection
+        review_receipt = None
+        if reviewed:
+            from digital_twin.modules.reasoning.contracts import content_hash
+            quality = result["researchQuality"]
+            frozen = connection.execute("SELECT input_hash FROM ai_control_inputs WHERE input_id=%s", (quality["reviewInputId"],)).fetchone()
+            review_receipt = {"version": quality["version"], "status": "accepted", "authorInputId": result["executionInputId"],
+                "authorInputHash": content_hash(envelope), "reviewInputId": quality["reviewInputId"], "reviewInputHash": frozen["input_hash"],
+                "proposalHash": quality["proposalHash"], "reason": quality["review"]["reason"],
+                "authority": "research-assessment-only", "qualification": "not-empirically-qualified"}
+        receipt = write_research(connection, result["input"], proposals, result["executionInputId"], now, business_ids, review_receipt)
         for event in receipt.pop("events"):
             insert_domain_event_with_connection(connection, event)
+        receipt["progress"] = progress
         return receipt
+
+    @staticmethod
+    def read_proof(connection, job, result):
+        from digital_twin.modules.ai_orchestration.domain.execution_input import validate_execution_input
+        from digital_twin.modules.ai_orchestration.domain import scoped_retrieval, working_retrieval
+        from digital_twin.modules.reasoning.contracts import content_hash, validate_evidence_packet
+        packet = result["input"]
+        validate_evidence_packet(packet)
+        ids = result.get("retrievalInputIds", [])
+        if not ids or len(ids) > 3 or len(set(ids)) != len(ids):
+            raise ValueError("research progress requires bounded completed reads")
+        trace, known, captured_versions = [], {}, {}
+        for input_id in ids:
+            row = connection.execute("SELECT i.artifact_gzip AS input_gzip,r.artifact_gzip AS round_gzip,r.artifact_hash "
+                "FROM ai_control_inputs i JOIN ai_control_retrieval_rounds r ON r.input_id=i.input_id AND r.attempt=i.attempt "
+                "JOIN ai_control_input_calls l ON l.input_id=i.input_id JOIN ai_control_calls c ON c.call_id=l.call_id "
+                "AND c.task_id=i.task_id AND c.prompt_hash=i.prompt_hash AND c.status='completed' "
+                "WHERE i.input_id=%s AND i.task_id=%s AND i.attempt=%s LIMIT 1", (input_id, job["taskId"], job["attempts"])).fetchone()
+            if not row:
+                raise ValueError("research progress requires completed frozen read proof")
+            envelope, step = json.loads(gzip.decompress(row["input_gzip"])), json.loads(gzip.decompress(row["round_gzip"]))
+            validate_execution_input(envelope)
+            contract = scoped_retrieval if envelope["promptVersion"] == scoped_retrieval.VERSION else working_retrieval
+            if (envelope["promptVersion"] != contract.VERSION or step["inputId"] != input_id or content_hash(step) != row["artifact_hash"]
+                    or envelope["retrievalContext"].get("trace", []) != trace
+                    or any(envelope["current"].get(key) != packet.get(key) or packet.get(key) != job.get(key)
+                           for key in ("accountId", "symbol", "worldId", "taskId"))
+                    or envelope["current"]["sourceSnapshots"] != packet["sourceSnapshots"]
+                    or envelope["current"]["capturedAt"] != packet["capturedAt"]
+                    or envelope["current"].get("researchKnowledge") != packet.get("researchKnowledge")):
+                raise ValueError("research progress input scope or trace mismatch")
+            for fact in envelope["current"]["facts"]:
+                known.setdefault(fact["id"], fact)
+                captured_versions.setdefault(fact["id"], set()).add(digest(fact))
+            if step.get("decision"):
+                if set(step["decision"]["selectedFactIds"]) - known.keys():
+                    raise ValueError("research progress selected unread evidence")
+                if contract is scoped_retrieval:
+                    contract.validate_scope(step["decision"], envelope["retrievalContext"], known)
+            for item in step["reads"]:
+                for fact in item["result"].get("facts", []):
+                    known[fact["id"]] = fact
+                    captured_versions.setdefault(fact["id"], set()).add(digest(fact))
+            trace.append(step)
+            contract.validate_trace(trace)
+        if (packet["retrieval"] != contract.trace_summary(trace, packet["retrieval"]["status"])
+                or any(digest(fact) not in captured_versions.get(fact["id"], set()) for fact in packet["facts"])):
+            raise ValueError("research progress evidence changed after capture")
+        if contract is scoped_retrieval and packet.get("researchScope") != contract.research_scope(trace, packet["retrieval"]["status"]):
+            raise ValueError("research progress question scope changed")
+        last = (trace[-1].get("decision") or {}).get("action")
+        expected = {"finish": "ready", "research": "research-ready", "defer": "deferred"}.get(last)
+        if expected and packet["retrieval"]["status"] != expected:
+            raise ValueError("research progress disposition changed")
+        return trace

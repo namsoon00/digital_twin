@@ -6,7 +6,7 @@ from .frameworks import service_research_policy
 from .knowledge import CONTEXT_VERSION, SCOPE, digest, field_value, instant, source_known_before
 
 
-def build_context(packet, frameworks, records, max_bytes=32000, usable_ids=()):
+def build_context(packet, frameworks, records, max_bytes=32000, usable_ids=(), progress=()):
     cutoff = instant(packet.get("capturedAt"))
     if not cutoff or any(not packet.get(key) for key in SCOPE):
         raise ValueError("knowledge context requires a scoped cutoff")
@@ -36,7 +36,7 @@ def build_context(packet, frameworks, records, max_bytes=32000, usable_ids=()):
         method["coverage"] = coverage
         method.update(authority="research-reference-only", qualification="methodology-not-prediction-validation")
         methods.append(method)
-    value = {"version": CONTEXT_VERSION, **{key: packet[key] for key in SCOPE}, "asOf": packet["capturedAt"],
+    value = {"version": "research-knowledge-context-v2", **{key: packet[key] for key in SCOPE}, "asOf": packet["capturedAt"],
              "policy": service_research_policy(), "frameworks": methods, "claims": [], "excluded": [],
              "authority": "historical-research-and-methodology-only"}
     value["companyModel"] = {"symbol": packet["symbol"],
@@ -54,6 +54,18 @@ def build_context(packet, frameworks, records, max_bytes=32000, usable_ids=()):
     ordered = sorted(latest.values(), key=lambda row: (row.get("status") == "retired", row.get("nextCheckAt", ""), row["claimId"]))
     if len(json.dumps(value, ensure_ascii=False).encode()) > max_bytes:
         raise ValueError("research methodology exceeds context budget")
+    from .progress import progress_memory
+    value["progress"] = []
+    for row in progress[:2]:
+        if any(row.get(key) != packet[key] for key in SCOPE):
+            raise ValueError("cross-scope research progress")
+        if not instant(row.get("knownAt")) or instant(row["knownAt"]) > cutoff:
+            continue
+        selected = progress_memory(row)
+        value["progress"].append(selected)
+        if len(json.dumps(value, ensure_ascii=False).encode()) > max_bytes - 6000:
+            value["progress"].pop()
+            value["excluded"].append({"progressId": row["progressId"], "reason": "progress-byte-budget"})
     for row in ordered:
         if len(value["claims"]) >= 6:
             value["excluded"].append({"claimId": row["claimId"], "reason": "claim-budget"})
@@ -90,7 +102,7 @@ def context_material_identity(context):
 
 
 def validate_context(context, packet):
-    if (context.get("version") != CONTEXT_VERSION or any(context.get(key) != packet.get(key) for key in SCOPE)
+    if (context.get("version") not in {CONTEXT_VERSION, "research-knowledge-context-v2"} or any(context.get(key) != packet.get(key) for key in SCOPE)
             or context.get("asOf") != packet.get("capturedAt")
             or context.get("authority") != "historical-research-and-methodology-only"):
         raise ValueError("research knowledge context ownership mismatch")

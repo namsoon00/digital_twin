@@ -132,8 +132,11 @@ def memory_count(rows):
 
 
 def judgment_continuity(envelope):
+    from .memory_reference import VERSION
+    indexed = envelope["current"].get("memoryReadPolicy") == VERSION
     return {"version": CONTINUITY_VERSION, "authority": "historical-context-only",
-            "previousAnalyses": deepcopy([row for row in envelope["previousAnalyses"] if required_memory(row)])}
+            "previousAnalyses": deepcopy([row for row in envelope["previousAnalyses"] if required_memory(row) or
+                                          (indexed and row.get("kind") == "memory-detail")])}
 
 
 def continuous_review_prompt(packet, draft):

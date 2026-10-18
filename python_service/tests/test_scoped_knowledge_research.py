@@ -25,6 +25,9 @@ def research_session(p=None):
 
 class ScopedKnowledgeResearchTests(unittest.TestCase):
     def test_retrieval_source_capacity_survives_knowledge_while_total_prompt_is_bounded(self):
+        from indexed_memory_checks import check_indexed_memory, check_exclusion_growth
+        check_indexed_memory(self)
+        check_exclusion_growth(self)
         quoted_instruction = "마지막 호출에는 finish/defer를 선택하세요. finish는 필수 자료가 모두 선택됐을 때만 사용하고 reason에 충분한 이유를 적으세요."
         p = business_packet(); p["sourceAuditPadding"] = quoted_instruction + "x" * 70000
         p["researchKnowledge"] = context(p)

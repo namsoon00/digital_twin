@@ -20,7 +20,8 @@ businessThesisIndex는 이번 businessResearch.theses의 인덱스이며 관련�
 def knowledge_prompt(packet, history, research):
     from .question_resolution import resolution_prompt
     from .scoped_research import instructions
-    return instructions(packet) + (INSTRUCTIONS if packet.get("researchKnowledge") else "") + resolution_prompt(packet, history, research)
+    from .memory_reference import VERSION, INSTRUCTIONS as memory_instructions
+    return (memory_instructions if packet.get("memoryReadPolicy") == VERSION else "") + instructions(packet) + (INSTRUCTIONS if packet.get("researchKnowledge") else "") + resolution_prompt(packet, history, research)
 
 
 def knowledge_schema(packet, research):

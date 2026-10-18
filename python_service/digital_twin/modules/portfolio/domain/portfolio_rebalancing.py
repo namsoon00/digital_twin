@@ -3,10 +3,11 @@
 from dataclasses import asdict, dataclass, field
 import hashlib
 import json
+import math
 from typing import Dict, Iterable, List, Mapping, Optional
 
 
-PORTFOLIO_REBALANCING_VERSION = "portfolio-rebalancing-v2"
+PORTFOLIO_REBALANCING_VERSION = "portfolio-rebalancing-v3"
 REBALANCE_STATE_VERSION = "portfolio-rebalance-state-v1"
 REBALANCE_EXPOSURE_DELTA_PCT = 1.0
 REBALANCE_VOLATILITY_DELTA_PCT = 3.0
@@ -420,6 +421,32 @@ class RebalanceProposal:
             errors.append("duplicate-rebalance-scenario")
         if self.recommended_scenario_id and self.recommended_scenario_id not in set(scenario_ids):
             errors.append("recommended-scenario-missing")
+        for scenario in self.scenarios:
+            after = scenario.after_metrics
+            if after.get("arithmeticVersion") != "rebalance-arithmetic-v1":
+                continue  # Historical/hand-authored review-only contracts.
+            total = float(scenario.before_metrics.get("portfolioTotal") or 0)
+            cost = sum(row.estimated_cost for row in scenario.legs)
+            post_total = total - cost
+            cash = float(scenario.before_metrics.get("cash") or 0) + sum(
+                row.maximum_notional * (1 if row.side == "DECREASE" else -1) - row.estimated_cost for row in scenario.legs)
+            gross = sum(row.maximum_notional for row in scenario.legs) / total * 100 if total > 0 else 0
+            if (not math.isclose(after["portfolioTotal"], post_total, abs_tol=1e-6) or
+                    not math.isclose(after["cash"], cash, abs_tol=1e-6) or cash < -1e-6 or
+                    gross > after["turnoverLimitPct"] + 1e-6 or not math.isclose(scenario.turnover_pct, gross, abs_tol=1e-6)):
+                errors.append("rebalance-cash-or-turnover-mismatch")
+            if post_total <= 0 and scenario.legs:
+                errors.append("rebalance-invalid-post-total")
+            elif post_total > 0 and any(not math.isclose(row.after_weight_pct,
+                    (row.before_weight_pct * total / 100 + row.maximum_notional * (1 if row.side == "INCREASE" else -1))
+                    / post_total * 100, abs_tol=1e-6) for row in scenario.legs):
+                errors.append("rebalance-after-weight-mismatch")
+            if after.get("allocationBandsRestored") and (not after.get("allocationBandChecks") or
+                    any(row.get("withinBand") is not True for row in after["allocationBandChecks"])):
+                errors.append("rebalance-restoration-unproven")
+            if after.get("riskSimulationState") == "not-simulated" and any(after.get(key) is not None for key in
+                    ("annualizedVolatilityPct", "maximumDrawdownPct", "maximumPairwiseCorrelation")):
+                errors.append("rebalance-unsimulated-risk")
         return errors
 
     def to_dict(self) -> Dict[str, object]:

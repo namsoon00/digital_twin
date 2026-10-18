@@ -15,6 +15,7 @@ from digital_twin.modules.portfolio.domain.portfolio import AccountSnapshot
 from digital_twin.modules.portfolio.domain.portfolio_ledger import OPENING_CASH, OPENING_POSITION, PortfolioLedger, PortfolioLedgerEntry, PortfolioReconciliation, ReconciliationDifference, decimal_value
 from digital_twin.modules.portfolio.domain.snapshot_portfolio_activity import activity_payload, infer_snapshot_ledger_entries, trusted_account_snapshot
 from digital_twin.modules.portfolio.domain.portfolio_rebalancing import AllocationBand, RebalanceLeg, RebalanceProposal, RebalanceScenario, RebalanceState, allocation_drifts, rebalance_transition
+from digital_twin.modules.portfolio.domain.rebalance_simulation import size_legs, simulate, reweight_legs
 from digital_twin.modules.portfolio.domain.portfolio_analytics import PortfolioRiskSnapshot, portfolio_risk_snapshot, with_policy_limits
 from digital_twin.modules.portfolio.domain.portfolio_decision_cycle import PortfolioActionCandidate, PortfolioDecisionCycle
 from digital_twin.modules.portfolio.domain.risk_exposure import ExposureMetric, ExposureSnapshot
@@ -857,6 +858,7 @@ class PortfolioAccountingService:
     ) -> Optional[RebalanceProposal]:
         breached = exposure.over_policy_metrics()
         total = max(0.0, number(snapshot.portfolio.total))
+        cash = max(0.0, number(snapshot.portfolio.cash))
         bands_by_key = {}
         current = {}
         metric_by_key = {}
@@ -889,6 +891,9 @@ class PortfolioAccountingService:
                 min(100.0, target + band_width),
             )
         drifts = allocation_drifts(current, bands_by_key.values())
+        conflicts = [key for key, target in mandate.target_allocations.items() if
+                     (key.startswith("position:") and target > mandate.max_position_weight_pct) or
+                     (key == "cash:KRW" and target < mandate.min_cash_weight_pct)]
         legs = []
         for drift in drifts:
             if not drift.band_delta_pct:
@@ -899,8 +904,8 @@ class PortfolioAccountingService:
                 continue
             symbol = metric.key if metric else exposure_key
             raw_notional = abs(drift.target_delta_pct) * total / 100
-            turnover_cap = mandate.max_rebalance_turnover_pct * total / 100
-            maximum_notional = min(raw_notional, turnover_cap) if turnover_cap > 0 else 0.0
+            # This is a requested change. One shared cap/funding pass follows.
+            maximum_notional = min(raw_notional, drift.current_weight_pct * total / 100) if drift.band_delta_pct > 0 else raw_notional
             legs.append(RebalanceLeg(
                 allocation_key=drift.allocation_key,
                 side="DECREASE" if drift.band_delta_pct > 0 else "INCREASE",
@@ -912,18 +917,26 @@ class PortfolioAccountingService:
                 after_weight_pct=drift.band.target_weight_pct,
                 rationale="정책 배분 허용 범위 복원 후보",
             ))
+        cash_floor = max(mandate.min_cash_weight_pct,
+                         bands_by_key.get("cash:KRW", AllocationBand("cash:KRW", 0, 0, 100)).minimum_weight_pct)
+        legs = [] if conflicts else size_legs(legs, total, cash, mandate.max_rebalance_turnover_pct,
+                                              mandate.estimated_transaction_cost_bps, cash_floor)
+        after = simulate(legs, drifts, total, cash, mandate.max_rebalance_turnover_pct)
         risk_breached = bool(risk and any([
             risk.volatility_policy_delta_pct > 0,
             risk.drawdown_policy_delta_pct > 0,
             risk.correlation_policy_delta > 0,
         ]))
-        if not any(item.band_delta_pct for item in drifts) and not risk_breached:
+        if not any(item.band_delta_pct for item in drifts) and not risk_breached and not conflicts:
             return None
         before_metrics = {
             "portfolioTotal": total,
+            "cash": cash,
+            "cashWeightPct": cash / total * 100 if total > 0 else None,
             "annualizedVolatilityPct": risk.annualized_volatility_pct if risk else None,
             "maximumDrawdownPct": risk.maximum_drawdown_pct if risk else None,
             "maximumPairwiseCorrelation": risk.maximum_pairwise_correlation if risk else None,
+            **({"allocationTargetConflicts": sorted(conflicts), "sizingState": "blocked-conflicting-allocation-policy"} if conflicts else {}),
         }
         scenarios = [RebalanceScenario(
             scenario_id="rebalance-scenario:no-action:" + exposure.snapshot_id.split(":")[-1],
@@ -932,40 +945,46 @@ class PortfolioAccountingService:
             before_metrics=before_metrics,
             after_metrics=before_metrics,
             policy_effects=["현재 배분과 위험 상태를 유지합니다."],
-            data_state=risk.data_state if risk else "partial",
-            missing_data=list(risk.missing_data if risk else ["portfolioRiskSnapshot"]),
+            data_state="partial" if conflicts else risk.data_state if risk else "partial",
+            missing_data=list(risk.missing_data if risk else ["portfolioRiskSnapshot"]) +
+                         (["consistentAllocationPolicy"] if conflicts else []),
         )]
         if legs:
             scenarios.append(RebalanceScenario(
                 scenario_id="rebalance-scenario:restore-band:" + exposure.snapshot_id.split(":")[-1],
                 scenario_type="RESTORE_POLICY_BANDS",
-                label="정책 배분 범위 복원",
+                label="정책 배분 조정 검토",
                 legs=legs,
                 before_metrics=before_metrics,
-                after_metrics={**before_metrics, "allocationBandsRestored": True},
+                after_metrics=after,
                 estimated_cost=round(sum(item.estimated_cost for item in legs), 4),
                 turnover_pct=round(sum(item.maximum_notional for item in legs) / (total or 1.0) * 100, 6),
-                policy_effects=["정책 배분 이탈을 허용 범위 안으로 되돌리는 최대 주문 후보입니다."],
+                policy_effects=["계산상 배분 범위를 복원합니다." if after["allocationBandsRestored"] else
+                                "거래·현금 한도 안에서 배분 이탈을 일부 줄입니다. 남은 이탈을 확인해야 합니다."],
                 invalidation_conditions=["시세 또는 계좌 잔고가 바뀌면 다시 계산합니다."],
-                data_state=risk.data_state if risk else "partial",
-                missing_data=list(risk.missing_data if risk else ["portfolioRiskSnapshot"]),
+                data_state="partial",
+                missing_data=list(dict.fromkeys([*(risk.missing_data if risk else ["portfolioRiskSnapshot"]),
+                    "postTradeRiskSimulation", *[row["allocationKey"] + ":postTradeExposure" for row in after["allocationBandChecks"]
+                                                if row["withinBand"] is None]])),
             ))
         if risk_breached:
+            risk_legs = reweight_legs([item for item in legs if item.side == "DECREASE"], total)
             scenarios.append(RebalanceScenario(
                 scenario_id="rebalance-scenario:risk-review:" + risk.risk_snapshot_id.split(":")[-1],
                 scenario_type="REDUCE_PORTFOLIO_RISK",
                 label="포트폴리오 위험 축소 검토",
-                legs=[item for item in legs if item.side == "DECREASE"],
+                legs=risk_legs,
                 before_metrics=before_metrics,
-                after_metrics={**before_metrics, "requiresGraphValidation": True},
+                after_metrics={**simulate(risk_legs, drifts,
+                    total, cash, mandate.max_rebalance_turnover_pct), "requiresGraphValidation": True},
                 estimated_cost=round(sum(item.estimated_cost for item in legs if item.side == "DECREASE"), 4),
                 turnover_pct=round(sum(item.maximum_notional for item in legs if item.side == "DECREASE") / (total or 1.0) * 100, 6),
                 policy_effects=["위험 한도 초과 원인과 축소 대상을 관계 추론에서 검증합니다."],
                 invalidation_conditions=["위험 한도 초과가 해소되면 이 시나리오는 무효입니다."],
-                data_state=risk.data_state,
-                missing_data=list(risk.missing_data),
+                data_state="partial",
+                missing_data=list(dict.fromkeys([*risk.missing_data, "postTradeRiskSimulation"])),
             ))
-        return RebalanceProposal.create(
+        proposal = RebalanceProposal.create(
             exposure.portfolio_id,
             mandate.policy_version,
             exposure.snapshot_id,
@@ -974,6 +993,10 @@ class PortfolioAccountingService:
             scenarios,
             created_at=exposure.observed_at,
         )
+        errors = proposal.validate()
+        if errors:
+            raise ValueError("Invalid rebalance arithmetic: " + ",".join(errors))
+        return proposal
 
     def portfolio_decision_cycle(
         self,
@@ -1010,22 +1033,24 @@ class PortfolioAccountingService:
         )]
         for metric in exposure.over_policy_metrics():
             if metric.exposure_type == "position":
-                maximum_notional = max(0.0, metric.policy_delta_pct * total / 100)
-                after_cash = cash + maximum_notional
+                sized = size_legs([RebalanceLeg("position:" + metric.key, "DECREASE", -metric.policy_delta_pct,
+                    max(0.0, metric.policy_delta_pct * total / 100), symbol=metric.key, before_weight_pct=metric.ratio_pct)],
+                    total, cash, mandate.max_rebalance_turnover_pct, mandate.estimated_transaction_cost_bps)
+                if not sized:
+                    continue
+                leg = sized[0]
                 candidates.append(PortfolioActionCandidate.create(
                     source_snapshot_id,
                     "REDUCE_POSITION_EXPOSURE",
                     metric.key + " 정책 초과분 검토",
                     affected_symbol=metric.key,
-                    maximum_notional=maximum_notional,
+                    maximum_notional=leg.maximum_notional,
                     before_metrics={**base_metrics, "positionWeightPct": metric.ratio_pct},
                     after_metrics={
-                        **base_metrics,
-                        "cash": after_cash,
-                        "cashWeightPct": after_cash / total * 100,
-                        "positionWeightPct": metric.policy_limit_pct,
+                        **simulate(sized, [], total, cash, mandate.max_rebalance_turnover_pct),
+                        "positionWeightPct": leg.after_weight_pct,
                     },
-                    policy_effects=["종목 비중을 정책 상한 안으로 낮추는 최대 범위입니다."],
+                    policy_effects=["거래 한도 안에서 종목의 정책 초과 비중을 줄이는 검토 범위입니다."],
                     required_relation_types=["EXCEEDS_POLICY", "HAS_EXPOSURE", "HAS_LIQUIDITY_CONSTRAINT"],
                     data_state="partial",
                 ))
@@ -1037,7 +1062,8 @@ class PortfolioAccountingService:
                     "현금 하한 회복 검토",
                     maximum_notional=shortfall,
                     before_metrics=base_metrics,
-                    after_metrics={**base_metrics, "cash": cash + shortfall, "cashWeightPct": metric.policy_limit_pct},
+                    after_metrics={"cash": None, "cashWeightPct": None, "requiredCashIncrease": shortfall,
+                                   "cashTarget": cash + shortfall, "fundingSimulationState": "requires-funding-legs"},
                     policy_effects=["현금 비중을 계좌 정책 하한까지 회복하는 부족분입니다."],
                     required_relation_types=["EXCEEDS_POLICY", "HAS_RISK_BUDGET"],
                     data_state="partial",
@@ -1046,20 +1072,27 @@ class PortfolioAccountingService:
             if drift.band_delta_pct >= 0 or not drift.allocation_key.startswith("position:"):
                 continue
             symbol = drift.allocation_key.split(":", 1)[1]
+            if drift.band.target_weight_pct > mandate.max_position_weight_pct:
+                continue
+            sized = size_legs([RebalanceLeg(drift.allocation_key, "INCREASE", -drift.target_delta_pct,
+                abs(drift.target_delta_pct) * total / 100, symbol=symbol, before_weight_pct=drift.current_weight_pct)],
+                total, cash, mandate.max_rebalance_turnover_pct, mandate.estimated_transaction_cost_bps,
+                mandate.min_cash_weight_pct)
+            if not sized:
+                continue
+            leg = sized[0]
             candidates.append(PortfolioActionCandidate.create(
                 source_snapshot_id,
                 "INCREASE_UNDERWEIGHT_ALLOCATION",
                 symbol + " 목표 배분 하단 복원 검토",
                 affected_symbol=symbol,
-                maximum_notional=min(
-                    abs(drift.target_delta_pct) * total / 100,
-                    mandate.max_rebalance_turnover_pct * total / 100,
-                ),
+                maximum_notional=leg.maximum_notional,
                 before_metrics={**base_metrics, "positionWeightPct": drift.current_weight_pct},
-                after_metrics={**base_metrics, "positionWeightPct": drift.band.target_weight_pct},
-                policy_effects=["사용자가 정한 목표 배분 범위의 하단을 복원하는 후보입니다."],
+                after_metrics={**simulate(sized, [], total, cash, mandate.max_rebalance_turnover_pct),
+                               "positionWeightPct": leg.after_weight_pct},
+                policy_effects=["사용자가 정한 목표 배분과 사용 가능한 현금 한도 안에서 비중을 늘리는 검토 범위입니다."],
                 required_relation_types=["HAS_TARGET_ALLOCATION", "HAS_RISK_BUDGET"],
-                data_state=risk.data_state if risk else "partial",
+                data_state="partial",
             ))
         if risk and any([
             risk.volatility_policy_delta_pct > 0,
@@ -1071,10 +1104,11 @@ class PortfolioAccountingService:
                 "REDUCE_PORTFOLIO_RISK",
                 "포트폴리오 위험 한도 초과 검토",
                 before_metrics=base_metrics,
-                after_metrics={**base_metrics, "requiresGraphValidation": True},
+                after_metrics={"annualizedVolatilityPct": None, "maximumDrawdownPct": None,
+                    "maximumPairwiseCorrelation": None, "riskSimulationState": "not-simulated", "requiresGraphValidation": True},
                 policy_effects=["변동성·낙폭·상관 위험의 원인 종목을 관계 추론으로 검증합니다."],
                 required_relation_types=["HAS_RISK_SNAPSHOT", "EXCEEDS_RISK_POLICY"],
-                data_state=risk.data_state,
+                data_state="partial",
             ))
         missing = list(risk.missing_data if risk else [
             "positionReturnVolatility", "positionCorrelationMatrix", "portfolioBenchmarkReturn"

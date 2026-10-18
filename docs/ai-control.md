@@ -1238,7 +1238,8 @@ V16 author/repair/review inputs and V1 research review remain replayable.
 ### Question-scoped progress and partial research
 
 When knowledge integration is enabled, retrieval uses
-`independent-observation-retrieval-v4-scoped-research`. V3 retrieval is retained
+`independent-observation-retrieval-v5-indexed-memory` for newly captured managed
+work (see the indexed-memory correction below). V4 and V3 retrieval are retained
 unchanged for historical replay and the integration-disabled route. Both final
 source validation and retrieval's displayed `authorBudget` use the same
 reasoning-owned source byte measurement. Knowledge memory is excluded from that
@@ -1370,3 +1371,43 @@ The policy is also frozen as `researchExecutionPolicy` in observation and
 repeat identities, so an earlier accepted observation cannot suppress the
 corrected author cohort. A subsequent identical policy does not create another
 call; self-authored progress and rephrasing remain non-material.
+
+### Indexed memory correction (2026-10-19)
+
+New managed knowledge-enabled reads freeze `indexed-continuity-v1` and retrieval
+V5. Author/repair inputs use V18/V14; V17/V13 and V4 remain reconstructible from
+their original frozen artifacts. The initial brief retains the previous usable
+judgment, original question/period/completion contract, current work status,
+missing requirements, and exact business checkpoint contracts. Provider audits,
+source-answer prose, company history and nested notification/development records
+are no longer automatically attached again during author input assembly.
+
+`memoryIndex` identifies each captured historical row by hash, category, identity
+and available top-level paths/byte sizes. `read_memory(category,memoryId,path)`
+returns an exact historical section, with source/section hashes persisted in the
+existing read-round audit. It accepts only same-session IDs and issued paths.
+Sections above 24 KiB return a bounded child-path index (at most 32, with omitted
+count) instead of an oversized body; an indivisible oversized value is explicitly
+unavailable within the read budget. Unexposed children are not absence or
+counter-evidence. `recall_memory` returns briefs on this route. Only explicitly
+read details join author memory; every intermediate author budget includes those
+details. Read historical facts remain historical and do not become current ABox
+evidence. Original question requirements and checkpoint baselines are never
+silently shortened to make a brief fit.
+
+This reuses the existing three-round/two-request limit, repeated-read suppression,
+40 KiB single-result/96 KiB total-result audit limits and whole-prompt bound. It
+does not grant SQL, arbitrary URL, cross-account, write or trade access. The memory
+policy enters the operational retry identity once; unchanged work is still
+suppressed afterwards. Selection, independent research review and question-answer
+admission retain their previous authority.
+
+Knowledge context V3 budgets its final hash and exclusion metadata too. Excluded
+claims/progress use counts by reason, a ledger hash and at most four examples,
+instead of an unbounded exclusion list. Optional records are removed whole until
+the complete context fits 32,000 bytes; missing core methodology remains an
+explicit failure. Exclusion does not refute, retire or erase stored research.
+`indexed_memory_checks.py` covers large captured rows, exact targeted reads,
+ownership/path rejection, preserved question/checkpoint contracts, V17/V13 replay
+and a 24-claim exclusion-growth counterexample. Reduced input or successful
+validation alone establishes neither lower billed cost nor better predictions.

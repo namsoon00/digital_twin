@@ -28,6 +28,7 @@ def retry_key(packet, research):
     ready_reviews = sorted(key for row in research if row.get("kind") == "brain-case"
                            for key in [answer_review_key(row)] if key)
     return content_hash({"policy": AUTHOR_SCOPE_POLICY if packet.get("researchKnowledge") else POLICY, "researchReviewPolicy": research_review_version,
+        **({"memoryReadPolicy": packet["memoryReadPolicy"]} if packet.get("memoryReadPolicy") else {}),
         **({"answerReviewKeys": ready_reviews} if ready_reviews else {}),
         "knowledgePolicy": knowledge_context_identity(packet["researchKnowledge"]) if packet.get("researchKnowledge") else "",
         "researchAssessmentScopePolicy": ASSESSMENT_SCOPE_VERSION,

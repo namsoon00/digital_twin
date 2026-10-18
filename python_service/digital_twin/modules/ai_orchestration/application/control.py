@@ -1,6 +1,7 @@
 """Durable independent research loop, with capabilities supplied by composition."""
 from datetime import datetime, timedelta, timezone
 from digital_twin.modules.ai_orchestration.domain.continuity import judgment_continuity
+from ..domain.memory_reference import historical_facts
 from digital_twin.modules.reasoning.contracts import EvidenceContractError, EvidenceReadError, ObservationEvidenceSession
 from digital_twin.modules.ai_orchestration.application.retrieval import RetrievalLeaseLost, RetrievalContractFailure
 from .working_retrieval import retrieve_working_evidence
@@ -93,6 +94,9 @@ class AIControlService:
                         from ..domain.scoped_retrieval import AUTHOR_SCOPE_POLICY
                         packet["researchKnowledge"] = knowledge
                         packet["researchExecutionPolicy"] = AUTHOR_SCOPE_POLICY
+                    if knowledge and session and self.read_planner:
+                        from ..domain.memory_reference import VERSION as memory_policy
+                        packet["memoryReadPolicy"] = memory_policy
                     fingerprint = observation_fingerprint(packet, research)
                     repeat_key = repeat.observation_key(packet, research)
                     retry_identity = retry_key(packet, research)
@@ -158,7 +162,7 @@ class AIControlService:
                               "judgmentContinuity": judgment_continuity(envelope),
                               "followUpEvaluations": packet["followUpEvaluations"],
                               "resumption": observation_resume(job, packet),
-                              "comparisonFacts": [fact for previous in envelope["previousAnalyses"] for fact in previous.get("previousFacts", [])[:20]]}
+                              "comparisonFacts": historical_facts(envelope["previousAnalyses"])}
                     if validation_repair:
                         result["validationRepair"] = validation_repair
                     for verification in range(2):
@@ -190,7 +194,8 @@ class AIControlService:
                             repaired = validate_plan(self.planner(correction, repair_id), packet, correction["researchResults"], require_research=True, require_resolution=True)
                             result.pop("conditionValidation", None)
                             result.update(repaired, executionInputId=repair_id, observedAt=stamp(), memoryCoverage=correction["memoryCoverage"],
-                                          judgmentContinuity=judgment_continuity(correction))
+                                          judgmentContinuity=judgment_continuity(correction),
+                                          comparisonFacts=historical_facts(correction["previousAnalyses"]))
                             envelope = correction
                         except (AIControlBudgetWait, AIExecutionDeferred):
                             raise

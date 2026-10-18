@@ -14,7 +14,7 @@ from digital_twin.modules.ai_orchestration.domain.execution_input import validat
 from digital_twin.modules.ai_orchestration.domain.budget import AIControlBudgetWait, admission_wait, budget_state, budgets_enabled
 from digital_twin.modules.ai_orchestration.domain.recovery import retry_delays
 from digital_twin.modules.ai_orchestration.domain.retrieval import RETRIEVAL_PROMPT_VERSION, validate_trace
-from ..domain import working_retrieval, scoped_retrieval
+from ..domain import working_retrieval, scoped_retrieval, indexed_retrieval
 from digital_twin.modules.reasoning.contracts import content_hash
 from digital_twin.modules.ai_orchestration.infrastructure.mysql_execution import AIExecutionPersistence, EXECUTION_SCHEMA
 from digital_twin.modules.ai_orchestration.domain.execution_resilience import safe_diagnostic
@@ -339,9 +339,10 @@ class MySQLAIControlStore(DiagnosticProgressPersistence, AITaskDispatchPersisten
                 raise ValueError("retrieval audit requires owned frozen input")
             envelope = json.loads(gzip.decompress(frozen["artifact_gzip"]))
             validate_execution_input(envelope)
-            if envelope["promptVersion"] not in {RETRIEVAL_PROMPT_VERSION, working_retrieval.VERSION, scoped_retrieval.VERSION}:
+            if envelope["promptVersion"] not in {RETRIEVAL_PROMPT_VERSION, working_retrieval.VERSION, scoped_retrieval.VERSION, indexed_retrieval.VERSION}:
                 raise ValueError("retrieval audit requires retrieval input")
-            validator = (scoped_retrieval.validate_trace if envelope["promptVersion"] == scoped_retrieval.VERSION else
+            validator = (indexed_retrieval.validate_trace if envelope["promptVersion"] == indexed_retrieval.VERSION else
+                         scoped_retrieval.validate_trace if envelope["promptVersion"] == scoped_retrieval.VERSION else
                          working_retrieval.validate_trace if envelope["promptVersion"] == working_retrieval.VERSION else validate_trace)
             validator([*envelope["retrievalContext"].get("trace", []), step])
             connection.execute("INSERT IGNORE INTO ai_control_retrieval_rounds "

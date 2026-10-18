@@ -749,6 +749,8 @@ class PortfolioLifecycleServiceTests(unittest.TestCase):
         self.assertEqual("11", quantity_difference["observed"])
 
     def test_exposure_breach_creates_review_only_rebalance_proposal(self):
+        from rebalance_arithmetic_checks import check_rebalance_arithmetic
+        check_rebalance_arithmetic(self)
         repository = MemoryInvestmentRepository()
 
         result = PortfolioAccountingService(repository).observe_snapshot(live_snapshot())

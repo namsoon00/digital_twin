@@ -25,3 +25,31 @@ The account-centered investment lifecycle is split into explicit ownership bound
 ## Execution Safety
 
 The fill import endpoint records already confirmed provider fills. It does not submit orders. Imported fills must reference an approved plan and a matching order intent. Provider execution IDs make imports idempotent.
+
+## Rebalance arithmetic V3
+
+`portfolio-rebalancing-v3` uses one gross turnover limit across the entire proposal
+(sum of buy and sell notionals / initial portfolio total). Requested legs are
+scaled together, then buys are limited by captured cash plus net sale proceeds,
+estimated fees and the cash floor. Amount rounding occurs before funding is
+finalized. This is deterministic sizing of existing policy requests, not a stock
+ranking or investment-action selector.
+Targets that contradict the position cap or cash floor block joint sizing and
+retain an explicit policy-conflict diagnostic; they cannot silently override the
+active mandate.
+
+After weights use actual bounded notionals and the portfolio total after fees.
+`allocationBandsRestored` is true only when every checked band is demonstrably
+inside its range. Unsupported post-trade sector/currency exposure stays unknown;
+a capped partial reduction cannot claim the target was attained. Changed-weight
+volatility, drawdown and correlation remain null with `not-simulated`, rather
+than copying the before-risk metrics into an apparent forecast. Individual
+decision-cycle alternatives use the same cash/cost sizing; a cash-floor shortfall
+without funding legs is a target, not an achieved after-balance.
+
+Scenarios remain partial/review-required and candidate projection remains
+non-executable. Lot sizes, realized slippage, tax and final broker balances still
+belong to the existing approval/execution revalidation boundary. Independent
+cash/weight-conservation regressions in `rebalance_arithmetic_checks.py` cover
+capped reductions, shared turnover, jointly funded buys, zero limits and varying
+fees/cash balances. These checks validate arithmetic, not portfolio returns.

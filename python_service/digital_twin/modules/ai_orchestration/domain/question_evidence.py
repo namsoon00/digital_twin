@@ -63,8 +63,9 @@ def checkpoints(packet, trace):
     """Derive operational checkpoints only from the frozen, final read decision."""
     if packet.get("questionEvidencePolicy") != VERSION or not trace or not trace[-1].get("decision"):
         return []
-    from . import scoped_retrieval
-    decision = scoped_retrieval.validate_decision(trace[-1]["decision"])
+    from . import scoped_retrieval, indexed_retrieval
+    contract = indexed_retrieval if packet["retrieval"]["version"] == indexed_retrieval.VERSION else scoped_retrieval
+    decision = contract.validate_decision(trace[-1]["decision"])
     if decision["action"] == "read":
         return []  # An exhausted read budget is not a completed per-question assessment.
     index = packet.get("questionEvidenceIndex", [])

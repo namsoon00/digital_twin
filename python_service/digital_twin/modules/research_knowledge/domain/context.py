@@ -1,5 +1,6 @@
 """Bounded knowledge retrieval with explicit scope, time and coverage limits."""
 from copy import deepcopy
+from collections import Counter
 import json
 
 from .frameworks import service_research_policy
@@ -36,7 +37,7 @@ def build_context(packet, frameworks, records, max_bytes=32000, usable_ids=(), p
         method["coverage"] = coverage
         method.update(authority="research-reference-only", qualification="methodology-not-prediction-validation")
         methods.append(method)
-    value = {"version": "research-knowledge-context-v2", **{key: packet[key] for key in SCOPE}, "asOf": packet["capturedAt"],
+    value = {"version": "research-knowledge-context-v3", **{key: packet[key] for key in SCOPE}, "asOf": packet["capturedAt"],
              "policy": service_research_policy(), "frameworks": methods, "claims": [], "excluded": [],
              "authority": "historical-research-and-methodology-only"}
     value["companyModel"] = {"symbol": packet["symbol"],
@@ -56,6 +57,7 @@ def build_context(packet, frameworks, records, max_bytes=32000, usable_ids=(), p
         raise ValueError("research methodology exceeds context budget")
     from .progress import progress_memory
     value["progress"] = []
+    exclusions = []
     for row in progress[:2]:
         if any(row.get(key) != packet[key] for key in SCOPE):
             raise ValueError("cross-scope research progress")
@@ -65,10 +67,10 @@ def build_context(packet, frameworks, records, max_bytes=32000, usable_ids=(), p
         value["progress"].append(selected)
         if len(json.dumps(value, ensure_ascii=False).encode()) > max_bytes - 6000:
             value["progress"].pop()
-            value["excluded"].append({"progressId": row["progressId"], "reason": "progress-byte-budget"})
+            exclusions.append({"progressId": row["progressId"], "reason": "progress-byte-budget"})
     for row in ordered:
         if len(value["claims"]) >= 6:
-            value["excluded"].append({"claimId": row["claimId"], "reason": "claim-budget"})
+            exclusions.append({"claimId": row["claimId"], "reason": "claim-budget"})
             continue
         selected = deepcopy(row)
         current = {fact["id"]: fact for fact in packet.get("facts", [])}
@@ -82,11 +84,25 @@ def build_context(packet, frameworks, records, max_bytes=32000, usable_ids=(), p
         value["claims"].append(selected)
         if len(json.dumps(value, ensure_ascii=False).encode()) > max_bytes - 1500:
             value["claims"].pop()
-            value["excluded"].append({"claimId": row["claimId"], "reason": "byte-budget"})
-    if len(json.dumps(value, ensure_ascii=False).encode()) > max_bytes:
-        raise ValueError("research context exceeds explicit budget")
-    value["contextHash"] = digest(value)
-    return value
+            exclusions.append({"claimId": row["claimId"], "reason": "byte-budget"})
+    # Audit metadata is part of the limit too. A growing exclusion ledger must
+    # not undo successful claim budgeting. Keep counts/hash and a small sample.
+    while True:
+        value["excluded"] = deepcopy(exclusions[:4])
+        value["exclusionSummary"] = {"count": len(exclusions), "reasonCounts": dict(Counter(row["reason"] for row in exclusions)),
+            "ledgerHash": digest(exclusions), "sampleLimit": 4,
+            "meaning": "not-selected-not-disproved; source revisions remain in research storage"}
+        value["contextHash"] = digest({key: item for key, item in value.items() if key != "contextHash"})
+        if len(json.dumps(value, ensure_ascii=False, allow_nan=False).encode()) <= max_bytes:
+            return value
+        if value["claims"]:
+            removed = value["claims"].pop()
+            exclusions.append({"claimId": removed["claimId"], "reason": "byte-budget"})
+        elif value["progress"]:
+            removed = value["progress"].pop()
+            exclusions.append({"progressId": removed["progressId"], "reason": "progress-byte-budget"})
+        else:
+            raise ValueError("research methodology and coverage metadata exceed context budget")
 
 
 def context_material_identity(context):
@@ -102,7 +118,7 @@ def context_material_identity(context):
 
 
 def validate_context(context, packet):
-    if (context.get("version") not in {CONTEXT_VERSION, "research-knowledge-context-v2"} or any(context.get(key) != packet.get(key) for key in SCOPE)
+    if (context.get("version") not in {CONTEXT_VERSION, "research-knowledge-context-v2", "research-knowledge-context-v3"} or any(context.get(key) != packet.get(key) for key in SCOPE)
             or context.get("asOf") != packet.get("capturedAt")
             or context.get("authority") != "historical-research-and-methodology-only"):
         raise ValueError("research knowledge context ownership mismatch")

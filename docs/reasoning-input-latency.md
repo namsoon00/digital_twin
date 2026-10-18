@@ -131,3 +131,41 @@ payload bytes) returned the exact original receipt clock in 4.782 seconds.
 This measures the scoped receipt query, not the full candidate-build stage.
 Regression coverage includes account IDs and opaque keys containing colons,
 failed receipts, other-account/subject traffic and legacy reader compatibility.
+
+## Valuation Audit Churn and Comparison Inputs (2026-10-18)
+
+Two actual immutable NVDA snapshots four minutes apart had identical DCF
+values and release decisions after the existing clock/identity normalization.
+Their only remaining delta was `modelRelease.audit.auditId`, regenerated as a
+`driver-dcf-release-audit:` identity. V7 verified-monitor admission removes
+only that recognized identity at that exact nested path from its comparison
+projection. The full source and audit remain unchanged. Numerical inputs,
+assumptions, approval decisions, release contents and other audit identities
+still request native reasoning. This removes redundant work; it is not a new
+market-hours gate, a notification quota or a change to investment thresholds.
+
+Independent comparison input V5 additionally requires verified incoming and
+persisted semantic ABox manifests. The durable compact projection retains the
+original manifests, counts and fingerprints. A matching event/source/temporal
+clock cannot stand in for equal assembled facts. Invalid, different or missing
+manifests are recorded as input exclusions, never as successful comparisons.
+Old V4 receipts remain in history; their missing proofs are not reconstructed
+from today's graph or counted toward V5 promotion. Exclusion receipts use their
+own contract identity so old incomparable pairs cannot starve later comparisons.
+Release fingerprints, validation-start clocks and latency requirements remain
+unchanged.
+
+Decision comparison now includes native management-response codes, objectives,
+bound numerical facts, release conditions and adjustment scenarios, while
+excluding graph-local decision IDs. Rules used by the frozen judgment also
+participate in comparison, including context rules that supplied its conditions.
+Differences expose the exact changed decision fields. A declared management
+upgrade is visible as a difference and still requires review; it is never
+automatically accepted merely because both market actions are `NO_ACTION`.
+
+Operational delivery diagnostics reuse existing status reads, adding no history
+scan. CLI and the operations reasoning view distinguish processing delays,
+source waiting, candidate rules not yet serving customers, the last scoped
+analysis with no alert candidate, and recorded admission outcomes. Unknown
+candidate counts remain unknown. Queue health and admission do not prove a
+successful customer receipt or an absence of market opportunities.

@@ -7,6 +7,7 @@ from typing import Dict, Iterable, Mapping
 
 from digital_twin.modules.reasoning.domain.reasoning_engine_versions import EngineReleaseBundle, ReasoningEngineDescriptor, promotion_blockers, reasoning_release_identity
 from digital_twin.modules.market_data.contracts import TEMPORAL_FEATURE_SET_VERSION
+from digital_twin.modules.reasoning.domain.reasoning_delivery_diagnostics import reasoning_delivery_diagnostics
 
 
 class ReasoningEnginePlatformService:
@@ -766,6 +767,14 @@ class ReasoningEnginePlatformService:
                     last_result.get("trace_complete") or last_result.get("traceComplete")
                 ),
                 "symbols": list(last_result.get("symbols") or [])[:20],
+                "candidateEventCount": len(last_result.get("candidate_events") or []) if "candidate_events" in last_result else None,
+                "dispatchOutcomes": [
+                    {"status": str(item.get("status") or ""),
+                     "reasonCode": str(item.get("reason_code") or item.get("reasonCode") or "")[:120],
+                     "reason": str(item.get("reason") or "")[:500]}
+                    for item in last_result.get("insight_dispatch_outcomes") or []
+                    if isinstance(item, Mapping)
+                ][:10],
             },
         }
 
@@ -1067,6 +1076,7 @@ class ReasoningEnginePlatformService:
         if include_history:
             result["deployments"] = deployments
             result["releaseManagement"] = platform_state
+        result["deliveryDiagnostics"] = reasoning_delivery_diagnostics(result)
         return result
 
     @staticmethod
@@ -1598,6 +1608,8 @@ class ReasoningEnginePlatformService:
             comparison_status_counts = dict(
                 comparison_summary.get("statusCounts") or {}
             )
+            if int(comparison_status_counts.get("reasoning-parity-gap") or 0) > 0:
+                blockers.append("independent-evidence-parity-incomplete")
             if int(comparison_status_counts.get("candidate-failed") or 0) > 0:
                 blockers.append("independent-comparison-execution-failures")
             if int(comparison_status_counts.get("delivery-violation") or 0) > 0:

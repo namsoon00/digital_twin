@@ -401,6 +401,17 @@ def compact_projection_result(projection: object) -> Dict[str, object]:
         "temporalFeatureInput": dict(
             graph_input.get("temporalFeatureInput") or {}
         ),
+        # Source-event equality is not proof of equal assembled facts. Retain
+        # both the incoming and persisted semantic manifests for comparison.
+        **{
+            name: {
+                key: deepcopy(scope[key])
+                for key in ("fingerprint", "scopeCount", "scopeManifest", "targetSymbols")
+                if key in scope
+            }
+            for name in ("comparisonScope", "persistedComparisonScope")
+            for scope in [values.get(name) if isinstance(values.get(name), Mapping) else {}]
+        },
         "retryable": retry["retryable"],
         "retryAfterSeconds": retry["retryAfterSeconds"],
         "failureReasonCode": retry["reasonCode"],

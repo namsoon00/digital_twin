@@ -34,7 +34,7 @@ from digital_twin.modules.reasoning.domain.reasoning_source_facts import reasoni
 
 VERIFIED_MONITOR_SNAPSHOT_TRIGGER = "verified-monitor-snapshot"
 VERIFIED_MONITOR_SNAPSHOT_SLOT_FAMILY = "VerifiedMonitorSnapshot"
-VERIFIED_MONITOR_SNAPSHOT_VERSION = "verified-monitor-snapshot-v6-valuation-inputs"
+VERIFIED_MONITOR_SNAPSHOT_VERSION = "verified-monitor-snapshot-v7-stable-valuation-audit"
 
 
 # Deliberately keep the source contract close to the Position domain object.
@@ -508,6 +508,33 @@ def _external_for_symbol(
     return result
 
 
+def _driver_dcf_change_payload(value: object) -> Dict[str, object]:
+    """Keep release decisions, excluding only their regenerated audit identity.
+
+    The full source bundle and its audit remain immutable. This projection is
+    used solely for work admission; an approval, assumption, value or release
+    change still requests TypeDB reasoning.
+    """
+    result = {}
+    for symbol, row in (value.items() if isinstance(value, Mapping) else []):
+        if not isinstance(row, Mapping):
+            result[symbol] = row
+            continue
+        bundle = dict(row)
+        release = bundle.get("modelRelease")
+        if isinstance(release, Mapping):
+            release = dict(release)
+            audit = release.get("audit")
+            if isinstance(audit, Mapping):
+                audit = dict(audit)
+                if str(audit.get("auditId") or "").startswith("driver-dcf-release-audit:"):
+                    audit.pop("auditId")
+                release["audit"] = audit
+            bundle["modelRelease"] = release
+        result[symbol] = bundle
+    return result
+
+
 def _changed_external_groups(previous: Mapping[str, object], current: Mapping[str, object]) -> List[str]:
     groups = []
     for key in sorted(set(previous) | set(current)):
@@ -544,6 +571,8 @@ def _changed_external_groups(previous: Mapping[str, object], current: Mapping[st
                 "subjectInputBundleId", "releasedInputBundleId", "activeInputBundleId",
                 "reviewId", "evidenceId", "sourceReferences",
             }
+            before_value = _driver_dcf_change_payload(before_value)
+            after_value = _driver_dcf_change_payload(after_value)
         before = fact_signature({key: before_value}, refresh_fields)
         after = fact_signature({key: after_value}, refresh_fields)
         if before != after:

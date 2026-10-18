@@ -1196,6 +1196,7 @@ class ConsoleReadModelService:
                     "deliveryDeployment": _mapping(engine.get("deliveryDeployment")),
                     "candidateDeployment": _mapping(engine.get("candidateDeployment")),
                     "historicalDebt": _mapping(engine.get("historicalDebt")),
+                    "deliveryDiagnostics": _mapping(engine.get("deliveryDiagnostics")),
                 },
             },
             "providers": providers,

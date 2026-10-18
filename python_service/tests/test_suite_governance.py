@@ -347,7 +347,10 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # Six scoped-knowledge regressions cover real read budgets, question
         # isolation, partial-research authority, dated progress, SQL rollback
         # and controller review/store/recall/revision across two source inputs.
-        self.assertLessEqual(total, 2373)
+        # Stable valuation admission and management-response comparison each
+        # protect an independently observed runtime defect. Operational delivery
+        # diagnostics additionally preserve unknown versus no-candidate states.
+        self.assertLessEqual(total, 2376)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

@@ -2628,7 +2628,11 @@ class IndependentReasoningEngineTests(unittest.TestCase):
         self.assertEqual("ready", engine.health()["status"])
 
     def test_persisted_projection_result_keeps_performance_contract_summary(self):
+        scope = {"fingerprint": "source-facts", "scopeCount": 1,
+                 "scopeManifest": {"symbol:000660:market": "facts"}, "targetSymbols": ["000660"]}
         compact = compact_projection_result({
+            "comparisonScope": scope,
+            "persistedComparisonScope": scope,
             "configured": True,
             "saved": True,
             "status": "ok",
@@ -2672,6 +2676,10 @@ class IndependentReasoningEngineTests(unittest.TestCase):
         })
 
         performance = compact["performanceAssessment"]
+        self.assertEqual(scope, compact["comparisonScope"])
+        self.assertEqual(scope, compact["persistedComparisonScope"])
+        compact["comparisonScope"]["scopeManifest"].clear()
+        self.assertEqual(1, len(scope["scopeManifest"]))
         self.assertEqual("degraded", performance["status"])
         self.assertEqual("nativeInferenceMs", performance["bottleneckStage"])
         self.assertEqual(67500, performance["violations"][0]["durationMs"])

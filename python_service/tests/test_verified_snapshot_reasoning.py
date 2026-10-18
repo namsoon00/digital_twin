@@ -1,4 +1,5 @@
 import copy
+from copy import deepcopy
 import sys
 import unittest
 from datetime import datetime
@@ -530,6 +531,30 @@ class VerifiedSnapshotReasoningTests(unittest.TestCase):
             event.payload["changedFieldsBySymbol"]["AAPL"],
         )
         self.assertEqual(["ValuationObservation"], event.payload["factTypesBySymbol"]["AAPL"])
+
+    def test_valuation_release_audit_refresh_does_not_admit_redundant_reasoning(self):
+        from digital_twin.modules.reasoning.domain.verified_snapshot_reasoning import _changed_external_groups
+
+        previous = {"driverDcfInputs": {"AAPL": {
+            "waccPct": 10, "modelApprovalState": "pending",
+            "modelRelease": {"audit": {"auditId": "driver-dcf-release-audit:old", "state": "pending"}},
+            "financialEvidence": {"auditId": "financial-version:1"},
+        }}}
+        original = deepcopy(previous)
+        current = deepcopy(previous)
+        current["driverDcfInputs"]["AAPL"]["modelRelease"]["audit"]["auditId"] = "driver-dcf-release-audit:new"
+        self.assertEqual([], _changed_external_groups(previous, current))
+        self.assertEqual(original, previous)
+        for path, value in ((["waccPct"], 11), (["modelApprovalState"], "approved"),
+                            (["modelRelease", "audit", "state"], "approved"),
+                            (["financialEvidence", "auditId"], "financial-version:2"),
+                            (["modelRelease", "audit", "auditId"], "unknown-audit:1")):
+            changed = deepcopy(current)
+            target = changed["driverDcfInputs"]["AAPL"]
+            for key in path[:-1]:
+                target = target[key]
+            target[path[-1]] = value
+            self.assertEqual(["driverDcfInputs"], _changed_external_groups(previous, changed), path)
 
     def test_company_knowledge_section_revision_routes_only_changed_fact_family(self):
         def financial_row(revenue, revision):

@@ -5,7 +5,7 @@ import json
 from typing import Mapping
 
 
-COMPARISON_INPUT_CONTRACT_VERSION = "reasoning-comparison-input-v4"
+COMPARISON_INPUT_CONTRACT_VERSION = "reasoning-comparison-input-v5"
 
 
 def _mapping(value):
@@ -30,9 +30,26 @@ def job_comparison_identity(job: Mapping[str, object]):
     result = _mapping(values.get("result"))
     temporal_inputs = []
     temporal_semantics = []
+    abox_inputs = []
     for account_id, projection in sorted(
         _mapping(result.get("projection_results") or result.get("projectionResults")).items()
     ):
+        projection = _mapping(projection)
+        scopes = {}
+        for name in ("comparisonScope", "persistedComparisonScope"):
+            scope = _mapping(projection.get(name))
+            manifest = _mapping(scope.get("scopeManifest"))
+            encoded = json.dumps(manifest, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+            fingerprint = hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+            if (not manifest or scope.get("scopeCount") != len(manifest)
+                    or scope.get("fingerprint") != fingerprint
+                    or not all(isinstance(k, str) and isinstance(v, str) and v for k, v in manifest.items())):
+                scopes = {}
+                break
+            scopes[name] = {"fingerprint": fingerprint, "scopeCount": len(manifest),
+                            "targetSymbols": _texts(scope.get("targetSymbols"))}
+        if scopes:
+            abox_inputs.append({"accountId": str(account_id), **scopes})
         temporal = _mapping(_mapping(projection).get("temporalFeatureInput"))
         if not temporal:
             continue
@@ -63,7 +80,12 @@ def job_comparison_identity(job: Mapping[str, object]):
         "symbols": _texts(payload.get("affectedSymbols") or payload.get("symbols") or payload.get("symbol") or [symbol for item in boundaries for symbol in item.get("symbols") or []]),
         "temporalFeatureInputs": temporal_inputs,
         "temporalFeatureSemantics": temporal_semantics,
+        "aboxInputs": abox_inputs if len(abox_inputs) == len(_mapping(result.get("projection_results") or result.get("projectionResults"))) else [],
     }
+    if (sorted(row["accountId"] for row in abox_inputs) != inputs["accountIds"]
+            or any(not set(inputs["symbols"]).issubset(row[name]["targetSymbols"])
+                   for row in abox_inputs for name in ("comparisonScope", "persistedComparisonScope"))):
+        inputs["aboxInputs"] = []
     return {
         **inputs,
         "inputFingerprint": _hash(inputs),
@@ -75,7 +97,7 @@ def comparison_input_contract(baseline: Mapping[str, object], candidate: Mapping
     left, right = job_comparison_identity(baseline), job_comparison_identity(candidate)
     checks = {key: bool(left[key]) and left[key] == right[key] for key in (
         "scopeKey", "sourceSnapshotId", "sourceSnapshotAt", "sourcePayloadHash",
-        "accountIds", "symbols", "temporalFeatureSemantics",
+        "accountIds", "symbols", "temporalFeatureSemantics", "aboxInputs",
     )}
     return {
         "contractVersion": COMPARISON_INPUT_CONTRACT_VERSION,

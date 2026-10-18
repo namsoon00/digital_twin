@@ -144,7 +144,6 @@ class IndependentReasoningComparisonService:
             input_contract = comparison_input_contract(baseline_job, candidate_job)
             if not input_contract["eligible"]:
                 rejected.append(input_contract)
-                continue
             baseline_job["comparisonSourceEventId"] = source_event_id
             candidate_job["comparisonSourceEventId"] = source_event_id
 
@@ -188,11 +187,31 @@ class IndependentReasoningComparisonService:
                 },
             }
             source_input_comparison.update(input_contract)
-            comparison = compare_engine_outcomes(
-                independent_reasoning_outcome_packet(baseline_job),
-                independent_reasoning_outcome_packet(candidate_job),
-                [source_input_comparison],
-            ).to_dict()
+            if input_contract["eligible"]:
+                comparison = compare_engine_outcomes(
+                    independent_reasoning_outcome_packet(baseline_job),
+                    independent_reasoning_outcome_packet(candidate_job),
+                    [source_input_comparison],
+                ).to_dict()
+            else:
+                # Persist the exclusion under its new comparison contract so
+                # legacy/mismatched jobs cannot monopolize every reconciliation
+                # turn. Never rewrite their old receipts or count an exclusion
+                # as independent validation evidence.
+                comparison = {
+                    "status": "incomparable-inputs",
+                    "factParityPct": 0.0,
+                    "ruleSlotCoveragePct": 0.0,
+                    "unexplainedDecisionDifferenceCount": 0,
+                    "shadowDeliveryCount": len(
+                        _mapping(candidate_job.get("result")).get("delivery_events")
+                        or _mapping(candidate_job.get("result")).get("deliveryEvents") or []
+                    ) if (
+                        _mapping(candidate_job.get("result")).get("delivery_authorized")
+                        or _mapping(candidate_job.get("result")).get("deliveryAuthorized")
+                    ) else 0,
+                    "failedInputChecks": [key for key, valid in input_contract["checks"].items() if not valid],
+                }
 
             candidate_started_at = _timestamp(
                 candidate_job.get("claimedAt") or candidate_job.get("createdAt")
@@ -269,6 +288,8 @@ class IndependentReasoningComparisonService:
         result = {
             "status": "recorded" if recorded else "idle",
             "recordedCount": len(recorded),
+            "eligibleComparisonCount": len(recorded) - len(rejected),
+            "excludedComparisonCount": len(rejected),
             "rejectedPairCount": len(rejected),
             "rejectedPairs": rejected[:20],
             "baselineDeploymentId": baseline_id,

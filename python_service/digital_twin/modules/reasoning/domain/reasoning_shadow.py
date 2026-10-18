@@ -20,7 +20,7 @@ from digital_twin.modules.reasoning.domain.portfolio_ontology_catalog import OPE
 from digital_twin.modules.reasoning.domain.reasoning_comparison_identity import COMPARISON_INPUT_CONTRACT_VERSION
 
 
-REASONING_SHADOW_CONTRACT_VERSION = "reasoning-shadow-comparison-v2"
+REASONING_SHADOW_CONTRACT_VERSION = "reasoning-shadow-comparison-v3"
 PROJECTION_RUNTIME_CONTEXT_PACKET_VERSION = "projection-runtime-context-zlib-v1"
 MAX_PROJECTION_RUNTIME_CONTEXT_BYTES = 16 * 1024 * 1024
 
@@ -261,6 +261,7 @@ def graph_candidate_packet(event: object) -> Dict[str, object]:
     synthesis_rule_ids = _strings(
         [selected_rule_id]
         + list(metadata.get("matchedRuleIds") or [])
+        + list(_mapping(synthesis.get("rulebox_judgment") or synthesis.get("ruleboxJudgment")).get("sourceRuleIds") or [])
         + list(_first_value(synthesis, "portfolio_constraint_rule_ids", "portfolioConstraintRuleIds", fallback=[]) or [])
         + list(_first_value(synthesis, "execution_constraint_rule_ids", "executionConstraintRuleIds", fallback=[]) or [])
         + list(_first_value(synthesis, "data_quality_rule_ids", "dataQualityRuleIds", fallback=[]) or [])
@@ -347,6 +348,21 @@ def graph_candidate_packet(event: object) -> Dict[str, object]:
             ),
         ),
     }
+    management = _mapping(synthesis.get("management_decision") or synthesis.get("managementDecision"))
+    management_semantics = {
+        "status": str(management.get("status") or ""),
+        "authority": str(management.get("authority") or ""),
+        "forecastActionSelected": bool(management.get("forecastActionSelected")),
+        "orderAuthorized": bool(management.get("orderAuthorized")),
+        "responses": sorted([
+            {key: response.get(key) for key in (
+                "ruleId", "code", "objective", "boundFacts", "observedValue", "targetValue",
+                "releaseCondition", "blockedActions", "calculation", "adjustmentScenario",
+            ) if key in response}
+            for response in management.get("responses") or [] if isinstance(response, Mapping)
+        ], key=canonical_json),
+    } if management else {}
+    semantic_decision_facts["managementDecision"] = management_semantics
     packet = {
         "accountId": str(
             _event_field(event, "account_id", "")
@@ -411,6 +427,7 @@ def graph_candidate_packet(event: object) -> Dict[str, object]:
         "relationSlots": relation_slots,
         "evidenceIds": list(evidence_ids),
         "semanticFactsHash": payload_hash(semantic_decision_facts),
+        "managementDecision": management_semantics,
         "factsHash": payload_hash(
             _mapping(context.get("facts"))
             or {
@@ -598,8 +615,9 @@ def independent_reasoning_outcome_packet(job: Mapping[str, object]) -> Dict[str,
     """Adapt one durable independent V2 result to the shared comparison contract.
 
     The independent queue intentionally stores compact projection receipts. Its
-    immutable source boundaries therefore own fact parity, while candidate and
-    rule packets own decision parity. Graph-local ABox and inference IDs are
+    semantic ABox manifests therefore own fact parity, while candidate and
+    rule packets own decision parity. Source-event equality alone cannot prove
+    equal inputs. Graph-local ABox and inference IDs are
     provenance and must not create false differences between isolated stores.
     """
 
@@ -659,15 +677,8 @@ def independent_reasoning_outcome_packet(job: Mapping[str, object]) -> Dict[str,
         _mapping(result.get("projection_results") or result.get("projectionResults")).items()
     ):
         receipt = projection_receipt_packet(str(account_id or ""), _mapping(projection))
-        receipt.update({
-            "comparisonScopeFingerprint": source_scope_fingerprint,
-            "comparisonScopeCount": len(scope_manifest),
-            "comparisonScopeManifest": dict(scope_manifest),
-            "persistedComparisonScopeFingerprint": source_scope_fingerprint,
-            "persistedComparisonScopeCount": len(scope_manifest),
-            "materialFingerprint": source_scope_fingerprint,
-            "targetSymbols": symbols,
-        })
+        receipt["sourceBoundaryFingerprint"] = source_scope_fingerprint
+        receipt["targetSymbols"] = symbols
         projections.append(receipt)
     decision_syntheses = [
         _mapping(item)
@@ -1014,6 +1025,18 @@ def compare_engine_outcomes(
         if left_signatures != right_signatures:
             differences.append({
                 "subjectKey": key,
+                "changedFields": {
+                    field: {
+                        "baseline": [item.get(field) for item in left],
+                        "candidate": [item.get(field) for item in right],
+                    }
+                    for field in (
+                        "candidateAction", "selectedRuleId", "decisionStage", "decisionEffect",
+                        "actionGroup", "judgementBlocked", "reviewLevel", "dataState",
+                        "validationState", "ruleIds", "relationSlots", "semanticFactsHash", "managementDecision",
+                    )
+                    if [item.get(field) for item in left] != [item.get(field) for item in right]
+                },
                 "baseline": [
                     {
                         field: item.get(field)

@@ -1,4 +1,6 @@
 import unittest
+import hashlib
+import json
 from contextlib import contextmanager
 from copy import deepcopy
 from datetime import datetime, timezone
@@ -42,6 +44,15 @@ def descriptor(status="candidate"):
     )
 
 
+def input_scopes(symbol="NVDA", value="same-facts"):
+    manifest = {"symbol:" + symbol + ":market": value}
+    fingerprint = hashlib.sha256(json.dumps(manifest, ensure_ascii=False, sort_keys=True,
+                                             separators=(",", ":")).encode()).hexdigest()
+    scope = {"fingerprint": fingerprint, "scopeCount": len(manifest),
+             "scopeManifest": manifest, "targetSymbols": [symbol]}
+    return {"comparisonScope": deepcopy(scope), "persistedComparisonScope": deepcopy(scope)}
+
+
 class ReasoningEngineVersionTests(unittest.TestCase):
     def _assert_independent_results_feed_the_comparison_ledger(self):
         source_event = {
@@ -58,6 +69,7 @@ class ReasoningEngineVersionTests(unittest.TestCase):
             "evaluated_symbols": ["NVDA"],
             "projection_results": {
                 "acct": {
+                    **input_scopes(),
                     "status": "ok",
                     "saved": True,
                     "nativeTypeDbReasoningCompleted": True,
@@ -296,8 +308,11 @@ class ReasoningEngineVersionTests(unittest.TestCase):
                 "sourceEventId": "event:NVDA:1", "baseline": baseline_job, "candidate": changed,
             }]):
                 result = IndependentReasoningComparisonService(Jobs(), Comparisons(), Registry()).reconcile()
-                self.assertEqual(0, result["recordedCount"])
+                self.assertEqual(1, result["recordedCount"])
                 self.assertEqual(1, result["rejectedPairCount"])
+                self.assertEqual(0, result["eligibleComparisonCount"])
+                self.assertEqual(1, result["excludedComparisonCount"])
+                self.assertEqual("incomparable-inputs", result["comparisons"][0]["status"])
 
         class LockConnection:
             def __init__(self, acquired=1):
@@ -394,7 +409,7 @@ class ReasoningEngineVersionTests(unittest.TestCase):
         self.assertIn("comparison_contract_version", insert_sql)
         self.assertIn("job:active", insert_params)
         self.assertIn("job:candidate", insert_params)
-        self.assertIn("reasoning-comparison-input-v4", insert_params)
+        self.assertIn("reasoning-comparison-input-v5", insert_params)
 
     def test_comparison_rejects_different_temporal_feature_inputs(self):
         def job(job_id, snapshot_id, payload_hash, backend_id, windows_hash):
@@ -413,6 +428,7 @@ class ReasoningEngineVersionTests(unittest.TestCase):
                 "result": {
                     "projection_results": {
                         "default": {
+                            **input_scopes("MSTR"),
                             "temporalFeatureInput": {
                                 "snapshotId": snapshot_id,
                                 "payloadHash": payload_hash,
@@ -448,6 +464,7 @@ class ReasoningEngineVersionTests(unittest.TestCase):
                     "payload": {"accountIds": ["default"], "symbols": ["MSTR"]}
                 },
                 "result": {"projection_results": {"default": {
+                    **input_scopes("MSTR"),
                     "temporalFeatureInput": {
                         "snapshotId": snapshot_id,
                         "payloadHash": payload_hash,
@@ -467,6 +484,66 @@ class ReasoningEngineVersionTests(unittest.TestCase):
 
         self.assertTrue(result["eligible"])
         self.assertTrue(result["checks"]["temporalFeatureSemantics"])
+        self.assertTrue(result["checks"]["aboxInputs"])
+        baseline = job("baseline", "temporal:quest", "quest-envelope", "questdb-shadow")
+        candidate = job("candidate", "temporal:mysql", "mysql-envelope", "mysql-primary")
+        for field, value in (("comparisonScope", input_scopes("MSTR", "changed-facts")["comparisonScope"]),
+                             ("persistedComparisonScope", {})):
+            changed = deepcopy(candidate)
+            changed["result"]["projection_results"]["default"][field] = value
+            self.assertFalse(comparison_input_contract(baseline, changed)["eligible"])
+        tampered = deepcopy(candidate)
+        tampered["result"]["projection_results"]["default"]["comparisonScope"]["scopeManifest"]["other"] = "unverified"
+        self.assertFalse(comparison_input_contract(baseline, tampered)["eligible"])
+        wrong_account = deepcopy(candidate)
+        wrong_account["result"]["projection_results"]["another-account"] = wrong_account["result"]["projection_results"].pop("default")
+        self.assertFalse(comparison_input_contract(baseline, wrong_account)["eligible"])
+        wrong_subject = deepcopy(candidate)
+        wrong_subject["result"]["projection_results"]["default"]["persistedComparisonScope"]["targetSymbols"] = ["AAPL"]
+        self.assertFalse(comparison_input_contract(baseline, wrong_subject)["eligible"])
+
+    def test_management_response_changes_are_visible_in_independent_comparisons(self):
+        from digital_twin.modules.reasoning.domain.reasoning_shadow import graph_candidate_packet
+
+        synthesis = {"account_id": "acct", "symbol": "MSTR", "graph_candidate_action": "NO_ACTION",
+                     "rulebox_judgment": {"sourceRuleIds": ["policy:concentration"]}}
+        baseline = graph_candidate_packet({"metadata": {"v2DecisionSynthesis": synthesis}})
+        response = {"ruleId": "policy:concentration", "code": "RESTORE_POSITION_LIMIT",
+                    "objective": {"field": "positionAccountWeight", "operator": "<=", "valueField": "limit"},
+                    "observedValue": 80, "targetValue": 45,
+                    "releaseCondition": "same-source-position-weight-within-limit"}
+        upgraded = {**synthesis, "management_decision": {"status": "POLICY_RESPONSE_SELECTED",
+                    "authority": "typedb-materialized-account-policy", "decisionId": "storage-id:1", "responses": [response]}}
+        candidate = graph_candidate_packet({"metadata": {"v2DecisionSynthesis": upgraded}})
+        self.assertNotEqual(baseline["decisionSignature"], candidate["decisionSignature"])
+        self.assertEqual(["policy:concentration"], baseline["ruleIds"])
+        self.assertEqual(45, candidate["managementDecision"]["responses"][0]["targetValue"])
+        upgraded["management_decision"]["decisionId"] = "storage-id:other-graph"
+        self.assertEqual(candidate["decisionSignature"], graph_candidate_packet(
+            {"metadata": {"v2DecisionSynthesis": upgraded}})["decisionSignature"])
+        upgraded["management_decision"]["responses"][0]["targetValue"] = 40
+        self.assertNotEqual(candidate["decisionSignature"], graph_candidate_packet(
+            {"metadata": {"v2DecisionSynthesis": upgraded}})["decisionSignature"])
+
+    def test_delivery_diagnostics_distinguish_delay_candidate_rollout_and_subject_abstention(self):
+        from digital_twin.modules.reasoning.domain.reasoning_delivery_diagnostics import reasoning_delivery_diagnostics
+
+        state = {"status": "degraded", "reasons": ["reasoning-queue-critical-age"],
+                 "control": {"deliveryDeploymentId": "active", "candidateDeploymentId": "candidate"},
+                 "queues": {"delivery": {"pendingCount": 4, "oldestPendingAgeSeconds": 755,
+                             "oldestPendingSourceAt": "2026-10-18T01:00:00Z"}},
+                 "deliveryDeployment": {"lastRun": {"status": "ok", "traceComplete": True,
+                                         "candidateEventCount": 0, "symbols": ["NVDA"]}}}
+        result = reasoning_delivery_diagnostics(state)
+        self.assertEqual(["reasoning-delayed", "candidate-not-delivery", "last-run-no-candidate"],
+                         [row["code"] for row in result["checks"]])
+        self.assertIn("NVDA", result["checks"][-1]["detail"])
+        state["deliveryDeployment"]["lastRun"].pop("candidateEventCount")
+        self.assertNotIn("last-run-no-candidate", [row["code"] for row in reasoning_delivery_diagnostics(state)["checks"]])
+        state["queues"]["delivery"] = {"pendingCount": 0, "awaitingSourceCount": 2}
+        state["reasons"] = []
+        self.assertIn("awaiting-source", [row["code"] for row in reasoning_delivery_diagnostics(state)["checks"]])
+        self.assertNotIn("customerDeliveryVerified", result)
 
     def test_release_artifact_restore_preserves_frozen_authored_rule_payload(self):
         from unittest.mock import MagicMock
@@ -1680,8 +1757,9 @@ class ReasoningEngineVersionTests(unittest.TestCase):
                 }
 
         class Comparisons:
-            def __init__(self, sample_count=5):
+            def __init__(self, sample_count=5, status="equivalent"):
                 self.sample_count = sample_count
+                self.status = status
 
             def summary(self, _deployment_id, **_kwargs):
                 return {
@@ -1690,7 +1768,7 @@ class ReasoningEngineVersionTests(unittest.TestCase):
                     "minimumRuleSlotCoveragePct": 100.0 if self.sample_count else 0.0,
                     "unexplainedDecisionDifferenceCount": 0,
                     "shadowDeliveryCount": 0,
-                    "statusCounts": {"equivalent": self.sample_count},
+                    "statusCounts": {self.status: self.sample_count},
                     "latestComparisonAt": (
                         "2099-01-01T00:00:00Z" if self.sample_count else ""
                     ),
@@ -1717,6 +1795,12 @@ class ReasoningEngineVersionTests(unittest.TestCase):
         ).promotion_readiness("ontology-v2-shadow")
         self.assertTrue(governed["ready"])
         self.assertEqual(5, governed["comparisonEvidence"]["sampleCount"])
+        evidence_gap = ReasoningEnginePlatformService(
+            Registry(), {"reasoningEngineV2IndependentEnabled": "1"},
+            independent_job_store=Jobs(), comparison_store=Comparisons(status="reasoning-parity-gap"),
+        ).promotion_readiness("ontology-v2-shadow")
+        self.assertFalse(evidence_gap["ready"])
+        self.assertIn("independent-evidence-parity-incomplete", evidence_gap["blockers"])
 
         missing_comparisons = ReasoningEnginePlatformService(
             Registry(),

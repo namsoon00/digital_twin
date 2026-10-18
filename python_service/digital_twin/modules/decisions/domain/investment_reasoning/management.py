@@ -7,6 +7,7 @@ policy objective; they grant neither a forecast nor an order permission.
 """
 
 from copy import deepcopy
+from collections.abc import Mapping
 import hashlib
 import json
 import math
@@ -89,3 +90,51 @@ def management_decision_from_relation(account_id, relation):
     result["decisionId"] = "management-decision:" + hashlib.sha256(
         json.dumps(result, ensure_ascii=True, sort_keys=True, separators=(",", ":")).encode()).hexdigest()[:32]
     return result
+
+
+def verified_management_decision(context):
+    """Bind a captured policy decision to its original native proof.
+
+    Candidate construction has a synthesis before a subject case exists.
+    Delivery has the persisted (possibly compact) subject case. Neither stage
+    may create a response from a flag, a raw weight or another generation.
+    """
+    def mapping(value):
+        return dict(value) if isinstance(value, Mapping) else {}
+
+    payload = mapping(context)
+    relation = mapping(payload.get("ontologyRelationContext")) or mapping(
+        mapping(payload.get("metadata")).get("ontologyRelationContext"))
+    case = mapping(payload.get("investmentSubjectDecisionCase"))
+    syntheses = [mapping(case.get("synthesis")), mapping(payload.get("v2DecisionSynthesis"))]
+    captured = [mapping(case.get("managementDecision")), *[
+        mapping(s.get("management_decision") or s.get("managementDecision")) for s in syntheses]]
+    captured = [value for value in captured if value]
+    if not captured:
+        return {}
+    account = captured[0].get("accountId")
+    native = management_decision_from_relation(account, relation)
+    if not native or any(value != native for value in captured):
+        return {}
+    fields = {"accountId": "account_id", "symbol": "symbol", "worldId": "world_id",
+              "inferenceGenerationId": "inference_generation_id", "sourceAboxSnapshotId": "source_abox_snapshot_id"}
+    for source in [case, *syntheses]:
+        if not source:
+            continue
+        for key, alias in fields.items():
+            values = [source.get(key), source.get(alias)]
+            if key != "worldId" and not any(values):
+                return {}
+            if any(value and value != native[key] for value in values):
+                return {}
+    if not case and not any(syntheses):
+        return {}
+    if payload.get("accountId") and payload["accountId"] != account:
+        return {}
+    if payload.get("symbol") and payload["symbol"] != native["symbol"]:
+        return {}
+    if case and (not case.get("subjectCaseId") or (
+            payload.get("investmentSubjectDecisionCaseId")
+            and payload["investmentSubjectDecisionCaseId"] != case["subjectCaseId"])):
+        return {}
+    return native

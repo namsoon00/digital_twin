@@ -6,7 +6,7 @@ from typing import Dict, Mapping
 
 from digital_twin.modules.notifications.domain.context_observation_notifications import context_observation_delivery_decision, review_observation_delivery_decision, typedb_context_observation_contract, typedb_review_observation_contract
 from digital_twin.modules.model_registry.contracts import has_material_delta, relation_lifecycle_transition_contract
-from digital_twin.modules.notifications.domain.relation_change import relation_change_authority
+from digital_twin.modules.notifications.domain.relation_change import relation_change_authority, relation_change_evidence
 from digital_twin.modules.decisions.contracts import investment_decision_actionability
 from digital_twin.modules.decisions.contracts import DecisionDelta
 from digital_twin.modules.decisions.contracts import reasoning_disposition_delivery
@@ -236,7 +236,27 @@ def verified_typedb_direct_delivery_authorization(
         })
     )
     verified_relation = bool("typedb-relation-transition" in authorization_sources and relation_change_authority(payload))
-    if not common_authorization or not (verified_trigger or verified_stage_source or verified_relation):
+    verified_policy = False
+    if observation.get("decisionEligibility") == "management-policy":
+        # A policy-only observation has no hypothesis lifecycle. Recompute
+        # its purpose-bound event against the receipt loaded by admission;
+        # an old upstream `send` flag must not reopen an unchanged response.
+        packet = relation_change_evidence(payload, _mapping(payload.get("relationChangeEvidence")).get("previous"))
+        case = _mapping(payload.get("investmentSubjectDecisionCase"))
+        candidate = _mapping(case.get("candidateSet")) or case
+        scope = ("accountId", "symbol", "worldId", "inferenceGenerationId", "sourceAboxSnapshotId")
+        verified_policy = bool(
+            "typedb-relation-transition" in authorization_sources
+            and packet["current"].get("proofIdentityVerified")
+            and case.get("subjectCaseId") == dispatch.get("subjectCaseId")
+            and case.get("inferenceGenerationId") == dispatch.get("inferenceGenerationId")
+            and (candidate.get("fingerprint") or candidate.get("candidateFingerprint")) == dispatch.get("candidateFingerprint")
+            and any(event.get("purpose") == "management-policy" and event.get("eligible")
+                    and all(event.get(key) == observation.get(key) for key in scope)
+                    and set(event.get("sourceRuleIds") or []).issubset(observation.get("relationIds") or [])
+                    for event in packet["customerEvents"])
+        )
+    if not common_authorization or not (verified_trigger or verified_stage_source or verified_relation or verified_policy):
         return {}
 
     matched_conditions = [
@@ -252,9 +272,10 @@ def verified_typedb_direct_delivery_authorization(
     reasons = [_text(item) for item in trigger.get("reasons") or [] if _text(item)]
     return {
         "status": "authorized",
-        "reason": _text(semantic.get("reason")) if verified_relation else reasons[0] if reasons else _text(semantic.get("reason")),
+        "reason": _text(semantic.get("reason")) if verified_relation or verified_policy else reasons[0] if reasons else _text(semantic.get("reason")),
         "cadenceTier": "immediate" if immediate else "material",
         "stageObservation": stage_observation,
+        **({"managementPolicyObservation": True} if verified_policy else {}),
         "matchedConditions": matched_conditions,
         "materialRevisionKeys": revision_keys,
     }

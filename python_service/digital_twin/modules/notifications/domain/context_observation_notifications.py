@@ -10,6 +10,7 @@ from digital_twin.modules.model_registry.contracts import has_material_delta, re
 from digital_twin.modules.decisions.contracts import is_graph_backed_relation_context
 from digital_twin.modules.notifications.domain.follow_up_transition_evidence import follow_up_transition_evidence
 from digital_twin.modules.notifications.domain.relation_change import relation_change_evidence, relation_change_snapshot
+from digital_twin.modules.notifications.domain.management_observation import management_observation_contract, management_only_observation_requested
 
 
 CONTEXT_OBSERVATION_NOTIFICATION_VERSION = "typedb-context-observation-notification-v2"
@@ -36,11 +37,11 @@ def _text(value: object) -> str:
     return str(value or "").strip()
 
 
-def _delivery_policy_block_reason(payload: Mapping[str, object]) -> str:
+def _delivery_policy_block_reason(payload: Mapping[str, object], *, predecision_cadence_is_binding=True) -> str:
     cadence = _mapping(payload.get("preDecisionDeliveryCadence")) or _mapping(
         _mapping(payload.get("metadata")).get("preDecisionDeliveryCadence")
     )
-    if cadence and cadence.get("eligible") is False:
+    if predecision_cadence_is_binding and cadence and cadence.get("eligible") is False:
         minutes = _text(cadence.get("minutes"))
         return (
             "같은 종목의 추론 알림 간격"
@@ -343,6 +344,12 @@ def typedb_context_observation_contract(value: object) -> Dict[str, object]:
             "inferenceGenerationId": generation_id,
             "aiHandoffPending": stage_observation.get("independent") is not True,
         }
+    if management_only_observation_requested(payload):
+        management = management_observation_contract(payload)
+        if not management:
+            return {}  # A broken policy proof cannot fall back to a generic notice.
+        return {"schemaVersion": CONTEXT_OBSERVATION_NOTIFICATION_VERSION, "status": "eligible",
+                "decisionMode": CONTEXT_OBSERVATION_DECISION_MODE, **management}
     # Purpose-bound notices can describe a constraint or a registered outcome
     # without inventing a market hypothesis. Publication authority is unchanged.
     publication = _mapping(payload.get("typedbObservationPublication")) or _mapping(payload.get("decisionPublication"))
@@ -773,7 +780,10 @@ def context_observation_delivery_decision(value: object) -> Dict[str, object]:
             "suppressionReason": "missing_context_observation_publication",
         })
         return decision
-    delivery_policy_block_reason = _delivery_policy_block_reason(payload)
+    # Policy-only subjects reach the receipt-locked admission before cooldown
+    # is decided. The candidate builder's advisory cadence cannot archive them.
+    delivery_policy_block_reason = _delivery_policy_block_reason(
+        payload, predecision_cadence_is_binding=contract.get("decisionEligibility") != "management-policy")
     if delivery_policy_block_reason:
         decision.update({
             "reason": delivery_policy_block_reason,

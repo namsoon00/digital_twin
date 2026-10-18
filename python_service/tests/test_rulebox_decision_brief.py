@@ -352,6 +352,11 @@ class NativeManagementResponseTests(unittest.TestCase):
         return ctx
 
     def test_policy_decision_survives_unqualified_forecasts_and_persists_with_synthesis(self):
+        checks = ManagementObservationFlowChecks()
+        for name in sorted(n for n in dir(checks) if n.startswith('assert_policy_')
+                           or n.startswith(('assert_unusable_', 'assert_captured_', 'assert_successful_'))):
+            with self.subTest(management_flow=name):
+                getattr(checks, name)()
         from digital_twin.modules.decisions.contracts import decision_synthesis_from_relation_context
         from digital_twin.modules.decisions.domain.investment_reasoning.contracts import DecisionSynthesis
         ctx = self.response_context()
@@ -634,6 +639,293 @@ class CompactRuleBoxJudgmentTests(unittest.TestCase):
         self.assertEqual({}, judgment['managementDecision'], 'a foreign persisted response cannot be used by the legacy adapter')
         relation['graphStoreInference']['inferenceGenerationId'] = 'other-generation'
         self.assertEqual({}, decision_synthesis_from_relation_context(ctx['accountId'], relation).rulebox_judgment)
+
+
+def management_only_fixture():
+    """Native policy proof with no price hypothesis or lifecycle transition."""
+    from digital_twin.modules.model_registry.contracts import default_graph_inference_rules
+    ctx = NativeManagementResponseTests().response_context()
+    rel = ctx['ontologyRelationContext']
+    authored = next(r for r in default_graph_inference_rules() if r.rule_id == 'graph.position.concentration.guard.v1')
+    policy = deepcopy(rel['matchedRules'][0])
+    policy.update(rule_id=authored.rule_id, ruleId=authored.rule_id, matched=True,
+                  relation_type='BLOCKS_ACTION', decision_effect='block', blockedActions=['ADD'],
+                  knowledgeBasis=authored.to_dict()['knowledge_basis'],
+                  claimContract=authored.to_dict()['claim_contract'])
+    conditions = [{'conditionId': 'position-over-policy', 'field': 'positionAccountWeight',
+                   'operator': '>', 'observedValue': 78.45, 'expectedValue': {'field': 'strategyMaxPositionWeightPct'},
+                   'matchedByTypeDB': True, 'matched': True, 'judgementEvidenceUsable': True,
+                   'freshnessStatus': 'fresh', 'observedAt': '2026-10-02T01:10:00Z'}]
+    policy['matchedConditions'] = conditions
+    rel.update(activeRules=[deepcopy(policy)], matchedRules=[policy], referenceRules=[],
+               hypothesisSet={'hypotheses': []}, hypothesisLifecycle={},
+               decision={'basis': 'typedbInferenceBox'},
+               actionEnvelope={'blockedActions': ['ADD'], 'allowedActions': [], 'inferenceEligibilityAssessments': [{
+                   'ruleId': authored.rule_id, 'status': 'eligible', 'freshnessStatus': 'fresh',
+                   'evidenceUsableForJudgement': True}]})
+    rel.pop('investmentBrain', None)
+    rel['graphStoreInference'].update(traces=[deepcopy(policy)], relations=[deepcopy(policy)])
+    rel['facts'].update(source='holding', isWatchlist=False, market='US', currency='USD')
+    rel['subject'].update(market='US', symbol='MSTR', name='스트래티지')
+    return {'accountId': ctx['accountId'], 'symbol': 'MSTR', 'displayTarget': '스트래티지 / MSTR',
+            'ontologyRelationContext': rel}
+
+
+class ManagementObservationFlowChecks(unittest.TestCase):
+    def engine_run(self, *, validation_only=False, delivery_authorized=True, context=None):
+        from dataclasses import replace
+        from types import SimpleNamespace
+        from unittest.mock import Mock, patch
+        from test_independent_reasoning_engine import descriptor, source_event
+        from test_investment_insight_dispatch_service import FakeIngress, FakeNotificationQueue
+        from digital_twin.modules.decisions.application.investment_insight_dispatch_service import InvestmentInsightDispatchService
+        from digital_twin.modules.notifications.application.notification.admission import NotificationAdmissionPolicy
+        from digital_twin.modules.notifications.domain.notification_rules import default_notification_rule
+        from digital_twin.modules.portfolio.domain.portfolio import AccountSnapshot, PortfolioSummary, Position
+        from digital_twin.modules.reasoning.application.independent_reasoning_engine import V2ReasoningEngine
+        from digital_twin.modules.reasoning.application.investment_reasoning.decision_synthesis import V2GraphDecisionCandidateBuilder
+        from digital_twin.modules.reasoning.application.investment_reasoning.orchestrator import InvestmentReasoningOrchestrator
+        from digital_twin.modules.reasoning.domain.independent_reasoning import independent_reasoning_request
+
+        class Repository:
+            def __init__(self):
+                self.items = {}
+            def save(self, case):
+                self.items[case.case_id] = case
+                return case
+            def get(self, case_id):
+                return self.items.get(case_id)
+            def get_by_request(self, request_id):
+                return next((c for c in self.items.values() if c.request_id == request_id), None)
+
+        class AdmittedQueue(FakeNotificationQueue):
+            def enqueue(self, job):
+                policy = NotificationAdmissionPolicy()
+                rule = default_notification_rule('investmentInsight')
+                job.context['_relationDeliveredSnapshot'] = {}
+                decision = policy.evaluate(job, rule, policy.prepare(job, rule))
+                self.admission = policy.apply_result(job, decision)
+                self.job = job
+                return super().enqueue(job) if self.admission.accepted else False
+
+        ctx = context or management_only_fixture()
+        rel = ctx['ontologyRelationContext']
+        account = ctx['accountId']
+        snapshot = AccountSnapshot(account, '기본', 'fixture', 'live', 'ok', '2026-10-02T01:10:00Z',
+                                   PortfolioSummary(100000, 78450, 21550, [], [], 78.45),
+                                   positions=[Position('MSTR', '스트래티지', market='US', currency='USD',
+                                                       quantity=203, current_price=139.26,
+                                                       source_as_of='2026-10-02T01:10:00Z',
+                                                       source_fetched_at='2026-10-02T01:10:00Z', quote_source='Fixture feed')])
+        projection = {account: {'status': 'ok', 'inferenceBox': {
+            **deepcopy(rel['graphStoreInference']), 'generationAligned': True, 'nativeTypeDbReasoningCompleted': True}}}
+        queue, ai = AdmittedQueue(), Mock()
+        orchestrator = InvestmentReasoningOrchestrator(Repository())
+        service = InvestmentInsightDispatchService(FakeIngress(), queue, ai, orchestrator, legacy_ai_handoff_enabled=False)
+        engine = V2ReasoningEngine(replace(descriptor(), deployment_id='management:test', status='active'),
+            SimpleNamespace(assemble=lambda _: {'status': 'ready', 'preflight': {'ready': True},
+                                                'snapshots': [snapshot], 'previousByAccount': {}}),
+            SimpleNamespace(execute=lambda _request, _snapshots: projection),
+            V2GraphDecisionCandidateBuilder({}, SimpleNamespace(sent={})),
+            delivery_authorized_provider=lambda: delivery_authorized, reasoning_orchestrator=orchestrator,
+            insight_dispatch_service=service)
+        request = independent_reasoning_request('management:test', [source_event('MSTR', [account])])
+        if validation_only:
+            request = replace(request, context={**request.context, 'validationOnly': True})
+        with patch('digital_twin.modules.reasoning.application.investment_reasoning.decision_synthesis.relation_contexts_from_snapshot',
+                   return_value={'MSTR': rel}):
+            result = engine.execute(request)
+        return result, queue, ai, orchestrator
+
+    def candidate(self, context=None):
+        from types import SimpleNamespace
+        from digital_twin.modules.decisions.contracts import decision_synthesis_from_relation_context
+        from digital_twin.modules.reasoning.application.investment_reasoning.decision_synthesis import V2GraphDecisionCandidateBuilder
+        ctx = context or management_only_fixture()
+        synthesis = decision_synthesis_from_relation_context(ctx['accountId'], ctx['ontologyRelationContext'])
+        builder = V2GraphDecisionCandidateBuilder({}, SimpleNamespace(sent={}))
+        snapshot = SimpleNamespace(account_id=ctx['accountId'], account_label='기본', positions=[], watchlist=[],
+                                   generated_at='2026-10-02T01:10:00Z', metadata={})
+        return ctx, synthesis, builder._base_event(snapshot, ctx['ontologyRelationContext'], synthesis)
+
+    def assert_policy_only_native_response_creates_candidate_without_forecast_or_ai(self):
+        from digital_twin.modules.notifications.domain.context_observation_notifications import typedb_context_observation_contract
+        ctx, synthesis, event = self.candidate()
+        self.assertTrue(synthesis.management_decision)
+        self.assertEqual((), synthesis.eligible_hypothesis_ids)
+        self.assertEqual('NO_ACTION', synthesis.graph_candidate_action)
+        self.assertIsNotNone(event)
+        contract = typedb_context_observation_contract(event.metadata)
+        self.assertEqual('typedb-management-policy', contract['messageClass'])
+        self.assertFalse(event.metadata['requiresAiJudgement'])
+        self.assertEqual('WATCH', event.severity)
+        self.assertEqual('NO_ACTION', contract['action'])
+        self.assertFalse(synthesis.management_decision['orderAuthorized'])
+
+    def assert_unusable_or_unproven_policy_never_creates_candidate(self):
+        for variant in ('stale', 'foreign-world', 'missing-proof', 'missing-purpose', 'missing-response', 'unmatched'):
+            with self.subTest(variant=variant):
+                ctx = management_only_fixture()
+                rel = ctx['ontologyRelationContext']
+                if variant == 'stale':
+                    rel['actionEnvelope']['inferenceEligibilityAssessments'][0]['freshnessStatus'] = 'stale'
+                elif variant == 'foreign-world':
+                    rel['graphStoreInference']['worldId'] = 'other-world'
+                elif variant == 'missing-proof':
+                    rel['graphStoreInference'].update(traces=[], relations=[])
+                elif variant == 'missing-purpose':
+                    rel['matchedRules'][0]['claimContract'] = {}
+                elif variant == 'missing-response':
+                    rel['matchedRules'][0].pop('managementResponse')
+                else:
+                    rel['matchedRules'][0]['matched'] = False
+                self.assertIsNone(self.candidate(ctx)[2])
+
+    def assert_captured_policy_response_cannot_be_rebound_or_modified(self):
+        from digital_twin.modules.notifications.domain.context_observation_notifications import typedb_context_observation_contract
+        ctx, synthesis, event = self.candidate()
+        for variant in ('account', 'symbol', 'generation', 'abox', 'target', 'order', 'response-flag'):
+            with self.subTest(variant=variant):
+                payload = deepcopy(event.metadata)
+                saved = payload['v2DecisionSynthesis']
+                if variant in ('account', 'symbol', 'generation', 'abox'):
+                    saved[{'account': 'account_id', 'symbol': 'symbol', 'generation': 'inference_generation_id',
+                           'abox': 'source_abox_snapshot_id'}[variant]] = 'foreign'
+                elif variant == 'target':
+                    saved['management_decision']['responses'][0]['targetValue'] = 40
+                elif variant == 'order':
+                    saved['management_decision']['orderAuthorized'] = True
+                else:
+                    saved['management_decision'] = {'status': 'POLICY_RESPONSE_SELECTED'}
+                self.assertEqual({}, typedb_context_observation_contract(payload))
+
+    def assert_policy_only_result_reaches_admission_and_compact_transport_without_ai(self):
+        from digital_twin.modules.notifications.application.notification.rendering import NotificationRenderingService
+        from digital_twin.modules.notifications.domain.typedb_publication import independent_typedb_publication
+        result, queue, ai, orchestrator = self.engine_run()
+        self.assertEqual('ok', result.status)
+        self.assertEqual(1, len(result.candidate_events))
+        self.assertEqual('typedb-queued', result.insight_dispatch_status)
+        self.assertTrue(queue.admission.accepted, queue.job.last_error)
+        self.assertTrue(independent_typedb_publication(queue.job.context, account_id=queue.job.account_id))
+        ai.enqueue.assert_not_called()
+        case = orchestrator.subject_cases.for_batch(result.reasoning_case_id)[0]
+        self.assertEqual('OBSERVATION', case.publication.outcome_kind)
+        self.assertIsNone(case.final_decision)
+        self.assertEqual((), case.candidate_set.eligible_hypothesis_ids)
+        body = NotificationRenderingService().render(queue.job)
+        for phrase in ('계좌 비중을 설정 상한 이내로 조정', '78.45%', '45%', '알림 이유', '핵심 수치', '다음 확인'):
+            self.assertIn(phrase, body)
+        self.assertLessEqual(len([line for line in body.splitlines() if line.strip()]), 9)
+        self.assertTrue(queue.job.context['relationChangeEvidence']['eligible'])
+        damaged = deepcopy(queue.job.context)
+        damaged['investmentSubjectDecisionCase']['managementDecision']['responses'][0]['targetValue'] = 40
+        self.assertFalse(independent_typedb_publication(damaged, account_id=queue.job.account_id),
+                         'an invalid saved policy cannot fall back to a generic purpose observation')
+
+    def assert_policy_candidate_cannot_escape_shadow_or_validation_fence(self):
+        for validation, authorized, expected in ((True, True, 'validation-delivery-blocked'),
+                                                  (False, False, 'shadow-delivery-blocked')):
+            with self.subTest(validation=validation, authorized=authorized):
+                result, queue, ai, _ = self.engine_run(validation_only=validation, delivery_authorized=authorized)
+                self.assertEqual(1, len(result.candidate_events))
+                self.assertEqual(expected, result.insight_dispatch_status)
+                self.assertEqual({}, queue.jobs)
+                ai.enqueue.assert_not_called()
+
+    def assert_policy_only_candidate_survives_worker_gates_and_records_transport_receipt(self):
+        from datetime import datetime, timezone
+        from types import SimpleNamespace
+        from digital_twin.infrastructure.notifications import NotificationResult
+        from digital_twin.modules.notifications.application.notification_service import NotificationQueueRunner
+        result, queue, ai, _ = self.engine_run()
+        job, sent, receipts = queue.job, [], []
+        queue.pending = lambda limit=10: [job] if job.status == 'pending' else []
+        queue.mark_processing = lambda item: setattr(item, 'status', 'processing')
+        queue.mark_done = lambda item: setattr(item, 'status', 'done')
+        def fail(item, reason):
+            item.status, item.last_error = 'failed', reason
+        queue.mark_failed = queue.mark_suppressed = fail
+        queue.start_delivery_attempt = lambda *_: 'attempt:test-policy'
+        queue.complete_delivery_attempt = lambda _job, _attempt, delivered, **values: receipts.append(
+            {'delivered': delivered, **values})
+        def send(body):
+            sent.append(body)
+            return NotificationResult(True, 'Telegram', metadata={
+                'receiptVerified': True, 'destinationVerified': True, 'messageIds': ['policy-fixture']})
+        account = SimpleNamespace(account_id=job.account_id, quiet_hours_active=lambda *_: False)
+        runner = NotificationQueueRunner(queue, SimpleNamespace(load_all=lambda: [account]),
+            lambda _: SimpleNamespace(send=send),
+            settings={'investmentNotificationRoute': 'ai-control', 'dataFreshnessEnabled': '1'},
+            now_provider=lambda: datetime(2026, 10, 2, 1, 10, 10, tzinfo=timezone.utc))
+        self.assertEqual(1, runner.run_once())
+        self.assertEqual('done', job.status, (job.last_error, runner.last_run_details))
+        self.assertEqual(1, len(sent))
+        self.assertIn('계좌 비중을 설정 상한 이내로 조정', sent[0])
+        self.assertTrue(receipts[0]['delivered'])
+        self.assertTrue(receipts[0]['metadata']['receiptVerified'])
+        self.assertTrue(receipts[0]['metadata']['destinationVerified'])
+        ai.enqueue.assert_not_called()
+
+    def assert_successful_receipt_suppresses_same_policy_and_cadence_still_applies(self):
+        from digital_twin.modules.notifications.application.notification.admission import NotificationAdmissionPolicy
+        from digital_twin.modules.notifications.domain.notification_rules import default_notification_rule
+        from digital_twin.modules.notifications.domain.relation_follow_up import delivery_snapshot
+        from digital_twin.modules.notifications.domain.notification_ai_delivery import verified_typedb_direct_delivery_authorization
+        from digital_twin.modules.notifications.domain.notifications import NotificationJob
+        result, queue, _, _ = self.engine_run()
+        original = queue.job
+        previous = delivery_snapshot(original.context['relationChangeEvidence'], 'delivered-policy', original.account_id)
+        previous.update(receiptJobId='delivered-policy', deliveredAt='2026-10-02T01:11:00Z')
+        job = NotificationJob.create('관리 조건 재확인', account_id=original.account_id, message_type='investmentInsight',
+                                     context=deepcopy(original.context))
+        job.context['_relationDeliveredSnapshot'] = previous
+        policy, rule = NotificationAdmissionPolicy(), default_notification_rule('investmentInsight')
+        decision = policy.evaluate(job, rule, policy.prepare(job, rule))
+        self.assertFalse(policy.apply_result(job, decision).accepted)
+        self.assertFalse(job.context['relationChangeEvidence']['eligible'])
+        self.assertEqual({}, verified_typedb_direct_delivery_authorization(job.context))
+        # Even a valid new policy event respects the existing repeat interval.
+        job = NotificationJob.create('관리 기준 적용', account_id=original.account_id, message_type='investmentInsight',
+                                     context=deepcopy(original.context))
+        job.context['_relationDeliveredSnapshot'] = {}
+        decision = policy.evaluate(job, rule, policy.prepare(job, rule), recent_count=1, last_sent_at=job.created_at)
+        self.assertFalse(policy.apply_result(job, decision).accepted)
+        self.assertEqual('state_cooldown', job.context['deliverySuppressionReason'])
+
+    def assert_policy_target_change_reaches_locked_admission_despite_predecision_cadence(self):
+        from digital_twin.modules.notifications.application.notification.admission import NotificationAdmissionPolicy
+        from digital_twin.modules.notifications.domain.notification_rules import default_notification_rule
+        from digital_twin.modules.notifications.domain.relation_follow_up import delivery_snapshot
+        from digital_twin.modules.notifications.domain.context_observation_notifications import context_observation_delivery_decision
+        _, original, _, _ = self.engine_run()
+        previous = delivery_snapshot(original.job.context['relationChangeEvidence'], 'original-policy', original.job.account_id)
+        previous.update(receiptJobId='original-policy', deliveredAt='2026-10-02T01:11:00Z')
+        ctx = management_only_fixture()
+        rel = ctx['ontologyRelationContext']
+        rel['facts']['strategyMaxPositionWeightPct'] = 40
+        rel['matchedRules'][0]['managementResponse']['boundFacts']['strategyMaxPositionWeightPct'] = 40
+        _, newer, _, _ = self.engine_run(context=ctx)
+        job = newer.job
+        job.context['preDecisionDeliveryCadence'] = {'eligible': False, 'minutes': 360}
+        self.assertEqual('send', context_observation_delivery_decision(job.context)['decision'])
+        job.context['_relationDeliveredSnapshot'] = previous
+        policy, rule = NotificationAdmissionPolicy(), default_notification_rule('investmentInsight')
+        decision = policy.evaluate(job, rule, policy.prepare(job, rule))
+        self.assertTrue(policy.apply_result(job, decision).accepted, job.last_error)
+        self.assertTrue(any(e.get('managementResponseChanged') for e in job.context['relationChangeEvidence']['customerEvents']))
+        # Current numeric drift with the same objective is not a new policy.
+        ctx = management_only_fixture()
+        rel = ctx['ontologyRelationContext']
+        rel['facts']['positionAccountWeight'] = 80
+        rel['matchedRules'][0]['managementResponse']['boundFacts']['positionAccountWeight'] = 80
+        rel['matchedRules'][0]['matchedConditions'][0]['observedValue'] = 80
+        _, repeated, _, _ = self.engine_run(context=ctx)
+        job = repeated.job
+        job.context['_relationDeliveredSnapshot'] = previous
+        decision = policy.evaluate(job, rule, policy.prepare(job, rule))
+        self.assertFalse(policy.apply_result(job, decision).accepted)
+        self.assertFalse(job.context['relationChangeEvidence']['eligible'])
 
 
 if __name__ == "__main__":

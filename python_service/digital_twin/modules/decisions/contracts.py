@@ -10,6 +10,7 @@ _EXPORTS['DecisionEpisodeRepository'] = ('digital_twin.modules.decisions.domain.
 
 
 _EXPORTS.update({
+    'verified_management_decision': ('digital_twin.modules.decisions.domain.investment_reasoning.management', 'verified_management_decision'),
     'rulebox_decision_brief': ('digital_twin.modules.decisions.domain.rulebox_decision_brief', 'rulebox_decision_brief'),
     'resolved_rule_threshold': ('digital_twin.modules.decisions.domain.rulebox_decision_brief', 'resolved_rule_threshold'),
     'ABSTAIN': ('digital_twin.modules.decisions.domain.investment_reasoning.subject_case', 'ABSTAIN'),

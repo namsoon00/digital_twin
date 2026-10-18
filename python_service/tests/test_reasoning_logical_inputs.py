@@ -21,6 +21,15 @@ class ReasoningLogicalInputTests(unittest.TestCase):
                 OntologyRelation("stock:" + symbol, "portfolio:default", "HELD_IN", properties={"ontologyBox": "ABox", "symbol": symbol}) for symbol in ("NVDA", "MSFT")
             ] + [OntologyRelation("stock:" + symbol, "price-snapshot:" + symbol, "HAS_PRICE", properties={"ontologyBox": "ABox", "symbol": symbol}) for symbol in ("NVDA", "MSFT")]
               + [OntologyRelation("stock:NVDA", "fx:usdkrw", "EXPOSED_TO", properties={"ontologyBox": "ABox", "symbol": "NVDA"})])
+            if revision == 100:
+                value.entities.append(OntologyEntity("model-signal:MSFT", "MSFT model", "statistical-model-signal", {
+                    "ontologyBox": "ABox", "symbol": "MSFT", "signalType": "test-signal", "windowKey": "20d"}))
+                value.entities.append(OntologyEntity("statistical-model-release:msft", "MSFT model release", "statisticalmodelrelease", {
+                    "ontologyBox": "ABox", "modelId": "msft-test"}))
+                value.relations.append(OntologyRelation("stock:MSFT", "model-signal:MSFT", "HAS_MODEL_SIGNAL", properties={
+                    "ontologyBox": "ABox", "symbol": "MSFT"}))
+                value.relations.append(OntologyRelation("model-signal:MSFT", "statistical-model-release:msft", "HAS_MODEL_RELEASE", properties={
+                    "ontologyBox": "ABox", "symbol": "MSFT"}))
             apply_scoped_abox_identity(value, account_id="default")
             return value
 
@@ -28,6 +37,9 @@ class ReasoningLogicalInputTests(unittest.TestCase):
         active = {**deepcopy(old.worldview), "status": "ok"}
         expected = {row["scopeId"]: row for row in current.worldview["scopePlan"]}
         prior = {row["scopeId"]: row for row in active["scopePlan"]}
+        conservative = merge_target_scoped_abox_manifest(deepcopy(current), active, ["NVDA"], fact_slot_plan={"enabled": False}, source_graph_complete=True)
+        self.assertEqual("skipped-removed-scope-requires-full-refresh", conservative["status"])
+        current.worldview["targetScopeRetentionMode"] = "incremental-target-patch"
         result = merge_target_scoped_abox_manifest(current, active, ["NVDA"], fact_slot_plan={"enabled": False}, source_graph_complete=True)
         self.assertTrue(result["applied"], result)
         after = {row["scopeId"]: row for row in current.worldview["scopePlan"]}
@@ -41,6 +53,13 @@ class ReasoningLogicalInputTests(unittest.TestCase):
         untouched = [scope_id for scope_id, row in prior.items() if "price-snapshot:MSFT" in (row.get("nodeIds") or [])]
         self.assertEqual(1, len(untouched))
         self.assertEqual(prior[untouched[0]]["generationId"], after[untouched[0]]["generationId"])
+        omitted_nodes = {"model-signal:MSFT", "statistical-model-release:msft"}
+        omitted = [scope_id for scope_id, row in prior.items()
+                   if omitted_nodes.intersection(row.get("nodeIds") or [])]
+        self.assertEqual(omitted_nodes, set().union(*(set(prior[scope_id].get("nodeIds") or []) for scope_id in omitted)))
+        for scope_id in omitted:
+            self.assertEqual(prior[scope_id]["generationId"], after[scope_id]["generationId"])
+        self.assertEqual([], result["retiredScopeIds"])
 
     def plan(self):
         return [

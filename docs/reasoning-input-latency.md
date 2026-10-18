@@ -283,3 +283,22 @@ compaction and request/audit context retain this purpose; mixed/ordinary or
 unverified requests cannot enable it. Captured incoming **and actual persisted**
 V6 scope proofs remain mandatory. This is a new executable input contract, not a
 backfill of missing proofs, a rewritten old receipt or a reset validation clock.
+
+The first complete-dependency native pair had equal incoming, temporal and
+persisted inputs. Its migration review then exposed an encoding mismatch:
+the immutable registry hashes canonical ASCII-escaped JSON, whereas the reviewer
+had hashed unescaped Korean labels. Artifact verification now uses the registry's
+existing public fingerprint contract. Raw rule and comparison fingerprints keep
+their own contracts. Unicode fixtures reject both the wrong encoding contract
+and modified frozen content. Historical rejected receipts remain unchanged;
+the corrected executable receives a new release and fresh independent evidence.
+
+The complete raw source still has single-subject computed evidence. Two actual
+consecutive subjects fell back to a whole-manifest rewrite because unrelated
+computed scopes were absent. Paired validation now retains the ordinary
+incremental manifest purpose: omission is not a deletion event. Supplied shared
+and target dependencies are refreshed from the complete snapshot, while unrelated
+computed results retain their verified generations. Explicit full reconciliation
+and ordinary source-deletion contracts remain unchanged. Regression coverage
+reproduces the removed shared-link fallback, preserves the unrelated model and
+quote, and verifies refreshed account, macro and requested-price fragments.

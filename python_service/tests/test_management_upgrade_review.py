@@ -2,6 +2,7 @@ import unittest
 from copy import deepcopy
 
 from digital_twin.modules.model_registry.contracts import rulebox_rules_hash
+from digital_twin.modules.market_data.contracts import payload_fingerprint
 from digital_twin.modules.reasoning.domain.management_upgrade_review import review_management_upgrade, management_upgrade_review_valid
 from digital_twin.modules.reasoning.domain.reasoning_comparison_identity import comparison_input_contract
 from digital_twin.modules.reasoning.domain.reasoning_shadow import compare_engine_outcomes, independent_reasoning_outcome_packet, payload_hash, reasoning_comparison_summary
@@ -12,7 +13,7 @@ def fixtures():
     authored = {"code": "RESTORE_POSITION_LIMIT", "authority": "account-policy",
                 "objective": {"field": "positionAccountWeight", "operator": "<=", "valueField": "strategyMaxPositionWeightPct"},
                 "releaseCondition": "Fresh account weight returns within its limit", "calculation": "sale-proceeds-retained-in-account"}
-    rule = {"rule_id": "policy-limit", "version": "v1", "conditions": [{"field": "weight", "value": 45}],
+    rule = {"rule_id": "policy-limit", "label": "계좌 비중 상한", "version": "v1", "conditions": [{"field": "weight", "value": 45}],
             "claim_contract": {"claimType": "risk-invariant", "decisionAuthority": "guardrail-only", "ruleFingerprint": "old"},
             "domain_manifest": {"outcomeContract": {"criteria": []}},
             "derivations": [{"relation_type": "BLOCKS_ACTION", "blocked_actions": ["ADD"]}]}
@@ -24,13 +25,13 @@ def fixtures():
     right_artifact = {"rules": [updated], "tboxMetadata": deepcopy(left_artifact["tboxMetadata"]), "ruleboxFingerprint": rulebox_rules_hash([updated])}
     right_artifact["managementUpgradeContract"] = {
         "version": "management-rule-migration-v1", "baselineDeploymentId": "baseline",
-        "baselineArtifactFingerprint": payload_hash(left_artifact), "baselineRuleboxFingerprint": left_artifact["ruleboxFingerprint"],
+        "baselineArtifactFingerprint": payload_fingerprint(left_artifact), "baselineRuleboxFingerprint": left_artifact["ruleboxFingerprint"],
         "candidateRuleboxFingerprint": right_artifact["ruleboxFingerprint"], "rules": [{
             "ruleId": rule["rule_id"], "baselineRuleFingerprint": payload_hash(rule),
             "candidateRuleFingerprint": payload_hash(updated), "expectedResponseCode": authored["code"],
         }],
     }
-    records = [{"valid": True, "artifact": artifact, "artifactFingerprint": payload_hash(artifact),
+    records = [{"valid": True, "artifact": artifact, "artifactFingerprint": payload_fingerprint(artifact),
                 "ruleboxFingerprint": artifact["ruleboxFingerprint"]} for artifact in (left_artifact, right_artifact)]
     projection = {**input_scopes(), "status": "ok", "nativeTypeDbReasoningCompleted": True, "generationAligned": True,
                   "ruleboxExecution": {"typedbNativeRuleMatchedRuleIds": ["policy-limit"]},
@@ -73,6 +74,15 @@ class ManagementUpgradeReviewTests(unittest.TestCase):
         left, right, records = fixtures()
         raw = comparison(left, right)
         before = deepcopy(raw)
+        self.assertNotEqual(payload_hash(records[0]["artifact"]), records[0]["artifactFingerprint"])
+        for corrupt in ("wrong-canonical-contract", "changed-frozen-content"):
+            altered = deepcopy(records)
+            if corrupt == "wrong-canonical-contract":
+                altered[0]["artifactFingerprint"] = payload_hash(altered[0]["artifact"])
+            else:
+                altered[0]["artifact"]["rules"][0]["label"] += " 변경"
+            rejected = review_management_upgrade(left, right, raw, *altered)
+            self.assertEqual("frozen-artifact-unverified", rejected["reasonCode"])
         review = review_management_upgrade(left, right, raw, *records)
         self.assertEqual("explained-policy-upgrade", review["status"], review)
         self.assertEqual(before, raw)
@@ -107,7 +117,7 @@ class ManagementUpgradeReviewTests(unittest.TestCase):
                     right["result"]["decision_syntheses"][0]["graph_candidate_action"] = "REDUCE"
                 else:
                     right["result"]["decision_syntheses"][0]["allowed_actions"] = ["ADD"]
-                records[1]["artifactFingerprint"] = payload_hash(records[1]["artifact"])
+                records[1]["artifactFingerprint"] = payload_fingerprint(records[1]["artifact"])
                 raw = comparison(left, right)
                 review = review_management_upgrade(left, right, raw, *records)
                 self.assertEqual("not-explained", review["status"])

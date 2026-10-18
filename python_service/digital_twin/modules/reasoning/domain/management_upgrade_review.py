@@ -6,6 +6,7 @@ import json
 import math
 
 from digital_twin.modules.model_registry.contracts import rulebox_rules_hash
+from digital_twin.modules.market_data.contracts import payload_fingerprint
 from digital_twin.modules.reasoning.domain.reasoning_comparison_identity import COMPARISON_INPUT_CONTRACT_VERSION, comparison_input_contract
 
 
@@ -118,7 +119,7 @@ def review_management_upgrade(baseline_job, candidate_job, comparison, baseline_
                 or comparison.get("shadowDeliveryCount") != 0):
             raise ValueError("input-native-rule-or-delivery-parity-incomplete")
         for record in (baseline_record, candidate_record):
-            if record.get("valid") is not True or _hash(record.get("artifact")) != record.get("artifactFingerprint"):
+            if record.get("valid") is not True or payload_fingerprint(record.get("artifact")) != record.get("artifactFingerprint"):
                 raise ValueError("frozen-artifact-unverified")
             artifact = record["artifact"]
             if not (record.get("ruleboxFingerprint") == artifact.get("ruleboxFingerprint") == rulebox_rules_hash(artifact["rules"])):

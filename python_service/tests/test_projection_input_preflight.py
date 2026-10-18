@@ -67,6 +67,7 @@ class ProjectionInputPreflightTests(unittest.TestCase):
         context = {"validationOnly": True, "validationInputMode": "paired-complete-dependencies-v1"}
         result, kwargs, _ = self.assemble(ready_manifest(), context=context)
         self.assertEqual("full", result.graph_input["mode"])
+        self.assertEqual("incremental-target-patch", result.persistence_graph.worldview["targetScopeRetentionMode"])
         call = kwargs["_store"].build_projection_graph.call_args.kwargs
         self.assertFalse(call["target_scoped_input"])
         self.assertEqual(["AAPL"], call["target_symbols"])
@@ -74,6 +75,10 @@ class ProjectionInputPreflightTests(unittest.TestCase):
         for ordinary in ({}, {**context, "validationOnly": False}, {**context, "validationInputMode": "unverified"}):
             result, _, _ = self.assemble(ready_manifest(), context=ordinary)
             self.assertEqual("target-scoped", result.graph_input["mode"])
+        for ordinary in ({}, {**context, "validationOnly": False}, {**context, "validationInputMode": "unverified"}):
+            result, _, _ = self.assemble(context=ordinary)
+            self.assertEqual("full", result.graph_input["mode"])
+            self.assertNotIn("targetScopeRetentionMode", result.persistence_graph.worldview)
 
     def select(self, result, kwargs):
         return select_source(**kwargs, active_abox=result.active_abox, graph=result.graph,

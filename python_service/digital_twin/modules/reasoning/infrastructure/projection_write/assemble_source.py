@@ -102,14 +102,17 @@ def assemble_source(
     material_snapshot_id = projection_graph["materialSnapshotId"]
     scoped_identity = projection_graph["scopedIdentity"]
     runtime_stages.update(dict(projection_graph.get("runtimeStages") or {}))
-    if str(graph_assembly.get("inputMode") or "") == "target-scoped":
+    if str(graph_assembly.get("inputMode") or "") == "target-scoped" or complete_dependency_validation:
         # A target-scoped graph is an incremental patch by contract.
         # Missing scopes therefore mean "reuse the active generation".
         # Deletion requires an explicit scoped source fact or operator
         # rebuild; no timer may expand this request to the whole world.
         # This avoids turning one-symbol mailbox work into a complete
         # manifest rewrite while preserving explicit deletion checks
-        # on the full projection path.
+        # on the full projection path. Paired validation also computes only
+        # its requested subject: complete raw dependencies do not give an
+        # omitted, unrelated computation deletion meaning. Supplied shared
+        # and target facts still pass the normal complete-source merge.
         persistence_graph.worldview["targetScopeRetentionMode"] = (
             "incremental-target-patch"
         )

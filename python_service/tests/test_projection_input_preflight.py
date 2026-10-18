@@ -34,7 +34,7 @@ class ProjectionInputPreflightTests(unittest.TestCase):
             with self.subTest(scenario=scenario.__name__):
                 scenario()
 
-    def assemble(self, manifest=None, fresh=False, targets=None, eligible=True):
+    def assemble(self, manifest=None, fresh=False, targets=None, eligible=True, context=None):
         snapshot = object()
         events = []
 
@@ -56,12 +56,24 @@ class ProjectionInputPreflightTests(unittest.TestCase):
             world_partitioned_reasoning_enabled=lambda: True, build_projection_graph=Mock(side_effect=build),
             target_scoped_patch_targets=Mock(return_value={"eligible": eligible, "fallbackReason": "fixture-ineligible"}),
             store_projection_result=Mock())
-        kwargs = {"_store": store, "compact_reasoning_context": {}, "emit_progress": Mock(),
+        kwargs = {"_store": store, "compact_reasoning_context": context or {}, "emit_progress": Mock(),
                   "market_world_context": object(), "portfolio_world_context": SimpleNamespace(world_id="world:fixture"),
                   "runtime_stages": {}, "shared_premise_proof": {}, "snapshot": snapshot,
                   "target_symbols": targets or ["AAPL"]}
         result = assemble_source(**kwargs, fresh_candidate_rebuild=fresh, projection_run=None)
         return result, kwargs, events
+
+    def test_paired_validation_reads_complete_facts_but_keeps_computation_on_the_requested_subject(self):
+        context = {"validationOnly": True, "validationInputMode": "paired-complete-dependencies-v1"}
+        result, kwargs, _ = self.assemble(ready_manifest(), context=context)
+        self.assertEqual("full", result.graph_input["mode"])
+        call = kwargs["_store"].build_projection_graph.call_args.kwargs
+        self.assertFalse(call["target_scoped_input"])
+        self.assertEqual(["AAPL"], call["target_symbols"])
+        self.assertEqual(["AAPL"], call["reasoning_context"]["projectionComputationTargetSymbols"])
+        for ordinary in ({}, {**context, "validationOnly": False}, {**context, "validationInputMode": "unverified"}):
+            result, _, _ = self.assemble(ready_manifest(), context=ordinary)
+            self.assertEqual("target-scoped", result.graph_input["mode"])
 
     def select(self, result, kwargs):
         return select_source(**kwargs, active_abox=result.active_abox, graph=result.graph,

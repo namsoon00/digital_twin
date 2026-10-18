@@ -359,7 +359,8 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # A real rollback rehearsal covers the observed outcome-save deadlock.
         # Reused candidate bootstrap must bind a verified executable readback.
         # Frozen policy migration review rejects unapproved actions and numeric/input gaps.
-        self.assertLessEqual(total, 2390)
+        # Exact paired inputs need complete dependencies without widening live events.
+        self.assertLessEqual(total, 2392)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

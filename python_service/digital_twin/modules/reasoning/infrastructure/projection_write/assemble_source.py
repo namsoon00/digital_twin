@@ -12,6 +12,7 @@ from .assemble_source_ports import AssembleSourcePort
 from .scope_policy import manifest_input_readiness
 from digital_twin.modules.reasoning.domain.ontology_worlds import OntologyWorld
 from digital_twin.modules.reasoning.domain.ontology_projection_audit import OntologyProjectionRun
+from digital_twin.modules.reasoning.domain.reasoning_comparison_identity import PAIRED_VALIDATION_INPUT_VERSION
 
 
 def assemble_source(
@@ -70,10 +71,16 @@ def assemble_source(
     }.intersection(available)
     # The manifest is already known before assembly. Never build a partial
     # graph merely to discover that cold bootstrap needs the complete source.
+    complete_dependency_validation = (compact_reasoning_context.get("validationOnly") is True
+                                      and compact_reasoning_context.get("validationInputMode") == PAIRED_VALIDATION_INPUT_VERSION)
     use_target_input = bool(
         requested and requested != available and readiness["ready"]
         and not readiness["overlayMigrationRequired"]
+        and not complete_dependency_validation
     )
+    assembly_context = dict(compact_reasoning_context)
+    if complete_dependency_validation:
+        assembly_context["projectionComputationTargetSymbols"] = sorted(requested)
     runtime_stages["fullInputPreflightSelected"] = int(bool(target_symbols) and not use_target_input)
     emit_progress("graph_assembly.start", targetScopedInput=use_target_input)
     projection_graph = _store.build_projection_graph(
@@ -85,7 +92,7 @@ def assemble_source(
         target_scoped_input=use_target_input,
         progress_callback=emit_progress,
         shared_premise_proof=shared_premise_proof,
-        reasoning_context=compact_reasoning_context,
+        reasoning_context=assembly_context,
     )
     graph = projection_graph["graph"]
     persistence_graph = projection_graph["persistenceGraph"]

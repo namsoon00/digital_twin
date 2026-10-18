@@ -180,6 +180,7 @@ def compact_ontology_reasoning_request_payload_for_storage(payload: Mapping[str,
                 **{key: _event_text(pair.get(key), 191) for key in (
                     "baselineDeploymentId", "candidateDeploymentId", "sourceSnapshotId",
                 )},
+                **({"inputMode": _event_text(pair.get("inputMode"), 80)} if _event_text(pair.get("inputMode"), 80) else {}),
                 "symbols": _event_text_list(pair.get("symbols"), limit=200, item_limit=64),
             }
     return compact

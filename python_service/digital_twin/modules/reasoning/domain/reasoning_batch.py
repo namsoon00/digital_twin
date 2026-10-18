@@ -20,9 +20,12 @@ def reasoning_batch_key(event, lane):
     boundary = dict(boundary) if isinstance(boundary, Mapping) else {}
     boundaries = [value for value in payload.get("verifiedSourceSnapshots") or []
                   if isinstance(value, Mapping) and value]
+    pair = payload.get("validationPair")
+    pair = dict(pair) if isinstance(pair, Mapping) else {}
     return (
         account_ids,
         bool(payload.get("candidateValidationReplay")),
+        str(pair.get("inputMode") or ""),
         tuple(sorted({str(value).upper().strip() for value in symbols if str(value or "").strip()})),
         str(boundary.get("accountId") or ""),
         str(boundary.get("snapshotId") or ""),

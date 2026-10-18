@@ -7,6 +7,7 @@ import json
 from digital_twin.shared_kernel.events import DomainEvent
 from digital_twin.modules.reasoning.domain.independent_reasoning import shard_reasoning_event, reasoning_event_scope
 from digital_twin.modules.reasoning.domain.verified_snapshot_reasoning import verified_monitor_snapshot_reasoning_event
+from digital_twin.modules.reasoning.domain.reasoning_comparison_identity import PAIRED_VALIDATION_INPUT_VERSION
 
 
 class PairedReasoningValidationService:
@@ -46,7 +47,8 @@ class PairedReasoningValidationService:
                 if boundary.get("sourceFactCoverageComplete") is not True:
                     continue
                 pair = {"baselineDeploymentId": baseline, "candidateDeploymentId": candidate,
-                        "sourceSnapshotId": str(boundary.get("snapshotId") or ""), "symbols": subject}
+                        "sourceSnapshotId": str(boundary.get("snapshotId") or ""), "symbols": subject,
+                        "inputMode": PAIRED_VALIDATION_INPUT_VERSION}
                 identity = hashlib.sha256(json.dumps(pair, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
                 payload.update(candidateValidationReplay=True, validationPair=pair,
                                trigger="paired-current-source-validation", workClass="GOVERNANCE",

@@ -7,6 +7,41 @@ from digital_twin.modules.reasoning.domain.reasoning_comparison_identity import 
 
 
 class ReasoningLogicalInputTests(unittest.TestCase):
+    def test_complete_dependency_patch_updates_shared_facts_and_keeps_other_subjects(self):
+        from digital_twin.modules.reasoning.domain.ontology_contracts import OntologyEntity, OntologyRelation, PortfolioOntology
+        from digital_twin.modules.reasoning.domain.ontology_scopes import apply_scoped_abox_identity, merge_target_scoped_abox_manifest
+
+        def graph(revision):
+            value = PortfolioOntology("default", entities=[
+                OntologyEntity("portfolio:default", "Account", "portfolio", {"ontologyBox": "ABox", "cash": revision}),
+                OntologyEntity("fx:usdkrw", "FX", "fx-rate", {"ontologyBox": "ABox", "rate": revision}),
+                *[OntologyEntity("stock:" + symbol, symbol, "stock", {"ontologyBox": "ABox", "symbol": symbol}) for symbol in ("NVDA", "MSFT")],
+                *[OntologyEntity("price-snapshot:" + symbol, symbol, "price-snapshot", {"ontologyBox": "ABox", "symbol": symbol, "currentPrice": revision}) for symbol in ("NVDA", "MSFT")],
+            ], relations=[
+                OntologyRelation("stock:" + symbol, "portfolio:default", "HELD_IN", properties={"ontologyBox": "ABox", "symbol": symbol}) for symbol in ("NVDA", "MSFT")
+            ] + [OntologyRelation("stock:" + symbol, "price-snapshot:" + symbol, "HAS_PRICE", properties={"ontologyBox": "ABox", "symbol": symbol}) for symbol in ("NVDA", "MSFT")]
+              + [OntologyRelation("stock:NVDA", "fx:usdkrw", "EXPOSED_TO", properties={"ontologyBox": "ABox", "symbol": "NVDA"})])
+            apply_scoped_abox_identity(value, account_id="default")
+            return value
+
+        old, current = graph(100), graph(101)
+        active = {**deepcopy(old.worldview), "status": "ok"}
+        expected = {row["scopeId"]: row for row in current.worldview["scopePlan"]}
+        prior = {row["scopeId"]: row for row in active["scopePlan"]}
+        result = merge_target_scoped_abox_manifest(current, active, ["NVDA"], fact_slot_plan={"enabled": False}, source_graph_complete=True)
+        self.assertTrue(result["applied"], result)
+        after = {row["scopeId"]: row for row in current.worldview["scopePlan"]}
+        refreshed = [scope_id for scope_id, row in expected.items()
+                     if set(row.get("nodeIds") or []).intersection({"portfolio:default", "fx:usdkrw", "price-snapshot:NVDA"})]
+        self.assertEqual(3, len(refreshed))
+        for scope_id in refreshed:
+            self.assertEqual(expected[scope_id]["baseFingerprint"], after[scope_id]["baseFingerprint"])
+            self.assertNotEqual(prior[scope_id]["baseFingerprint"], after[scope_id]["baseFingerprint"])
+        self.assertEqual(["NVDA"], result["targetSymbols"])
+        untouched = [scope_id for scope_id, row in prior.items() if "price-snapshot:MSFT" in (row.get("nodeIds") or [])]
+        self.assertEqual(1, len(untouched))
+        self.assertEqual(prior[untouched[0]]["generationId"], after[untouched[0]]["generationId"])
+
     def plan(self):
         return [
             {"scopeId": "symbol:NVDA:market", "baseFingerprint": "price-100", "fingerprint": "storage-price-a"},
@@ -96,6 +131,17 @@ class ReasoningLogicalInputTests(unittest.TestCase):
         self.assertFalse(repaired_request.supersedable)
         self.assertEqual(request.account_ids, repaired_request.account_ids)
         self.assertEqual(events[0].payload["validationPair"], durable.payload["validationPair"])
+        from digital_twin.modules.reasoning.domain.ontology_projection_audit import compact_reasoning_request_context
+        self.assertEqual("paired-complete-dependencies-v1", repaired_request.context["validationInputMode"])
+        self.assertEqual([], repaired_request.context["requestedScopeFamilies"])
+        self.assertEqual({}, repaired_request.context["changedFieldsBySymbol"])
+        self.assertFalse(repaired_request.context["eventFactBoundaryAuthoritative"])
+        compact = compact_reasoning_request_context(repaired_request.context)
+        self.assertTrue(compact["validationOnly"])
+        self.assertEqual(repaired_request.context["validationInputMode"], compact["validationInputMode"])
+        ordinary = deepcopy(durable)
+        ordinary.payload.pop("candidateValidationReplay")
+        self.assertNotIn("validationInputMode", independent_reasoning_request("baseline", [ordinary]).context)
         self.assertEqual("unavailable-source", service.request(["UNKNOWN"])["status"])
         blocked = PairedReasoningValidationService(registry, lambda *_args: [snapshot],
                                                   lambda _event: {"status": "control-pair-changed"}, service.now_provider)

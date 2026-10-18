@@ -11,6 +11,7 @@ from digital_twin.shared_kernel.events import DomainEvent
 from digital_twin.modules.reasoning.domain.fact_changes import FACT_CHANGE_CONTRACT_VERSION, fact_change_contract
 from digital_twin.modules.reasoning.domain.ontology_execution_units import revision_vector_for_change
 from digital_twin.modules.reasoning.domain.semantic_fact_plane import semantic_change_set
+from digital_twin.modules.reasoning.domain.reasoning_comparison_identity import PAIRED_VALIDATION_INPUT_VERSION
 
 
 INDEPENDENT_REASONING_REQUEST_VERSION = "independent-reasoning-request-v2"
@@ -856,6 +857,26 @@ def independent_reasoning_request(
         "reasoningRequestFingerprint": fingerprint,
         "reasoningRequestContractVersion": INDEPENDENT_REASONING_REQUEST_VERSION,
     }
+    complete_dependency_validation = bool(events) and all(
+        (event.payload or {}).get("candidateValidationReplay") is True
+        and dict((event.payload or {}).get("validationPair") or {}).get("inputMode") == PAIRED_VALIDATION_INPUT_VERSION
+        and dict((event.payload or {}).get("verifiedSourceSnapshot") or {}).get("snapshotId")
+        and dict((event.payload or {}).get("verifiedSourceSnapshot") or {}).get("sourceFactCoverageComplete") is True
+        for event in events
+    )
+    if complete_dependency_validation:
+        # A bounded comparison prepares current dependency facts, rather than
+        # claiming ownership of one market event's narrow field slots. Keep
+        # original source facts/revisions as audit and native subjects bounded.
+        context["validationInputMode"] = PAIRED_VALIDATION_INPUT_VERSION
+        for key in ("requestedScopeFamilies", "requestedDependencyKeys"):
+            context[key] = []
+        for key in ("requestedScopeFamiliesBySymbol", "requestedDependencyKeysBySymbol", "changedFieldsBySymbol"):
+            context[key] = {}
+        context["eventFactBoundaryAuthoritative"] = False
+        context["eventDependencyBoundaryAuthoritative"] = False
+        authoritative_fact_boundary = False
+        authoritative_dependency_boundary = False
     change_set = semantic_change_set(
         source_events=event_payloads,
         source_event_ids=[event.event_id for event in events],

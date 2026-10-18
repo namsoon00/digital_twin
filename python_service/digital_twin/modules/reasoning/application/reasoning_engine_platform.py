@@ -1248,7 +1248,7 @@ class ReasoningEnginePlatformService:
         # rules. Its new executable deployment must identify the code that is
         # actually registering it, rather than inheriting the old runtime's
         # revision and silently pooling their validation history.
-        from digital_twin.modules.reasoning.domain.reasoning_comparison_identity import COMPARISON_INPUT_CONTRACT_VERSION
+        from digital_twin.modules.reasoning.domain.reasoning_comparison_identity import COMPARISON_INPUT_CONTRACT_VERSION, PAIRED_VALIDATION_INPUT_VERSION
         from digital_twin.modules.reasoning.domain.reasoning_shadow import REASONING_SHADOW_CONTRACT_VERSION
         from digital_twin.modules.reasoning.domain.management_upgrade_review import MANAGEMENT_UPGRADE_REVIEW_VERSION
         registration_runtime = dict(self.settings.get("_runtimeIdentity") or {})
@@ -1279,7 +1279,7 @@ class ReasoningEnginePlatformService:
                 feature_set_version=bundle.feature_set_version,
                 model_signal_release_id=bundle.model_signal_release_id,
                 source_contract_versions=tuple(sorted(set(bundle.source_contract_versions) | {
-                    COMPARISON_INPUT_CONTRACT_VERSION, "target-scope-logical-input-v2", MANAGEMENT_UPGRADE_REVIEW_VERSION,
+                    COMPARISON_INPUT_CONTRACT_VERSION, "target-scope-logical-input-v2", MANAGEMENT_UPGRADE_REVIEW_VERSION, PAIRED_VALIDATION_INPUT_VERSION,
                 })),
                 release_id=clean_release_id,
                 runtime_contract_version=bundle.runtime_contract_version,

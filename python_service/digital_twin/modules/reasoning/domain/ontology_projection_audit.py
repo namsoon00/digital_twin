@@ -7,6 +7,7 @@ from digital_twin.modules.reasoning.domain.ontology_change_impact import compact
 from digital_twin.modules.reasoning.domain.ontology_contracts import PortfolioOntology
 from digital_twin.modules.reasoning.domain.ontology_runtime_operations import compact_abox_relation_persistence, native_replay_validation, native_rule_timing_profile
 from digital_twin.modules.portfolio.contracts import AccountSnapshot, utc_now_iso
+from digital_twin.modules.reasoning.domain.reasoning_comparison_identity import PAIRED_VALIDATION_INPUT_VERSION
 
 
 def _json_payload(value: object) -> str:
@@ -222,6 +223,8 @@ def compact_reasoning_request_context(
     ][:20]
     return {
         "version": str(values.get("version") or REASONING_REQUEST_CONTEXT_VERSION),
+        **({"validationOnly": True, "validationInputMode": PAIRED_VALIDATION_INPUT_VERSION}
+           if values.get("validationOnly") is True and values.get("validationInputMode") == PAIRED_VALIDATION_INPUT_VERSION else {}),
         "requestEventIds": clean_list(values.get("requestEventIds"), limit=80),
         "sourceEventIds": clean_list(values.get("sourceEventIds"), limit=80),
         "triggers": clean_list(values.get("triggers"), limit=20),

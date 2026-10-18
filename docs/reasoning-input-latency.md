@@ -265,3 +265,21 @@ retained; readiness counts only fingerprint-bound explained policy differences
 separately. Altered receipts and duplicate execution representations cannot use
 one review to clear another raw failure. Matching `NO_ACTION` labels alone never
 qualify a migration, and historical failures or validation clocks are unchanged.
+
+The first r5 paired run exposed a remaining causal-input mismatch. Its complete
+incoming and temporal manifests were identical, but native persisted macro,
+portfolio and subject exposure fragments still differed. Narrow event routing
+had correctly retained each database's prior shared context; matching incoming
+facts alone therefore could not establish equivalent native inputs. The actual
+comparison was recorded as ineligible and is retained.
+
+Paired validation now declares `paired-complete-dependencies-v1` in its immutable
+source purpose. A verified complete snapshot prepares full factual dependencies
+before the normal target/shared manifest merge. It does not claim the narrow
+field ownership of a new market event. Decision memory, statistical computation
+and native rule targets remain restricted to the requested subject. Regular
+events keep their existing field ownership and partial-input path. Durable event
+compaction and request/audit context retain this purpose; mixed/ordinary or
+unverified requests cannot enable it. Captured incoming **and actual persisted**
+V6 scope proofs remain mandatory. This is a new executable input contract, not a
+backfill of missing proofs, a rewritten old receipt or a reset validation clock.

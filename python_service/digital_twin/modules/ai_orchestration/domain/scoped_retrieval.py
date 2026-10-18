@@ -22,19 +22,20 @@ research는 내부 잠정 연구만 허용하며 질문을 answered로 닫거나
 
 
 def question_index(research):
-    return [{key: deepcopy(row[key]) for key in ("caseId", "question", "questionContract") if key in row}
-            for row in research if row.get("kind") == "brain-case" and row.get("capability") == "research"][:5]
+    from .question_evidence import question_index as work_index
+    return work_index(research)
 
 
 def research_window(research):
     """Schedule a bounded question cohort without editing any original contract."""
     cases = [row for row in research if row.get("kind") == "brain-case"]
     ordered = sorted(cases, key=lambda row: ((row.get("answerResolution") or {}).get("status") != "answered",
+        row.get("capability") != "research",
         not row.get("reviewDue", False), row.get("nextCheckAt", ""), row["caseId"]))
     admitted = {row["caseId"] for row in ordered[:3]}
     omitted = [row["caseId"] for row in ordered[3:]]
     return [row for row in research if row.get("kind") != "brain-case" or row["caseId"] in admitted], {
-        "version": "question-research-window-v1", "includedCaseIds": sorted(admitted),
+        "version": "question-research-window-v2", "includedCaseIds": sorted(admitted),
         "excludedCaseIds": omitted[:32], "excludedCaseCount": len(omitted),
         "exclusionMeaning": "deferred-to-another-research-window-not-answered-or-dismissed"}
 
@@ -86,6 +87,10 @@ def validate_scope(decision, context, seen):
         raise ReadRequestError([issue("questionScopes", "이번 questionIndex의 질문별 진행 상태를 모두 보존하세요")])
     if decision["action"] == "finish" and expected and not any(row["status"] == "ready" for row in decision["questionScopes"]):
         raise ReadRequestError([issue("questionScopes", "평가할 질문이 없으면 research 또는 defer")])
+    from .question_evidence import VERSION as evidence_policy
+    if (context.get("questionEvidencePolicy") == evidence_policy and decision["action"] in {"research", "defer"}
+            and any(row["status"] == "ready" for row in decision["questionScopes"])):
+        raise ReadRequestError([issue("action", "ready 질문이 있으면 finish로 답변 검토에 넘기세요")])
     if decision["action"] == "research":
         from .research_evidence_use import usable_fact
         if not any(usable_fact(seen[key]) and seen[key].get("evidenceCategory") in {"company", "research", "valuation"}
@@ -140,7 +145,9 @@ def prompt(current, context):
         "선택한 질문을 평가할 수 있으면 finish, 부분 근거로 잠정 연구할 수 있으면 research, 진행 근거가 없으면 defer하세요.")
     prefix = prefix.replace("마지막 호출에는 finish/defer를 선택하세요. finish는 필수 자료가 모두 선택됐을 때만 사용하고 reason에 충분한 이유를 적으세요.",
         "마지막 호출에는 finish/research/defer를 선택하세요. finish의 필수 자료는 ready 질문의 범위에 적용하고 reason에 충분한 이유를 적으세요.")
-    return INSTRUCTIONS + prefix + data
+    from .question_evidence import VERSION as evidence_policy, INSTRUCTIONS as evidence_instructions
+    extra = evidence_instructions if context.get("questionEvidencePolicy") == evidence_policy else ""
+    return INSTRUCTIONS + extra + prefix + data
 
 
 def freeze(current, context, max_bytes):

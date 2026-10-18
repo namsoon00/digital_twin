@@ -173,12 +173,17 @@ class MySQLBrainAgendaStore(MySQLOperationalConnection):
         source = source_memory(job, result)
         feedback_ids = self.feedback(connection, job, result, source, now)
         receipt = {"status": "recorded", "caseIds": [], "feedbackIds": feedback_ids, "deferred": []}
-        if not research_accepted and (result.get("quality", {}).get("status") not in {"accepted", "observation-only"} or local_quality(result)["errors"]):
+        from ..domain.question_evidence import VERSION as evidence_policy
+        question_review_required = (result["input"].get("questionEvidencePolicy") == evidence_policy
+            and any(row["action"] in {"answered", "dismissed"} for row in result.get("caseReviews", [])))
+        if not research_accepted and (question_review_required
+                or result.get("quality", {}).get("status") not in {"accepted", "observation-only"} or local_quality(result)["errors"]):
             children[:] = [child for child in children if child["capability"] != "research"]
             for review in result.get("caseReviews", []):
                 case = self.read(connection, review["caseId"], job["accountId"], job["symbol"], lock=True)
                 if case and case["worldId"] == job["worldId"] and case["revision"] == review["expectedRevision"] and case["status"] in ACTIVE_CASE_STATES:
-                    case.update(nextCheckAt=later(now, 180), reason="이번 관찰의 근거 검증이 보류되어 과제 평가를 다시 확인합니다.")
+                    case.update(nextCheckAt=later(now, 180), reason=("원래 질문의 답변을 독립 검토에서 확인하지 못해 과제 평가를 보류합니다."
+                        if question_review_required else "이번 관찰의 근거 검증이 보류되어 과제 평가를 다시 확인합니다."))
                     from .mysql_question_resolution import defer_resolution
                     defer_resolution(case, job, result, now)
                     if review["action"] == "research":
@@ -187,8 +192,9 @@ class MySQLBrainAgendaStore(MySQLOperationalConnection):
                         from ..domain.research_request import validate_research_request
                         case["researchRequest"] = validate_research_request(review["research"], True, job["accountId"])
                         self.schedule_research(connection, case, job, result, children, now)
-                    case["reviewBlocker"] = {"reason": "투자 관찰의 품질 검사를 통과하지 못해 가설 판단을 보류했습니다.",
-                        "errors": list(dict.fromkeys((result.get("quality", {}).get("errors") or []) + local_quality(result)["errors"]))[:4]}
+                    case["reviewBlocker"] = {"reason": case["reason"] if question_review_required else "투자 관찰의 품질 검사를 통과하지 못해 가설 판단을 보류했습니다.",
+                        "errors": list(dict.fromkeys((["question-independent-review-required"] if question_review_required else [])
+                            + (result.get("quality", {}).get("errors") or []) + local_quality(result)["errors"]))[:4]}
                     self.save(connection, case, job["taskId"], "review-deferred", {"executionInputId": result["executionInputId"],
                         "hypothesisResolution": case.get("hypothesisResolution", {}), "authority": "source-verification-only"})
             for review in (result.get("businessResearch") or {}).get("reviews", []):
@@ -262,6 +268,10 @@ class MySQLBrainAgendaStore(MySQLOperationalConnection):
             self.save(connection, case, job["taskId"], "created", {"executionInputId": source["executionInputId"],
                 "evidenceIds": [row["id"] for row in source["evidence"]]})
             receipt["caseIds"].append(key)
+
+    def record_evidence_progress(self, connection, job, packet, trace):
+        from .mysql_question_evidence import record_question_evidence
+        return record_question_evidence(self, connection, job, packet, trace)
 
     @staticmethod
     def schedule_research(connection, case, job, result, children, now):
@@ -442,6 +452,7 @@ class MySQLBrainAgendaStore(MySQLOperationalConnection):
                 + ("AND JSON_UNQUOTE(JSON_EXTRACT(payload_json,'$.capability'))='research' "
                    "AND COALESCE(JSON_UNQUOTE(JSON_EXTRACT(payload_json,'$.answerResolution.status')),'')<>'answered' " if research_only else "")
                 + "ORDER BY (COALESCE(JSON_UNQUOTE(JSON_EXTRACT(payload_json,'$.answerResolution.status')),'')='answered') DESC,"
+                  "(COALESCE(JSON_UNQUOTE(JSON_EXTRACT(payload_json,'$.capability')),'')='research') DESC,"
                   "next_check_at,created_at,case_id LIMIT 5", (account, symbol, world, world)).fetchall()
             feedback = connection.execute("SELECT payload_json FROM ai_brain_cases WHERE account_id=%s AND symbol=%s AND kind='service-feedback' "
                 "ORDER BY updated_at DESC LIMIT 3", (account, symbol)).fetchall()
@@ -459,6 +470,7 @@ class MySQLBrainAgendaStore(MySQLOperationalConnection):
                 "researchRequest": case.get("researchRequest", {}),
                 "questionContract": case.get("questionContract", {}), "answerResolution": case.get("answerResolution", {}),
                 "researchPlan": case.get("researchPlan", {}),
+                **({"evidenceProgress": case["evidenceProgress"]} if case.get("evidenceProgress") else {}),
                 **({"researchRepeat": case.get("researchRepeat", {}), "researchSourceState": case.get("researchSourceState", {})}
                    if research_only else {}),
                 "answerMemory": case.get("answerMemory", []),

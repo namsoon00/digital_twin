@@ -38,7 +38,7 @@ class InsightGroundingTests(unittest.TestCase):
         self.assertEqual("research-reviewed", research_disposition(result))
         self.assertTrue(quality_block(result))  # Research acceptance is never delivery permission.
         wait = disposition(result["input"], "same-input", research_disposition(result), [])
-        self.assertFalse(unchanged_wait(wait, "same-input"))  # Reviewed work may continue its scoped research.
+        self.assertTrue(unchanged_wait(wait, "same-input"))  # Reviewed work also needs changed evidence.
         wait = disposition(result["input"], "same-input", "research-review-required", [])
         self.assertTrue(unchanged_wait(wait, "same-input"))
         self.assertFalse(unchanged_wait(wait, "changed-evidence"))

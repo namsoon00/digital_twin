@@ -35,18 +35,20 @@ class AIControlResearchKnowledge:
         if not result.get("summary"):
             trace = self.read_proof(connection, job, result)
             receipt = write_progress(connection, result["input"], trace, stamp())
+            questions = self.question_progress(connection, job, result["input"], trace)
             for event in receipt.pop("events", []):
                 insert_domain_event_with_connection(connection, event)
-            return {"status": "progress-only", "progress": receipt}
+            return {"status": "progress-only", "progress": receipt, **questions}
         if not result.get("knowledgeResearch"):
             return {"status": "not-requested"}
         envelope = self.agenda.proof(connection, job, result)
         progress = write_progress(connection, result["input"], envelope.get("retrievalTrace", []), stamp())
+        questions = self.question_progress(connection, job, result["input"], envelope.get("retrievalTrace", []))
         for event in progress.pop("events", []):
             insert_domain_event_with_connection(connection, event)
         reviewed = self.agenda.research_proof(connection, job, result, envelope)
         if not reviewed and result["knowledgeResearch"]["claims"]:
-            return {"status": "review-required", "progress": progress}
+            return {"status": "review-required", "progress": progress, **questions}
         theses = (result.get("businessResearch") or {}).get("theses", [])
         proposals = validate_research(raw_knowledge_proposals(result["knowledgeResearch"]), envelope["current"], theses)
         if proposals != result["knowledgeResearch"]:
@@ -66,12 +68,20 @@ class AIControlResearchKnowledge:
         for event in receipt.pop("events"):
             insert_domain_event_with_connection(connection, event)
         receipt["progress"] = progress
+        receipt.update(questions)
         return receipt
+
+    def question_progress(self, connection, job, packet, trace):
+        from digital_twin.modules.ai_orchestration.domain.question_evidence import VERSION
+        if packet.get("questionEvidencePolicy") != VERSION:
+            return {}  # Historical frozen input remains unchanged.
+        return {"questions": self.agenda.record_evidence_progress(connection, job, packet, trace)}
 
     @staticmethod
     def read_proof(connection, job, result):
         from digital_twin.modules.ai_orchestration.domain.execution_input import validate_execution_input
         from digital_twin.modules.ai_orchestration.domain import scoped_retrieval, working_retrieval
+        from digital_twin.modules.ai_orchestration.domain.question_evidence import captured_index
         from digital_twin.modules.reasoning.contracts import content_hash, validate_evidence_packet
         packet = result["input"]
         validate_evidence_packet(packet)
@@ -97,6 +107,8 @@ class AIControlResearchKnowledge:
                     or envelope["current"]["sourceSnapshots"] != packet["sourceSnapshots"]
                     or envelope["current"]["capturedAt"] != packet["capturedAt"]
                     or envelope["current"].get("researchKnowledge") != packet.get("researchKnowledge")
+                    or envelope["retrievalContext"].get("questionEvidencePolicy") != packet.get("questionEvidencePolicy")
+                    or (packet.get("questionEvidencePolicy") and captured_index(envelope["retrievalContext"].get("questionIndex", [])) != packet.get("questionEvidenceIndex"))
                     or step.get("authorScopePolicy") != envelope["retrievalContext"].get("authorScopePolicy")):
                 raise ValueError("research progress input scope or trace mismatch")
             for fact in envelope["current"]["facts"]:

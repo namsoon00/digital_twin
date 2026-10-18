@@ -36,6 +36,9 @@ def instructions(packet):
              "researchDeferredQuestions는 다음 질문 평가로 넘긴 원래 질문과 완료 기준입니다. 이를 수정·종료하거나 다른 문장으로 새로 만들지 마세요. "
              "선택한 근거의 knowledgeResearch 및 관련 사업 설명만 연구하고, 독립 검토도 이 변경만 평가하세요.\n"
              if scope.get("assessmentPolicy") == AUTHOR_SCOPE_POLICY else "")
+    from .question_evidence import VERSION as evidence_policy
+    if packet.get("questionEvidencePolicy") == evidence_policy and scope.get("mode") == "question-assessment":
+        extra += "ready 질문은 caseReviews와 questionResolutions에서 빠짐없이 검토하세요. 근거의 기간·지표·완료 기준을 다시 확인하고 부족하면 구체적인 사유로 wait/research/blocked를 선택하세요.\n"
     return INSTRUCTIONS + extra
 
 
@@ -45,6 +48,11 @@ def validate_plan(result, packet):
         return
     ready = {row["caseId"] for row in scope["questions"] if row["status"] == "ready"}
     scoped = {row["caseId"] for row in scope["questions"]}
+    from .question_evidence import VERSION as evidence_policy
+    if packet.get("questionEvidencePolicy") == evidence_policy and scope["mode"] == "question-assessment":
+        reviewed = {row["caseId"] for row in result.get("caseReviews", [])}
+        if ready - reviewed:
+            raise PlanValidationError("ready-question-review-missing", "caseReviews", "ready 질문을 원래 완료 기준에 따라 각각 검토하세요.")
     if scope.get("assessmentPolicy") == AUTHOR_SCOPE_POLICY and (result.get("caseReviews") or result.get("questionResolutions")):
         raise PlanValidationError("provisional-knowledge-scope", "caseReviews", "잠정 지식 연구에서는 기존 질문을 갱신하지 말고 두 과제 평가 배열을 비우세요.")
     if scope["mode"] == "research-only" and result["notification"]["send"]:

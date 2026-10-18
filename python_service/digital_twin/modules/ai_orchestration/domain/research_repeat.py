@@ -85,7 +85,7 @@ def observation_key(packet, research):
     from digital_twin.modules.reasoning.contracts import evidence_change_identity
     from .planning import identity
     operational = {"revision", "nextCheckAt", "reviewDue", "reason", "lastAssessment",
-                   "researchPlan", "researchRepeat", "researchSourceState", "answerMemory"}
+                   "researchPlan", "researchRepeat", "researchSourceState", "answerMemory", "evidenceProgress"}
     work = [{key: value for key, value in row.items() if key not in operational}
             if row.get("kind") == "brain-case" else row for row in research]
     source = evidence_change_identity(packet, work, packet.get("questionsToCheck", []))

@@ -68,6 +68,13 @@ class ScopedKnowledgeResearchTests(unittest.TestCase):
         raw = {**plan(), "businessResearch": raw_research(), "knowledgeResearch": proposal(), "questionResolutions": [],
                "followUpConditions": [], "observations": []}
         raw["notification"]["send"] = False
+        with self.assertRaisesRegex(ValueError, "ready-question-review-missing"):
+            validate_plan(raw, result[0], result[2])
+        raw["caseReviews"] = [{"caseId": "revenue", "action": "answered", "reason": "동일 기간 공식 보고의 매출 비교에 답했습니다.",
+            "evidenceIds": ["report-2025"], "nextCheckMinutes": 1440,
+            "research": {"queryTerms": [], "sourceTypes": [], "maxAgeMinutes": 0}}]
+        raw["questionResolutions"] = [{"caseId": "revenue", "disposition": "not-applicable", "targetIndex": -1,
+            "reason": "공식 자료의 사실 비교 답변이며 별도 투자 가설을 만들 근거는 없습니다.", "evidenceIds": ["report-2025"]}]
         validate_plan(raw, result[0], result[2])
         from digital_twin.modules.ai_orchestration.domain.scoped_research import validate_plan as guard
         with self.assertRaises(ValueError):

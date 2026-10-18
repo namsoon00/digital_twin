@@ -12,6 +12,16 @@ def retry_key(packet, research):
     work = [{key: row[key] for key in ("kind", "caseId", "question", "capability", "status", "thesisId",
              "checkpoints", "researchRequest", "lastResearch", "runId", "developmentProgress") if key in row}
             for row in research]
+    from .question_evidence import source_identity
+    for item, row in zip(work, research):
+        if row.get("kind") == "brain-case" and row.get("capability") == "research":
+            # Source plans, failed attempts and paraphrased internal notes must
+            # not wake an observation on the same underlying question/data.
+            item.pop("researchRequest", None)
+            item.pop("lastResearch", None)
+            item["status"] = row.get("status") if row.get("status") in {"answered", "dismissed"} else "active"
+            item["questionContract"] = row.get("questionContract", {})
+            item["sourceAnswer"] = source_identity(row)
     from digital_twin.modules.research_knowledge.contracts import knowledge_context_identity
     from .scoped_retrieval import AUTHOR_SCOPE_POLICY
     return content_hash({"policy": AUTHOR_SCOPE_POLICY if packet.get("researchKnowledge") else POLICY, "researchReviewPolicy": research_review_version,
@@ -40,4 +50,4 @@ def unchanged_wait(previous, key, now=None):
     # model call on identical failed input. Genuine evidence/work changes alter
     # key; verified follow-up transitions are admitted separately by the caller.
     return previous.get("status") in {"data-wait", "retrieval-blocked", "output-invalid",
-                                      "research-review-required"}
+                                      "research-review-required", "research-reviewed", "research-only"}

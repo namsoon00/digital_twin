@@ -1129,7 +1129,8 @@ notify. Legacy notification markers are seeded without replaying the old update.
 
 Observation retries also require change: an expired `retryAt` is a cheap check,
 not permission to rerun the same rejected or evidence-blocked input. Identical
-accepted judgments have no timer-based reauthoring expiry. Unchanged tasks schedule
+accepted judgments and completed internal research (`research-reviewed` or
+`research-only`) have no timer-based reauthoring expiry. Unchanged tasks schedule
 a future six-hour check so suppression cannot create a past-due queue loop. New
 source/work identities, applicable policy changes and verified follow-up
 transitions retain their existing admission paths.
@@ -1234,11 +1235,43 @@ and proposal hash as a small provenance receipt. Hash receipts do not recreate
 expired raw source/input bodies or establish empirical correctness.
 
 A window admits up to three original agenda questions, prioritizing available
-source answers, then due work and its existing check time. Included and excluded
+source answers, then research questions, due work and its existing check time. The
+bounded agenda read also prioritizes research questions so an older price-wait
+case cannot fill the source-question cohort before retrieval starts. Included and excluded
 question IDs are explicit in the input; exclusion never closes, merges or changes
 a question's contract. The source agenda remains the owner of questions and
 collection. Further model calls still obey the existing capacity and repeat
 policies. Reading/storing a progress record does not itself wake another call.
+
+New frozen inputs carry `question-evidence-work-v1`. Their question index keeps
+the original contract and revision, reviewed source-answer status, bounded source
+pointers, unresolved requirements and source-access blockers. These are read
+directions, not factual evidence or answer approval. The author packet retains
+only the small ownership pointers; it does not duplicate the whole source answer.
+Any `ready` question requires `finish` and an explicit `caseReview` and hypothesis
+disposition. The author may still defer it when the original period, metric or
+completion criterion is not met. An `answered` review still requires the existing
+frozen independent research review before agenda completion.
+
+Completed read decisions attach `evidenceProgress` to the existing question in
+the same task-completion transaction. The writer checks account, subject, world,
+captured revision and unchanged original contract; an answer assessment that
+already advanced that revision wins. Data waits require the completed frozen
+retrieval proof, and author results require the existing frozen author proof.
+Rollbacks undo both the task and the checkpoint. Unchanged source/contract/scope
+checkpoints are not rewritten merely because missing-evidence prose changed.
+The checkpoint is `read-progress-only`, cannot close a question, and emits no
+customer research milestone. The next eligible research plan sees these missing
+items alongside the preserved partial answer. It does not grant a new search or
+reset any repeat ledger, lifetime ceiling or wait deadline; new cached source
+content is still required. This can deliberately leave a question waiting when
+the available sources have not changed.
+
+Internal research retry identity includes original question contracts and source
+content/answer state, but excludes its own checkpoint, failed-attempt bookkeeping,
+plan wording, timers and repeated fetch IDs when source material identity exists.
+The new prompt rules apply only to inputs carrying the marker. Previously frozen
+V4/V17 inputs and review prompts remain byte-for-byte replayable.
 Due question memories keep their exact question contract, revision and due flag
 in the author input. Long historical answer previews are explicitly truncated
 with a content hash and detailed-recall reference; their raw histories do not

@@ -150,3 +150,15 @@ class ResearchKnowledgeStorageTests(unittest.TestCase):
     def test_partial_research_real_controller_commits_recalls_and_revises_reviewed_knowledge(self):
         from scoped_knowledge_storage_checks import check_partial_controller
         check_partial_controller(self)
+
+    def test_question_gaps_commit_with_read_proof_and_reach_the_original_research_plan(self):
+        from question_evidence_storage_checks import check_question_progress
+        check_question_progress(self)
+
+    def test_ready_question_completion_requires_its_own_review_even_with_accepted_market_quality(self):
+        from question_evidence_storage_checks import check_ready_question_answer
+        for accepted in (True, False):
+            with self.subTest(accepted=accepted):
+                self.fixture.clean()
+                self.clean_knowledge()
+                check_ready_question_answer(self, accepted=accepted)

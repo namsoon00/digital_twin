@@ -32,6 +32,9 @@ def _work_summary(row):
         "capability", "status", "revision", "reviewDue", "nextCheckAt", "completionCriterion", "reason",
         "researchAttempts", "researchRequest", "hypothesisResolution", "developmentProgress",
         "questionContract", "answerResolution", "researchPlan", "mergedQuestions"))
+    if row.get("evidenceProgress"):
+        from .question_evidence import progress_memory
+        result["evidenceProgress"] = progress_memory(row["evidenceProgress"])
     plan = row.get("researchPlan") or {}
     if plan:
         result["researchPlan"] = {key: deepcopy(plan[key]) for key in

@@ -104,6 +104,14 @@ def check_partial_controller(test):
     test.assertEqual(first["executionInputId"], first["reviewReceipt"]["authorInputId"])
     test.assertEqual("research-only", recorded_authors[0]["current"]["researchScope"]["mode"])
     test.assertEqual(1, len(test.repository.progress(source, stamp())))
+    # A completed internal research draft must not create another paid read,
+    # author or reviewer simply because its next observation is due.
+    with test.control.transaction() as connection:
+        connection.execute("UPDATE ai_control_tasks SET available_at=%s WHERE account_id=%s AND symbol=%s AND capability='observe' AND status='pending'",
+            (stamp(), subject["accountId"], subject["symbol"]))
+    test.assertEqual("unchanged-wait", service.run_once()["status"])
+    test.assertEqual(1, len(recorded_authors))
+    test.assertEqual(1, len(test.repository.progress(source, stamp())))
     with test.control.transaction() as connection:
         connection.execute("UPDATE ai_control_tasks SET available_at=%s WHERE account_id=%s AND symbol=%s AND capability='observe' AND status='pending'",
             (stamp(), subject["accountId"], subject["symbol"]))
@@ -113,6 +121,8 @@ def check_partial_controller(test):
     for fact in source["facts"]:
         fact["sourceSnapshotId"] = source["sourceSnapshotId"]
     source["facts"][-1]["reportedValues"]["revenue"] = 90
+    from test_business_research import select_evidence
+    source["facts"], source["coverage"] = select_evidence(source["facts"])
     test.assertEqual("completed", service.run_once()["status"])
     second = test.repository.recent(subject["accountId"])[0]
     test.assertEqual(2, second["revision"])

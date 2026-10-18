@@ -68,7 +68,9 @@ def record_plan(store, connection, job, result, children):
         minutes = max(review["nextCheckMinutes"], min(10080, 1440 * 2 ** min(repeats, 3)))
         case.update(questionContract=deepcopy(review["contract"]), reason=review["reason"], nextCheckAt=later(now, minutes))
         case["researchPlan"] = {"version": work.VERSION, "action": review["action"], "reason": review["reason"],
-            "resumeWhen": review["resumeWhen"], "missingRequirements": deepcopy((case.get("answerResolution") or {}).get("missingRequirements", [])),
+            "resumeWhen": review["resumeWhen"], "missingRequirements": list(dict.fromkeys(
+                (case.get("answerResolution") or {}).get("missingRequirements", [])
+                + (case.get("evidenceProgress") or {}).get("missingRequirements", [])))[:12],
             "executionInputId": result["executionInputId"], "taskId": job["taskId"], "at": now,
             "stateKey": state, "unchangedPlans": repeats, "authority": "research-planning-only"}
         if review["action"] == "research":

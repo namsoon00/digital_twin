@@ -44,8 +44,11 @@ def retrieve_working_evidence(session, packet, history, research, decide, save_i
                              max_rounds=MAX_ROUNDS, record_round=None):
     contract = scoped_retrieval if packet.get("researchKnowledge") else legacy_contract
     if contract is scoped_retrieval:
+        from ..domain.question_evidence import VERSION as evidence_policy, captured_index
         research, window = contract.research_window(research)
-        packet = {**packet, "researchWindow": window}
+        question_index = contract.question_index(research)
+        packet = {**packet, "researchWindow": window, "questionEvidencePolicy": evidence_policy,
+                  "questionEvidenceIndex": captured_index(question_index)}
     rounds = max(0, min(MAX_ROUNDS, int(max_rounds)))
     sources = {}
     for case in research:
@@ -79,7 +82,8 @@ def retrieve_working_evidence(session, packet, history, research, decide, save_i
                "reportIndexLimit": 32, "reportIndexOrdering": "source-time-descending; excluded older reports remain queryable",
                "roundLimit": rounds, "selectionPolicy": contract.POLICY}
     if contract is scoped_retrieval:
-        context["questionIndex"] = contract.question_index(research)
+        context["questionIndex"] = question_index
+        context["questionEvidencePolicy"] = packet["questionEvidencePolicy"]
         context["authorScopePolicy"] = contract.AUTHOR_SCOPE_POLICY
     trace, recalled, requests_seen = [], {"analyses": [], "memories": []}, set()
     used, corrections, status = 0, 0, "deferred"

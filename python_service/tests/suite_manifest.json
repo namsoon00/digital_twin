@@ -1,5 +1,6 @@
 {
   "tests": [
+    {"file": "test_management_upgrade_review.py", "tier": "contract", "core": true},
     {"file": "test_reasoning_logical_inputs.py", "tier": "contract", "core": true},
     {"file": "test_scoped_knowledge_research.py", "tier": "contract", "core": true},
     {"file": "test_research_knowledge_storage.py", "tier": "integration", "core": true},

@@ -15,6 +15,16 @@ class ReasoningBinding:
     release_artifact_persistence: Dict[str, Any]
 
 
+def existing_runtime_rulebox_fingerprint(repository) -> str:
+    from digital_twin.modules.model_registry.contracts import rulebox_rules_hash
+
+    snapshot = dict(repository.rulebox_snapshot() or {})
+    if snapshot.get("status") != "ok" or not snapshot.get("rules"):
+        raise RuntimeError("Existing candidate RuleBox readback is unavailable or empty")
+    return str(snapshot.get("sourceRulesHash") or snapshot.get("rulesHash")
+               or snapshot.get("ruleboxRulesHash") or rulebox_rules_hash(snapshot["rules"]))
+
+
 def bind_v2_release(
     repository, platform, descriptor, candidate_settings, configured, deployment_health
 ) -> ReasoningBinding:
@@ -65,7 +75,7 @@ def bind_v2_release(
             # The authored artifact, not today's code catalog, defines a candidate.
             frozen_release_recorded = True
             deployment_health = {**deployment_health,
-                "ruleboxFingerprint": restored.get("runtimeRuleboxFingerprint") or "",
+                "ruleboxFingerprint": restored.get("runtimeRuleboxFingerprint") or existing_runtime_rulebox_fingerprint(repository),
                 "tboxFingerprint": stored_payload.get("tboxFingerprint") or ""}
     candidate_rulebox, rulebox_release_preflight = prepare_v2_rulebox_release(
         repository,

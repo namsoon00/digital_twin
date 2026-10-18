@@ -357,7 +357,9 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # Comparison-only execution additionally verifies zero anchor writes.
         # Paired ingress verifies immutable source time, scope and control drift.
         # A real rollback rehearsal covers the observed outcome-save deadlock.
-        self.assertLessEqual(total, 2386)
+        # Reused candidate bootstrap must bind a verified executable readback.
+        # Frozen policy migration review rejects unapproved actions and numeric/input gaps.
+        self.assertLessEqual(total, 2390)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

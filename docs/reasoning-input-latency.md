@@ -230,3 +230,38 @@ the outcome insert, proves the retry leaves exactly one observation, and keeps
 the original observation clock. Other errors and ambiguous commit outcomes
 are not retried. Historical execution failures are retained; a genuinely new
 runtime release receives its own immutable validation cohort.
+
+The first rollout exposed a separate startup defect when a new deployment reused
+an already verified static graph. Its authored manifest matched, so restoration
+was correctly skipped, but startup then compared the native rule hash with an
+empty expected fingerprint. Initial binding now captures the existing executable
+readback, and the unchanged immutable preflight verifies it along with the TBox.
+Missing or empty readbacks still fail closed; active and already-frozen releases
+keep their recorded expected hashes. Reuse does not rewrite the authored artifact
+or reseed the database.
+
+The candidate control pointer and the explicitly configured candidate worker are
+separate controls. After registration, bind `reasoningEngineV2DeploymentId`,
+`reasoningEngineCandidateDeploymentId` and `reasoningEngineCandidateReleaseId`
+to that candidate through the runtime settings store and reload the managed
+supervisor. Check the worker's actual frozen release and warmed status before
+requesting comparisons. A registered deployment alone does not prove that a
+worker is consuming its queue.
+
+V4 comparison keeps raw management differences and records a separate
+`management-rule-migration-review-v1` receipt. It requires a content-addressed
+declaration in the candidate artifact naming the exact baseline artifact,
+original/updated rule hashes and expected response codes. Only additive
+`management_response` fields in non-predictive guardrail rules qualify. Existing
+conditions, action envelopes, derivations, claim meaning and every other rule
+must remain unchanged; legacy non-predictive observation defaults are normalized
+explicitly. Native response objectives, observed/target values and release
+conditions must bind to the frozen authored contract and its numerical facts.
+
+Review rechecks captured V6 inputs and compares all non-management decisions
+again. Missing input, delivery leakage, changed market judgments or unverified
+bindings remain blocking. The original comparison status and differences are
+retained; readiness counts only fingerprint-bound explained policy differences
+separately. Altered receipts and duplicate execution representations cannot use
+one review to clear another raw failure. Matching `NO_ACTION` labels alone never
+qualify a migration, and historical failures or validation clocks are unchanged.

@@ -20,7 +20,7 @@ from digital_twin.modules.reasoning.domain.portfolio_ontology_catalog import OPE
 from digital_twin.modules.reasoning.domain.reasoning_comparison_identity import COMPARISON_INPUT_CONTRACT_VERSION
 
 
-REASONING_SHADOW_CONTRACT_VERSION = "reasoning-shadow-comparison-v3"
+REASONING_SHADOW_CONTRACT_VERSION = "reasoning-shadow-comparison-v4"
 PROJECTION_RUNTIME_CONTEXT_PACKET_VERSION = "projection-runtime-context-zlib-v1"
 MAX_PROJECTION_RUNTIME_CONTEXT_BYTES = 16 * 1024 * 1024
 
@@ -872,6 +872,9 @@ def reasoning_comparison_summary(
                 payload[key] = sorted(set(payload.get(key) or []) | set(incoming.get(key) or []))
             for key in ("subjectCount", "candidateNativeMatchedRuleCount", "baselineDurationMs", "candidateDurationMs", "queueWaitMs"):
                 payload[key] = max(int(payload.get(key) or 0), int(incoming.get(key) or 0))
+            # Multiple representations of one execution retain the strictest
+            # raw result; a review of one representation cannot clear another.
+            payload.pop("managementUpgradeReview", None)
             retained["payload"] = payload
         else:
             execution_rows[identity] = row
@@ -884,6 +887,7 @@ def reasoning_comparison_summary(
     candidate_stage_values: Dict[str, list] = {}
     unexplained = nonempty_decisions = nonempty_native = decision_subjects = 0
     shadow_deliveries = sum(int(row.get("shadowDeliveryCount") or 0) for row in all_items)
+    reviewed_policy_upgrades = unreviewed_differences = unreviewed_evidence_gaps = 0
     for row in items:
         status = str(row.get("status") or "unknown")
         status_counts[status] = status_counts.get(status, 0) + 1
@@ -891,6 +895,15 @@ def reasoning_comparison_summary(
         rule_values.append(float(row.get("ruleSlotCoveragePct") or 0.0))
         unexplained += int(row.get("unexplainedDecisionDifferenceCount") or 0)
         payload = _mapping(row.get("payload"))
+        from digital_twin.modules.reasoning.domain.management_upgrade_review import management_upgrade_review_valid
+        review_valid = management_upgrade_review_valid(payload) and all(
+            row.get(key) == payload.get(key) for key in (
+                "status", "factParityPct", "ruleSlotCoveragePct", "unexplainedDecisionDifferenceCount", "shadowDeliveryCount",
+            )
+        )
+        reviewed_policy_upgrades += int(review_valid)
+        unreviewed_differences += 0 if review_valid else int(row.get("unexplainedDecisionDifferenceCount") or 0)
+        unreviewed_evidence_gaps += int(status == "reasoning-parity-gap" and not review_valid)
         row_symbols = _strings(payload.get("symbols") or [])
         symbols.update(row_symbols)
         markets.update(
@@ -935,6 +948,9 @@ def reasoning_comparison_summary(
         "ruleSlotCoveragePct": round(sum(rule_values) / len(rule_values), 3) if rule_values else 0.0,
         "minimumRuleSlotCoveragePct": min(rule_values) if rule_values else 0.0,
         "unexplainedDecisionDifferenceCount": unexplained,
+        "unreviewedDecisionDifferenceCount": unreviewed_differences,
+        "unreviewedReasoningParityGapCount": unreviewed_evidence_gaps,
+        "reviewedPolicyUpgradeSampleCount": reviewed_policy_upgrades,
         "shadowDeliveryCount": shadow_deliveries,
         "distinctSymbolCount": len(symbols),
         "symbols": sorted(symbols),

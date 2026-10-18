@@ -1250,6 +1250,7 @@ class ReasoningEnginePlatformService:
         # revision and silently pooling their validation history.
         from digital_twin.modules.reasoning.domain.reasoning_comparison_identity import COMPARISON_INPUT_CONTRACT_VERSION
         from digital_twin.modules.reasoning.domain.reasoning_shadow import REASONING_SHADOW_CONTRACT_VERSION
+        from digital_twin.modules.reasoning.domain.management_upgrade_review import MANAGEMENT_UPGRADE_REVIEW_VERSION
         registration_runtime = dict(self.settings.get("_runtimeIdentity") or {})
         authored_artifact = dict(release_seed_artifact or {})
         if authored_artifact:
@@ -1278,7 +1279,7 @@ class ReasoningEnginePlatformService:
                 feature_set_version=bundle.feature_set_version,
                 model_signal_release_id=bundle.model_signal_release_id,
                 source_contract_versions=tuple(sorted(set(bundle.source_contract_versions) | {
-                    COMPARISON_INPUT_CONTRACT_VERSION, "target-scope-logical-input-v2",
+                    COMPARISON_INPUT_CONTRACT_VERSION, "target-scope-logical-input-v2", MANAGEMENT_UPGRADE_REVIEW_VERSION,
                 })),
                 release_id=clean_release_id,
                 runtime_contract_version=bundle.runtime_contract_version,
@@ -1611,7 +1612,7 @@ class ReasoningEnginePlatformService:
             ):
                 blockers.append("independent-rule-slot-coverage-incomplete")
             if int(
-                comparison_summary.get("unexplainedDecisionDifferenceCount") or 0
+                comparison_summary.get("unreviewedDecisionDifferenceCount", comparison_summary.get("unexplainedDecisionDifferenceCount")) or 0
             ) > 0:
                 blockers.append("independent-unexplained-decision-differences")
             if int(comparison_summary.get("shadowDeliveryCount") or 0) > 0:
@@ -1619,7 +1620,7 @@ class ReasoningEnginePlatformService:
             comparison_status_counts = dict(
                 comparison_summary.get("statusCounts") or {}
             )
-            if int(comparison_status_counts.get("reasoning-parity-gap") or 0) > 0:
+            if int(comparison_summary.get("unreviewedReasoningParityGapCount", comparison_status_counts.get("reasoning-parity-gap")) or 0) > 0:
                 blockers.append("independent-evidence-parity-incomplete")
             if int(comparison_status_counts.get("candidate-failed") or 0) > 0:
                 blockers.append("independent-comparison-execution-failures")

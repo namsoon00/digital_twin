@@ -33,7 +33,39 @@ class RuntimeCompositionTests(unittest.TestCase):
             actual = hashlib.sha256(
                 ast.dump(ast.Module(body=body, type_ignores=[]), include_attributes=False).encode()
             ).hexdigest()
-            self.assertEqual(entry["bodyHash"], actual, entry["file"])
+            reviewed = json.loads((ROOT.parent / "tests/fixtures/closed_loop_semantic_changes.json").read_text()).get("composition", {}).get(entry["file"] + "::" + entry["function"])
+            if reviewed:
+                self.assertTrue(reviewed["reason"])
+                self.assertNotEqual(entry["bodyHash"], reviewed["hash"])
+            self.assertEqual(reviewed["hash"] if reviewed else entry["bodyHash"], actual, entry["file"])
+
+    def test_reused_candidate_reads_its_existing_executable_fingerprint_without_reseeding(self):
+        from digital_twin.infrastructure.composition.reasoning_binding import bind_v2_release
+        from digital_twin.modules.reasoning.domain.reasoning_engine_versions import EngineControlState, EngineReleaseBundle, ReasoningEngineDescriptor
+
+        bundle = EngineReleaseBundle("tbox-v1@tbox", "rules", "prompt", "features", release_id="new-runtime")
+        descriptor = ReasoningEngineDescriptor("brain", "v2", "new-candidate", "provisioning", "isolated", "mysql-primary", bundle)
+        artifact = {"releaseBundle": bundle.to_dict(), "rules": [{"rule_id": "frozen-rule"}],
+                    "ruleboxFingerprint": "authored-rule-hash", "tboxFingerprint": "tbox"}
+        registry = Mock()
+        registry.control.return_value = EngineControlState("delivery", "delivery", "new-candidate")
+        registry.release_artifact.return_value = {"valid": True, "artifact": artifact,
+                                                  "ruleboxFingerprint": "authored-rule-hash", "tboxFingerprint": "tbox"}
+        repository = Mock()
+        repository.read_seed_static_manifest.return_value = {"status": "ok", "metadata": {
+            "ruleboxRulesHash": "authored-rule-hash", "tboxFingerprint": "tbox"}}
+        repository.rulebox_snapshot.return_value = {"status": "ok", "rules": artifact["rules"],
+                                                    "ruleboxRulesHash": "executable-rule-hash"}
+        repository.active_tbox_metadata.return_value = {"status": "ok", "version": "tbox-v1", "fingerprint": "tbox"}
+        result = bind_v2_release(repository, SimpleNamespace(registry=registry), descriptor, {}, {}, {})
+        self.assertEqual("executable-rule-hash", result.rulebox_fingerprint)
+        self.assertEqual("unchanged", result.release_artifact_persistence["status"])
+        repository.seed_release_artifact.assert_not_called()
+        registry.save_release_artifact.assert_not_called()
+        for invalid in ({"status": "error", "rules": artifact["rules"]}, {"status": "ok", "rules": []}):
+            repository.rulebox_snapshot.return_value = invalid
+            with self.assertRaisesRegex(RuntimeError, "readback is unavailable or empty"):
+                bind_v2_release(repository, SimpleNamespace(registry=registry), descriptor, {}, {}, {})
 
     def test_v2_launch_copies_settings_and_respects_existing_database_provisioning(self):
         from digital_twin.infrastructure.composition.reasoning_launch import prepare_v2_launch

@@ -1814,6 +1814,18 @@ class ReasoningEngineVersionTests(unittest.TestCase):
         self.assertFalse(evidence_gap["ready"])
         self.assertIn("independent-evidence-parity-incomplete", evidence_gap["blockers"])
 
+        reviewed = Comparisons(status="reasoning-parity-gap")
+        original_summary = reviewed.summary
+        reviewed.summary = lambda *args, **kwargs: {
+            **original_summary(*args, **kwargs), "reviewedPolicyUpgradeSampleCount": 5,
+            "unreviewedReasoningParityGapCount": 0, "unreviewedDecisionDifferenceCount": 0,
+        }
+        reviewed_readiness = ReasoningEnginePlatformService(
+            Registry(), {"reasoningEngineV2IndependentEnabled": "1"},
+            independent_job_store=Jobs(), comparison_store=reviewed,
+        ).promotion_readiness("ontology-v2-shadow")
+        self.assertTrue(reviewed_readiness["ready"])
+
         missing_comparisons = ReasoningEnginePlatformService(
             Registry(),
             {

@@ -344,12 +344,21 @@
     var ruleExecution = active.ruleExecutionReadiness || {};
     var reasons = Array.isArray(engine.reasons) ? engine.reasons : [];
     var historicalDebt = engine.historicalDebt || {};
+    var diagnostics = engine.deliveryDiagnostics || {};
+    var diagnosticChecks = Array.isArray(diagnostics.checks) ? diagnostics.checks : [];
+    var deliveryDiagnosis = '<section class="cws-section"><header><div><h2>알림이 없는 이유 확인</h2></div></header>' +
+      (diagnosticChecks.length ? '<div class="cws-health-list">' + diagnosticChecks.map(function (check) {
+        return '<article class="' + escapeHtml(check.status === "warning" ? "warning" : "neutral") + '"><div><strong>' + escapeHtml(check.label) + '</strong><em>' + escapeHtml(check.detail) + '</em></div></article>';
+      }).join("") + '</div>' : empty("추론 진단 정보 미확인", "이 화면만으로 알림이나 투자 신호가 없다고 판단할 수 없습니다.")) +
+      '<footer class="cws-section-note">최근 추론 완료 ' + escapeHtml(clock(diagnostics.lastInferenceAt)) +
+      ' · 대기 원천 스냅샷 ' + escapeHtml(clock(diagnostics.oldestPendingSourceAt)) +
+      '</footer><footer class="cws-section-actions"><button type="button" data-operations-view="delivery">실제 전달 확인</button><button type="button" data-operations-view="governance">후보 규칙 검증 확인</button></footer></section>';
     var debtSummary = number(historicalDebt.unresolvedFailureCount)
       ? '<section class="cws-section cws-reasoning-debt"><header><div><span>Historical debt</span><h2>과거 추론 실패</h2></div><strong class="warning">' + escapeHtml(historicalDebt.unresolvedFailureCount) + '건</strong></header><dl class="cws-queue-facts"><div><dt>최근 24시간</dt><dd>' + escapeHtml(historicalDebt.recentFailureCount24h || 0) + '건</dd></div><div><dt>분류</dt><dd>' + escapeHtml(historicalDebt.status === "current" ? "현재 영향" : "현재 처리 영향 없음") + '</dd></div></dl><footer class="cws-section-note">일시적 TypeDB 오류는 이력을 보존한 새 복구 작업으로 최대 1회 자동 재처리합니다.</footer></section>'
       : '';
     return '<div class="cws-grid cws-grid-primary"><section class="cws-section"><header><div><span>온톨로지</span><h2>관계 추론 대기열</h2></div></header>' + queueFacts(queues.reasoning, [["pending", "대기"], ["processing", "처리"], ["retrying", "재시도"]]) + '<footer class="cws-section-note">가장 오래된 요청 ' + escapeHtml(queues.reasoning && queues.reasoning.oldestRequestAt ? clock(queues.reasoning.oldestRequestAt) : "없음") + '</footer></section><section class="cws-section"><header><div><span>AI 판단</span><h2>검증 대기열</h2></div></header>' + queueFacts(queues.ai, [["pendingCount", "대기"], ["processingCount", "처리"], ["retryCount", "재시도"], ["failedCount", "실패"]]) + '</section></div>' +
       '<div class="cws-grid cws-grid-primary"><section class="cws-section"><header><div><span>배포별 소비</span><h2>운영·후보 추론 워커</h2></div><strong>' + escapeHtml(engine.status || "unknown") + '</strong></header><div class="cws-health-list">' + (deploymentRows || empty("배포 정보가 없습니다", "제어 포인터를 확인하세요.")) + '</div></section><section class="cws-section"><header><div><span>TypeDB 실행</span><h2>규칙 실행 경로</h2></div><strong class="positive">직접 TypeQL</strong></header><dl class="cws-queue-facts"><div><dt>상태</dt><dd>' + escapeHtml(ruleExecution.status || "ready") + '</dd></div><div><dt>실행 모드</dt><dd>' + escapeHtml(ruleExecution.mode || "typedb-direct-typeql") + '</dd></div></dl><footer class="cws-section-note">' + escapeHtml(reasons.length ? reasons.join(" · ") : "운영 차단 사유 없음") + '</footer></section></div>' +
-      debtSummary;
+      deliveryDiagnosis + debtSummary;
   }
 
   function operationsDelivery(payload) {

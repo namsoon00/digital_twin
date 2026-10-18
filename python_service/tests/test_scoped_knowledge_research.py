@@ -94,7 +94,9 @@ class ScopedKnowledgeResearchTests(unittest.TestCase):
         raw = {**plan(), "businessResearch": raw_research(), "knowledgeResearch": proposal(), "questionResolutions": [],
                "followUpConditions": [], "observations": []}
         raw["notification"]["send"] = False
-        self.assertTrue(validate_plan(raw, result[0])["knowledgeResearch"]["claims"])
+        internal = validate_plan(raw, result[0])
+        self.assertTrue(internal["knowledgeResearch"]["claims"])
+        self.assertNotIn("conditionValidation", internal)
         raw["notification"]["send"] = True
         with self.assertRaises(ValueError):
             validate_plan(raw, result[0])

@@ -39,4 +39,5 @@ def unchanged_wait(previous, key, now=None):
     # retryAt schedules a cheap source check, not permission to spend another
     # model call on identical failed input. Genuine evidence/work changes alter
     # key; verified follow-up transitions are admitted separately by the caller.
-    return previous.get("status") in {"data-wait", "retrieval-blocked", "output-invalid"}
+    return previous.get("status") in {"data-wait", "retrieval-blocked", "output-invalid",
+                                      "research-review-required"}

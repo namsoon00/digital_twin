@@ -41,8 +41,17 @@ JSON만 반환하세요. sections의 모든 항목을 각각 검토하며 빈 �
 
 
 def local_quality(result, *, causal_guard_version=CAUSAL_GUARD_VERSION):
-    errors = insight_errors(result, result["input"], causal_guard_version=causal_guard_version)
     version = {"version": REVIEW_VERSION, "causalGuardVersion": causal_guard_version}
+    from .scoped_research import research_only
+    if research_only(result["input"]):
+        if result.get("notification", {}).get("send") is not False:
+            return {**version, "status": "rejected", "errors": ["잠정 연구는 고객 알림을 요청할 수 없습니다."]}
+        # Price comparisons/follow-ups belong to customer observations, not a
+        # provisional knowledge claim. Its separate frozen research review is
+        # still required; this status never passes quality_block/publication.
+        return {**version, "status": "not-applicable", "errors": [],
+                "reasonCode": "internal-research", "authority": "no-notification"}
+    errors = insight_errors(result, result["input"], causal_guard_version=causal_guard_version)
     if result["input"].get("retrieval", {}).get("status") in {"deferred", "repeated-read", "context-budget"}:
         errors.append("내부 조회를 충분히 완료하지 못해 발송을 보류했습니다.")
     business = result.get("businessResearch") or {}
@@ -69,7 +78,7 @@ def local_quality(result, *, causal_guard_version=CAUSAL_GUARD_VERSION):
 
 def accept_review(result, review, input_id):
     quality = local_quality(result)
-    if quality["errors"]:
+    if quality["errors"] or quality["status"] == "not-applicable":
         return quality
     errors = []
     if not isinstance(review, dict) or review.get("version") != REVIEW_VERSION or set(review.get("sections", {})) != set(SECTIONS):

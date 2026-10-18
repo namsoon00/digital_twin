@@ -346,7 +346,16 @@ if __name__ == "__main__":
     unittest.main()
 
 class IsolatedObserverTests(unittest.TestCase):
+    def assert_passive_schedule_records_missed_slots_without_catch_up(self):
+        from isolated_observer import sample_slot
+        self.assertEqual((0, 0, 1000), sample_slot(1000, 1000, 300, 0))
+        self.assertEqual((1, 0, 1300), sample_slot(1000, 1010, 300, 1))
+        # A sleeping host missed slot one. Resume once at the current boundary.
+        self.assertEqual((2, 1, 1600), sample_slot(1000, 1620, 300, 1))
+        self.assertEqual((3, 0, 1900), sample_slot(1000, 1621, 300, 3))
+
     def test_cycles_use_distinct_processes_and_preserve_checkpoint(self):
+        self.assert_passive_schedule_records_missed_slots_without_catch_up()
         import sys
         from isolated_observer import run_cycle
         with tempfile.TemporaryDirectory() as directory:

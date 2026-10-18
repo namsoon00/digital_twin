@@ -141,6 +141,18 @@ AI 호출 한도와 관찰 간격은 별도 운영 정책으로 유지한다.
 재현은 동일 입력과 프롬프트를 복원해 해시·근거 연결을 검증한다는 뜻이다.
 비결정적인 모델이 같은 문장을 다시 생성한다는 보장은 아니다.
 
+## 내부 연구와 고객 알림 검증
+
+동결된 `question-research-scope-v1`의 `mode=research-only` 작업은 고객 알림
+비교·가격 확인 조건의 검증 대상이 아니다. `notification.send=false`일 때
+`quality.status=not-applicable`과 `authority=no-notification`으로 기록한다.
+잠정 지식과 사업 연구는 기존 동결 `researchQuality`의 독립 검토를 계속 거친다.
+처리 결과는 `research-reviewed`, `research-review-required`, `research-only`로
+구분하며, 연구 검토 실패의 동일 근거 재시도에는 기존 운영 제한을 적용한다. 고객 알림은 기존
+근거 검증·독립 검토·발행·전달 영수증 조건을 모두 충족해야 한다. 지원하지 않는
+연구 범위나 고객 분석에는 기존 전체 검증을 적용한다. 과거 저장 기록은 변경하지
+않으며, 모니터링은 과거 내부 연구의 알림 검증 거절과 실제 연구 검토 실패를 구분한다.
+
 ## 검증과 적용 범위
 
 `test_observation_evidence_protocol.py`는 어댑터의 종목/거시 전달, 포함·제외 회계,

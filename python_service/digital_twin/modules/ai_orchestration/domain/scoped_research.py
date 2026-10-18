@@ -11,6 +11,23 @@ mode=research-only이면 notification.send=false입니다. 부분 근거에 기�
 """
 
 
+def research_only(packet):
+    """Only a frozen, supported read-stage scope can select internal research."""
+    scope = packet.get("researchScope") or {}
+    return scope.get("version") == SCOPE_VERSION and scope.get("mode") == "research-only"
+
+
+def research_disposition(result):
+    """Research review is independent from customer narrative admission."""
+    if not research_only(result.get("input") or {}):
+        return ""
+    from .research_review import needed
+    if not needed(result):
+        return "research-only"
+    return ("research-reviewed" if (result.get("researchQuality") or {}).get("status") == "accepted"
+            else "research-review-required")
+
+
 def instructions(packet):
     scope = packet.get("researchScope", {})
     if scope.get("version") != SCOPE_VERSION:

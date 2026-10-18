@@ -1,5 +1,6 @@
 import ctypes
 import gc
+import json
 import os
 from pathlib import Path
 import unittest
@@ -14,7 +15,33 @@ from digital_twin.shared_kernel.events import DomainEvent
 
 
 class WorkerLifetimeTests(unittest.TestCase):
+    def assert_early_collection_and_trend_do_not_raise_the_hard_limit(self):
+        clock, emit, collect = Mock(return_value=0), Mock(), Mock()
+        memory = Mock(side_effect=[100, 170, 140, 210, 205])
+        guard = WorkerLifetime(max_bytes=200, max_seconds=1000, check_seconds=10,
+                               report_seconds=30, memory_reader=memory, clock=clock,
+                               collect=collect, emit=emit)
+        self.assertFalse(guard.should_retire())
+        first = json.loads(emit.call_args.args[0].split(' ', 1)[1])
+        self.assertEqual('sample', first['action'])
+        self.assertEqual(100, first['memoryBaselineBytes'])
+        clock.return_value = 10
+        self.assertFalse(guard.should_retire())
+        collected = json.loads(emit.call_args.args[0].split(' ', 1)[1])
+        self.assertEqual('collected', collected['action'])
+        self.assertEqual(40, collected['memoryGrowthBytes'])
+        self.assertEqual(170, collected['peakMemoryBytes'])
+        clock.return_value = 20
+        self.assertTrue(guard.should_retire())
+        retired = json.loads(emit.call_args.args[0].split(' ', 1)[1])
+        self.assertEqual('retire', retired['action'])
+        self.assertEqual('memory-pressure', retired['reason'])
+        self.assertEqual(200, retired['memoryLimitBytes'])
+        self.assertEqual(3, retired['completedTurns'])
+        self.assertEqual(2, collect.call_count)
+
     def test_pressure_reclaims_python_garbage_before_retiring(self):
+        self.assert_early_collection_and_trend_do_not_raise_the_hard_limit()
         memory = Mock(side_effect=[300, 80, 300, 250])
         clock = Mock(return_value=0)
         collect, emit = Mock(), Mock()

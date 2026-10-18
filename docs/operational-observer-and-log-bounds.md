@@ -11,6 +11,22 @@ native allocation growth without asserting that a particular driver allocation
 has been diagnosed or fixed. A small resident set alone does not prove recovery:
 check physical footprint, swapped allocations and host free disk too.
 
+`isolated_observer.supervise_samples` runs an operator-supplied passive sampler
+on a persisted wall-clock schedule until an explicit UTC cutoff. The interval
+must be at least 60 seconds and exceed the child deadline. Its exclusive lock,
+disposable child groups, private lifecycle receipts and durable next slot prevent
+overlap or catch-up polling after host suspension. A scheduled run, successful
+child exit or live PID is not a healthy-data observation; read the child's saved
+sample and query errors. Retain historical gaps when this sampler is restarted.
+
+Managed worker memory is sampled at settled work boundaries. At 80% of the
+existing 2 GiB hard limit it attempts Python garbage collection, without
+interrupting a transaction or receipt. Numeric baseline, growth, peak and work
+counts are logged every five minutes and on collection/retirement. The hard
+limit and maximum age remain unchanged. This provides evidence for separating
+Python garbage from retained/native growth; it does not assert that a leak has
+been diagnosed or that every retirement will disappear.
+
 `central_ai_health_reads.py` supplies a bounded round-robin primary-key task
 page, recent indexed call/notification pages and PK-only detail/receipt reads.
 It advances the task cursor only after all reads succeed. It marks results as

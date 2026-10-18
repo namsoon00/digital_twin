@@ -59,6 +59,9 @@ def legacy_quote_from(packet):
 
 def publication_block(result, now=None):
     now = now or datetime.now(timezone.utc)
+    from .scoped_research import research_only
+    if research_only(result.get("input") or {}):
+        return "잠정 연구는 독립 연구 검토 후 내부에만 보관합니다."
     if result.get("notification", {}).get("send") is not True:
         return "AI가 지금 알릴 만큼 새로운 해석이 없다고 판단했습니다."
     packet = result.get("input", {})

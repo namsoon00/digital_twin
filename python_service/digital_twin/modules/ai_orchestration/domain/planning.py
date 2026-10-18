@@ -102,7 +102,9 @@ def validate_plan(value, packet, research=(), require_research=False, require_re
         result.update({key: value.get(key) for key in ("insightVersion", "portfolioImpact", "claimEvidence", "observations")})
         try:
             business = value.get("businessResearch") or {}
-            result["followUpConditions"] = [] if value.get("followUpConditions") == [] and (business.get("theses") or business.get("reviews")) else prepare_observation_conditions(value.get("followUpConditions"), packet)
+            from .scoped_research import research_only
+            internal = research_only(packet) and notification["send"] is False
+            result["followUpConditions"] = [] if value.get("followUpConditions") == [] and (internal or business.get("theses") or business.get("reviews")) else prepare_observation_conditions(value.get("followUpConditions"), packet)
         except (ValueError, KeyError, TypeError) as error:
             result["followUpConditions"] = []
             result["conditionValidation"] = error.diagnostic if isinstance(error, ObservationConditionError) else {

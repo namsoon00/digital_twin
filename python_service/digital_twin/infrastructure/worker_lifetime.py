@@ -67,7 +67,8 @@ def _positive_env(name, default):
 class WorkerLifetime:
     def __init__(self, *, max_bytes=2 * 1024 ** 3, max_seconds=3600,
                  check_seconds=60, memory_reader=process_memory_bytes,
-                 clock=time.monotonic, collect=gc.collect, emit=print):
+                 clock=time.monotonic, collect=gc.collect, emit=print,
+                 collection_ratio=0.8, report_seconds=300):
         self.max_bytes = max_bytes
         self.max_seconds = max_seconds
         self.check_seconds = check_seconds
@@ -77,12 +78,19 @@ class WorkerLifetime:
         self.emit = emit
         self.started = clock()
         self.next_check = self.started
+        self.collection_bytes = int(max_bytes * max(0.5, min(1.0, collection_ratio)))
+        self.report_seconds = max(check_seconds, report_seconds)
+        self.next_report = self.started
+        self.baseline_bytes = None
+        self.peak_bytes = None
+        self.completed_turns = 0
         self.retired = False
 
     def should_retire(self):
         """Call only after the current job/transaction/receipt has settled."""
         if self.retired:
             return True
+        self.completed_turns += 1
         now = self.clock()
         age = max(0, now - self.started)
         expired = age >= self.max_seconds
@@ -92,18 +100,32 @@ class WorkerLifetime:
         before = self.memory_reader()
         after = before
         pressure = before is not None and before >= self.max_bytes
-        if pressure:
+        collection_needed = before is not None and before >= self.collection_bytes
+        if before is not None:
+            if self.baseline_bytes is None:
+                self.baseline_bytes = before
+            self.peak_bytes = max(self.peak_bytes or 0, before)
+        if collection_needed:
             self.collect()
             after = self.memory_reader()
         # A failed second read cannot prove that pressure was relieved.
         self.retired = expired or (pressure and (after is None or after >= self.max_bytes))
-        if pressure or self.retired:
+        if after is not None:
+            self.peak_bytes = max(self.peak_bytes or 0, after)
+            self.retired = self.retired or after >= self.max_bytes
+        if collection_needed or self.retired or now >= self.next_report:
+            self.next_report = now + self.report_seconds
             self.emit("worker-lifetime " + json.dumps({
                 "pid": os.getpid(), "ageSeconds": round(age, 1),
                 "memoryBeforeBytes": before, "memoryAfterBytes": after,
                 "memoryLimitBytes": self.max_bytes,
-                "action": "retire" if self.retired else "collected",
-                "reason": "maximum-age" if expired else "memory-pressure",
+                "memoryCollectionThresholdBytes": self.collection_bytes,
+                "memoryBaselineBytes": self.baseline_bytes,
+                "memoryGrowthBytes": (after - self.baseline_bytes
+                                      if after is not None and self.baseline_bytes is not None else None),
+                "peakMemoryBytes": self.peak_bytes, "completedTurns": self.completed_turns,
+                "action": "retire" if self.retired else "collected" if collection_needed else "sample",
+                "reason": "maximum-age" if expired else "memory-pressure" if collection_needed else "periodic",
                 "boundary": "completed-turn",
             }, sort_keys=True))
         return self.retired

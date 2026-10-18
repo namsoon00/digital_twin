@@ -158,7 +158,14 @@ The active graph's age observation window is 72 hours, but age-only deletion
 remains disabled. Shared disk reserve checks remain independent, so increasing
 the TypeDB ceiling cannot consume the host's final free space.
 
-The MySQL operational ceiling is 16,384 MB. Capacity reports separate physical
+The default MySQL operational ceiling is 32,768 MiB, configured through
+`operationalMySqlDataMaxSizeMb` / `OPERATIONAL_MYSQL_DATA_MAX_SIZE_MB`.
+The owner-approved local mitigation on 2026-10-18 raises it to 40,960 MiB
+while preserving 70% cleanup, 80% warning, 90% optional-write restriction and
+95% critical thresholds. It is a temporary operating budget, not a limit on
+InnoDB itself or proof that data growth has stabilized. Keep the shared-disk
+guard independent and reserve rebuild/TypeDB cutover space before compaction.
+Capacity reports separate physical
 files, live data and indexes, and allocator pages reclaimable by explicit
 compaction. Increasing retention does not treat deleted but unreclaimed pages
 as live investment history.

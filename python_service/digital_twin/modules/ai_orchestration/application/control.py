@@ -217,8 +217,9 @@ class AIControlService:
                     if result.get("conditionValidation", {}).get("reasonCode") == "condition-baseline-unusable":
                         result["dataRecovery"] = {"status": "awaiting-next-observation", "reasonCode": "condition-baseline-unusable",
                                                   "sameSnapshotRepairSkipped": True}
+                    from ..domain.scoped_research import research_disposition
                     result["processingOutcome"] = disposition(packet, retry_identity,
-                        "data-wait" if result.get("dataRecovery") else "output-invalid" if result["quality"]["status"] == "rejected" else "ready",
+                        research_disposition(result) or ("data-wait" if result.get("dataRecovery") else "output-invalid" if result["quality"]["status"] == "rejected" else "ready"),
                         result["quality"].get("errors", []))
                     children = []
                     for question in result["researchQuestions"]:

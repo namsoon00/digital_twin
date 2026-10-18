@@ -18,6 +18,43 @@ import test_ai_control as control_helpers
 
 
 class InsightGroundingTests(unittest.TestCase):
+    def assert_internal_research_is_not_a_failed_customer_draft_or_publication(self):
+        from digital_twin.modules.ai_orchestration.domain.scoped_retrieval import SCOPE_VERSION
+        from digital_twin.modules.ai_orchestration.domain.scoped_research import research_disposition
+        from digital_twin.modules.ai_orchestration.domain.publication import publication_block
+        from digital_twin.modules.ai_orchestration.domain.observation_wait import disposition, unchanged_wait
+        result = observation()
+        result["input"]["researchScope"] = {"version": SCOPE_VERSION, "mode": "research-only"}
+        result["notification"]["send"] = False
+        result.update(observations=[], followUpConditions=[], knowledgeResearch={"claims": [{"id": "proposal"}]})
+        result["quality"] = local_quality(result)
+        self.assertEqual("not-applicable", result["quality"]["status"])
+        self.assertEqual([], result["quality"]["errors"])
+        self.assertTrue(quality_block(result))
+        self.assertTrue(publication_block(result))
+        self.assertEqual("not-applicable", accept_review(result, review(), "customer-review")["status"])
+        self.assertEqual("research-review-required", research_disposition(result))
+        result["researchQuality"] = {"status": "accepted"}
+        self.assertEqual("research-reviewed", research_disposition(result))
+        self.assertTrue(quality_block(result))  # Research acceptance is never delivery permission.
+        wait = disposition(result["input"], "same-input", research_disposition(result), [])
+        self.assertFalse(unchanged_wait(wait, "same-input"))  # Reviewed work may continue its scoped research.
+        wait = disposition(result["input"], "same-input", "research-review-required", [])
+        self.assertTrue(unchanged_wait(wait, "same-input"))
+        self.assertFalse(unchanged_wait(wait, "changed-evidence"))
+        result["notification"]["send"] = True
+        self.assertEqual("rejected", local_quality(result)["status"])
+        self.assertTrue(publication_block(result))
+
+    def assert_unknown_or_customer_scope_keeps_full_narrative_validation(self):
+        for scope in ({}, {"version": "unknown", "mode": "research-only"},
+                      {"version": "question-research-scope-v1", "mode": "question-assessment"}):
+            result = observation()
+            result["input"]["researchScope"] = scope
+            result["notification"]["send"] = False
+            result.update(observations=[], followUpConditions=[])
+            self.assertEqual("rejected", local_quality(result)["status"])
+
     def assert_condition_meaning_is_reviewed_and_immutable(self):
         from digital_twin.modules.ai_orchestration.domain.insight_contract import narrative_digest
         from digital_twin.modules.reasoning.contracts import content_hash
@@ -316,6 +353,8 @@ class InsightGroundingTests(unittest.TestCase):
             self.assertTrue(insight_errors(result, p), mutation)
 
     def test_review_must_cover_every_section_and_new_meaning(self):
+        self.assert_internal_research_is_not_a_failed_customer_draft_or_publication()
+        self.assert_unknown_or_customer_scope_keeps_full_narrative_validation()
         self.assert_condition_meaning_is_reviewed_and_immutable()
         result = observation()
         for patch in ({'usefulness': 'generic'}, {'novelty': 'repetition'}, {'sections': {}}, {'version': 'old'}):

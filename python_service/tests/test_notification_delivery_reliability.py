@@ -440,6 +440,9 @@ class DeliveryHistoryDatabaseTests(StabilizationDatabaseCase):
             other.account_id = "other-account"
             self.assertEqual({}, store.relation_delivery_snapshot_with_connection(connection, other))
         self.assertEqual("unchanged_rulebox_relation", store.recheck_delivery_cadence(second)["suppressionReason"])
+        self.assertFalse(second.context["ontologyRelationDiff"]["material"])
+        self.assertEqual(first.job_id, second.context["ruleNotificationComparison"]["baselineJobId"])
+        self.assertEqual("dispatch-receipt-lock", second.context["ruleNotificationComparison"]["stage"])
         failed = deepcopy(second)
         failed.job_id += "-failed"
         store.upsert_job(failed)

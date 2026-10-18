@@ -12,6 +12,7 @@ from digital_twin.modules.notifications.domain.notification_rules import DEFAULT
 from digital_twin.modules.notifications.domain.notification.lifecycle import age_minutes_since
 from digital_twin.modules.notifications.domain.context_observation_notifications import typedb_context_observation_contract
 from digital_twin.modules.notifications.domain.relation_change import relation_change_evidence
+from digital_twin.modules.notifications.domain.rule_delivery_comparison import rule_delivery_comparison
 from digital_twin.modules.notifications.domain.notifications import NotificationJob
 from digital_twin.modules.notifications.domain.delivery_recovery import (
     notification_failure_retry_at,
@@ -1980,8 +1981,9 @@ class MySQLNotificationJobStore(DiagnosticThreadStore, InvestmentConversationSto
         with self.connect() as connection:
             if typedb_context_observation_contract(job.context or {}):
                 baseline = self.relation_delivery_snapshot_with_connection(connection, job)
-                packet = relation_change_evidence(job.context, baseline)
-                job.context["relationChangeEvidence"] = packet
+                comparison = rule_delivery_comparison(job.context, baseline, stage="dispatch-receipt-lock")
+                job.context.update(comparison)
+                packet = comparison["relationChangeEvidence"]
                 if not packet["eligible"]:
                     return {"allowed": False, "suppressionReason": packet.get("nonDeliveryReasonCode") or "unchanged_rulebox_relation", "reason": packet["reason"]}
             rule = self.rule_for_connection(connection, job.message_type)

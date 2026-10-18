@@ -322,6 +322,34 @@ continue as evidence; they cannot trigger the former customer AI queue.
 
 ## AI and ontology development
 
+### RuleBox improvement feedback (2026-10-18)
+
+`rulebox-improvement-feedback-v1` adds bounded historical feedback to the next
+independently scheduled observation. It reads scoped subject publication cases,
+including cases without notification jobs, actual notification policy results,
+successful delivery records, and stored outcome evaluations known at capture.
+It distinguishes source rechecks, duplicate/cooldown control, transport failure,
+and contradicted predictions. A publication record alone does not prove a
+production failure or customer delivery; unrecorded execution modes remain
+unverified. Older outcome records are labelled account/subject history, not
+current-world evidence. Missing, excluded and duplicate outcomes are never
+counted as successful or failed independent predictions.
+
+The feedback is frozen with the existing required continuity and prompt audit.
+It does not become a current ABox fact or a citable market premise. Changes to
+real records participate in input identity; a later polling clock alone does
+not create another input. A reader failure is explicit unavailable feedback,
+not evidence of zero failures. The inventory is bounded recent history, not a
+complete missed-opportunity census or a new performance/qualification score.
+
+Central AI may use it to request `develop-hypothesis` with usable current facts
+or propose service/management-policy improvements through `serviceFeedback`.
+Those existing writers, isolation, comparison, review and release-promotion
+checks retain authority. No inference-triggered AI task, rule editing privilege,
+new worker, schedule, or customer data-status push is added. The normal runtime
+composition wires all three readers; tests cover feedback capture, subject/time
+isolation, frozen prompt reuse and the existing development-question handoff.
+
 The ontology is the shared model of facts, meanings and evidence. Central AI
 compares explanations, identifies missing knowledge and chooses the next bounded
 research task. TypeDB owns semantic rules and action envelopes; the existing

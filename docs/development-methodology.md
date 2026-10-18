@@ -619,3 +619,13 @@ Successful receipts carry compact hypothesis continuity across intervening alert
 raw availability in an unrelated snapshot is not a delivered interruption notice.
 This is notification policy and presentation, not new investment inference or a
 change to graph-authored thresholds. See the same relationship-notification document.
+
+Owner-approved dispatch revalidation (2026-10-18): TypeDB relation notices must
+revalidate the frozen conditions actually used by their customer event at send
+time. Expired or unverifiable premises suppress that job and request source
+refresh through the existing monitoring queue. This supersedes the generic
+advisory-only freshness permission for this route. It is not a universal
+market-hours block: static policy inputs, filing-specific validity and historical
+outcome/source-status replies retain their own semantics. Keep source facts and
+judgments immutable; renewed inputs require a new TypeDB judgment. Publication,
+admission and the final receipt-locked send use the same customer-event comparison.

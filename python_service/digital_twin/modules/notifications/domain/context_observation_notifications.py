@@ -11,6 +11,7 @@ from digital_twin.modules.decisions.contracts import is_graph_backed_relation_co
 from digital_twin.modules.notifications.domain.follow_up_transition_evidence import follow_up_transition_evidence
 from digital_twin.modules.notifications.domain.relation_change import relation_change_evidence, relation_change_snapshot
 from digital_twin.modules.notifications.domain.management_observation import management_observation_contract, management_only_observation_requested
+from digital_twin.modules.notifications.domain.rule_delivery_comparison import rule_delivery_comparison
 
 
 CONTEXT_OBSERVATION_NOTIFICATION_VERSION = "typedb-context-observation-notification-v2"
@@ -749,7 +750,9 @@ def context_observation_delivery_decision(value: object) -> Dict[str, object]:
     # Before enqueueing, no receipt has been loaded yet. Admit proven recovery
     # to that check; the durable delivery gate freezes a packet (even when its
     # previous receipt is empty) and enforces the actual delivered baseline.
-    relation_change = relation_change_evidence(payload, saved.get("previous"), require_recovery_receipt=bool(saved))
+    comparison = rule_delivery_comparison(payload, saved.get("previous"), stage="publication",
+                                         require_recovery_receipt=bool(saved))
+    relation_change = comparison["relationChangeEvidence"]
     authorization_sources = ["typedb-relation-transition"] if relation_change["eligible"] else []
 
     decision = {
@@ -771,6 +774,8 @@ def context_observation_delivery_decision(value: object) -> Dict[str, object]:
         "relationTransitionIds": [item["transitionId"] for item in relation_change["transitions"]],
         "customerEventIds": [item["eventId"] for item in relation_change["customerEvents"]],
         "notificationPurposes": sorted({item["purpose"] for item in relation_change["customerEvents"]}),
+        "comparisonVersion": comparison["ruleNotificationComparison"]["version"],
+        "baselineSource": comparison["ruleNotificationComparison"]["baselineSource"],
     }
     if decision["stageObservation"]:
         decision.pop("selectedRuleId", None)

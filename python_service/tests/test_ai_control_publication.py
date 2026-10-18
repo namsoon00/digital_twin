@@ -461,10 +461,12 @@ class CentralPublicationStorageTests(unittest.TestCase):
         self.assertFalse(legacy.complete(None, "manual", None, {}))
 
     def test_independent_typedb_survives_retirement_and_worker_delivers_without_ai(self):
+        from datetime import datetime, timezone
         from test_typedb_independent_observation import independent_fixture
         from digital_twin.modules.notifications.application.notification.workflow import NotificationQueueRunner
         from digital_twin.modules.notifications.domain.typedb_publication import independent_typedb_publication
-        result, _, handoff, _ = independent_fixture(queue=self.queue, account_id=SUBJECT["accountId"])
+        result, _, handoff, _ = independent_fixture(queue=self.queue, account_id=SUBJECT["accountId"],
+                                                   source_clock="2026-10-01T00:00:00Z")
         self.assertEqual(1, result["typedbPublishedCount"], result)
         self.assertEqual([], handoff.events)
         self.assertEqual(0, self.publication.retire_legacy_work()["notifications"])
@@ -478,7 +480,8 @@ class CentralPublicationStorageTests(unittest.TestCase):
         old_ai = Mock()
         runner = NotificationQueueRunner(self.queue, SimpleNamespace(load_all=lambda: [account]), lambda _: notifier,
             settings=self.settings, include_message_types=["investmentInsight"], ai_request_enqueuer=old_ai,
-            delivery_guard=self.publication.delivery_guard)
+            delivery_guard=self.publication.delivery_guard,
+            now_provider=lambda: datetime(2026, 10, 1, 0, 1, tzinfo=timezone.utc))
         self.assertEqual(1, runner.run_once(), runner.last_run_details)
         old_ai.enqueue.assert_not_called()
         notifier.send.assert_called_once()

@@ -83,6 +83,7 @@ _EXPORTS.update({
     'investor_flow_values_reliable': ('digital_twin.modules.market_data.domain.investor_flow_psychology', 'investor_flow_values_reliable'),
     'investor_net_volume': ('digital_twin.modules.market_data.domain.market_data', 'investor_net_volume'),
     'kis_stage_freshness_records': ('digital_twin.modules.market_data.domain.data_freshness', 'kis_stage_freshness_records'),
+    'max_age_minutes_for_message_type': ('digital_twin.modules.market_data.domain.data_freshness', 'max_age_minutes_for_message_type'),
     'known_stock': ('digital_twin.modules.market_data.domain.market_data', 'known_stock'),
     'macro_context_facts': ('digital_twin.modules.market_data.domain.macro_context', 'macro_context_facts'),
     'market_evidence_profile': ('digital_twin.modules.market_data.domain.market_evidence_profiles', 'market_evidence_profile'),

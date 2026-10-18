@@ -123,6 +123,29 @@ def build_ai_control_service(settings=None):
         refresh_development(agenda, subjects, development.progress)
         agenda.wake_due(subjects)
 
+    def rulebox_feedback(packet):
+        from digital_twin.modules.notifications.infrastructure.rule_feedback import RuleBoxNotificationFeedbackReader
+        from digital_twin.modules.decisions.infrastructure.rule_feedback import RuleBoxCaseFeedbackReader
+        from digital_twin.modules.ai_orchestration.domain.rulebox_feedback import improvement_feedback
+        from digital_twin.infrastructure.operational_store import investment_decision_episode_store, subject_decision_case_store
+        notices, outcomes, cases, unavailable = [], [], [], []
+        try:
+            notices = RuleBoxNotificationFeedbackReader(publication.notifications).read(
+                packet["accountId"], packet["symbol"], packet["worldId"], packet["capturedAt"])
+        except Exception:
+            unavailable.append("notification-history")
+        try:
+            outcomes = investment_decision_episode_store(configured).outcome_history_for_symbols(
+                [packet["symbol"]], account_id=packet["accountId"], as_of=packet["capturedAt"], limit_per_symbol=6, maximum_episode_count=6)
+        except Exception:
+            unavailable.append("outcome-history")
+        try:
+            cases = RuleBoxCaseFeedbackReader(subject_decision_case_store(configured)).read(
+                packet["accountId"], packet["symbol"], packet["worldId"], packet["capturedAt"])
+        except Exception:
+            unavailable.append("publication-history")
+        return improvement_feedback(packet, notices, outcomes, unavailable, cases)
+
     return AIControlService(store, subjects, evidence, planner, researcher, research_memory, configured,
                             delivery_memory=publication.memory, reviewer=planner, development_memory=development.memory,
                             brain_memory=agenda.memory, brain_waker=wake_brain, read_planner=planner,
@@ -130,7 +153,7 @@ def build_ai_control_service(settings=None):
                             research_plan_memory=lambda account, symbol, world: agenda.memory(account, symbol, world, research_only=True),
                             research_gate=agenda.research_admission,
                             knowledge_context=knowledge.context if knowledge else None,
-                            knowledge_refresh=knowledge.refresh if knowledge else None)
+                            knowledge_refresh=knowledge.refresh if knowledge else None, rulebox_feedback=rulebox_feedback)
 
 
 def ai_control_status(settings=None, account_id=""):

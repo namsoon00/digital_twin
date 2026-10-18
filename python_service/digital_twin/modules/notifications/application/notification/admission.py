@@ -2,7 +2,7 @@
 
 import hashlib
 from dataclasses import dataclass
-from digital_twin.modules.notifications.domain.relation_change import relation_change_evidence
+from digital_twin.modules.notifications.domain.rule_delivery_comparison import rule_delivery_comparison
 from typing import Dict, List, Mapping
 
 from digital_twin.modules.market_data.contracts import evaluate_notification_data_freshness, sanitize_notification_context_for_freshness
@@ -149,14 +149,16 @@ class NotificationAdmissionPolicy:
                 relation_previous_context.get("_relationBaselineFingerprint") or ""
             )
             job.context = context
-        relation_diff = ontology_relation_delivery_diff(job.context or {}, relation_previous_context)
         if typedb_context_observation_contract(job.context or {}):
             context = dict(job.context or {})
             baseline = context.pop("_relationDeliveredSnapshot", None)
             if baseline is None:
                 baseline = (context.get("relationChangeEvidence") or {}).get("previous")
-            context["relationChangeEvidence"] = relation_change_evidence(context, baseline)
+            context.update(rule_delivery_comparison(context, baseline))
             job.context = context
+            relation_diff = context["ontologyRelationDiff"]
+        else:
+            relation_diff = ontology_relation_delivery_diff(job.context or {}, relation_previous_context)
         if ontology_relation_delivery_metadata(job.context or {}):
             context = dict(job.context or {})
             context["ontologyRelationDiff"] = relation_diff

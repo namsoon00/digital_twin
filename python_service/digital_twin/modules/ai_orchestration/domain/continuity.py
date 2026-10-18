@@ -109,6 +109,9 @@ def continuity_memory(history, research, compact_cases=False):
             memories.append(_summary(row, ("kind", "runId", "status", "completedAt", "stopReason", "verifiedClaimCount")))
         elif row.get("kind") == "ontology-development":
             memories.append(_summary(row, ("kind", "requestId", "worldId", "status", "question", "blockedReason", "sourceCapturedAt", "completedAt", "cases")))
+        elif row.get("kind") == "rulebox-feedback":
+            memories.append(_summary(row, ("kind", "version", "accountId", "symbol", "worldId", "notifications", "outcomes", "cases",
+                                            "unavailableSources", "coverage", "use")))
     value = {"version": CONTINUITY_VERSION, "previousAnalyses": analyses, "researchResults": memories}
     # Due cases have their own mandatory budget in final generation. All other
     # continuity is small and explicit; failure must never become silent amnesia.

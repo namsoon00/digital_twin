@@ -10,6 +10,9 @@ from digital_twin.modules.market_data.contracts import default_market_hours_mark
 from digital_twin.modules.notifications.domain.notification_ai_delivery import explicit_delivery_authorization, final_ai_insight_delivery_is_authorized, first_holding_review_candidate_is_admissible, verified_typedb_direct_delivery_authorization
 from digital_twin.modules.decisions.contracts import is_graph_backed_relation_context
 from digital_twin.modules.notifications.domain.notifications import NotificationJob
+from digital_twin.modules.notifications.domain.context_observation_notifications import typedb_context_observation_contract
+from digital_twin.modules.notifications.domain.rule_delivery_comparison import rule_delivery_comparison
+from digital_twin.modules.notifications.domain.rule_dispatch_validity import rule_dispatch_validity
 
 
 class NotificationDispatchEligibilityService:
@@ -219,11 +222,26 @@ class NotificationDispatchEligibilityService:
         return True
 
     def apply_dispatch_freshness_gate(self, job: NotificationJob, stage: str) -> bool:
-        if not self.freshness_enabled:
-            return True
         now = self.now_provider()
         if not isinstance(now, datetime):
             now = datetime.now(ZoneInfo("UTC"))
+        if job.message_type == INVESTMENT_INSIGHT and typedb_context_observation_contract(job.context or {}):
+            context = dict(job.context or {})
+            saved = context.get("relationChangeEvidence") or {}
+            comparison = rule_delivery_comparison(context, saved.get("previous"), stage=stage)
+            context.update(comparison)
+            validity = rule_dispatch_validity(comparison["relationChangeEvidence"], self.settings, now)
+            context["ruleDispatchValidity"] = validity
+            job.context = context
+            if not validity["allowed"]:
+                recheck = self.request_fresh_data_recheck(job, stage, validity["reason"])
+                job.context["ruleDispatchValidity"]["recheckRequested"] = bool(recheck.get("requested"))
+                job.context["deliverySuppressionReason"] = validity["reasonCode"]
+                self.suppress(job, validity["reason"])
+                return False
+            return True
+        if not self.freshness_enabled:
+            return True
         decision = evaluate_notification_data_freshness(job.context or {}, self.settings, now=now)
         context = dict(job.context or {})
         context.update(decision.to_context())

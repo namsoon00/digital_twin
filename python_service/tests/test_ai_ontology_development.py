@@ -40,6 +40,8 @@ class AIObservationDevelopmentTests(unittest.TestCase):
         self.task = {**{key: packet()[key] for key in ("accountId", "symbol", "worldId", "name")}, "taskId": "development-task"}
 
     def test_capability_is_bounded_and_preserves_historical_frozen_prompts(self):
+        from rule_delivery_checks import assert_rulebox_feedback
+        assert_rulebox_feedback(self)
         from question_resolution_checks import assert_resolution_contracts
         assert_resolution_contracts(self)
         result = development_result(self.task)

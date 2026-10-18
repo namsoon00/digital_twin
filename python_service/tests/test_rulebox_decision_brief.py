@@ -353,6 +353,9 @@ class NativeManagementResponseTests(unittest.TestCase):
 
     def test_policy_decision_survives_unqualified_forecasts_and_persists_with_synthesis(self):
         checks = ManagementObservationFlowChecks()
+        from rule_delivery_checks import assert_dispatch_revalidation, assert_receipt_comparison
+        assert_dispatch_revalidation(self, checks)
+        assert_receipt_comparison(self, checks)
         for name in sorted(n for n in dir(checks) if n.startswith('assert_policy_')
                            or n.startswith(('assert_unusable_', 'assert_captured_', 'assert_successful_'))):
             with self.subTest(management_flow=name):

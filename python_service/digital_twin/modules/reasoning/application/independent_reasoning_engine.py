@@ -1685,7 +1685,7 @@ class V2ReasoningEngine:
                 *(handoff.get("typedbCompanionOutcomes") or []),
             ]
             insight_dispatch_outcomes = tuple({key: row[key] for key in (
-                "status", "route", "symbol", "subjectCaseId", "requestId", "reason", "reasonCode",
+                "status", "route", "symbol", "subjectCaseId", "requestId", "reason", "reasonCode", "semanticReasonCode", "semanticReason",
                 "existing", "refreshRequired", "companionOfRoute", "queued", "notificationJobId",
             ) if key in row} for row in persisted_dispatch_outcomes)
             typedb_published_count = int(handoff.get("typedbPublishedCount") or 0)

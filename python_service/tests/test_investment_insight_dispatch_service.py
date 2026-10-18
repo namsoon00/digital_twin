@@ -317,6 +317,32 @@ class InvestmentInsightDispatchServiceTests(unittest.TestCase):
                 self.assertFalse(handoff.events)
 
     def assert_queue_receipt_distinguishes_admission_from_dispatch_intent(self):
+        class SuppressingQueue(FakeNotificationQueue):
+            def enqueue(self, job):
+                job.status = "suppressed"
+                job.last_error = "룰박스 관계의 새 의미 변화가 없어 웹 이력에만 저장합니다."
+                job.context["deliverySuppressionReason"] = "unchanged_rulebox_relation"
+                self.jobs[job.job_id] = job
+                return False
+
+        observation = subject_case("subject:suppressed-observation")
+        semantic_context = context_observation(observation)
+        semantic = inference_dispatch_decision(semantic_context, observation)
+        orchestrator = FakeOrchestrator([observation])
+        ai = FakeAIHandoff()
+        result = InvestmentInsightDispatchService(FakeIngress(), SuppressingQueue(), ai, orchestrator).dispatch([
+            alert(observation, semantic_context, "suppressed-observation"),
+        ])
+        outcome = result["outcomes"][0]
+        self.assertFalse(outcome["queued"])
+        self.assertEqual("unchanged_rulebox_relation", outcome["reasonCode"])
+        self.assertEqual(semantic.reason_code, outcome["semanticReasonCode"])
+        self.assertNotEqual(outcome["reasonCode"], outcome["semanticReasonCode"])
+        self.assertIn("새 의미 변화가 없어", outcome["reason"])
+        self.assertEqual(semantic.reason, outcome["semanticReason"])
+        self.assertEqual("suppressed", observation.delivery_state)
+        self.assertFalse(ai.events)
+
         for status, state in [
             ("awaiting-ai-insight", "awaiting-ai"), ("coalesced-material", "coalesced-ai"),
             ("coalesced-active", "coalesced-ai"), ("coalesced-cost-control", "coalesced-ai"),

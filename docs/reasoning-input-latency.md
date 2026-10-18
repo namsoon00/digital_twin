@@ -155,6 +155,12 @@ own contract identity so old incomparable pairs cannot starve later comparisons.
 Release fingerprints, validation-start clocks and latency requirements remain
 unchanged.
 
+Post-restart native runs retained valid ABox proofs, but two runs for the same
+verified subject snapshot used different joint subject batches. Their complete
+temporal and ABox footprints were not equal, so V5 rejected the comparison.
+Paired validation still needs demonstrably identical assembled inputs; this
+revision does not waive that requirement or promote the management candidate.
+
 Decision comparison now includes native management-response codes, objectives,
 bound numerical facts, release conditions and adjustment scenarios, while
 excluding graph-local decision IDs. Rules used by the frozen judgment also
@@ -167,5 +173,6 @@ Operational delivery diagnostics reuse existing status reads, adding no history
 scan. CLI and the operations reasoning view distinguish processing delays,
 source waiting, candidate rules not yet serving customers, the last scoped
 analysis with no alert candidate, and recorded admission outcomes. Unknown
-candidate counts remain unknown. Queue health and admission do not prove a
+candidate counts remain unknown. Unavailable queue reads are never reported as
+an empty queue. Queue health and admission do not prove a
 successful customer receipt or an absence of market opportunities.

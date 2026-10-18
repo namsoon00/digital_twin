@@ -771,6 +771,7 @@ class ReasoningEnginePlatformService:
                 "dispatchOutcomes": [
                     {"status": str(item.get("status") or ""),
                      "reasonCode": str(item.get("reason_code") or item.get("reasonCode") or "")[:120],
+                     "semanticReasonCode": str(item.get("semanticReasonCode") or "")[:120],
                      "reason": str(item.get("reason") or "")[:500]}
                     for item in last_result.get("insight_dispatch_outcomes") or []
                     if isinstance(item, Mapping)

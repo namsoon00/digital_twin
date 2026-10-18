@@ -16,6 +16,9 @@ def reasoning_delivery_diagnostics(state):
     if state.get("status") == "unavailable" or "delivery-reasoning-worker-heartbeat-missing" in reasons:
         add("reasoning-unavailable", "추론 실행 상태 확인 필요",
             "운영 추론을 사용할 수 없거나 워커의 최근 실행 신호가 확인되지 않습니다.", "warning")
+    elif delivery.get("pendingCount") is None or delivery.get("status") in {"unavailable", "error"}:
+        add("reasoning-queue-unavailable", "추론 대기열 상태 미확인",
+            "대기열 조회 결과가 없어 처리 지연이나 대기 작업 유무를 확인하지 못했습니다.", "warning")
     elif "reasoning-queue-critical-age" in reasons:
         age = int(delivery.get("oldestPendingAgeSeconds") or 0)
         add("reasoning-delayed", "추론 처리 지연",

@@ -544,6 +544,10 @@ class ReasoningEngineVersionTests(unittest.TestCase):
         state["reasons"] = []
         self.assertIn("awaiting-source", [row["code"] for row in reasoning_delivery_diagnostics(state)["checks"]])
         self.assertNotIn("customerDeliveryVerified", result)
+        state["queues"]["delivery"] = {"status": "unavailable", "pendingCount": 0}
+        codes = [row["code"] for row in reasoning_delivery_diagnostics(state)["checks"]]
+        self.assertIn("reasoning-queue-unavailable", codes)
+        self.assertNotIn("reasoning-idle", codes)
 
     def test_release_artifact_restore_preserves_frozen_authored_rule_payload(self):
         from unittest.mock import MagicMock

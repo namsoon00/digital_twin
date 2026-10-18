@@ -485,7 +485,13 @@ class InvestmentInsightDispatchService:
             "subjectCaseId": subject_case_id,
             "notificationJobId": job.job_id if queued else "",
             "queued": queued,
-            "reasonCode": decision.reason_code,
+            "reasonCode": (
+                "typedb-notification-admitted" if accepted
+                else "typedb-notification-already-recorded" if already_queued
+                else str(_mapping(job.context).get("deliverySuppressionReason") or "typedb-notification-not-admitted")
+            ),
+            "semanticReasonCode": decision.reason_code,
+            "semanticReason": decision.reason,
             "reason": (
                 decision.reason
                 if queued

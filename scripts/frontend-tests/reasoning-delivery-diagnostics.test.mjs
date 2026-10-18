@@ -15,6 +15,8 @@ test("operations shows inference delay and candidate rollout separately from act
   const html = context.window.OrbitAlphaConsoleWorkspaces.renderOperations(payload, "reasoning");
   assert.match(html, /추론 처리 지연/);
   assert.match(html, /고객 발송 미적용/);
+  assert.match(html, /cws-delivery-diagnostics/);
+  assert.match(html, /<span class="cws-health-dot" aria-hidden="true"><\/span><div><strong>추론 처리 지연/);
   assert.match(html, /data-operations-view="delivery"/);
   assert.match(html, /&lt;script&gt;unsafe&lt;\/script&gt;/);
   assert.doesNotMatch(html, /<script>unsafe/);

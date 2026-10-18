@@ -825,6 +825,10 @@
   border-bottom: 0;
 }
 
+.cws-delivery-diagnostics .cws-health-list article {
+  grid-template-columns: 10px minmax(0, 1fr);
+}
+
 .cws-health-dot {
   width: 8px;
   height: 8px;

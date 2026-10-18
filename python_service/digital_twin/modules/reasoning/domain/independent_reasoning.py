@@ -143,6 +143,7 @@ def reasoning_event_scope(event: object) -> Dict[str, object]:
         effective_symbols = (subject_id.upper(),)
     supersedable = bool(
         source.name == ONTOLOGY_REASONING_REQUESTED
+        and not bool(payload.get("candidateValidationReplay"))
         and work_class not in {"DIRECT", "RESEARCH", "GOVERNANCE"}
         and str(payload.get("importanceGate") or "").lower() != "non-fungible"
     )
@@ -793,6 +794,7 @@ def independent_reasoning_request(
         authoritative_fact_boundary = False
         authoritative_dependency_boundary = False
     context = {
+        "validationOnly": any(bool((event.payload or {}).get("candidateValidationReplay")) for event in events),
         "sourceEventIds": [event.event_id for event in events],
         "accountIds": list(account_ids),
         "targetSymbols": list(symbols),

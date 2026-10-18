@@ -27,6 +27,7 @@ def compact_ontology_reasoning_request_payload_for_storage(payload: Mapping[str,
         "subjectKind": 40,
         "subjectId": 191,
         "subjectRevision": 191,
+        "workClass": 40,
     }.items():
         text = _event_text(source.get(key), limit)
         if text:
@@ -38,6 +39,7 @@ def compact_ontology_reasoning_request_payload_for_storage(payload: Mapping[str,
             pass
     for key, limit, item_limit in (
         ("symbols", 200, 64),
+        ("accountIds", 200, 191),
         ("affectedSymbols", 200, 64),
         ("observationFollowupSymbols", 200, 64),
         ("factTypes", 20, 96),
@@ -170,6 +172,16 @@ def compact_ontology_reasoning_request_payload_for_storage(payload: Mapping[str,
                 if _event_text(symbol, 64)
             },
         }
+    if source.get("candidateValidationReplay") is True:
+        compact["candidateValidationReplay"] = True
+        pair = source.get("validationPair")
+        if isinstance(pair, Mapping):
+            compact["validationPair"] = {
+                **{key: _event_text(pair.get(key), 191) for key in (
+                    "baselineDeploymentId", "candidateDeploymentId", "sourceSnapshotId",
+                )},
+                "symbols": _event_text_list(pair.get("symbols"), limit=200, item_limit=64),
+            }
     return compact
 
 

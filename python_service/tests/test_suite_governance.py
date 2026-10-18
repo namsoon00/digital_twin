@@ -350,7 +350,14 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # Stable valuation admission and management-response comparison each
         # protect an independently observed runtime defect. Operational delivery
         # diagnostics additionally preserve unknown versus no-candidate states.
-        self.assertLessEqual(total, 2376)
+        # Logical input proof regressions cover isolated storage identities,
+        # missing dependencies and deterministic source/subject batch boundaries.
+        # Four concurrent memory/review regressions retain their own test
+        # ownership; include their declared methods in the shared suite budget.
+        # Comparison-only execution additionally verifies zero anchor writes.
+        # Paired ingress verifies immutable source time, scope and control drift.
+        # A real rollback rehearsal covers the observed outcome-save deadlock.
+        self.assertLessEqual(total, 2386)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

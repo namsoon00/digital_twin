@@ -1368,6 +1368,14 @@ def reasoning_engine_platform_command(args) -> int:
             ensure_ascii=False,
         ))
         return 0
+    if args.reasoning_engine_action == "validate-current":
+        from .reasoning_validation_factory import build_paired_reasoning_validation_service
+        result = build_paired_reasoning_validation_service(configured).request(
+            [value.strip() for value in args.symbols.split(",") if value.strip()],
+            account_id=args.account_id, limit=args.limit,
+        )
+        print(json.dumps(result, ensure_ascii=False))
+        return 0 if result.get("status") == "requested" else 2
     if args.reasoning_engine_action == "shadow-once":
         runner = build_reasoning_engine_shadow_runner(
             configured,
@@ -2748,6 +2756,10 @@ def build_parser() -> argparse.ArgumentParser:
     reasoning_engine_actions = reasoning_engine.add_subparsers(dest="reasoning_engine_action", required=True)
     reasoning_engine_status = reasoning_engine_actions.add_parser("status")
     reasoning_engine_status.add_argument("--historical", action="store_true")
+    reasoning_validate_current = reasoning_engine_actions.add_parser("validate-current")
+    reasoning_validate_current.add_argument("--symbols", required=True)
+    reasoning_validate_current.add_argument("--account-id", default="")
+    reasoning_validate_current.add_argument("--limit", type=int, default=1)
     reasoning_shadow_once = reasoning_engine_actions.add_parser("shadow-once")
     reasoning_shadow_once.add_argument("--worker-id", default="")
     reasoning_shadow_watch = reasoning_engine_actions.add_parser("shadow-watch")

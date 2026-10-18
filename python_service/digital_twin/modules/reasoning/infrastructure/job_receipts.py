@@ -38,6 +38,8 @@ def publish_job_receipts(
         )
     request_json = json_value(job.get("request_json"), {})
     source_event = dict(request_json.get("sourceEvent") or {})
+    if bool(dict(source_event.get("payload") or {}).get("candidateValidationReplay")):
+        return {**completion_summary, "status": "validation-only"}
     scope = market_observation_completion_scope(source_event)
     lineage_cursor = connection.execute(
         "SELECT source_event_id, account_id, symbol, source_snapshot_id, source_snapshot_at, "

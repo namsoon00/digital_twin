@@ -5,7 +5,7 @@ import json
 from typing import Mapping
 
 
-COMPARISON_INPUT_CONTRACT_VERSION = "reasoning-comparison-input-v5"
+COMPARISON_INPUT_CONTRACT_VERSION = "reasoning-comparison-input-v6"
 
 
 def _mapping(value):
@@ -41,7 +41,9 @@ def job_comparison_identity(job: Mapping[str, object]):
             manifest = _mapping(scope.get("scopeManifest"))
             encoded = json.dumps(manifest, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
             fingerprint = hashlib.sha256(encoded.encode("utf-8")).hexdigest()
-            if (not manifest or scope.get("scopeCount") != len(manifest)
+            if (scope.get("contractVersion") != "target-scope-logical-input-v2"
+                    or scope.get("complete") is not True
+                    or not manifest or scope.get("scopeCount") != len(manifest)
                     or scope.get("fingerprint") != fingerprint
                     or not all(isinstance(k, str) and isinstance(v, str) and v for k, v in manifest.items())):
                 scopes = {}

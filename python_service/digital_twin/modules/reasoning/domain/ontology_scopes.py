@@ -1961,7 +1961,15 @@ def target_scope_manifest_fingerprint(
     scope_plan: Iterable[object],
     target_symbols: Iterable[object],
 ) -> Dict[str, object]:
-    """Fingerprint target-owned scopes and their transitive dependencies."""
+    """Compare logical fragments, retaining every transitive fact dependency.
+
+    A current-state link's storage fingerprint can include copy-on-write
+    endpoint generations. Those generations legitimately differ between
+    isolated databases. The original base fingerprint owns the complete
+    logical assertion payload; its dependency IDs bind it to the other
+    fragments included below. Never substitute incoming facts for retained
+    persisted fragments, or reconstruct a missing fragment from another DB.
+    """
 
     rows = _scope_plan_by_id(scope_plan)
     targets = {
@@ -1982,15 +1990,23 @@ def target_scope_manifest_fingerprint(
                 if dependency_id in rows and dependency_id not in selected:
                     selected.add(dependency_id)
                     changed = True
-    payload = {
-        scope_id: _clean(
-            rows[scope_id].get("semanticFingerprint")
-            or rows[scope_id].get("fingerprint")
+    payload = {}
+    complete = bool(selected)
+    for scope_id in sorted(selected):
+        row = rows[scope_id]
+        base = _clean(row.get("baseFingerprint"))
+        dependencies = sorted({_clean(value) for value in row.get("dependencyScopeIds") or [] if _clean(value)})
+        complete = complete and bool(base) and all(value in selected for value in dependencies)
+        fragment = {"baseFingerprint": base, "dependencyScopeIds": dependencies}
+        payload[scope_id] = hashlib.sha256(json.dumps(
+            fragment, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+        ).encode("utf-8")).hexdigest() if base else _clean(
+            row.get("semanticFingerprint") or row.get("fingerprint")
         )
-        for scope_id in sorted(selected)
-    }
     encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     return {
+        "contractVersion": "target-scope-logical-input-v2",
+        "complete": complete,
         "fingerprint": hashlib.sha256(encoded.encode("utf-8")).hexdigest(),
         "scopeCount": len(payload),
         "scopeManifest": payload,

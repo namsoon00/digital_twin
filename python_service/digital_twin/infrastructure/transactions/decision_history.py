@@ -13,6 +13,7 @@ from digital_twin.modules.portfolio.infrastructure import (
     transaction_writes as portfolio_writes,
 )
 from contextlib import nullcontext
+from digital_twin.infrastructure.mysql_operational_connection import mysql_transaction_deadlock_retry
 from digital_twin.modules.model_registry.infrastructure import experiment_observation_writes
 from digital_twin.modules.model_registry.infrastructure.mysql_experiment_observations import active_observation_plans
 from datetime import timedelta, timezone
@@ -706,6 +707,7 @@ class MySQLInvestmentDecisionEpisodeStore(MySQLOperationalConnection):
             _runtime_settings=self.runtime_settings,
         )
 
+    @mysql_transaction_deadlock_retry("decision-outcome-save")
     def save_outcome(self, episode: DecisionEpisode, outcome: ObservedOutcome) -> ObservedOutcome:
         return observation_records.save_outcome(
             episode,

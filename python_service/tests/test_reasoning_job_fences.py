@@ -15,8 +15,9 @@ class ReasoningJobFenceTests(StabilizationDatabaseCase):
         now = datetime.now(timezone.utc)
         boundary = now.isoformat().replace("+00:00", "Z")
         other_boundary = (now + timedelta(seconds=1)).isoformat().replace("+00:00", "Z")
-        for index, (symbol, at) in enumerate((("AAPL", boundary), ("NVDA", other_boundary), ("MSFT", boundary))):
+        for index, (symbol, at) in enumerate((("AAPL", boundary), ("NVDA", other_boundary), ("AAPL", boundary))):
             event = self.source(symbol, stamp=at)
+            event.payload.update(workClass="GOVERNANCE", importanceGate="non-fungible")
             self.events.handle(event)
             self.sql("UPDATE reasoning_engine_jobs SET created_at=%s WHERE deployment_id=%s AND source_event_id=%s",
                      ((now + timedelta(milliseconds=index)).isoformat().replace("+00:00", "Z"), self.deployment, event.event_id))

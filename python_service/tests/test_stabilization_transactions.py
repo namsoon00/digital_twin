@@ -33,6 +33,30 @@ from digital_twin.modules.model_registry.infrastructure.mysql_hypothesis_develop
 
 
 class TransactionStabilizationTests(StabilizationDatabaseCase):
+    def test_outcome_deadlock_retries_the_rolled_back_transaction_without_duplicate_observations(self):
+        from pymysql.err import OperationalError
+        from digital_twin.infrastructure.mysql_operational_connection import MySQLConnectionProxy
+        episode = fixture_episode(account="deadlock:" + uuid.uuid4().hex, episode_id="episode:" + uuid.uuid4().hex)
+        self.decisions.save(episode)
+        outcome = ObservedOutcome(outcome_id="outcome:" + episode.episode_id, episode_id=episode.episode_id,
+                                  observed_at="2026-09-10T02:00:00Z", price=102,
+                                  payload={"calibrationEligibility": "eligible"})
+        execute = MySQLConnectionProxy.execute
+        failed = []
+
+        def once(connection, sql, params=None):
+            if sql.startswith("UPDATE investment_decision_episodes SET status") and not failed:
+                failed.append(True)
+                raise OperationalError(1213, "fixture deadlock after outcome insert")
+            return execute(connection, sql, params)
+
+        with patch.object(MySQLConnectionProxy, "execute", once):
+            saved = self.decisions.save_outcome(episode, outcome)
+        self.assertEqual(outcome.outcome_id, saved.outcome_id)
+        self.assertEqual(1, len(self.decisions.outcomes_for_episode(episode.episode_id)))
+        self.assertEqual(2, self.decisions.last_transaction_retry["attempts"])
+        self.assertTrue(self.decisions.last_transaction_retry["recovered"])
+
     def test_interrupted_hypothesis_selection_ignores_schedule_but_respects_owner_lock(self):
         from digital_twin.modules.model_registry.application.hypothesis_development_service import HypothesisDevelopmentService
         store = MySQLHypothesisDevelopmentStore(self.settings)

@@ -82,6 +82,7 @@ def smart_market_observations(snapshot, previous, legacy_events, settings):
                       format(movement["trigger"]["thresholdPct"], ".2f") + "% · 실제 관측 시간으로 보정"],
             metadata={"marketObservation": observation, "priceMovement": movement,
                 "observationOnly": True, "investmentJudgement": False, "deliveryDeferred": False,
+                "reasoningFollowupRequired": True,
                 "deliveryMode": "deterministic-outbox-before-typedb", "reasoningFollowup": "queued-from-persisted-snapshot"},
             generated_at=snapshot.generated_at))
     return result

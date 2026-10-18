@@ -2525,7 +2525,45 @@ class IndependentReasoningEngineTests(unittest.TestCase):
         self.assertEqual("shadow-delivery-blocked", result["ai_handoff_status"])
         self.assertEqual(0, recorder.calls)
         self.assertFalse(engine.health()["monitorRunnerUsed"])
+        # A comparison-only source is also fenced when the same engine owns
+        # the delivery pointer. It must not enter either transport or AI.
+        validation = source_event()
+        validation.payload["candidateValidationReplay"] = True
+        validation_handoff = FakeAIInsightHandoffService()
+        validation_engine = V2ReasoningEngine(
+            descriptor(), FakeAssembler(), FakeExecutor(), FakeCandidateBuilder(),
+            cycle_recorder=recorder, delivery_authorized_provider=lambda: True,
+            ai_insight_handoff_service=validation_handoff,
+        )
+        validation_result = validation_engine.consume([validation])
+        self.assertTrue(validation_result["trace_complete"])
+        self.assertFalse(validation_result["delivery_authorized"])
+        self.assertEqual("validation-delivery-blocked", validation_result["ai_handoff_status"])
+        self.assertFalse(independent_reasoning_request("delivery", [validation]).supersedable)
+        self.assertEqual([], validation_handoff.events)
+        self.assertEqual(0, recorder.calls)
         self.assert_active_v2_hands_subject_to_ai_before_notification_recorder()
+
+    def test_validation_receipt_skips_production_anchor_and_lineage_writes(self):
+        from digital_twin.modules.reasoning.infrastructure.job_receipts import publish_job_receipts
+        queries = []
+
+        class Connection:
+            def execute(self, sql, _params):
+                queries.append(sql)
+                return SimpleNamespace(fetchone=lambda: {"job_id": "validation-job", "request_json": json.dumps({
+                    "sourceEvent": {"payload": {"candidateValidationReplay": True}},
+                })})
+
+        result = publish_job_receipts(Connection(), "validation-job", {}, "2026-10-18T00:00:00Z")
+        self.assertEqual("validation-only", result["status"])
+        self.assertEqual(0, result["receiptCount"])
+        self.assertEqual(1, len(queries))
+        self.assertTrue(queries[0].lstrip().startswith("SELECT"))
+        self.assertEqual([], IndependentReasoningJobRunner.market_observation_completion_scope([
+            {"sourceEvent": {"eventId": "validation", "payload": {"candidateValidationReplay": True,
+                                                                  "accountIds": ["acct"], "symbols": ["NVDA"]}}},
+        ])["eventIds"])
 
     def assert_active_v2_hands_subject_to_ai_before_notification_recorder(self):
         recorder = FakeCycleRecorder()
@@ -3042,7 +3080,7 @@ class IndependentReasoningEngineTests(unittest.TestCase):
         self.assertEqual("deferred", registry.health["status"])
 
     def test_runner_never_completes_a_job_omitted_from_evaluated_symbols(self):
-        events = [source_event("NVDA", []), source_event("TSLA", [])]
+        events = [source_event("TSLA", [])]
         anchor_completions = []
 
         class Queue:
@@ -3110,13 +3148,12 @@ class IndependentReasoningEngineTests(unittest.TestCase):
 
         result = runner.run_once()
 
-        self.assertEqual(["job:0"], queue.completed)
-        self.assertEqual("job:1", queue.superseded[0][0])
+        self.assertEqual([], queue.completed)
+        self.assertEqual("job:0", queue.superseded[0][0])
         self.assertIn("TSLA", queue.superseded[0][1])
-        self.assertEqual(1, result["result"]["completed_job_count"])
+        self.assertEqual(0, result["result"]["completed_job_count"])
         self.assertEqual(1, result["result"]["coverage_excluded_job_count"])
-        self.assertEqual(["event:NVDA"], anchor_completions[0][0])
-        self.assertEqual(["NVDA"], anchor_completions[0][1]["symbols"])
+        self.assertEqual([], anchor_completions)
 
     def test_runner_shutdown_releases_only_its_owned_jobs_once(self):
         class Queue:

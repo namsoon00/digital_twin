@@ -133,6 +133,7 @@ def market_observation_followup_symbols(
             str(getattr(event, "account_id", "") or "").strip() != account
             or str(getattr(event, "rule", "") or "") != MARKET_OBSERVATION
             or not bool(metadata.get("observationOnly"))
+            or metadata.get("reasoningFollowupRequired") is False
         ):
             continue
         symbol = str(getattr(event, "symbol", "") or "").upper().strip()
@@ -352,6 +353,8 @@ class MySQLMarketObservationReasoningAnchorStore(MySQLOperationalConnection):
                         continue
                     source_event = dict(request.get("sourceEvent") or {})
                     payload = dict(source_event.get("payload") or {})
+                    if payload.get("candidateValidationReplay"):
+                        continue
                     coalesced = dict(payload.get("coalescedReasoningChanges") or {})
                     source_event_ids = {
                         str(survivor.get("source_event_id") or "").strip(),
@@ -396,6 +399,7 @@ class MySQLMarketObservationReasoningAnchorStore(MySQLOperationalConnection):
                     WHERE deployment_id = %s
                       AND job_status = 'completed'
                       AND source_snapshot_at >= %s
+                      AND COALESCE(JSON_UNQUOTE(JSON_EXTRACT(result_json, '$.insight_dispatch_status')), '') <> 'validation-delivery-blocked'
                     ORDER BY completed_at DESC
                     LIMIT 1000
                     """,

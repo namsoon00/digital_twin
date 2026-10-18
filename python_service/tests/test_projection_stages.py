@@ -223,4 +223,8 @@ class ProjectionStageTests(unittest.TestCase):
         fixture = json.loads(
             (ROOT.parent / "tests/fixtures/job_receipts_v1.json").read_text()
         )
-        self.assertEqual(fixture["bodyHash"], digest)
+        reviewed = json.loads((ROOT.parent / "tests/fixtures/closed_loop_semantic_changes.json").read_text()).get("receipts", {}).get("publish_job_receipts")
+        if reviewed:
+            self.assertTrue(reviewed["reason"])
+            self.assertNotEqual(fixture["bodyHash"], reviewed["hash"])
+        self.assertEqual(reviewed["hash"] if reviewed else fixture["bodyHash"], digest)

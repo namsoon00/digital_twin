@@ -8,6 +8,9 @@ def reasoning_batch_key(event, lane):
     accounts = payload.get("accountIds") or []
     if isinstance(accounts, str):
         accounts = [accounts]
+    symbols = payload.get("affectedSymbols") or payload.get("symbols") or payload.get("targetSymbols") or []
+    if isinstance(symbols, str):
+        symbols = [symbols]
     account_ids = tuple(sorted({
         str(value or "").strip()
         for value in [*accounts, payload.get("accountId")]
@@ -19,6 +22,8 @@ def reasoning_batch_key(event, lane):
                   if isinstance(value, Mapping) and value]
     return (
         account_ids,
+        bool(payload.get("candidateValidationReplay")),
+        tuple(sorted({str(value).upper().strip() for value in symbols if str(value or "").strip()})),
         str(boundary.get("accountId") or ""),
         str(boundary.get("snapshotId") or ""),
         str(boundary.get("generatedAt") or ""),

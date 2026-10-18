@@ -344,7 +344,14 @@ class RealtimeMonitor(MonitoringSampleDataMixin, MonitoringPositionContextMixin,
         # relationship result; only a configured critical move bypasses it
         # with a factual raw observation notification.
         observation_events = self.market_observation_events(decision_snapshot, previous)
-        candidates = [self.market_observation_candidate_payload(event) for event in observation_events]
+        candidates = [self.market_observation_candidate_payload(event) for event in observation_events
+                      if event.metadata.get("reasoningFollowupRequired") is not False]
+        # This list belongs to this collection cycle. Provider snapshots may
+        # carry the previous metadata forward; retaining its old candidate
+        # would request a fresh TypeDB follow-up on every unchanged poll.
+        # Durable pending anchors and already-queued source events survive
+        # independently and remain owned by their receipt/completion stores.
+        decision_snapshot.metadata.pop(MARKET_OBSERVATION_CANDIDATES_KEY, None)
         if candidates:
             decision_snapshot.metadata[MARKET_OBSERVATION_CANDIDATES_KEY] = candidates[:50]
         raw_events.extend([
@@ -912,6 +919,7 @@ class RealtimeMonitor(MonitoringSampleDataMixin, MonitoringPositionContextMixin,
                     },
                     "observationOnly": True,
                     "investmentJudgement": False,
+                    "reasoningFollowupRequired": reasoning_material,
                     "deliveryDeferred": delivery_deferred,
                     "deliveryMode": "typedb-first" if delivery_deferred else "deterministic-outbox-before-typedb",
                     "reasoningFollowup": "queued-from-persisted-snapshot",

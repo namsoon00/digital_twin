@@ -36,7 +36,10 @@ def reasoning_delivery_diagnostics(state):
         add("candidate-not-delivery", "새 규칙 검증 중 · 고객 발송 미적용",
             "후보 규칙의 추론 성공과 운영 전환은 별도입니다. 현재 발송은 운영 배포의 규칙을 사용합니다.")
     count = last.get("candidateEventCount")
-    if last.get("status") == "ok" and last.get("traceComplete") and count is not None:
+    if last.get("validationOnly"):
+        add("last-run-validation-only", "최근 실행은 엔진 비교 검증",
+            "고객 알림과 AI 접수를 하지 않는 검증 실행입니다. 일반 알림 후보 유무와 구분합니다.")
+    elif last.get("status") == "ok" and last.get("traceComplete") and count is not None:
         symbols = " · ".join(str(value) for value in last.get("symbols") or [])
         if count == 0:
             add("last-run-no-candidate", "최근 완료 추론의 알림 후보 없음",

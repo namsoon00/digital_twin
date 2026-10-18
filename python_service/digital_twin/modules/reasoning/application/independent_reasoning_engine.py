@@ -406,7 +406,7 @@ def compact_projection_result(projection: object) -> Dict[str, object]:
         **{
             name: {
                 key: deepcopy(scope[key])
-                for key in ("fingerprint", "scopeCount", "scopeManifest", "targetSymbols")
+                for key in ("contractVersion", "complete", "fingerprint", "scopeCount", "scopeManifest", "targetSymbols")
                 if key in scope
             }
             for name in ("comparisonScope", "persistedComparisonScope")
@@ -1655,10 +1655,14 @@ class V2ReasoningEngine:
                 reasoning_case.case_id,
                 [*detected_events, *ready_events],
             )
-        delivery_authorized = bool(self.delivery_authorized_provider())
+        validation_only = bool(request.context.get("validationOnly"))
+        delivery_authorized = bool(self.delivery_authorized_provider()) and not validation_only
         delivery_events = []
         ai_handoff_status = "shadow-delivery-blocked"
         insight_dispatch_status = "shadow-delivery-blocked"
+        if validation_only:
+            ai_handoff_status = "validation-delivery-blocked"
+            insight_dispatch_status = "validation-delivery-blocked"
         insight_dispatch_routes = {}
         insight_dispatch_outcomes = ()
         if delivery_authorized and self.insight_dispatch_service is not None:
@@ -2061,6 +2065,8 @@ class IndependentReasoningJobRunner:
         symbols = set()
         for job in jobs or []:
             event = dict(job.get("sourceEvent") or {})
+            if bool(dict(event.get("payload") or {}).get("candidateValidationReplay")):
+                continue
             scope = market_observation_completion_scope(event)
             event_ids.update(scope["eventIds"])
             account_ids.update(scope["accountIds"])

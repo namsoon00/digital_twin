@@ -34,6 +34,8 @@ _EXPORTS = {'research_knowledge_projection': ('digital_twin.modules.reasoning.do
                                    'OntologyWorldProjectionRunner'),
  'ReasoningEnginePlatformService': ('digital_twin.modules.reasoning.application.reasoning_engine_platform',
                                     'ReasoningEnginePlatformService'),
+ 'PairedReasoningValidationService': ('digital_twin.modules.reasoning.application.paired_reasoning_validation',
+                                    'PairedReasoningValidationService'),
  'ReasoningEngineShadowRunner': ('digital_twin.modules.reasoning.application.reasoning_shadow_service',
                                  'ReasoningEngineShadowRunner'),
  'ReasoningShadowScheduler': ('digital_twin.modules.reasoning.application.reasoning_shadow_service',

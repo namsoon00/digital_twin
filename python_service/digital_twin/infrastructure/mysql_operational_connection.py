@@ -1,6 +1,7 @@
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from functools import wraps
 import random
 import re
 import time
@@ -195,6 +196,28 @@ def run_mysql_deadlock_retry(
             delay_ms = mysql_deadlock_retry_delay_milliseconds(settings, attempts, random_fn=random_fn)
             delays.append(delay_ms)
             (sleep_fn or time.sleep)(delay_ms / 1000.0)
+
+
+def mysql_transaction_deadlock_retry(operation: str):
+    """Decorate a complete idempotent transaction, never a SQL statement."""
+    def decorate(callback):
+        @wraps(callback)
+        def invoke(store, *args, **kwargs):
+            try:
+                result, receipt = run_mysql_deadlock_retry(
+                    getattr(store, "runtime_settings", {}) or {}, operation, lambda: callback(store, *args, **kwargs),
+                )
+            except MySQLDeadlockRetryExhausted as error:
+                store.last_transaction_retry = error.receipt.to_dict()
+                raise
+            except Exception as error:
+                receipt = getattr(error, "orbit_mysql_retry_receipt", None)
+                store.last_transaction_retry = receipt.to_dict() if receipt is not None else {}
+                raise
+            store.last_transaction_retry = receipt.to_dict()
+            return result
+        return invoke
+    return decorate
 
 
 def mysql_operational_schema_bootstrap_enabled(settings: Dict[str, str] = None) -> bool:

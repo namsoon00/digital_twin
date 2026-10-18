@@ -176,3 +176,57 @@ analysis with no alert candidate, and recorded admission outcomes. Unknown
 candidate counts remain unknown. Unavailable queue reads are never reported as
 an empty queue. Queue health and admission do not prove a
 successful customer receipt or an absence of market opportunities.
+
+## Logical input proof and reproducible subject batches (2026-10-18)
+
+A later exact single-subject pair had identical incoming ABox and temporal
+inputs. Its persisted link hashes still differed because each isolated database
+had independently rebound copy-on-write endpoint generations. V6 comparison
+now requires `target-scope-logical-input-v2`: each original logical fragment's
+complete `baseFingerprint`, its dependency IDs, and the transitive dependency
+closure. Physical storage generations remain untouched and auditable. A changed
+value, logical relation or dependency still changes the proof; missing fragments
+or legacy receipts cannot establish completeness. Proofs are captured by each
+new execution, never backfilled from today's graph.
+
+Queue and runner batch compatibility now include the exact subject bundle.
+The same verified snapshot can no longer combine NVDA with different unrelated
+subjects depending on which worker reaches the mailbox first. Point-in-time
+source and temporal equality checks remain mandatory. New release registration
+binds the actual registering runtime revision and comparison contracts while
+preserving the authored rules; existing releases and validation clocks are not
+rewritten. This is required before independently validating and promoting the
+management-rule upgrade.
+
+Three actual immutable PLTR requests carried only `marketObservationFollowup`.
+A source replay reproduced a raw-delivery candidate even though its quote was
+identical to the pending reasoning anchor. Smart delivery deferred that raw
+candidate, but the monitor still scheduled its TypeDB follow-up. Raw delivery
+and reasoning now carry separate admission flags; new smart movement transitions
+explicitly retain follow-up. Review also found that an inherited cycle-local
+candidate list could survive an empty detection pass. Detection now replaces
+that list, including its empty state. Durable pending anchors, queued source
+events, completion receipts and meaningful new observations remain intact. No
+price threshold, news/filing admission or investment rule is changed.
+
+`python_service/service.py reasoning-engine validate-current --symbols NVDA --limit 1`
+requests a bounded independent pair from an already durable source snapshot.
+Its event and both queue jobs are recorded atomically against the selected
+delivery/candidate pair. Repeating the same subject/snapshot/pair is idempotent.
+The request is non-coalescible, retains the original observation clock, and uses
+normal native execution and exact input proof checks. It does not manufacture
+a new quote or bypass a missing source/temporal/ABox dependency.
+
+Comparison-only sources are fenced from both transport and AI even on the
+delivery deployment. They cannot advance pending production quote anchors,
+including completion-repair fallback reads. The existing queues retain actual
+wait/execution times; a requested pair is not a passing comparison. Request one
+pair at a time so validation does not flood customer work or obscure queue SLOs.
+
+The isolated real-MySQL load rehearsal also exposed error 1213 during an
+outcome save. That complete idempotent transaction now uses the existing
+bounded deadlock policy. A real rollback rehearsal injects the failure after
+the outcome insert, proves the retry leaves exactly one observation, and keeps
+the original observation clock. Other errors and ambiguous commit outcomes
+are not retried. Historical execution failures are retained; a genuinely new
+runtime release receives its own immutable validation cohort.

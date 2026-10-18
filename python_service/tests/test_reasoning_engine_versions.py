@@ -48,7 +48,8 @@ def input_scopes(symbol="NVDA", value="same-facts"):
     manifest = {"symbol:" + symbol + ":market": value}
     fingerprint = hashlib.sha256(json.dumps(manifest, ensure_ascii=False, sort_keys=True,
                                              separators=(",", ":")).encode()).hexdigest()
-    scope = {"fingerprint": fingerprint, "scopeCount": len(manifest),
+    scope = {"contractVersion": "target-scope-logical-input-v2", "complete": True,
+             "fingerprint": fingerprint, "scopeCount": len(manifest),
              "scopeManifest": manifest, "targetSymbols": [symbol]}
     return {"comparisonScope": deepcopy(scope), "persistedComparisonScope": deepcopy(scope)}
 
@@ -409,7 +410,7 @@ class ReasoningEngineVersionTests(unittest.TestCase):
         self.assertIn("comparison_contract_version", insert_sql)
         self.assertIn("job:active", insert_params)
         self.assertIn("job:candidate", insert_params)
-        self.assertIn("reasoning-comparison-input-v5", insert_params)
+        self.assertIn("reasoning-comparison-input-v6", insert_params)
 
     def test_comparison_rejects_different_temporal_feature_inputs(self):
         def job(job_id, snapshot_id, payload_hash, backend_id, windows_hash):
@@ -548,6 +549,10 @@ class ReasoningEngineVersionTests(unittest.TestCase):
         codes = [row["code"] for row in reasoning_delivery_diagnostics(state)["checks"]]
         self.assertIn("reasoning-queue-unavailable", codes)
         self.assertNotIn("reasoning-idle", codes)
+        state["deliveryDeployment"]["lastRun"]["validationOnly"] = True
+        codes = [row["code"] for row in reasoning_delivery_diagnostics(state)["checks"]]
+        self.assertIn("last-run-validation-only", codes)
+        self.assertNotIn("last-run-no-candidate", codes)
 
     def test_release_artifact_restore_preserves_frozen_authored_rule_payload(self):
         from unittest.mock import MagicMock
@@ -1158,7 +1163,8 @@ class ReasoningEngineVersionTests(unittest.TestCase):
 
         platform = ReasoningEnginePlatformService(
             Registry(),
-            {"reasoningEngineShadowTypeDbDatabase": "typedb-production"},
+            {"reasoningEngineShadowTypeDbDatabase": "typedb-production",
+             "_runtimeIdentity": {"revision": "fixed-input-runtime"}},
         )
 
         result = platform.register_v2_release("v2-candidate", "release-candidate")
@@ -1171,6 +1177,8 @@ class ReasoningEngineVersionTests(unittest.TestCase):
         self.assertEqual("saved", result["releaseSeedArtifact"]["status"])
         artifact = platform.registry.release_artifacts["v2-candidate"]
         self.assertEqual("ontology-release-seed-artifact-v2", artifact["version"])
+        self.assertEqual("fixed-input-runtime", artifact["releaseBundle"]["runtime_revision"])
+        self.assertIn("reasoning-comparison-input-v6", artifact["releaseBundle"]["source_contract_versions"])
         self.assertEqual(
             "release-candidate",
             artifact["releaseBundle"]["release_id"],

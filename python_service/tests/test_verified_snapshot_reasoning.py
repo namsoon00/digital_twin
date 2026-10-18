@@ -387,6 +387,29 @@ class VerifiedSnapshotReasoningTests(unittest.TestCase):
         self.assertTrue(entries[0]["observationFollowup"])
         self.assertGreaterEqual(entries[0]["priorityHint"], OBSERVATION_FOLLOWUP_PRIORITY_HINT)
 
+        # A later unchanged collection must not inherit that cycle's pending
+        # scheduling marker. The durable anchor still records unfinished work.
+        from digital_twin.modules.market_data.domain.monitoring import RealtimeMonitor
+        from digital_twin.modules.market_data.domain.market_observations import MARKET_OBSERVATION_CANDIDATES_KEY, market_observation_reasoning_symbols
+        stable = snapshot()
+        stable.metadata[MARKET_OBSERVATION_CANDIDATES_KEY] = [
+            {"symbol": "AAPL", "marketObservation": {"currentPrice": 100.0}},
+        ]
+        stable.metadata["marketObservationBaselines"] = {
+            "AAPL": {"price": 80.0, "outboxPrice": 80.0, "pendingReasoningPrice": 100.0, "pendingReasoningEventId": "already-queued"},
+        }
+        prior_state = stable.to_monitor_state()
+        monitor = RealtimeMonitor({})
+        candidates = monitor.market_observation_events(stable, prior_state)
+        self.assertTrue(candidates)
+        self.assertTrue(all(event.metadata["reasoningFollowupRequired"] is False for event in candidates))
+        monitor.events_for_snapshot(stable, prior_state)
+        self.assertNotIn(MARKET_OBSERVATION_CANDIDATES_KEY, stable.metadata)
+        self.assertEqual("already-queued", stable.metadata["marketObservationBaselines"]["AAPL"]["pendingReasoningEventId"])
+        self.assertIsNone(verified_monitor_snapshot_reasoning_event(
+            stable, prior_state, observation_followup_symbols=market_observation_reasoning_symbols(stable.metadata),
+        ))
+
     def test_research_cache_rotation_without_eligible_evidence_does_not_enqueue(self):
         previous = snapshot(external_signals={
             "researchEvidence": {

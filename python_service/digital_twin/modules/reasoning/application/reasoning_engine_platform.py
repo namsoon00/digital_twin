@@ -766,6 +766,7 @@ class ReasoningEnginePlatformService:
                 "traceComplete": bool(
                     last_result.get("trace_complete") or last_result.get("traceComplete")
                 ),
+                "validationOnly": last_result.get("insight_dispatch_status") == "validation-delivery-blocked",
                 "symbols": list(last_result.get("symbols") or [])[:20],
                 "candidateEventCount": len(last_result.get("candidate_events") or []) if "candidate_events" in last_result else None,
                 "dispatchOutcomes": [
@@ -1243,6 +1244,13 @@ class ReasoningEnginePlatformService:
             or base.time_series_backend_id
         )
         bundle = base.release_bundle
+        # An authored RuleBox may intentionally inherit the active market
+        # rules. Its new executable deployment must identify the code that is
+        # actually registering it, rather than inheriting the old runtime's
+        # revision and silently pooling their validation history.
+        from digital_twin.modules.reasoning.domain.reasoning_comparison_identity import COMPARISON_INPUT_CONTRACT_VERSION
+        from digital_twin.modules.reasoning.domain.reasoning_shadow import REASONING_SHADOW_CONTRACT_VERSION
+        registration_runtime = dict(self.settings.get("_runtimeIdentity") or {})
         authored_artifact = dict(release_seed_artifact or {})
         if authored_artifact:
             from digital_twin.modules.model_registry.contracts import GraphInferenceRule, rulebox_rules_hash
@@ -1269,11 +1277,13 @@ class ReasoningEnginePlatformService:
                 prompt_release_id=bundle.prompt_release_id,
                 feature_set_version=bundle.feature_set_version,
                 model_signal_release_id=bundle.model_signal_release_id,
-                source_contract_versions=bundle.source_contract_versions,
+                source_contract_versions=tuple(sorted(set(bundle.source_contract_versions) | {
+                    COMPARISON_INPUT_CONTRACT_VERSION, "target-scope-logical-input-v2",
+                })),
                 release_id=clean_release_id,
                 runtime_contract_version=bundle.runtime_contract_version,
-                runtime_revision=bundle.runtime_revision,
-                comparison_contract_version=bundle.comparison_contract_version,
+                runtime_revision=str(registration_runtime.get("revision") or bundle.runtime_revision),
+                comparison_contract_version=REASONING_SHADOW_CONTRACT_VERSION,
             ),
             capabilities=dict(base.capabilities),
         )

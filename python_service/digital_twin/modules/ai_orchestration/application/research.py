@@ -51,6 +51,8 @@ def execute_research(job, research_store, orchestrator_factory):
         # fingerprint and model input. Keep the original question intact.
         task["purpose"] = "원래 질문의 대상·기간·완료 기준을 모두 확인합니다: " + json.dumps(job["questionContract"], ensure_ascii=False, sort_keys=True)
     previous_answer = job.get("knownSourceAnswer") or {}
+    if job.get("evidenceRequirements"):
+        task["purpose"] += "\n원문 조회에서 확인한 미확인 항목만 보완합니다: " + json.dumps(job["evidenceRequirements"], ensure_ascii=False)
     if previous_answer.get("status") == "partial":
         task["purpose"] += ("\n이미 확인한 답변은 보존하고 아래 미확인 항목만 추가 탐색하세요. "
             "이전 답변은 역사적 작업 기록이며 이번 답변의 근거를 대신하지 않습니다. "

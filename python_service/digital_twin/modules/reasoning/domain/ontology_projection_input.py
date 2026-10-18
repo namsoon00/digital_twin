@@ -23,8 +23,8 @@ from digital_twin.modules.news_intelligence.contracts import company_knowledge_b
 from digital_twin.modules.instruments.contracts import security_lines_for_symbol
 
 
-ONTOLOGY_PROJECTION_INPUT_VERSION = "ontology-projection-input-v5"
-ONTOLOGY_REASONING_SNAPSHOT_INPUT_VERSION = "ontology-reasoning-snapshot-input-v5"
+ONTOLOGY_PROJECTION_INPUT_VERSION = "ontology-projection-input-v6"
+ONTOLOGY_REASONING_SNAPSHOT_INPUT_VERSION = "ontology-reasoning-snapshot-input-v6"
 
 SYMBOL_SIGNAL_GROUPS = {
     "secFilings",
@@ -294,7 +294,7 @@ def _compact_research_payload(item: Mapping[str, object]) -> Dict[str, object]:
         document = source.get("officialDocumentText")
         if isinstance(document, str) and len(document.encode()) <= 16000:
             proof = {key: source[key] for key in ("officialDocumentText", "documentHash", "sourceDocumentHash", "documentPassages",
-                     "documentIssuerIdentity", "reportDate", "evidenceLifecycleState", "researchTaskIds") if key in source}
+                     "documentIssuerIdentity", "reportDate", "evidenceLifecycleState", "researchTaskIds", "publicationProof") if key in source}
             if len(json.dumps(proof, ensure_ascii=False).encode()) <= 32000:
                 result.update(deepcopy(proof))
     assertions = relationships.get("assertions") if isinstance(relationships, Mapping) else None
@@ -337,6 +337,15 @@ def _compact_research_payload(item: Mapping[str, object]) -> Dict[str, object]:
     references = source.get("sourceReferences") if isinstance(source.get("sourceReferences"), list) else item.get("sourceReferences")
     if isinstance(references, list):
         result["sourceReferences"] = _compact_company_event_contract({"sourceReferences": references}).get("sourceReferences", [])
+    if source.get("financialReport"):
+        # Exact cited report revisions must survive independently of the latest
+        # company report. Truncated source contracts are not valid substitutes.
+        report = {key: source[key] for key in ("financialReport", "periodEnd", "frequency", "reportedValues",
+            "metricUnits", "metricProvenance", "durationBases", "sourceReferences", "sourceRevision",
+            "reportObservationId", "historicalReport", "publicationTimeKnown", "freshnessBasis",
+            "freshnessObservedAt", "evidenceLifecycleState") if key in source}
+        if len(json.dumps(report, ensure_ascii=False).encode()) <= 32000:
+            result.update(deepcopy(report))
     for key in ["ontologyRelations", "entityLinks"]:
         value = source.get(key) if isinstance(source.get(key), list) else item.get(key)
         if isinstance(value, list):

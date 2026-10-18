@@ -285,6 +285,9 @@ class MySQLBrainAgendaStore(MySQLOperationalConnection):
                         nextCheckAt=max(case.get("nextCheckAt", ""), later(now, repeat.WAIT_MINUTES)))
             return
         repeat.initialize(case)
+        from ..domain.question_recovery import gap_opportunity
+        recovery_key = gap_opportunity(case, "scheduled")
+        new_material = set(repeat.materials(case)) - set(case["researchRepeat"].get("scheduledMaterials", []))
         ceiling = 6 if result.get("researchBasis") else 3
         repeated = "research-attempt-limit" if case.get("researchAttempts", 0) >= ceiling else repeat.admission(case, "scheduled")
         if repeated:
@@ -299,7 +302,8 @@ class MySQLBrainAgendaStore(MySQLOperationalConnection):
             json.loads(row["payload_json"]).get("researchRequest") if row else case.get("researchRequest"))
         retryable = previous.get("result", {}).get("status") in {"failed", "research-cooldown"}
         attempts = case.get("researchIntentAttempts", {}).get(intent, 0)
-        reason = ("조사 횟수 한도에 도달해 추가 자료나 기능 검토가 필요합니다." if case["researchAttempts"] >= ceiling or attempts >= 2 else
+        reason = ("이미 시도한 조사 경로입니다. 보완 조사는 다른 출처나 조회 범위를 지정해야 합니다." if recovery_key and not new_material and (intent == previous_intent or attempts) else
+                  "조사 횟수 한도에 도달해 추가 자료나 기능 검토가 필요합니다." if case["researchAttempts"] >= ceiling or attempts >= 2 else
                   "기존 조사 한도를 사용했습니다. 다른 출처나 구체적으로 달라진 조사 계획이 필요합니다." if result.get("researchBasis") and case["researchAttempts"] >= 3 and previous_intent == intent else
                   "같은 근거로 조사를 반복하지 않고 새 자료를 기다립니다." if previous.get("inputFingerprint") == fingerprint and previous_intent == intent and not retryable else
                   "조사 재시도 간격을 기다립니다." if previous.get("requestedAt") and later(previous["requestedAt"], 360) > now else "")
@@ -324,6 +328,8 @@ class MySQLBrainAgendaStore(MySQLOperationalConnection):
             **({"previousSourceRun": {"runId": previous["result"]["runId"], "taskId": previous["taskId"]}}
                if previous.get("taskId") and previous.get("result", {}).get("runId") else {}),
             **({"questionContract": copy.deepcopy(case["questionContract"])} if case.get("questionContract") else {}),
+            **({"evidenceRequirements": copy.deepcopy(case["evidenceProgress"]["missingRequirements"])[:8]}
+               if recovery_key else {}),
             "priority": 5, "availableAt": now})
         case.update(status="waiting", researchAttempts=case["researchAttempts"] + 1,
             lastResearch={"taskId": task_id, "requestedAt": now, "inputFingerprint": fingerprint, "requestFingerprint": intent},
@@ -333,10 +339,10 @@ class MySQLBrainAgendaStore(MySQLOperationalConnection):
 
     @staticmethod
     def wake_observation(connection, account, symbol, world, due, changed=True):
-        connection.execute("UPDATE ai_control_tasks SET available_at=LEAST(available_at,%s),priority=GREATEST(priority,3) "
+        return connection.execute("UPDATE ai_control_tasks SET available_at=LEAST(available_at,%s),priority=GREATEST(priority,3) "
             "WHERE account_id=%s AND symbol=%s AND capability='observe' AND status='pending' AND attempts=0 "
             "AND JSON_UNQUOTE(JSON_EXTRACT(payload_json,'$.worldId'))=%s "
-            "AND (%s OR created_at<=%s)", (due, account, symbol, world, bool(changed), due))
+            "AND (%s OR created_at<=%s)", (due, account, symbol, world, bool(changed), due)).rowcount
 
     def research_waiting(self, connection, job, result):
         key = job.get("brainCaseId")
@@ -453,7 +459,9 @@ class MySQLBrainAgendaStore(MySQLOperationalConnection):
                    "AND COALESCE(JSON_UNQUOTE(JSON_EXTRACT(payload_json,'$.answerResolution.status')),'')<>'answered' " if research_only else "")
                 + "ORDER BY (COALESCE(JSON_UNQUOTE(JSON_EXTRACT(payload_json,'$.answerResolution.status')),'')='answered') DESC,"
                   "(COALESCE(JSON_UNQUOTE(JSON_EXTRACT(payload_json,'$.capability')),'')='research') DESC,"
-                  "next_check_at,created_at,case_id LIMIT 5", (account, symbol, world, world)).fetchall()
+                + ("(JSON_UNQUOTE(JSON_EXTRACT(payload_json,'$.evidenceProgress.status'))='waiting' "
+                   "AND JSON_EXTRACT(payload_json,'$.researchRepeat.gapRecovery.planned') IS NULL) DESC," if research_only else "")
+                + "next_check_at,created_at,case_id LIMIT 5", (account, symbol, world, world)).fetchall()
             feedback = connection.execute("SELECT payload_json FROM ai_brain_cases WHERE account_id=%s AND symbol=%s AND kind='service-feedback' "
                 "ORDER BY updated_at DESC LIMIT 3", (account, symbol)).fetchall()
             from .mysql_business_research import business_memories

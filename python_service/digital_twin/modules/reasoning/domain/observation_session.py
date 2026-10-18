@@ -32,13 +32,16 @@ class ObservationEvidenceSession:
         """Resolve source-owner IDs only against this frozen graph inventory."""
         rows = []
         for fact in self._facts.values():
-            ref = fact.get("historicalDocumentReference") or {}
+            ref = fact.get("historicalDocumentReference") or fact.get("questionSourceReference") or {}
             if ref.get("evidenceId") not in sources:
                 continue
             rows.append({"factId": fact["id"], "category": fact["evidenceCategory"],
                          "evidenceId": ref["evidenceId"], "caseIds": sources[ref["evidenceId"]],
                          "periodEnd": ref["periodEnd"], "publishedAt": ref["publishedAt"],
-                         "documentHash": ref["documentHash"], "bytes": len(canonical_json(fact).encode())})
+                         **({"sourceKind": ref["sourceKind"], "limitation": ref["limitation"],
+                             "sourceRevision": ref["sourceRevision"]} if ref.get("sourceKind") else
+                            {"documentHash": ref["documentHash"]}),
+                         "bytes": len(canonical_json(fact).encode())})
         return sorted(rows, key=lambda row: row["factId"])[:8]
 
     def business_baseline(self, question_documents=()):

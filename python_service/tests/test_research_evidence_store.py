@@ -44,6 +44,14 @@ class FixedCacheKeyExternalSignalProvider(ExternalSignalProvider):
 
 class ResearchEvidenceStoreTests(unittest.TestCase):
     def test_verified_document_replaces_rejection_of_missing_source(self):
+        from question_recovery_checks import check_source_references
+        financial, issuer = check_source_references(self)
+        store = TestResearchEvidenceStore(self.seed)
+        store.upsert_many([financial, issuer])
+        self.assertEqual([issuer.evidence_id], [row.evidence_id for row in store.question_documents("TEST")])
+        self.assertEqual([financial.evidence_id], [row.evidence_id for row in
+            store.question_documents("TEST", limit=1, preferred_ids=[financial.evidence_id])])
+        self.assertEqual([], store.question_documents("ANOTHER", preferred_ids=[financial.evidence_id]))
         previous = {"officialDocumentText": "", "documentVerified": False,
                     "evidenceQualityAuthority": "revalidation-v1", "dataState": "insufficient", "validationState": "blocked"}
         incoming = {"officialDocumentText": "Verified filing body", "documentVerified": True,

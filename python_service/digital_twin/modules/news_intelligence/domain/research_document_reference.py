@@ -26,12 +26,16 @@ def question_document_changed_symbols(changes):
         for row in changes or []
         if isinstance(row, dict) and str(row.get("symbol") or "").strip()
         and str(row.get("evidenceId") or "").startswith(
-            "research:" + str(row["symbol"]).strip().upper() + ":sec-question:")
+            tuple("research:" + str(row["symbol"]).strip().upper() + ":" + suffix
+                  for suffix in ("sec-question:", "explored:", "financial-report:")))
     })
 
 
 def research_document_reference(item):
     """Fail closed; this reference never changes the filing's event eligibility."""
+    if item.kind == "issuer-ir":
+        from .question_source_reference import issuer_document_reference
+        return issuer_document_reference(item)
     raw = item.raw_payload
     governance = raw.get("evidenceGovernance") or {}
     admission = raw.get("promptEvidenceAdmission") or {}

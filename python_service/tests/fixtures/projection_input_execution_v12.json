@@ -1,0 +1,16 @@
+{
+  "sourceRevision": "d0e5afce5 + exact question source recovery",
+  "contractVersion": "projection-input-execution-v12",
+  "reason": "Version source compaction as v6 to retain complete bounded financial source contracts and verified issuer IR passages for original questions. Legacy v5 plus legacy TBox are replayed against unchanged v11/v10 scenarios. Question reference and SQL tests separately verify exact identity, provenance and no full-document or investment promotion.",
+  "scenarios": {
+    "full": "73b49a4d14be8e30f060c50b3230e64efd4dd91c906983e4a33cbd03ccfa031c",
+    "target": "e6868787dc74aa492eba10b4fb21891ecca565fec9429d1de7b38c1a7ee034b7",
+    "source-facts": "05c3840f67596bdeb2f248b7d92b46c5847a8e0cf9006e8f8bca3bf9eee71d3c",
+    "live-context": "c9c8e2d66f782a05b60395661f9a4290e47db27852dd17bf06b378b4ee9396d9",
+    "memory-hit": "e2db76e222ca00f085b7b7a59f77c6613d8e412bd4c7e3d48110bc6ca60cf96f",
+    "persistent-hit": "64ebfa59bb212f339f0ff608debd1cfc0430585206ba12d971f62f5d9fd038f9",
+    "cache-errors": "ad3340333e016817fb55f1856d828a31d3d2570deefbad3417c633f654e16283",
+    "scoring-failure": "fc7419a3c58a6005a40d83f7fe6110b2ead538c0067825b97751e34c1d9fcb2f",
+    "world-identity": "74a26009cce754f35fd4e5b2449fe4222b1f1d93466b0f7adeb27371fdf71b46"
+  }
+}

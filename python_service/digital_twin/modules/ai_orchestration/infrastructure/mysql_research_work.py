@@ -35,6 +35,8 @@ def record_plan(store, connection, job, result, children):
             receipt["deferred"].append({"caseId": review["caseId"], "reason": "case-changed-after-capture"})
             continue
         repeat.initialize(case)
+        from ..domain.question_recovery import gap_opportunity
+        recovery_key = gap_opportunity(case, "planned")
         if repeat.admission(case, "planned"):
             receipt["deferred"].append({"caseId": case["caseId"], "reason": "unchanged-research-material"})
             continue
@@ -73,11 +75,16 @@ def record_plan(store, connection, job, result, children):
                 + (case.get("evidenceProgress") or {}).get("missingRequirements", [])))[:12],
             "executionInputId": result["executionInputId"], "taskId": job["taskId"], "at": now,
             "stateKey": state, "unchangedPlans": repeats, "authority": "research-planning-only"}
+        if recovery_key:
+            case["researchPlan"]["gapRecoveryKey"] = recovery_key
         if review["action"] == "research":
             case["researchRequest"] = deepcopy(review["researchRequest"])
             basis = identity(case["caseId"], work.contract_key(review["contract"]),
                              case.get("answerResolution", {}).get("assessmentFingerprint", ""))
             store.schedule_research(connection, case, job, {"researchBasis": basis}, children, now)
+            scheduled = next((child for child in children if child.get("brainCaseId") == case["caseId"]), None)
+            if scheduled:
+                case["researchPlan"]["scheduledTaskId"] = scheduled["taskId"]
         store.save(connection, case, job["taskId"], "research-planned", case["researchPlan"])
         receipt["caseIds"].append(case["caseId"])
     for item in plan["questions"]:
@@ -142,7 +149,19 @@ def reconcile_and_schedule(store, connection, subjects):
                         case.update(nextCheckAt=now, reason="저장된 원문 답변을 질문에 연결했습니다. 가설 판단과 구분해 확인합니다.")
                         store.save(connection, case, task_id, "answer-reconciled", case["answerResolution"])
                         counts["answersReconciled"] += 1
-            if work.needs_research_plan(case) and case.get("nextCheckAt", "") <= now:
+            from ..domain.question_recovery import answer_review_key, gap_opportunity
+            review_key = answer_review_key(case)
+            if review_key and (case.get("answerReviewWake") or {}).get("key") != review_key:
+                updated = store.wake_observation(connection, *scope, now)
+                if not updated:
+                    updated = connection.execute("SELECT task_id FROM ai_control_tasks WHERE account_id=%s AND symbol=%s "
+                        "AND capability='observe' AND status='pending' AND attempts=0 AND available_at<=%s "
+                        "AND JSON_UNQUOTE(JSON_EXTRACT(payload_json,'$.worldId'))=%s LIMIT 1", (*scope[:2], now, scope[2])).fetchone()
+                if updated:
+                    case["answerReviewWake"] = {"key": review_key, "at": now, "authority": "review-scheduling-only"}
+                    store.save(connection, case, "answer-review-wake", "answer-review-scheduled", case["answerReviewWake"])
+            if work.needs_research_plan(case) and (case.get("nextCheckAt", "") <= now
+                    or (gap_opportunity(case, "planned") and not repeat.admission(case, "planned"))):
                 before = deepcopy(case)
                 store.refresh_research_material(case)
                 reason = repeat.admission(case, "planned")
@@ -152,7 +171,7 @@ def reconcile_and_schedule(store, connection, subjects):
                     store.save(connection, case, case.get("researchPlan", {}).get("taskId", "repeat-guard"),
                         "research-repeat-suppressed", {"reason": reason, "modelCalled": False})
                     counts["repeatPlansSuppressed"] += 1
-                else:
+                elif repeat.planning_due(case, now):
                     # Persist the exact source-content admission state before a
                     # planner is queued. The worker checks it again before AI.
                     if case != before:

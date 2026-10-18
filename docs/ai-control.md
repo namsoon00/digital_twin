@@ -1290,10 +1290,33 @@ Rollbacks undo both the task and the checkpoint. Unchanged source/contract/scope
 checkpoints are not rewritten merely because missing-evidence prose changed.
 The checkpoint is `read-progress-only`, cannot close a question, and emits no
 customer research milestone. The next eligible research plan sees these missing
-items alongside the preserved partial answer. It does not grant a new search or
-reset any repeat ledger, lifetime ceiling or wait deadline; new cached source
-content is still required. This can deliberately leave a question waiting when
-the available sources have not changed.
+items alongside the preserved partial answer. `question-recovery-v1` permits
+one bounded follow-up plan per original case when a verified read has recorded
+missing requirements. A persisted research plan must request an untried source
+or query scope before collection can use that opportunity. Rewording the gap or
+editing the question contract cannot renew it. The six-attempt lifetime ceiling,
+per-intent limits, six-hour source-request interval and source-availability gate
+still apply. Subsequent work requires newly available source material.
+
+An already answered source assessment can wake a pending observation once for
+that assessment and recovery policy, even when the next observation was created
+after the source answer. The wake marker and scheduling change commit together.
+This schedules independent question review; it does not close the agenda case
+or qualify a hypothesis. Answer completion requires a frozen independent research
+review even when the separate market narrative review was accepted.
+
+Original question references can reserve exact structured financial-report
+revisions and verified issuer IR passages as well as SEC filing passages. The
+source owner validates identity and provenance before projection into the ABox.
+Projection input v6 retains a complete financial source contract only within a
+32 KB bound; a newer report cannot silently replace the cited revision. Structured
+values are explicitly distinguished from a full filing, notes or correction
+history. Issuer document publication time never supplies an invented report period.
+
+A newly persisted follow-up task can emit one `researchProgress` milestone,
+“부족한 자료 추가 조사 예약”, with its missing requirements. Dedupe uses the actual
+scheduled task, and wait/blocked plans emit nothing. A scheduling notice is not
+answer delivery or empirical validation; delivery still requires a notifier receipt.
 
 Internal research retry identity includes original question contracts and source
 content/answer state, but excludes its own checkpoint, failed-attempt bookkeeping,

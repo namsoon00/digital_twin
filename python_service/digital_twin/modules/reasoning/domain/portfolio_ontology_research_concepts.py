@@ -586,8 +586,9 @@ def add_research_evidence_concepts(
             continue
         evidence_state = research_evidence_state(item, raw_payload)
         materiality_passed = bool(evidence_state.get("materialityPassed"))
-        from digital_twin.modules.news_intelligence.contracts import research_document_reference
+        from digital_twin.modules.news_intelligence.contracts import research_document_reference, question_source_reference
         document_reference = research_document_reference(item)
+        source_reference = question_source_reference(item)
         relation_weight = 1.0
         event_id = add_entity(graph, "research-evidence", item.evidence_id, item.title, {
             "tboxClass": "ResearchEvidence",
@@ -628,6 +629,7 @@ def add_research_evidence_concepts(
             "analysisReady": bool(raw_payload.get("analysisReady")),
             "documentHash": raw_payload.get("documentHash"),
             **({"historicalDocumentReference": document_reference} if document_reference else {}),
+            **({"questionSourceReference": source_reference} if source_reference else {}),
             **(
                 disclosure_reasoning_eligibility({**raw_payload, **evidence_state})
                 if "disclosure" in str(item.kind or "").lower()

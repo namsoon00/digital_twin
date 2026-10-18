@@ -43,24 +43,38 @@ def admission(case, action):
     current = set(materials(case))
     if len(known | current) > MAX_MATERIALS:
         return "research-material-limit"
-    if guard.get(action) and not current - known:
+    from .question_recovery import gap_opportunity
+    if guard.get(action) and not current - known and not gap_opportunity(case, action):
         return "unchanged-research-material"
     return ""
 
 
 def remember(case, action, task_id=""):
+    from .question_recovery import gap_opportunity
+    recovery = gap_opportunity(case, action)
     initialize(case)
     guard = case["researchRepeat"]
     guard[action] = True
     guard[action + "Materials"] = sorted(set(guard.get(action + "Materials", [])) | set(materials(case)))[:MAX_MATERIALS]
     guard.pop("waitReason", None)
+    if recovery:
+        guard.setdefault("gapRecovery", {})[action] = recovery
     if action == "scheduled":
         guard["authorizedTaskId"] = task_id
 
 
 def planning_due(case, now):
     from .research_work import needs_research_plan
-    return (needs_research_plan(case) and case.get("nextCheckAt", "") <= now
+    from .question_recovery import gap_opportunity
+    from .brain_management import later
+    requested = (case.get("lastResearch") or {}).get("requestedAt")
+    guard = case.get("researchRepeat") or {}
+    if (gap_opportunity(case, "planned") and guard.get("planned")
+            and not set(materials(case)) - set(guard.get("plannedMaterials", []))
+            and requested and later(requested, 360) > now):
+        return False
+    gap_due = gap_opportunity(case, "planned") and (not requested or later(requested, 360) <= now)
+    return (needs_research_plan(case) and (case.get("nextCheckAt", "") <= now or gap_due)
             and not admission(case, "planned"))
 
 
@@ -72,6 +86,11 @@ def planning_memory(case):
     if returned.get("documentaryAnswer") == result.get("latestSourceAnswer"):
         returned.pop("documentaryAnswer", None)
     result["planningMemoryVersion"] = "research-planning-memory-v1"
+    from .question_recovery import gap_opportunity, VERSION as recovery_version
+    opportunity = gap_opportunity(case, "planned")
+    if opportunity:
+        result["sourceFollowUpOpportunity"] = {"version": recovery_version, "key": opportunity,
+            "remaining": 1, "authority": "source-planning-only"}
     return result
 
 

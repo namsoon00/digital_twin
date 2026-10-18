@@ -155,11 +155,11 @@
     "graph_for_graph_store_persistence": {
       "path": "digital_twin/modules/reasoning/domain/projection_facts.py",
       "owner": "",
-      "bodyHash": "9e944273220682927487da0f061501150db6a64f182262caf1fde8e01ce46603",
+      "bodyHash": "2f8084db3f19e3575201b269e73f7300b7038f7bad45bba639c887ce0e950a09",
       "restore": {
         "list(fallback_rules or [])": "self.rulebox_rules_for_impact()"
       },
-      "reason": "Retain stock-to-original-question-document observation edges independent of active rule predicates, while preserving current-event ineligibility. Full persistence regression: test_research_judgment_continuity; docs/ai-control.md."
+      "reason": "Retain stock-to-original-question-document and exact structured source observation edges independent of active rule predicates, while preserving current-event ineligibility. Full persistence regression: test_research_judgment_continuity; docs/ai-control.md."
     },
     "decision_episode_projection_context": {
       "path": "digital_twin/modules/reasoning/application/projection_input/decision_memory.py",

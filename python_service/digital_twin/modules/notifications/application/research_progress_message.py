@@ -17,6 +17,12 @@ def render_research_progress(value):
     lines = ["<b>🔬 연구 진행 · " + subject + "</b>",
              text(value["label"]), "", "<b>연구 질문</b>", text(value["question"])]
     answer = value.get("documentaryAnswer") or {}
+    followup = value.get("sourceFollowUp") or {}
+    if followup:
+        lines.extend(["", "<b>이번에 보완할 조사</b>", text(followup.get("reason"))])
+        if followup.get("missingRequirements"):
+            lines.extend(["<b>필요한 자료</b>", text(" · ".join(followup["missingRequirements"]))])
+        lines.append("자료 조사를 예약했습니다. 답변 확보나 검증 완료를 뜻하지 않습니다.")
     if answer:
         lines.extend(["", "<b>자료 검토 답변</b>", text(answer.get("text"))])
         if answer.get("missingRequirements"):

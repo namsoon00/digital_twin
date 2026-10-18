@@ -238,6 +238,8 @@ class ResearchWorkTests(unittest.TestCase):
 @unittest.skipUnless(os.environ.get("MYSQL_DATABASE") == "orbit_alpha_test", "isolated MySQL required")
 class ResearchWorkStorageTests(unittest.TestCase):
     def test_timer_checks_do_not_replan_but_new_cached_content_reopens_once(self):
+        from question_recovery_checks import check_recovery_transaction
+        check_recovery_transaction(self)
         from test_ai_brain_agenda import BrainAgendaStorageTests
         from digital_twin.modules.ai_orchestration.infrastructure.mysql_research_work import reconcile_and_schedule
         fixture = BrainAgendaStorageTests(); fixture.setUp()

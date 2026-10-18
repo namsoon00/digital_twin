@@ -511,7 +511,7 @@ class ExternalSignalCoreMixin:
                 items = [
                     item.to_dict()
                     for item in list(reserved.values())[:12]
-                    if item.kind in {"news", "disclosure", "filing", "financial-fact", "market-move"}
+                    if item.kind in {"news", "disclosure", "filing", "issuer-ir", "financial-fact", "market-move"}
                 ]
             except Exception as error:  # noqa: BLE001 - stored evidence must not block realtime monitoring.
                 signals.setdefault("statuses", []).append({

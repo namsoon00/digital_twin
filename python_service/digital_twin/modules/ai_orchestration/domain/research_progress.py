@@ -27,6 +27,13 @@ def research_progress(case, event):
     elif stage == "assessment" and status in {"answered", "blocked", "dismissed"}:
         category, state = "question", status
         label = {"answered": "연구 답변 검토", "blocked": "연구 진행 보류", "dismissed": "연구 질문 종료"}[status]
+    elif stage == "research-planned":
+        plan = event.get("details") or {}
+        task_id = plan.get("scheduledTaskId")
+        if (plan.get("action") != "research" or not task_id
+                or task_id != (case.get("lastResearch") or {}).get("taskId")):
+            return None
+        category, state, label = "source-followup", task_id, "부족한 자료 추가 조사 예약"
     elif stage == "research-returned":
         result = case.get("lastResearch", {}).get("result", {})
         answer = result.get("documentaryAnswer") or {}
@@ -89,4 +96,8 @@ def research_progress(case, event):
         "qualification": "not-empirically-qualified",
         "documentaryAnswer": deepcopy(case.get("lastResearch", {}).get("result", {}).get("documentaryAnswer") or {}) if stage == "research-returned" else {},
         "reviewBlocker": deepcopy(case.get("reviewBlocker") or {}) if stage == "review-deferred" else {},
+        **({"sourceFollowUp": {"reason": (event.get("details") or {}).get("reason", ""),
+            "missingRequirements": (event.get("details") or {}).get("missingRequirements", []),
+            "resumeWhen": (event.get("details") or {}).get("resumeWhen", "")}}
+           if stage == "research-planned" else {}),
     }

@@ -13,6 +13,6 @@ def question_document_sources(connection, symbol):
     for row in rows:
         for source in json.loads(row["sources"] or "[]") or []:
             key = source.get("evidenceId")
-            if isinstance(key, str) and key.startswith("research:" + symbol + ":sec-question:") and key not in ids:
+            if isinstance(key, str) and key.startswith("research:" + symbol + ":") and key not in ids:
                 ids.append(key)
     return ids[:8]

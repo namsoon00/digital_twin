@@ -202,7 +202,9 @@ class AIControlService:
                         result["repair"]["status"] = result["quality"]["status"]
                     from ..domain import research_review
                     if research_review.needed(result) and (result["quality"]["status"] not in {"accepted", "observation-only"}
-                            or (result.get("knowledgeResearch") or {}).get("claims")):
+                            or (result.get("knowledgeResearch") or {}).get("claims")
+                            or (packet.get("questionEvidencePolicy") and any(row["action"] in {"answered", "dismissed"}
+                                for row in result.get("caseReviews", [])))):
                         stage = "research-assessment-review"
                         result["researchQuality"] = {"version": research_review.VERSION, "status": "rejected"}
                         try:

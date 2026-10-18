@@ -346,9 +346,9 @@
     var historicalDebt = engine.historicalDebt || {};
     var diagnostics = engine.deliveryDiagnostics || {};
     var diagnosticChecks = Array.isArray(diagnostics.checks) ? diagnostics.checks : [];
-    var deliveryDiagnosis = '<section class="cws-section"><header><div><h2>알림이 없는 이유 확인</h2></div></header>' +
+    var deliveryDiagnosis = '<section class="cws-section cws-delivery-diagnostics"><header><div><h2>알림이 없는 이유 확인</h2></div></header>' +
       (diagnosticChecks.length ? '<div class="cws-health-list">' + diagnosticChecks.map(function (check) {
-        return '<article class="' + escapeHtml(check.status === "warning" ? "warning" : "neutral") + '"><div><strong>' + escapeHtml(check.label) + '</strong><em>' + escapeHtml(check.detail) + '</em></div></article>';
+        return '<article class="' + escapeHtml(check.status === "warning" ? "warning" : "neutral") + '"><span class="cws-health-dot" aria-hidden="true"></span><div><strong>' + escapeHtml(check.label) + '</strong><em>' + escapeHtml(check.detail) + '</em></div></article>';
       }).join("") + '</div>' : empty("추론 진단 정보 미확인", "이 화면만으로 알림이나 투자 신호가 없다고 판단할 수 없습니다.")) +
       '<footer class="cws-section-note">최근 추론 완료 ' + escapeHtml(clock(diagnostics.lastInferenceAt)) +
       ' · 대기 원천 스냅샷 ' + escapeHtml(clock(diagnostics.oldestPendingSourceAt)) +

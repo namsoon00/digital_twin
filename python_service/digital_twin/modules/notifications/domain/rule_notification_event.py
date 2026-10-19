@@ -145,7 +145,8 @@ def customer_rule_events(current, previous, transitions):
         for hypothesis in hypotheses:
             intent = rule_notification_intent(hypothesis.get("claimContract"))
             if (not intent or intent["claimContractId"] in seen
-                    or intent["ruleId"] not in (hypothesis.get("ruleIds") or [])):
+                    or intent["ruleId"] not in (hypothesis.get("ruleIds") or [])
+                    or intent["ruleId"] not in (transition.get("sourceRuleIds") or [])):
                 continue
             purpose_linked = True
             if intent["purpose"] not in {"hypothesis-evidence", "context-evidence"}:

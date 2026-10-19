@@ -350,7 +350,15 @@ def lifecycle_observation_context(outcome="OBSERVATION"):
         "candidateAction": "NO_ACTION",
     }
     relation["graphStoreInference"]["relations"] = []
-    relation["graphStoreInference"]["traces"] = []
+    # A lifecycle label alone is not a sendable premise. This synthetic
+    # negative native evaluation preserves the fresh fact that closed it.
+    relation["graphStoreInference"]["traces"] = [{
+        "ruleId": "rule:risk", "matched": False, "label": "위험 조건 불성립 확인",
+        "matchedConditions": [{"conditionId": "negative-price-change", "kind": "subject_property",
+            "field": "priceChangeRate", "operator": "<", "expectedValue": 0,
+            "observedValue": 1.2, "matched": False, "matchedByTypeDB": False,
+            "observedAt": "2026-08-16T00:00:00Z", "source": "Fixture native evaluation",
+            "freshnessRequired": True, "freshnessStatus": "fresh", "judgementEvidenceUsable": True}]}]
     return context
 
 
@@ -450,6 +458,9 @@ class FinalAIDeliveryTests(unittest.TestCase):
             "resolved",
             decision["relationLifecycleTransition"]["changeKind"],
         )
+        missing_proof = lifecycle_observation_context()
+        missing_proof['ontologyRelationContext']['graphStoreInference']['traces'] = []
+        self.assertEqual('suppress', final_ai_delivery_decision(missing_proof)['decision'])
 
         triggered = lifecycle_observation_context()
         triggered["reasoningDeliveryTrigger"] = {

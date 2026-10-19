@@ -30,6 +30,7 @@ def rule_delivery_comparison(context, baseline=None, *, stage="admission", requi
                                    for t in packet['policyLifecycle']['transitions']],
              'remainingPolicyRuleIds': sorted({r['ruleId'] for r in packet['policyLifecycle']['remainingRestrictions']}),
              'unverifiedPreviousPolicyRuleIds': packet['policyLifecycle']['unverifiedPreviousRuleIds'],
+             'managementDecisionImpact': packet['policyLifecycle']['decisionImpact'],
              "sourceRuleIds": sorted({rid for e in events for rid in e.get("sourceRuleIds", [])})}
     return {"relationChangeEvidence": packet, "ontologyRelationDiff": diff,
             "decisionTransition": diff["decisionTransition"], "ruleNotificationComparison": audit}

@@ -9,7 +9,7 @@ from digital_twin.modules.notifications.domain.relation_observation_proof import
 from digital_twin.modules.notifications.domain.rulebox_decision_presentation import decision_brief_presentation, threshold
 
 
-PRESENTATION_VERSION = "readable-relation-change-v15"
+PRESENTATION_VERSION = "readable-relation-change-v16"
 
 CHANGE = {
     "observed": "조건이 새로 확인됐습니다.",

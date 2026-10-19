@@ -59,6 +59,8 @@ class CalibrationInputStorageTests(StabilizationDatabaseCase):
         compact = read()
         expected = next(row for row in compact if row["episodeId"] == value.episode_id)
         self.assertEqual("claim:exact", expected["hypothesisSet"]["hypotheses"][0]["claimContract"]["claimContractId"])
+        self.sql("UPDATE investment_decision_calibration_inputs SET hypotheses_json=JSON_REMOVE(hypotheses_json, '$.assistantQualityObservation') WHERE episode_id=%s", (value.episode_id,))
+        self.assertEqual(compact, read(), 'an individual missing compact field must still read its original')
         self.sql("DELETE FROM investment_decision_calibration_inputs WHERE episode_id=%s", (value.episode_id,))
         self.assertEqual(compact, read())
         self.assertEqual(evaluate_decision_performance(compact), evaluate_decision_performance(read()))

@@ -12,6 +12,10 @@ def assert_dispatch_revalidation(test, flow):
     _, admitted, ai, _ = flow.engine_run()
     original = admitted.job
     packet = original.context["relationChangeEvidence"]
+    from relationship_sequential_checks import assert_native_group_proof, assert_independent_event_proof, assert_notice_cause_and_response
+    assert_native_group_proof(test, packet)
+    assert_independent_event_proof(test, flow)
+    assert_notice_cause_and_response(test, flow)
     condition = packet["current"]["rules"][0]["conditions"][0]
     test.assertEqual("2026-10-02T01:10:00Z", condition["observedAt"])
     test.assertTrue(rule_dispatch_validity(packet, now=datetime(2026, 10, 2, 1, 20, tzinfo=timezone.utc))["allowed"])

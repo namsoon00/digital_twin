@@ -1,5 +1,28 @@
 # Reasoning Input Latency
 
+## Current-state queue and conditional history reads (2026-10-19)
+
+Unclaimed, supersedable price and portfolio deltas from a verified complete
+monitor packet share one latest-state slot for the same account and symbols.
+The existing coalescer retains both events' fact families, dependency keys and
+durable source lineage while selecting the newest verified immutable snapshot.
+Research, disclosures, non-fungible events, validation pairs and incomplete
+source packets keep their existing separate lanes. Processing leases and
+completed inputs are never rebound. Backlog migration retains the earliest
+queue-entry clock instead of resetting measured waiting time.
+
+The performance history reader obtains the large original episode payload
+through a conditional second join only when a compact input is absent, stale,
+wrong-version or missing an individual field. The original source and compact
+version still share one SQL read view. This avoids off-page audit reads for
+complete compact inputs without removing history or changing qualification.
+
+A read-only comparison at `2026-10-19T04:31:21.810005Z` returned exactly the same
+659 episodes from one consistent snapshot: the original reader took 2.547s
+and the revised reader 0.728s. This is one component measurement, not a claim
+that total queue latency meets its SLO. Native execution, persistence and
+dispatch expiry continue to be measured and validated separately.
+
 ## Measured Bottlenecks
 
 The realtime path was repeatedly extracting hypothesis contracts from large

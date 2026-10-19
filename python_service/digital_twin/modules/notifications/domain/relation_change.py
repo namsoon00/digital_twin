@@ -11,6 +11,7 @@ from digital_twin.modules.notifications.domain.rule_notification_event import cu
 from digital_twin.modules.notifications.domain.rule_policy_event import policy_events
 from digital_twin.modules.notifications.domain.rule_outcome_event import outcome_events
 from digital_twin.modules.notifications.domain.rule_policy_lifecycle import policy_lifecycle
+from digital_twin.modules.notifications.domain.rule_dispatch_validity import rule_event_proof
 
 
 VERSION = "relation-change-evidence-v1"
@@ -126,7 +127,8 @@ def relation_change_snapshot(context):
         conditions = {row.get("conditionId") or str(index): row for index, row in enumerate(existing.get("conditions") or [])}
         for condition in rows(item.get("matchedConditions")) + rows(item.get("conditionMatches")):
             captured = {key: deepcopy(condition.get(key)) for key in (
-                "conditionId", "label", "field", "operator", "observedValue", "matched", "evidenceIds",
+                "conditionId", "kind", "role", "minimumCount", "detailDeferred", "matchedConditionIds",
+                "label", "field", "operator", "observedValue", "matched", "evidenceIds", "ruleConditionShape",
                 "matchedByTypeDB", "observedAt", "source", "freshnessStatus", "judgementEvidenceUsable",
                 "sourceFetchedAt", "freshnessRequired", "maxAgeMinutes", "validUntil", "marketSessionStatus",
                 "resolutionMatchedByTypeDB", "resolutionOperator",
@@ -247,6 +249,17 @@ def relation_change_evidence(context, baseline=None, *, require_recovery_receipt
         events.extend(policy_events(current, previous))
     if receipt_scope and current["proofIdentityVerified"]:
         events.extend(outcome_events(current, previous))
+    # An unavailable rule in one hypothesis must not discard an independent
+    # event whose native proof is complete. Rejected events remain unconsumed
+    # in receipt continuity, and can be reconsidered only with real new proof.
+    for event in events:
+        if not event.get("eligible") or event.get("outcome"):
+            continue
+        proof = rule_event_proof(event, current)
+        if not proof["allowed"]:
+            event.update(eligible=False, reasonCode=proof["reasonCode"])
+            rejected.append({"transitionId": event.get("transitionId"), "eventId": event.get("eventId"),
+                "reasonCode": proof["reasonCode"], "reason": proof["reason"], "checks": proof["checks"]})
     admitted_events = [event for event in events if event.get("eligible")]
     # Outcome notices belong to the exact original. Other originals remain
     # pending until a subsequent pass sees the first successful reply receipt.
@@ -263,7 +276,7 @@ def relation_change_evidence(context, baseline=None, *, require_recovery_receipt
     suppressed.extend(rejected)
     suppressed.extend({"transitionId": e.get("transitionId"), "reasonCode": e["reasonCode"],
                        "reason": "같은 사안의 의미와 대응 상태를 이미 전달해 상세 이력에 남깁니다."}
-                      for e in events if not e.get("eligible"))
+                      for e in events if not e.get("eligible") and e.get("reasonCode") == "same-customer-meaning")
     event_parents = {e.get("parentJobId") or "" for e in admitted_events}
     if admitted_events:
         # Data availability notices can only be replies to their own original.
@@ -279,7 +292,9 @@ def relation_change_evidence(context, baseline=None, *, require_recovery_receipt
     wait_reasons = strings([reason for value in waits for reason in value.get("reasons") or []])
     non_delivery_code = ("relation_followup_not_deliverable" if suppressed else
                          "rule_evidence_unavailable" if wait_reasons else "unchanged_rulebox_relation")
-    if rejected:
+    if any(r.get("reasonCode", "").startswith("rule_dispatch_") for r in rejected):
+        non_delivery_code = next(r["reasonCode"] for r in rejected if r.get("reasonCode", "").startswith("rule_dispatch_"))
+    elif rejected:
         non_delivery_code = "rule_notification_purpose_missing" if any(
             r.get("reasonCode") == "missing-rule-notification-purpose" for r in rejected) else "rule_notification_change_not_selected"
     elif any(e.get("reasonCode") == "same-customer-meaning" for e in events):

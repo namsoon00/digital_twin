@@ -7,6 +7,7 @@ from digital_twin.modules.reasoning.infrastructure.typeql.condition_queries impo
 )
 from digital_twin.modules.reasoning.infrastructure.typeql.rule_shape import (
     normalized_condition_role,
+    symbol_from_subject,
     typedb_native_rule_id,
 )
 from typing import Dict, Iterable, List
@@ -96,15 +97,29 @@ def typedb_rule_condition_context(
     *,
     _bindings: NativeExecutionContextRuntime
 ) -> Dict[str, object]:
-    if not _store.condition_detail_queries_enabled():
-        return _bindings.typedb_static_rule_condition_context(rule, query_plan or {}, row or {})
+    compact = not _store.condition_detail_queries_enabled()
+    static = _bindings.typedb_static_rule_condition_context(rule, query_plan or {}, row or {}) if compact else {}
+    # Cardinality is already decided by TypeDB. Its group marker is not a
+    # measured premise: retain the exact matching alternatives for grounding
+    # and send-time validity, even when full condition diagnostics are off.
+    groups = [c for c in static.get("matchedConditions", []) if c.get("kind") == "any-condition-group"]
+    if compact and not groups:
+        return static
     source_query_plan = dict(query_plan or {})
+    proof = source_query_plan.get('conditionProofIndex') or {}
+    index = (proof.get('index') or {}) if proof.get('status') == 'verified' else {}
+    source_storage_id = (index.get('sourceStorageIdsBySourceId') or {}).get(source_id) or ''
+    if compact and not source_storage_id:
+        return static  # Never expand unbounded historical joins to repair a missing index.
+    relation_ids = (index.get('relationStorageIdsBySymbolAndType') or {}).get(symbol_from_subject(source_id), {}) or {}
     interpretation_policy = bool(source_query_plan.get("modelSignalInterpretationPolicy"))
     shared_bridge = bool(source_query_plan.get("sharedModelSignalBridge"))
     bridge_condition_ids = set(source_query_plan.get("bridgeConditionIds") or [])
     residual_condition_ids = set(source_query_plan.get("residualConditionIds") or [])
     matched_conditions: List[Dict[str, object]] = []
     evidence_relation_ids: List[str] = []
+    witness_groups = set()
+    minimum_witnesses = max(1, int(getattr(rule, 'any_condition_min_count', 1) or 1))
     for index, condition in enumerate(getattr(rule, "conditions", []) or []):
         condition_payload = (
             condition.to_dict() if hasattr(condition, "to_dict") else dict(condition or {})
@@ -115,11 +130,21 @@ def typedb_rule_condition_context(
             or "condition-" + str(index)
         )
         role = normalized_condition_role(condition_payload)
+        if compact and role not in {"any", "optional"}:
+            continue
+        witness_group = str(condition_payload.get('evidence_group_key') or condition_payload.get('evidenceGroupKey') or condition_id)
+        if compact and witness_group in witness_groups:
+            continue
+        active_relations = relation_ids.get(str(condition_payload.get('relation_type') or condition_payload.get('relationType') or '').upper()) or []
+        if compact and condition_payload.get('kind') == 'relation' and not active_relations:
+            continue
         condition_query_plan = typedb_native_condition_check_query(
             condition_payload,
             source_id,
             index,
             world_id=world_id,
+            active_source_storage_id=source_storage_id if compact else '',
+            active_relation_storage_ids=active_relations if compact else None,
         )
         rows: List[Dict[str, object]] = []
         if condition_query_plan.get("query"):
@@ -184,6 +209,20 @@ def typedb_rule_condition_context(
                 }
             )
         matched_conditions.append(payload)
+        if compact:
+            # TypeDB already proved the minimum. Collect a sufficient proof,
+            # not every equivalent alternative or a Cartesian diagnostic.
+            witness_groups.add(witness_group)
+            if len(witness_groups) >= minimum_witnesses:
+                break
+    if compact:
+        ids = [c["conditionId"] for c in matched_conditions]
+        for group in groups:
+            group.update(matchedConditionIds=ids, detailDeferred=not bool(ids))
+        static["matchedConditions"].extend(matched_conditions)
+        static["evidenceRelationIds"] = sorted(set(list(static.get("evidenceRelationIds") or []) + evidence_relation_ids))
+        static["conditionDetailSource"] = "typedb-match+any-condition-proof"
+        return static
     return {
         "matchedConditions": matched_conditions,
         "evidenceRelationIds": sorted(set(evidence_relation_ids)),

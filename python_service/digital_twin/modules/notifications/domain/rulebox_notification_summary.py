@@ -11,7 +11,7 @@ from digital_twin.modules.notifications.domain.rule_event_presentation import AC
 from digital_twin.modules.notifications.domain.rule_policy_lifecycle import release_conclusion
 
 
-VERSION = "compact-rulebox-v1"
+VERSION = "compact-rulebox-v2"
 
 
 def _unique(values):
@@ -158,6 +158,12 @@ def _comparison(judgment, current, events):
 
 
 def _next(judgment, events, currency):
+    if events and all(e.get('purpose') in {'hypothesis-evidence', 'context-evidence'} for e in events):
+        for event in events:
+            text = next_check_words((event.get('nextCheck') or {}).get('condition') or
+                                    (event.get('hypothesis') or {}).get('falsificationContract'))
+            if text and len(text) <= 150:
+                return text.rstrip('. ') + '.'
     targets = []
     for response in (judgment.get("managementDecision") or {}).get("responses", []):
         objective = response.get("objective") or {}
@@ -215,8 +221,14 @@ def compact_rulebox_summary(packet):
         market += " · 보유 수익률 " + decimal(profit, signed=True) + "%"
     released_lead = release_conclusion(packet)
     lead = released_lead or _conclusion(judgment, events)
+    impact = ((packet.get('policyLifecycle') or {}).get('decisionImpact') or {}) if judgment else {}
+    hypothesis_change = bool(events) and all(e.get('purpose') in {'hypothesis-evidence', 'context-evidence'} for e in events)
+    if hypothesis_change:
+        lead = event_conclusion(events[0])
+    elif impact.get('changedResponses') and not released_lead:
+        lead = ' · '.join(_unique(r.get('label') for r in impact['changedResponses'])) + '.'
     prior_judgment = (previous.get("decisionBrief") or {}).get("judgment") or {}
-    if (not released_lead and judgment.get("conclusionFingerprint") and judgment.get("conclusionFingerprint") == prior_judgment.get("conclusionFingerprint")
+    if (not released_lead and not hypothesis_change and judgment.get("conclusionFingerprint") and judgment.get("conclusionFingerprint") == prior_judgment.get("conclusionFingerprint")
             and judgment.get("status") in {"management-response", "restriction-only"}):
         lead = "기존 관리 대응 유지: " + lead
     lifecycle = packet.get('policyLifecycle') or {}
@@ -232,7 +244,15 @@ def compact_rulebox_summary(packet):
                '현재 자료에서 이 관리 대응의 적용을 처음 확인해 알려드립니다.' if causes == {'first-delivered-confirmation'} else _purpose(events))
     together = ('해제된 조건에 대한 후속 안내입니다. 추가매수 허용이나 매수·매도 권유를 뜻하지 않습니다.' if released_lead
                 else _comparison(judgment, current, events))
-    return {"version": VERSION, "lead": lead, "judgment": judgment,
+    remaining = _unique(r.get('label') for r in impact.get('remainingResponses') or [])
+    if remaining and not released_lead:
+        together = ('유지 중인 관리 기준: ' if impact.get('status') == 'maintained' else '현재 적용 중인 관리 기준: ') + ' · '.join(remaining) + '.'
+        if hypothesis_change:
+            together += (' 이번 근거 변화로 관리 대응이 바뀌지는 않았습니다.' if impact.get('status') == 'maintained'
+                         else ' 이번에 달라진 가설 근거와 별도로 적용되는 관리 기준입니다.')
+    elif hypothesis_change and (judgment.get('candidateGroups') or judgment.get('blockedActions')):
+        together = _conclusion(judgment, events)
+    return {"version": VERSION, "lead": lead, "judgment": judgment, "decisionImpact": impact,
         "sections": [("notification-purpose", "알림 이유", [purpose]),
                      ("decision-impact", "핵심 수치", [' · '.join(v for v in (target_text, _measurements(current, previous, judgment, events, currency, packet.get("transitions") or [])) if v)]),
                      ("decision-basis", "함께 보면", [together]),

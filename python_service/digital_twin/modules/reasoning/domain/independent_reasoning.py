@@ -12,6 +12,7 @@ from digital_twin.modules.reasoning.domain.fact_changes import FACT_CHANGE_CONTR
 from digital_twin.modules.reasoning.domain.ontology_execution_units import revision_vector_for_change
 from digital_twin.modules.reasoning.domain.semantic_fact_plane import semantic_change_set
 from digital_twin.modules.reasoning.domain.reasoning_comparison_identity import PAIRED_VALIDATION_INPUT_VERSION
+from digital_twin.modules.reasoning.domain.ontology_reasoning_queue import event_fact_types_for_symbol, work_class_for_fact_types
 
 
 INDEPENDENT_REASONING_REQUEST_VERSION = "independent-reasoning-request-v2"
@@ -325,10 +326,32 @@ def reasoning_queue_slot_key(event: object, reasoning_lane: str) -> str:
     """
 
     scope = reasoning_event_scope(event)
+    source = _event(event)
+    payload = source.payload or {}
+    boundary = payload.get('verifiedSourceSnapshot') or {}
+    contract = canonical_fact_change_contract(payload)
+    # A verified complete monitor packet owns both current price and current
+    # portfolio state. Pending deltas for that exact account/subject need one
+    # latest-state execution, even when their arrival lanes differ. Durable
+    # research, filings, validation replays and unverified packets stay apart.
+    current_state = bool(scope.get('supersedable') and scope.get('symbols')
+        and len(scope.get('accountIds') or []) == 1
+        and payload.get('trigger') == 'verified-monitor-snapshot'
+        and scope.get('workClass') in {'', 'MARKET', 'PORTFOLIO'}
+        and not payload.get('fullReconciliation') and not payload.get('validationPair')
+        and contract.get('status') == 'ready' and not contract.get('unclassifiedFactTypes')
+        and bool(contract.get('scopeFamilies')) and set(contract['scopeFamilies']) <= {
+            'market', 'flow', 'temporal', 'portfolio', 'position', 'exposure'}
+        and isinstance(boundary, Mapping) and boundary.get('snapshotId') and boundary.get('generatedAt')
+        and boundary.get('sourceFactCoverageComplete') is True
+        and boundary.get('accountId') == scope['accountIds'][0]
+        and all(event_fact_types_for_symbol(source, symbol) and work_class_for_fact_types(
+            event_fact_types_for_symbol(source, symbol), trigger=payload.get('trigger')) in {'MARKET', 'PORTFOLIO'}
+            for symbol in scope['symbols']))
     material = {
         "accounts": list(scope.get("accountIds") or []) or ["market"],
         "symbols": list(scope.get("symbols") or []) or ["global"],
-        "lane": str(reasoning_lane or "CONTEXT").upper().strip() or "CONTEXT",
+        "lane": 'VERIFIED_CURRENT_STATE' if current_state else str(reasoning_lane or "CONTEXT").upper().strip() or "CONTEXT",
     }
     return "reasoning-slot:" + _hash(material)[:32]
 
@@ -372,7 +395,9 @@ def _event_recency(event: DomainEvent) -> Tuple[str, str, str]:
         [str(value.get("generatedAt") or "") for value in boundaries] or [""]
     )
     observed_at = str(payload.get("sourceObservedAt") or payload.get("sourceAsOf") or "")
-    return max(boundary_at, observed_at, str(event.occurred_at or "")), str(event.occurred_at or ""), str(event.event_id or "")
+    # Arrival/retry time cannot make an older immutable source the newest
+    # world. Only unbound legacy events use their observation/arrival clock.
+    return boundary_at or max(observed_at, str(event.occurred_at or "")), str(event.occurred_at or ""), str(event.event_id or "")
 
 
 def merge_reasoning_events(events: Iterable[object]) -> DomainEvent:

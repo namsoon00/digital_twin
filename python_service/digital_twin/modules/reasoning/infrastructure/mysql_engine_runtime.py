@@ -1678,7 +1678,7 @@ class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
                             "Coalesced " + str(len(items)) + " pending fact changes into the latest source snapshot."
                             if len(items) > 1 else ""
                         ),
-                        stamp,
+                        min((str(row.get('created_at') or stamp) for row, _ in items), default=stamp),
                         stamp,
                         survivor_id,
                     ),

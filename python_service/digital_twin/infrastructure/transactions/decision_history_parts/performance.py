@@ -242,14 +242,14 @@ def performance_episodes(
             "episodes.account_id, episodes.symbol, episodes.subject_name, episodes.action, "
             "episodes.selected_hypothesis_id, episodes.decided_at, "
             "COALESCE(JSON_EXTRACT(calibration.hypotheses_json, '$.aiJudgment'), "
-            "JSON_OBJECT('insightAssessment', JSON_EXTRACT(episodes.payload_json, '$.factsAtDecision.aiJudgment.insightAssessment'), "
-            "'insight_assessment', JSON_EXTRACT(episodes.payload_json, '$.factsAtDecision.aiJudgment.insight_assessment'))) AS ai_judgment_json, "
+            "JSON_OBJECT('insightAssessment', JSON_EXTRACT(raw_episodes.payload_json, '$.factsAtDecision.aiJudgment.insightAssessment'), "
+            "'insight_assessment', JSON_EXTRACT(raw_episodes.payload_json, '$.factsAtDecision.aiJudgment.insight_assessment'))) AS ai_judgment_json, "
             "COALESCE(JSON_EXTRACT(calibration.hypotheses_json, '$.insightAssessment'), "
-            "JSON_EXTRACT(episodes.payload_json, '$.insightAssessment')) AS insight_assessment_json, "
+            "JSON_EXTRACT(raw_episodes.payload_json, '$.insightAssessment')) AS insight_assessment_json, "
             "COALESCE(JSON_EXTRACT(calibration.hypotheses_json, '$.assistantQualityObservation'), "
-            "JSON_EXTRACT(episodes.payload_json, '$.factsAtDecision.assistantQualityObservation')) AS quality_observation_json, "
+            "JSON_EXTRACT(raw_episodes.payload_json, '$.factsAtDecision.assistantQualityObservation')) AS quality_observation_json, "
             "COALESCE(JSON_EXTRACT(calibration.hypotheses_json, '$.hypotheses'), "
-            "JSON_EXTRACT(episodes.payload_json, '$.hypothesisSet.hypotheses')) AS hypotheses_json "
+            "JSON_EXTRACT(raw_episodes.payload_json, '$.hypothesisSet.hypotheses')) AS hypotheses_json "
             "FROM ("
             "SELECT episode_id, MAX(observed_at) AS latest_observed_at "
             "FROM investment_decision_outcomes"
@@ -263,6 +263,16 @@ def performance_episodes(
             "ON calibration.episode_id = episodes.episode_id "
             "AND calibration.source_updated_at = episodes.updated_at "
             "AND calibration.format_version = '" + DECISION_CALIBRATION_INPUT_VERSION + "' "
+            # Referencing the original LONGTEXT on the primary episode join
+            # makes InnoDB load its off-page audit even when COALESCE uses a
+            # valid compact row. Gate that physical read with a separate join.
+            # Missing individual projection fields retain the exact fallback.
+            "LEFT JOIN investment_decision_episodes AS raw_episodes FORCE INDEX (PRIMARY) "
+            "ON raw_episodes.episode_id = episodes.episode_id AND (calibration.episode_id IS NULL "
+            "OR JSON_EXTRACT(calibration.hypotheses_json, '$.aiJudgment') IS NULL "
+            "OR JSON_EXTRACT(calibration.hypotheses_json, '$.insightAssessment') IS NULL "
+            "OR JSON_EXTRACT(calibration.hypotheses_json, '$.assistantQualityObservation') IS NULL "
+            "OR JSON_EXTRACT(calibration.hypotheses_json, '$.hypotheses') IS NULL) "
             + outer_where
             + " "
             "ORDER BY selected.latest_observed_at DESC, outcomes.observed_at ASC, outcomes.outcome_id ASC",

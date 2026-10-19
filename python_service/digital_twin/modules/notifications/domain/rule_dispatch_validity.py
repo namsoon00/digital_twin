@@ -6,7 +6,48 @@ import math
 from digital_twin.modules.market_data.contracts import max_age_minutes_for_message_type
 
 
-VERSION = "rule-notice-dispatch-validity-v1"
+VERSION = "rule-notice-dispatch-validity-v2"
+
+
+def rule_event_proof(event, current):
+    """Check native proof closure without inventing a missing rule or clock."""
+    if event.get("outcome"):
+        return {"allowed": True, "checks": [], "reasonCode": "", "reason": ""}
+    rules = {r["id"]: r for r in current.get("rules", [])}
+    ids = event.get("sourceRuleIds") or []
+    failed = []
+    if not ids:
+        failed.append({"status": "missing-proof", "reasonCode": "rule_dispatch_proof_missing"})
+    for rid in ids:
+        rule = rules.get(rid) or {}
+        conditions = rule.get("conditions") or []
+        if not rule.get("nativeProof") or not conditions:
+            failed.append({"ruleId": rid, "status": "missing-proof", "reasonCode": "rule_dispatch_proof_missing"})
+            continue
+        by_id = {c.get("conditionId"): c for c in conditions}
+        for group in conditions:
+            if group.get("kind") != "any-condition-group":
+                continue
+            members = set(group.get("matchedConditionIds") or [])
+            minimum = group.get("minimumCount")
+            if (group.get("matchedByTypeDB") is not True or group.get("detailDeferred") is not False
+                    or type(minimum) is not int or minimum < 1 or len(members) < minimum
+                    or any(by_id.get(cid, {}).get("matchedByTypeDB") is not True
+                           or by_id[cid].get("role") not in {"any", "optional"} for cid in members)):
+                failed.append({"ruleId": rid, "conditionId": group.get("conditionId"),
+                    "status": "missing-group-proof", "reasonCode": "rule_dispatch_group_proof_missing"})
+    comparisons = event.get('ruleComparisons') or []
+    # An empty-baseline migration/identity change cannot prove that an
+    # actively matching premise was invalidated. Preserve it as an audit
+    # conflict, without suppressing independent, well-grounded events.
+    if (event.get('changeKind') == 'invalidated' and not event.get('evidenceChanges') and comparisons
+            and all(c.get('ruleId') in ids and (c.get('current') or {}).get('contractMatched') is True
+                    and not c.get('previous') for c in comparisons)):
+        failed.append({'status': 'transition-proof-conflict', 'reasonCode': 'rule_dispatch_transition_conflict'})
+    return {"allowed": not failed, "checks": failed, "reasonCode": failed[0]["reasonCode"] if failed else "",
+            "reason": ('현재도 성립한 근거와 가설 해제 기록이 일치하지 않아 이 변화는 상세 이력에 남깁니다.'
+                       if any(c['reasonCode'] == 'rule_dispatch_transition_conflict' for c in failed) else
+                       "규칙이 성립한 개별 조건의 원본 근거가 보존되지 않아 이 변화는 상세 이력에 남깁니다.") if failed else ""}
 
 
 def timestamp(value):
@@ -30,14 +71,15 @@ def rule_dispatch_validity(packet, settings=None, now=None):
     events = [e for e in packet.get("customerEvents", []) if e.get("eligible") and not e.get("outcome")]
     rule_ids = sorted({rid for event in events for rid in event.get("sourceRuleIds", [])})
     rules = {r["id"]: r for r in current.get("rules", [])}
-    checks = ([] if not events or rule_ids else [{"status": "missing-proof", "reasonCode": "rule_dispatch_proof_missing"}])
+    checks = [check for event in events for check in rule_event_proof(event, current)["checks"]]
     for rid in rule_ids:
         rule = rules.get(rid) or {}
         conditions = rule.get("conditions") or []
         if not rule.get("nativeProof") or not conditions:
-            checks.append({"ruleId": rid, "status": "missing-proof", "reasonCode": "rule_dispatch_proof_missing"})
             continue
         for condition in conditions:
+            if condition.get("kind") == "any-condition-group":
+                continue  # Its measured members, not the structural marker, own validity.
             row = {"ruleId": rid, "conditionId": condition.get("conditionId"), "field": condition.get("field"),
                    "observedAt": condition.get("observedAt"), "source": condition.get("source")}
             static = condition.get("freshnessRequired") is False or condition.get("freshnessStatus") == "not-applicable"

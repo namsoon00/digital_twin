@@ -2228,6 +2228,8 @@ class IndependentReasoningEngineTests(unittest.TestCase):
         self.assertEqual("worker-host:123:v2-current", connection.params[-1])
 
     def test_mysql_queue_compacts_old_scopes_without_losing_fact_changes(self):
+        from relationship_sequential_checks import assert_current_state_slots
+        assert_current_state_slots(self)
         old = source_event("NVDA")
         old.payload.update({
             "factTypes": ["PriceObservation"],
@@ -2317,6 +2319,7 @@ class IndependentReasoningEngineTests(unittest.TestCase):
             stored["sourceEvent"]["payload"]["factTypes"],
         )
         self.assertTrue(str(connection.survivor_update[4]).startswith("reasoning-slot:"))
+        self.assertEqual(rows[0]['created_at'], connection.survivor_update[-3], 'coalescing must preserve queue debt')
 
     def test_scoped_executor_skips_typedb_for_exact_private_overlay_replay(self):
         class Recorder:

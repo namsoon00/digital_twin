@@ -38,11 +38,30 @@ def policy_lifecycle(current, previous, events):
                 if entry.get('policyState') in {'applied', 'updated'} for rid in entry.get('sourceRuleIds') or []}
     reported.update(r.get('ruleId') for r in (previous.get('decisionBrief') or {}).get('restrictions') or [])
     unverified = sorted(reported - resolved - {r['ruleId'] for r in active})
+    current_responses = ((current.get('decisionBrief') or {}).get('managementDecision') or {}).get('responses') or []
+    prior_responses = list(((previous.get('decisionBrief') or {}).get('managementDecision') or {}).get('responses') or [])
+    prior_responses += [r for entry in (previous.get('notificationIntentContinuity') or {}).values()
+                        if entry.get('policyState') in {'applied', 'updated'} for r in entry.get('managementResponses') or []]
+    def signature(response):
+        return json.dumps({k: response.get(k) for k in ('ruleId', 'code', 'authority', 'objective', 'targetValue', 'releaseCondition')}, sort_keys=True)
+    prior_signatures = {signature(r) for r in prior_responses}
+    changed_rules = {rid for e in selected if e.get('policyState') != 'released' and (
+                        e.get('managementResponseChanged') or not e.get('previousBlockedActions'))
+                     for rid in e.get('sourceRuleIds') or []}
+    changed_responses = [r for r in current_responses if r.get('ruleId') in changed_rules]
+    remaining_responses = [r for r in current_responses if r.get('ruleId') not in changed_rules]
+    impact = {'version': 'rule-notice-decision-impact-v1',
+              'status': 'changed' if changed_responses or resolved else 'maintained' if current_responses and all(
+                  signature(r) in prior_signatures for r in current_responses) else 'current-only' if current_responses else 'unavailable',
+              'changedResponses': deepcopy(changed_responses), 'remainingResponses': deepcopy(remaining_responses),
+              'releasedRuleIds': sorted(resolved), 'sourceEventIds': [e['eventId'] for e in selected],
+              'forecastActionSelected': False, 'orderAuthorized': False}
     return {'version': 'rule-policy-lifecycle-v1',
             'baselineJobId': previous.get('receiptJobId') or '',
             'baselineDeliveredAt': previous.get('deliveredAt') or '',
             'transitions': changes, 'remainingRestrictions': deepcopy(active),
-            'unverifiedPreviousRuleIds': unverified, 'forecastActionSelected': False, 'orderAuthorized': False}
+            'unverifiedPreviousRuleIds': unverified, 'decisionImpact': impact,
+            'forecastActionSelected': False, 'orderAuthorized': False}
 
 
 def release_conclusion(packet):

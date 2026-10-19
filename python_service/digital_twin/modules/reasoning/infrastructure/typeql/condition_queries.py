@@ -193,6 +193,8 @@ def typedb_native_condition_check_query(
     index: int,
     scoped_manifest_only: bool = False,
     world_id: str = "",
+    active_source_storage_id: str = "",
+    active_relation_storage_ids: Iterable[str] = None,
 ) -> Dict[str, object]:
     """Build one bounded native condition probe for a resolved source.
 
@@ -209,6 +211,8 @@ def typedb_native_condition_check_query(
         target_prefix="checkTarget",
         manifest_id_variable=manifest_id_variable,
         world_id=world_id,
+        source_storage_indexed=bool(active_source_storage_id),
+        active_relation_storage_ids=active_relation_storage_ids,
     )
     if pattern.get("reason"):
         return {
@@ -217,14 +221,15 @@ def typedb_native_condition_check_query(
             "columns": [],
             "reason": str(pattern.get("reason") or ""),
         }
-    clauses = (
+    clauses = (["$source has ontology-storage-id " + typedb_string(active_source_storage_id) + ";"]
+        if active_source_storage_id else (
         [
             typedb_active_worldview_manifest_clause("$activeManifestPointer", manifest_id_variable, world_id),
             typedb_scoped_manifest_member_clause("$source", "source", manifest_id_variable, world_id),
         ]
         if scoped_manifest_only
         else [typedb_active_abox_member_clause("$source", "source", world_id)]
-    )
+    ))
     clauses.extend([
         "$source isa ontology-node, has ontology-id " + typedb_string(source_id) + ";",
         *[str(item) for item in pattern.get("clauses") or [] if str(item or "").strip()],

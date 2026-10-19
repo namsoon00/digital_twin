@@ -850,7 +850,7 @@ def match_typedb_native_rules(
                             }
                         )
                         _store.merge_native_match_rows(
-                            rule, query_plan, rows, match_index, matches, world_id
+                            rule, {**query_plan, "conditionProofIndex": evidence_read_index}, rows, match_index, matches, world_id
                         )
             finally:
                 _store.close_driver(driver)
@@ -1059,7 +1059,7 @@ def match_typedb_native_rules(
                 # Merge on the coordinator thread to retain deterministic
                 # ordering and keep condition-detail reads out of workers.
                 _store.merge_native_match_rows(
-                    rule, query_plan, rows, match_index, matches, world_id
+                    rule, {**query_plan, "conditionProofIndex": evidence_read_index}, rows, match_index, matches, world_id
                 )
         else:
             _store.with_typedb_retries(operation)

@@ -339,7 +339,10 @@ class IndependentTypeDBTests(unittest.TestCase):
         second["claimContract"].update(ruleId="rule:other", claimContractId="claim:rule:other")
         raw = relation["hypothesisLifecycle"]["transitions"][0]
         raw.update(currentState="invalidated", previousState="maintained")
-        raw["record"] = {"snapshot": {"hypothesisIds": ["h2"], "sourceRuleIds": ["rule:linked"]}}
+        raw["record"] = {"snapshot": {"hypothesisIds": ["h2"], "sourceRuleIds": ["rule:other"]}}
+        proof = deepcopy(relation['graphStoreInference']['traces'][0])
+        proof.update(ruleId='rule:other', matched=False)
+        relation['graphStoreInference']['traces'].append(proof)
         context["relationChangeEvidence"] = relation_change_evidence(context)
         packet = deepcopy(context["relationChangeEvidence"])
         self.assertEqual(["h2"], packet["transitions"][0]["hypothesisIds"])

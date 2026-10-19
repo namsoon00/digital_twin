@@ -670,6 +670,15 @@ def grounded_inference_context(
                 observed_value = (stock.properties or {}).get(field)
                 stock_observation_properties = dict(stock.properties or {})
                 stock_observation_properties.setdefault("observationKind", stock.kind)
+                # Account configuration is frozen with this ABox, rather than
+                # observed at the stock quote's clock. Valuations/exposure are
+                # deliberately excluded from this configuration-only set.
+                if field in {"investmentStrategyProfile", "investmentStrategyProfileLabel",
+                             "strategyLossTolerancePct", "strategyMaxPositionWeightPct",
+                             "strategyCashTargetPct", "strategyProfitTakePct"}:
+                    stock_observation_properties.update(freshnessRequired=False,
+                        observationKind="account-policy", source="account-policy", provider="account-policy",
+                        sourceAsOf="", observedAt="", sourceFetchedAt="", fetchedAt="")
                 item.update(observation_metadata(stock_observation_properties, observed_value))
                 item["field"] = field
                 source_fact_ids = _condition_source_fact_ids(
@@ -732,6 +741,18 @@ def grounded_inference_context(
                             "status": "available" if target_properties.get("premiseProofId") else "legacy-unavailable",
                         }
         grounded_conditions.append(item)
+    members = {c.get('conditionId'): c for c in grounded_conditions if c.get('kind') != 'any-condition-group'}
+    incomplete_groups = []
+    for group in grounded_conditions:
+        if group.get('kind') != 'any-condition-group':
+            continue
+        ids = set(group.get('matchedConditionIds') or [])
+        minimum = group.get('minimumCount')
+        group['groupProofComplete'] = bool(group.get('matchedByTypeDB') is True and group.get('detailDeferred') is False
+            and type(minimum) is int and minimum >= 1 and len(ids) >= minimum
+            and all(cid in members and condition_is_grounded(members[cid]) for cid in ids))
+        if not group['groupProofComplete']:
+            incomplete_groups.append(str(group.get('conditionId') or 'any-condition-group'))
     grounded_count = sum(1 for item in grounded_conditions if condition_is_grounded(item))
     required_conditions = [
         item
@@ -757,6 +778,7 @@ def grounded_inference_context(
         if str(item.get("role") or "required").strip().lower() == "required"
         and not condition_is_grounded(item)
     ]
+    ungrounded_required_condition_ids.extend(incomplete_groups)
     required_condition_proof_complete = not ungrounded_required_condition_ids
     if blocked_temporal_conditions:
         data_state = "unavailable" if grounded_required_count <= len(blocked_temporal_conditions) else "partial"
@@ -1167,14 +1189,12 @@ def inferred_time_sensitive_observation(properties: Dict[str, object]) -> bool:
 def condition_is_grounded(condition: Dict[str, object]) -> bool:
     if condition.get("matched") is False:
         return False
+    if condition.get('kind') == 'any-condition-group':
+        return condition.get('groupProofComplete') is True
     return bool(
         condition.get("observedValue") not in (None, "")
         or str(condition.get("relationId") or "").strip()
         or condition.get("absenceSatisfied")
-        or (
-            str(condition.get("kind") or "").strip() == "any-condition-group"
-            and condition.get("matchedByTypeDB") is True
-        )
     )
 
 

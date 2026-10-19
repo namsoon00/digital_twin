@@ -51,6 +51,27 @@ def owned_packet(subject, task_id=''):
 
 
 class BoundedEvidenceReadinessTests(unittest.TestCase):
+    def test_price_only_finish_preserves_the_conservative_wait_and_raw_decision(self):
+        from digital_twin.modules.ai_orchestration.domain.validation_diagnostic import task_failure
+        value = packet()
+        decide = Mock(return_value=scoped_decision('finish', ['quote-1']))
+        final, _, _, trace = retrieve_working_evidence(
+            ObservationEvidenceSession(value, value['facts']), value, [], [], decide,
+            lambda env: 'price-only-read', 262144)
+        self.assertEqual('deferred', final['retrieval']['status'])
+        self.assertEqual('finish', trace[-1]['decision']['action'])
+        self.assertEqual(1, decide.call_count)
+        seen = {row['id']: row for row in value['facts']}
+        self.assertTrue(bounded_retrieval.price_only_finish(trace[-1]['decision'], seen))
+        self.assertFalse(bounded_retrieval.price_only_finish(scoped_decision('finish', ['quote-1', 'report-2025']), seen))
+        old = {key: item for key, item in value.items() if key != 'evidenceReadCompletionPolicy'}
+        self.assertNotEqual(execution_lanes.material_key(old, []), execution_lanes.material_key(value, []))
+        self.assertEqual(execution_lanes.material_key(value, []), execution_lanes.material_key(
+            {**value, 'dataRecovery': {'checkedAt': '2099-01-01T00:00:00Z'}}, []))
+        reason, diagnostic = task_failure('evidence-retrieval', ValueError('research progress disposition changed'))
+        self.assertEqual('validation:retrieval-receipt-disposition', reason)
+        self.assertFalse(diagnostic['rawErrorRetained'])
+
     def test_controller_records_renewal_and_new_author_version(self):
         from test_ai_control import AIControlTests, SUBJECT
         from ai_insight_fixtures import plan
@@ -412,6 +433,24 @@ class SourceRenewalStorageTests(unittest.TestCase):
         wait = {'input': selected, 'retrievalInputIds': [s['inputId'] for s in trace]}
         with self.store.connect() as c:
             self.assertEqual(trace, AIControlResearchKnowledge.read_proof(c, self.job, wait))
+        price_value = deepcopy(value)
+        price_value['capturedAt'] = (datetime.fromisoformat(value['capturedAt'].replace('Z', '+00:00'))
+            + timedelta(seconds=1)).isoformat().replace('+00:00', 'Z')
+        price_value['quoteAssessment'] = quote_clock_assessment(price_value['facts'], price_value['capturedAt'])
+        selected, _, _, price_trace = retrieve_working_evidence(
+            ObservationEvidenceSession(price_value, price_value['facts']), price_value, [], [],
+            Mock(return_value=scoped_decision('finish', ['quote-1'])), save, 262144,
+            record_round=lambda step: self.store.save_retrieval_round(self.job, step))
+        price_wait = {'input': selected, 'retrievalInputIds': [step['inputId'] for step in price_trace]}
+        self.assertEqual('deferred', selected['retrieval']['status'])
+        with self.store.connect() as c:
+            self.assertEqual(price_trace, AIControlResearchKnowledge.read_proof(c, self.job, price_wait))
+        forged = deepcopy(price_wait)
+        forged['input']['retrieval'] = bounded_retrieval.trace_summary(price_trace, 'ready')
+        forged['input']['researchScope'] = bounded_retrieval.research_scope(price_trace, 'ready')
+        with self.store.connect() as c:
+            with self.assertRaisesRegex(ValueError, 'research progress disposition changed'):
+                AIControlResearchKnowledge.read_proof(c, self.job, forged)
         author = freeze_execution_input(value, [], [])
         author_id = save(author)
         result = {'input': value, 'summary': '현재 동결 자료의 확인 범위를 보존합니다.', 'executionInputId': author_id}

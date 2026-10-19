@@ -13,6 +13,7 @@ PLAN_REASONS = {
     "invalid research question": "question-shape",
     "at most one hypothesis development question is allowed": "development-count",
     "current verified graph facts unavailable": "current-facts-unavailable",
+    "research progress disposition changed": "retrieval-receipt-disposition",
     **{"AI plan requires bounded " + key: "narrative-shape" for key in
        ("summary", "hypothesis", "counterEvidence", "comparison")},
 }

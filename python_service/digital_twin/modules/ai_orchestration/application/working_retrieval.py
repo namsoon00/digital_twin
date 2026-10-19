@@ -190,7 +190,8 @@ def retrieve_working_evidence(session, packet, history, research, decide, save_i
         step.update(status="valid", decision=decision)
         if decision["action"] != "read":
             status = "ready" if decision["action"] == "finish" else "assessment-ready" if decision["action"] == "assess" else "research-ready" if decision["action"] == "research" else "deferred"
-            if status == "ready" and not any(seen[key]["kind"] != "stock" for key in selected):
+            if status == "ready" and (bounded_retrieval.price_only_finish(decision, seen)
+                    if contract is bounded_retrieval else not any(seen[key]["kind"] != "stock" for key in selected)):
                 status = "deferred"
             record(step)
             break

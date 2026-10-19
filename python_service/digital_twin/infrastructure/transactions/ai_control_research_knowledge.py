@@ -135,6 +135,8 @@ class AIControlResearchKnowledge:
             raise ValueError("research progress question scope changed")
         last = (trace[-1].get("decision") or {}).get("action")
         expected = {"finish": "ready", "research": "research-ready", "defer": "deferred", "assess": "assessment-ready"}.get(last)
+        if contract is bounded_retrieval and bounded_retrieval.price_only_finish(trace[-1].get("decision") or {}, known):
+            expected = "deferred"
         if (expected and packet["retrieval"]["status"] != expected
                 and not (contract in {lane_retrieval, bounded_retrieval} and packet["retrieval"]["status"] == "context-budget")):
             raise ValueError("research progress disposition changed")

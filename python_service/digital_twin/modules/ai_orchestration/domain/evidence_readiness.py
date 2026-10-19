@@ -3,6 +3,7 @@ from copy import deepcopy
 from . import execution_lanes
 
 VERSION = "bounded-evidence-readiness-v1"
+COMPLETION_POLICY = "conservative-read-completion-v1"
 PROMPT_VERSION = "independent-observation-v21-bounded-evidence"
 REPAIR_VERSION = "independent-observation-repair-v17-bounded-evidence"
 REVIEW_VERSION = "independent-observation-review-v10-bounded-evidence"
@@ -15,7 +16,7 @@ def enabled(packet):
 def annotate(packet):
     if not execution_lanes.identified(packet):
         return packet
-    return {**packet, "evidenceReadPolicy": VERSION}
+    return {**packet, "evidenceReadPolicy": VERSION, "evidenceReadCompletionPolicy": COMPLETION_POLICY}
 
 
 def source_refresh_requirement(packet):

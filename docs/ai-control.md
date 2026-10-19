@@ -19,6 +19,15 @@ permission is separate from selection: an indexed but unread document cannot
 be cited by the final author. A market `finish` which also declares required
 missing evidence becomes `defer` conservatively, retaining the original response
 in the audit and avoiding a paid correction that merely removes the warning.
+When a model selects only the stock fact and finishes, the existing evidence
+floor still parks the observation. V8 persistence derives that same conservative
+disposition from the captured selection, instead of rejecting the server's own
+wait as a changed result. It rejects a forged `ready` receipt for that selection;
+neither raw model output nor historical inputs are rewritten.
+New packets freeze `conservative-read-completion-v1` in their retry identity so
+the repaired runtime can reconsider a previous output-invalid disposition once.
+This does not reset source-research attempt limits or authorize timer-only
+model retries; packets captured before this marker keep their original identity.
 
 For existing research claims, `retain` offers the exact captured question,
 mechanism, assumption, alternative and invalidation text in the output schema.

@@ -68,6 +68,12 @@ def validate_decision(raw):
     return previous.validate_decision(value)
 
 
+def price_only_finish(decision, known):
+    """The existing source-selection floor also owns the persisted receipt."""
+    return decision.get("action") == "finish" and not any(
+        known[key]["kind"] != "stock" for key in decision["selectedFactIds"])
+
+
 def validate_trace(trace):
     previous.validate_trace(trace)
 

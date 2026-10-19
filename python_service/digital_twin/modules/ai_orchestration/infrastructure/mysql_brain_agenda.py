@@ -96,7 +96,8 @@ class MySQLBrainAgendaStore(MySQLOperationalConnection):
         guard = case["researchRepeat"]
         permitted = guard.get("authorizedTaskId") == job["taskId"]
         initial = case.get("researchAttempts", 0) <= 1 and not case.get("latestSourceAnswer")
-        reason = ("answered" if (case.get("answerResolution") or {}).get("status") == "answered" else
+        from ..domain.research_work import source_answer_complete
+        reason = ("answered" if source_answer_complete(case) else
                   "source-state-unavailable" if case.get("researchSourceState", {}).get("status") == "unavailable" else
                   "" if permitted or initial else "legacy-repeat-not-authorized")
         return {"allowed": not reason, "reason": reason, "version": repeat.VERSION,
@@ -175,7 +176,8 @@ class MySQLBrainAgendaStore(MySQLOperationalConnection):
         receipt = {"status": "recorded", "caseIds": [], "feedbackIds": feedback_ids, "deferred": []}
         from ..domain.question_evidence import VERSION as evidence_policy
         question_review_required = (result["input"].get("questionEvidencePolicy") == evidence_policy
-            and any(row["action"] in {"answered", "dismissed"} for row in result.get("caseReviews", [])))
+            and (any(row["action"] in {"answered", "dismissed"} for row in result.get("caseReviews", []))
+                 or (result["input"].get("questionWorkPolicy") and result.get("caseReviews"))))
         if not research_accepted and (question_review_required
                 or result.get("quality", {}).get("status") not in {"accepted", "observation-only"} or local_quality(result)["errors"]):
             children[:] = [child for child in children if child["capability"] != "research"]
@@ -275,7 +277,8 @@ class MySQLBrainAgendaStore(MySQLOperationalConnection):
 
     @staticmethod
     def schedule_research(connection, case, job, result, children, now):
-        if case.get("answerResolution", {}).get("status") == "answered":
+        from ..domain.research_work import source_answer_complete
+        if source_answer_complete(case):
             case.update(reason="원래 질문의 자료 답변을 확보했습니다. 투자 가설 연결 여부는 별도로 검토합니다.", nextCheckAt=later(now, 1440))
             return
         previous = case.get("lastResearch", {})
@@ -328,7 +331,7 @@ class MySQLBrainAgendaStore(MySQLOperationalConnection):
             **({"previousSourceRun": {"runId": previous["result"]["runId"], "taskId": previous["taskId"]}}
                if previous.get("taskId") and previous.get("result", {}).get("runId") else {}),
             **({"questionContract": copy.deepcopy(case["questionContract"])} if case.get("questionContract") else {}),
-            **({"evidenceRequirements": copy.deepcopy(case["evidenceProgress"]["missingRequirements"])[:8]}
+            **({"evidenceRequirements": copy.deepcopy((case.get("questionAssessment") or case.get("evidenceProgress", {}))["missingRequirements"])[:8]}
                if recovery_key else {}),
             "priority": 5, "availableAt": now})
         case.update(status="waiting", researchAttempts=case["researchAttempts"] + 1,
@@ -449,19 +452,20 @@ class MySQLBrainAgendaStore(MySQLOperationalConnection):
             ids.append(key)
         return ids
 
-    def memory(self, account, symbol, world=None, research_only=False):
+    def memory(self, account, symbol, world=None, research_only=False, max_cases=5):
         now = stamp()
         with self.connect() as connection:
             rows = connection.execute("SELECT payload_json FROM ai_brain_cases WHERE account_id=%s AND symbol=%s AND kind='question' "
                 "AND (%s IS NULL OR JSON_UNQUOTE(JSON_EXTRACT(payload_json,'$.worldId'))=%s) "
                 "AND status IN ('open','waiting','review-needed','blocked') "
                 + ("AND JSON_UNQUOTE(JSON_EXTRACT(payload_json,'$.capability'))='research' "
-                   "AND COALESCE(JSON_UNQUOTE(JSON_EXTRACT(payload_json,'$.answerResolution.status')),'')<>'answered' " if research_only else "")
+                   "AND (COALESCE(JSON_UNQUOTE(JSON_EXTRACT(payload_json,'$.answerResolution.status')),'')<>'answered' "
+                   "OR JSON_UNQUOTE(JSON_EXTRACT(payload_json,'$.questionAssessment.status'))='partial') " if research_only else "")
                 + "ORDER BY (COALESCE(JSON_UNQUOTE(JSON_EXTRACT(payload_json,'$.answerResolution.status')),'')='answered') DESC,"
                   "(COALESCE(JSON_UNQUOTE(JSON_EXTRACT(payload_json,'$.capability')),'')='research') DESC,"
                 + ("(JSON_UNQUOTE(JSON_EXTRACT(payload_json,'$.evidenceProgress.status'))='waiting' "
                    "AND JSON_EXTRACT(payload_json,'$.researchRepeat.gapRecovery.planned') IS NULL) DESC," if research_only else "")
-                + "next_check_at,created_at,case_id LIMIT 5", (account, symbol, world, world)).fetchall()
+                + "next_check_at,created_at,case_id LIMIT %s", (account, symbol, world, world, max(1, min(12, int(max_cases))))).fetchall()
             feedback = connection.execute("SELECT payload_json FROM ai_brain_cases WHERE account_id=%s AND symbol=%s AND kind='service-feedback' "
                 "ORDER BY updated_at DESC LIMIT 3", (account, symbol)).fetchall()
             from .mysql_business_research import business_memories
@@ -477,6 +481,7 @@ class MySQLBrainAgendaStore(MySQLOperationalConnection):
                 "researchAttempts": case["researchAttempts"], "development": case.get("development", {}),
                 "researchRequest": case.get("researchRequest", {}),
                 "questionContract": case.get("questionContract", {}), "answerResolution": case.get("answerResolution", {}),
+                **({"questionAssessment": case["questionAssessment"]} if case.get("questionAssessment") else {}),
                 "researchPlan": case.get("researchPlan", {}),
                 **({"evidenceProgress": case["evidenceProgress"]} if case.get("evidenceProgress") else {}),
                 **({"researchRepeat": case.get("researchRepeat", {}), "researchSourceState": case.get("researchSourceState", {})}
@@ -521,12 +526,26 @@ class MySQLBrainAgendaStore(MySQLOperationalConnection):
                 "SUM(JSON_UNQUOTE(JSON_EXTRACT(payload_json,'$.answerResolution.status'))='answered') AS sourceAnswered,"
                 "SUM(JSON_UNQUOTE(JSON_EXTRACT(payload_json,'$.answerResolution.status'))='partial') AS sourcePartial,"
                 "SUM(JSON_UNQUOTE(JSON_EXTRACT(payload_json,'$.answerResolution.status'))='unavailable') AS sourceUnavailable,"
+                "SUM(status='answered') AS finalAnswered,"
+                "SUM(JSON_UNQUOTE(JSON_EXTRACT(payload_json,'$.questionAssessment.status'))='partial') AS finalPartial,"
                 "SUM(JSON_EXTRACT(payload_json,'$.researchPlan') IS NOT NULL) AS planned,"
                 "SUM(JSON_EXTRACT(payload_json,'$.mergedInto') IS NOT NULL) AS merged "
                 "FROM ai_brain_cases WHERE kind='question' AND (%s='' OR account_id=%s)", (account, account)).fetchone()
             rows = connection.execute("SELECT /*+ MAX_EXECUTION_TIME(5000) */ payload_json FROM ai_brain_cases WHERE (%s='' OR account_id=%s) "
                 "ORDER BY status IN ('open','waiting','review-needed','blocked','proposed','planned','tracking','needs-review','data-needed') DESC,updated_at DESC LIMIT 40", (account, account)).fetchall()
             cases = [json.loads(row["payload_json"]) for row in rows]
+            # A completed question must not disappear behind the active backlog
+            # at the exact moment its answer/impact becomes available to read.
+            completed = connection.execute("SELECT /*+ MAX_EXECUTION_TIME(5000) */ case_id FROM ai_brain_cases "
+                "WHERE kind='question' AND (%s='' OR account_id=%s) "
+                "AND JSON_UNQUOTE(JSON_EXTRACT(payload_json,'$.questionAssessment.status'))='answered' "
+                "ORDER BY updated_at DESC,case_id LIMIT 8", (account, account)).fetchall()
+            if completed:
+                ids = [row["case_id"] for row in completed]
+                recent = connection.execute("SELECT case_id,payload_json FROM ai_brain_cases WHERE case_id IN ("
+                    + ",".join(["%s"] * len(ids)) + ")", tuple(ids)).fetchall()
+                by_id = {row["case_id"]: json.loads(row["payload_json"]) for row in recent}
+                cases = ([by_id[key] for key in ids] + [row for row in cases if row["caseId"] not in by_id])[:40]
             fill_case_names(connection, cases)
             if cases:
                 ids = [row["caseId"] for row in cases]
@@ -536,7 +555,7 @@ class MySQLBrainAgendaStore(MySQLOperationalConnection):
                     "WHERE rank_in_case<=5 ORDER BY case_id,rank_in_case", tuple(ids)).fetchall()
                 for case in cases:
                     case["history"] = [json.loads(row["payload_json"]) for row in events if row["case_id"] == case["caseId"]][:5]
-        return {"goals": list(GOALS), "cases": cases, "scope": "최근 및 진행 중인 과제 최대 40건",
+        return {"goals": list(GOALS), "cases": cases, "scope": "최근 최종 답변 최대 8건을 포함한 과제 최대 40건",
                 "researchMetrics": {key: int(value or 0) for key, value in metrics.items()},
                 "qualification": "AI 답변과 개선 제안은 실증된 성과가 아닙니다."}
 

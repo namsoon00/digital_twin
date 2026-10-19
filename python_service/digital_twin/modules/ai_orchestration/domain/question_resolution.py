@@ -35,6 +35,13 @@ def resolution_schema(packet, research):
         "evidenceIds": {**array(choice([row["id"] for row in packet.get("facts", [])] or [""])), "minItems": 1, "maxItems": 8},
     })), "maxItems": 5}
     schema["required"].append("questionResolutions")
+    from .question_assessment import enabled
+    if enabled(packet):
+        item = schema["properties"]["questionResolutions"]["items"]
+        item["properties"]["judgmentImpact"] = obj({"effect": choice(["supports", "weakens", "unchanged", "insufficient"]),
+            "reason": {"type": "string", "minLength": 8, "maxLength": 500}})
+        item["properties"]["missingRequirements"] = {**array({"type": "string", "minLength": 1, "maxLength": 600}), "maxItems": 8}
+        item["required"] += ["judgmentImpact", "missingRequirements"]
     return schema
 
 
@@ -49,8 +56,13 @@ def validate_resolutions(value, packet, research, result, required=False):
         raise ValueError("invalid question resolutions")
     known = {row["id"]: row for row in packet["facts"]}
     accepted, seen = [], set()
+    from .question_assessment import enabled, validate_impact
+    current_policy = enabled(packet)
     for row in rows:
-        if not isinstance(row, dict) or set(row) != {"caseId", "disposition", "targetIndex", "reason", "evidenceIds"}:
+        fields = {"caseId", "disposition", "targetIndex", "reason", "evidenceIds"}
+        if current_policy:
+            fields |= {"judgmentImpact", "missingRequirements"}
+        if not isinstance(row, dict) or set(row) != fields:
             raise ValueError("invalid question resolution fields")
         key, disposition, index = row["caseId"], row["disposition"], row["targetIndex"]
         if key not in needed or key in seen or disposition not in DISPOSITIONS or type(index) is not int:
@@ -73,8 +85,25 @@ def validate_resolutions(value, packet, research, result, required=False):
                 raise ValueError("unresolved work cannot simultaneously advance to a hypothesis")
         elif index != -1:
             raise ValueError("deferred question cannot name a target")
+        if current_policy:
+            validate_impact(row["judgmentImpact"])
+            if (case.get("capability") == "research" and reviews[key]["action"] == "answered"
+                    and not all((case.get("questionContract") or {}).get(field) for field in ("target", "period", "answerCriterion"))):
+                raise ValueError("question answer requires its original completion contract")
+            missing = row["missingRequirements"]
+            scope = next((scope for scope in packet.get("researchScope", {}).get("questions", []) if scope["caseId"] == key), {})
+            if (not isinstance(missing, list) or len(missing) > 8
+                    or any(not isinstance(item, str) or not 1 <= len(item.strip()) <= 600 for item in missing)
+                    or set(scope.get("missingEvidence", [])) - set(missing)
+                    or (reviews[key]["action"] == "answered" and missing)
+                    or (reviews[key]["action"] in {"wait", "blocked", "research"} and not missing)):
+                raise ValueError("question resolution must preserve unmet original requirements")
+            if case.get("capability") == "research" and not set(ids).intersection(scope.get("selectedFactIds", [])):
+                raise ValueError("question resolution requires its own selected evidence")
         source = {"caseId": key, "revision": case["revision"], "question": case.get("question", ""),
                   "research": deepcopy(case.get("lastResearch", {}))}
+        if current_policy:
+            source["questionContract"] = deepcopy(case.get("questionContract", {}))
         accepted.append({**deepcopy(row), "reason": row["reason"].strip(), "sourceQuestion": source})
         seen.add(key)
     if needed - seen:

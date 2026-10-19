@@ -9,7 +9,9 @@ def retry_delays(capability, error_kind, failures):
     capture_failure = capability == "observe" and (
         error_kind.startswith("evidence-read:")
         or error_kind in {"evidence-contract:graph-changed-before-capture",
-                          "evidence-contract:graph-changed-during-capture"}
+                          "evidence-contract:graph-changed-during-capture",
+                          "evidence-contract:active-observation-graph-binding-unavailable",
+                          "evidence-contract:observation-graph-deployment-changed-during-capture"}
     )
     # Three attempts still terminate the task. A durable successor prevents a
     # temporary graph outage from pausing a subject for the general six hours.

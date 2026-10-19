@@ -37,9 +37,14 @@ def answer_resolution(result, task_id):
             "qualification": "not-empirically-qualified"}
 
 
+def source_answer_complete(case):
+    from .question_assessment import disputed_source_answer
+    return (case.get("answerResolution") or {}).get("status") == "answered" and not disputed_source_answer(case)
+
+
 def needs_research_plan(case):
     return (case.get("capability") == "research" and case.get("status") in {"open", "waiting", "review-needed", "blocked"}
-            and (case.get("answerResolution") or {}).get("status") != "answered")
+            and not source_answer_complete(case))
 
 
 def contract_key(contract):

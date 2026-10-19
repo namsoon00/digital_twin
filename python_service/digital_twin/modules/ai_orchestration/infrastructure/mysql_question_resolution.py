@@ -49,6 +49,11 @@ def link_resolution(connection, case, job, result, read, now):
         if disposition == "defer" and old.get("requestId"):
             case["status"] = "waiting"
     case["hypothesisResolution"] = entry
+    from ..domain.question_assessment import assessment
+    review = next(row for row in result.get("caseReviews", []) if row["caseId"] == case["caseId"])
+    verified = assessment(case, job, result, review, resolution, now)
+    if verified:
+        case["questionAssessment"] = verified
 
 
 def refresh_development(store, subjects, reader):

@@ -8,6 +8,7 @@ _EXPORTS['source_packet_bytes'] = ('digital_twin.modules.reasoning.domain.observ
 _EXPORTS['OBSERVATION_EVIDENCE_READY'] = ('digital_twin.modules.reasoning.domain.observation_handoff', 'OBSERVATION_EVIDENCE_READY')
 _EXPORTS['completed_observation_evidence_event'] = ('digital_twin.modules.reasoning.domain.observation_handoff', 'completed_observation_evidence_event')
 _EXPORTS['ObservationEvidenceSession'] = ('digital_twin.modules.reasoning.domain.observation_session', 'ObservationEvidenceSession')
+_EXPORTS['EXACT_QUESTION_DOCUMENT_VERSION'] = ('digital_twin.modules.reasoning.domain.observation_document_view', 'VERSION')
 _EXPORTS['candidate_consumes_source_events'] = ('digital_twin.modules.reasoning.domain.reasoning_engine_versions', 'candidate_consumes_source_events')
 
 _EXPORTS['ONTOLOGY_GRAPH_REPOSITORY_CONTRACT'] = ('digital_twin.modules.reasoning.domain.repositories', 'ONTOLOGY_GRAPH_REPOSITORY_CONTRACT')

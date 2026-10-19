@@ -33,7 +33,8 @@ def initialize(case):
 
 def admission(case, action):
     guard = case.get("researchRepeat") or {}
-    if (case.get("answerResolution") or {}).get("status") == "answered":
+    from .research_work import source_answer_complete
+    if source_answer_complete(case):
         return "answered"
     if case.get("researchAttempts", 0) >= MAX_RESEARCH_ATTEMPTS:
         return "research-attempt-limit"
@@ -103,7 +104,7 @@ def observation_key(packet, research):
     """
     from digital_twin.modules.reasoning.contracts import evidence_change_identity
     from .planning import identity
-    operational = {"revision", "nextCheckAt", "reviewDue", "reason", "lastAssessment",
+    operational = {"revision", "nextCheckAt", "reviewDue", "reason", "lastAssessment", "questionAssessment",
                    "researchPlan", "researchRepeat", "researchSourceState", "answerMemory", "evidenceProgress"}
     work = [{key: value for key, value in row.items() if key not in operational}
             if row.get("kind") == "brain-case" else row for row in research]
@@ -143,7 +144,8 @@ def stalled_question(active, request, contract=None):
         stalled = guard.get("waitReason") or (not guard and case.get("researchPlan"))
         if case.get("capability") != "research" or not stalled:
             continue
-        if (case.get("answerResolution") or {}).get("status") == "answered":
+        from .research_work import source_answer_complete
+        if source_answer_complete(case):
             continue
         old_period = (case.get("questionContract") or {}).get("period")
         new_period = (contract or {}).get("period")

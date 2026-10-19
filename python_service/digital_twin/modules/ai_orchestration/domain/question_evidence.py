@@ -40,6 +40,8 @@ def question_index(research):
         answer = source_answer(case)
         resolution = case.get("answerResolution") or {}
         row = {key: deepcopy(case[key]) for key in ("caseId", "question", "questionContract", "revision") if key in case}
+        if case.get("questionWorkKey"):
+            row["questionWorkKey"] = case["questionWorkKey"]
         sources = answer.get("sources", [])
         row["sourceAnswer"] = {"status": resolution.get("status", answer.get("status", "unavailable")),
             "sources": [{key: deepcopy(source[key]) for key in ("evidenceId", "periodEnd", "reportDate", "publishedAt")
@@ -54,7 +56,7 @@ def question_index(research):
 
 def captured_index(index):
     """Only ownership/replay pointers belong in the final author's packet."""
-    return [{**{key: deepcopy(row[key]) for key in ("caseId", "revision", "questionContract") if key in row},
+    return [{**{key: deepcopy(row[key]) for key in ("caseId", "revision", "questionContract", "questionWorkKey") if key in row},
              "sourceAnswer": {"sourceIdentity": row.get("sourceAnswer", {}).get("sourceIdentity", "")}}
             for row in index]
 
@@ -63,15 +65,15 @@ def checkpoints(packet, trace):
     """Derive operational checkpoints only from the frozen, final read decision."""
     if packet.get("questionEvidencePolicy") != VERSION or not trace or not trace[-1].get("decision"):
         return []
-    from . import scoped_retrieval, indexed_retrieval
-    contract = indexed_retrieval if packet["retrieval"]["version"] == indexed_retrieval.VERSION else scoped_retrieval
+    from . import scoped_retrieval, indexed_retrieval, question_retrieval
+    contract = question_retrieval if packet["retrieval"]["version"] == question_retrieval.VERSION else indexed_retrieval if packet["retrieval"]["version"] == indexed_retrieval.VERSION else scoped_retrieval
     decision = contract.validate_decision(trace[-1]["decision"])
     if decision["action"] == "read":
         return []  # An exhausted read budget is not a completed per-question assessment.
     index = packet.get("questionEvidenceIndex", [])
     facts = {row["id"]: row for row in packet["facts"]}
-    scoped_retrieval.validate_scope(decision, {"questionIndex": index, "questionEvidencePolicy": VERSION}, facts)
-    if packet.get("researchScope") != scoped_retrieval.research_scope(trace, packet["retrieval"]["status"]):
+    contract.validate_scope(decision, {"questionIndex": index, "questionEvidencePolicy": VERSION}, facts)
+    if packet.get("researchScope") != contract.research_scope(trace, packet["retrieval"]["status"]):
         raise ValueError("question progress must match the frozen read scope")
     captured = {row["caseId"]: row for row in index}
     result = []
@@ -92,6 +94,7 @@ def checkpoints(packet, trace):
                 "progressKey": identity, "status": scope["status"], "missingRequirements": deepcopy(scope["missingEvidence"]),
                 "selectedFactIds": sorted(scope["selectedFactIds"]), "references": refs,
                 "sourceSnapshotId": packet["sourceSnapshotId"], "executionInputId": trace[-1]["inputId"],
+                **({"workKey": original["questionWorkKey"]} if original.get("questionWorkKey") else {}),
                 "resumeOn": ["changed-source-evidence", "changed-question-contract"],
                 "authority": "read-progress-only", "qualification": "not-an-answer-or-thesis"}})
     return result

@@ -53,12 +53,12 @@ def execute_research(job, research_store, orchestrator_factory):
     previous_answer = job.get("knownSourceAnswer") or {}
     if job.get("evidenceRequirements"):
         task["purpose"] += "\n원문 조회에서 확인한 미확인 항목만 보완합니다: " + json.dumps(job["evidenceRequirements"], ensure_ascii=False)
-    if previous_answer.get("status") == "partial":
+    if previous_answer.get("status") == "partial" or (previous_answer.get("status") == "answered" and job.get("evidenceRequirements")):
         task["purpose"] += ("\n이미 확인한 답변은 보존하고 아래 미확인 항목만 추가 탐색하세요. "
             "이전 답변은 역사적 작업 기록이며 이번 답변의 근거를 대신하지 않습니다. "
             "완료 판단은 원래 질문 전체 기준을 유지합니다: " + json.dumps({
                 "previousAnswer": previous_answer.get("text", ""),
-                "missingRequirements": previous_answer.get("missingRequirements", []),
+                "missingRequirements": job.get("evidenceRequirements") or previous_answer.get("missingRequirements", []),
                 "sourceEvidenceIds": [row.get("evidenceId") for row in previous_answer.get("sources", [])],
             }, ensure_ascii=False, sort_keys=True))
     orchestrator = orchestrator_factory()

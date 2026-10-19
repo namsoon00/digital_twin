@@ -7,10 +7,16 @@ VERSION = "question-recovery-v1"
 
 def gap_key(case):
     progress, contract = case.get("evidenceProgress") or {}, case.get("questionContract") or {}
-    if (progress.get("version") != EVIDENCE_VERSION or progress.get("status") != "waiting"
-            or not progress.get("executionInputId") or not progress.get("missingRequirements")
+    from .question_assessment import disputed_source_answer
+    disputed = disputed_source_answer(case)
+    if disputed:
+        progress = case["questionAssessment"]
+    if not disputed and (progress.get("version") != EVIDENCE_VERSION or progress.get("status") != "waiting"):
+        return ""
+    from .research_work import source_answer_complete
+    if (not progress.get("executionInputId") or not progress.get("missingRequirements")
             or not all(contract.get(key) for key in ("target", "period", "answerCriterion"))
-            or (case.get("answerResolution") or {}).get("status") == "answered"):
+            or source_answer_complete(case)):
         return ""
     from .research_work import contract_key
     return identity(VERSION, case["caseId"], contract_key(contract))

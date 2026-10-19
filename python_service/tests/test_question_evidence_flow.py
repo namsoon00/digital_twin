@@ -33,6 +33,8 @@ def waiting_scope(case):
 
 class QuestionEvidenceFlowTests(unittest.TestCase):
     def test_original_question_moves_from_source_index_to_scoped_review_and_persistent_gap(self):
+        from question_assessment_checks import check_question_assessment
+        check_question_assessment(self)
         from question_recovery_checks import check_source_references, check_finite_followup, check_review_dispatch
         check_source_references(self)
         check_finite_followup(self)

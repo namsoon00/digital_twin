@@ -156,6 +156,12 @@ class ResearchKnowledgeStorageTests(unittest.TestCase):
         check_question_progress(self)
 
     def test_ready_question_completion_requires_its_own_review_even_with_accepted_market_quality(self):
+        from question_assessment_checks import check_persisted_question_assessment
+        for answered, accepted in ((False, True), (True, True), (False, False)):
+            with self.subTest(assessment=answered, accepted=accepted):
+                self.fixture.clean()
+                self.clean_knowledge()
+                check_persisted_question_assessment(self, answered=answered, accepted=accepted)
         from question_evidence_storage_checks import check_ready_question_answer
         for accepted in (True, False):
             with self.subTest(accepted=accepted):

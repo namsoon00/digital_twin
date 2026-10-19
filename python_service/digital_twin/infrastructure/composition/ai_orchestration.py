@@ -52,10 +52,18 @@ def build_ai_control_service(settings=None):
     def subjects():
         return ai_control_subjects(configured)
 
-    def evidence(job):
+    def evidence_binding():
+        from digital_twin.modules.reasoning.infrastructure.observation_binding import active_observation_binding
+        with store.connect() as connection:
+            return active_observation_binding(connection)
+
+    def evidence_reader(binding, job):
         from digital_twin.modules.ai_orchestration.infrastructure.observation_reader import GraphObservationReader
-        return GraphObservationReader(typedb_repository_from_settings(configured),
-            macro_world_id=job.get("marketWorldId", "")).capture_session(job)
+        return GraphObservationReader(typedb_repository_from_settings({**configured, "typedbDatabase": binding["graphStoreBinding"]}),
+            macro_world_id=job.get("marketWorldId", ""))
+
+    from digital_twin.modules.reasoning.public import DeploymentObservationEvidenceReader
+    evidence = DeploymentObservationEvidenceReader(evidence_binding, evidence_reader).capture_session
 
     def planner(envelope, input_id):
         token = CURRENT_TASK.set(envelope["current"]["taskId"])
@@ -148,9 +156,9 @@ def build_ai_control_service(settings=None):
 
     return AIControlService(store, subjects, evidence, planner, researcher, research_memory, configured,
                             delivery_memory=publication.memory, reviewer=planner, development_memory=development.memory,
-                            brain_memory=agenda.memory, brain_waker=wake_brain, read_planner=planner,
+                            brain_memory=lambda account, symbol, world: agenda.memory(account, symbol, world, max_cases=12 if knowledge else 5), brain_waker=wake_brain, read_planner=planner,
                             evidence_waker=evidence_wake.run_once, read_round_budget=store.retrieval_round_budget, company_memory=company_memory,
-                            research_plan_memory=lambda account, symbol, world: agenda.memory(account, symbol, world, research_only=True),
+                            research_plan_memory=lambda account, symbol, world: agenda.memory(account, symbol, world, research_only=True, max_cases=12 if knowledge else 5),
                             research_gate=agenda.research_admission,
                             knowledge_context=knowledge.context if knowledge else None,
                             knowledge_refresh=knowledge.refresh if knowledge else None, rulebox_feedback=rulebox_feedback)

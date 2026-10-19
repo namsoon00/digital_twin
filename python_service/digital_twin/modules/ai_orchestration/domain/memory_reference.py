@@ -46,6 +46,9 @@ def brief(row, category):
         result["quality"] = {"status": row.get("quality", {}).get("status"),
                              "errorCount": len(row.get("quality", {}).get("errors") or [])}
     if row.get("kind") == "brain-case":
+        if row.get("questionAssessment"):
+            result["questionAssessment"] = {key: deepcopy(row["questionAssessment"][key]) for key in
+                ("status", "missingRequirements", "judgmentImpact", "hypothesisDisposition") if key in row["questionAssessment"]}
         # Preserve exact question requirements, but omit answer prose/provider audits.
         for key in ("answerResolution", "evidenceProgress"):
             source = row.get(key) or {}

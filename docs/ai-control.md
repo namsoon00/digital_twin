@@ -1411,3 +1411,58 @@ explicit failure. Exclusion does not refute, retire or erase stored research.
 ownership/path rejection, preserved question/checkpoint contracts, V17/V13 replay
 and a 24-claim exclusion-growth counterexample. Reduced input or successful
 validation alone establishes neither lower billed cost nor better predictions.
+
+### Original-question closure and active graph reads (2026-10-19)
+
+The central reader resolves the existing `reasoning_engine_control` and active
+deployment binding before each capture. It reads that deployment's portfolio
+and public macro worlds, then checks the binding again. Missing, candidate,
+delivery-misaligned or concurrently switched bindings fail before model work;
+there is no fallback to the old configured graph. The exact deployment, database
+binding and control version are frozen as `reasoningBinding`. The resolver uses
+bounded primary-key reads and does not initialize a registry, create a database,
+change a release, or request inference. This corrects a stale-reader path where
+newly projected question documents existed in the active database but were
+absent from the central AI's older graph.
+
+Knowledge-enabled management uses `original-question-assessment-v1`, retrieval
+V6, author V19, repair V15 and research review V3. Earlier V5/V18/V14 and review
+V1/V2 inputs retain their original validators. `read_document(factId)` accepts
+only this capture's question document index. Its exact field view retains the
+complete admitted excerpt, document hash, issuer/source clocks, provenance and
+quality, or all reported values and their original periods/units for a structured
+report. It removes duplicated analysis/provider fields, never rewrites an
+excerpt, and records the original fact hash and omitted field names. Structured
+reports remain distinct from complete filings, notes and correction histories.
+Dated source use cannot renew a price or admit a conflicting/retracted source.
+
+`assess` advances source-backed partial work to an internal question assessment.
+It requires an explicit review of each question with selected evidence, preserves
+every unmet requirement, prohibits customer delivery and cannot close a waiting
+question as answered. A final answer still requires a ready question and an
+independent review against the complete original criterion. A ready question's
+`finish` is also an internal assessment: a factual answer does not require a
+market-price follow-up, a forced business thesis or notification approval. Every reviewed
+research question records its authored `judgmentImpact`, missing requirements,
+source citations, original contract, hypothesis disposition and exact author
+input. Research review V3 receives the accompanying explanation and captured
+prior-judgment continuity too. The web console displays source-owner completion,
+final question completion, partial answers and their judgment impact separately.
+Its bounded forty-case view reserves up to eight recent final answers so a
+completed answer stays visible when the active backlog exceeds the view limit.
+An accepted review is not empirical hypothesis validation or investment profit.
+
+Documentary work is keyed by the original question/contract, source-answer
+coverage and frozen document/report inventory. Quotes, polling clocks, our own
+assessment wording and due timers do not renew that key. Completed read progress
+or an assessment parks the same work; the bounded window advances to other
+unreviewed questions. A changed source or original contract can reopen it. The
+pending work keys participate in the operational retry identity, so parking one
+cohort does not suppress the next unreviewed cohort.
+
+If an independently accepted final partial assessment contradicts a source
+owner's earlier `answered` receipt, that receipt is preserved. The final missing
+requirements can enter the existing once-per-original-case gap follow-up. The
+six-attempt lifetime ceiling, two-attempt intent ceiling, six-hour interval and
+previously consumed recovery slot remain authoritative. Merely rewording the
+question or changing a completion label grants no additional research calls.

@@ -72,6 +72,7 @@ def record_plan(store, connection, job, result, children):
         case["researchPlan"] = {"version": work.VERSION, "action": review["action"], "reason": review["reason"],
             "resumeWhen": review["resumeWhen"], "missingRequirements": list(dict.fromkeys(
                 (case.get("answerResolution") or {}).get("missingRequirements", [])
+                + (case.get("questionAssessment") or {}).get("missingRequirements", [])
                 + (case.get("evidenceProgress") or {}).get("missingRequirements", [])))[:12],
             "executionInputId": result["executionInputId"], "taskId": job["taskId"], "at": now,
             "stateKey": state, "unchangedPlans": repeats, "authority": "research-planning-only"}

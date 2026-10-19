@@ -55,6 +55,7 @@ _EXPORTS = {'research_knowledge_projection': ('digital_twin.modules.reasoning.do
 
 _EXPORTS['append_rule_to_release_artifact'] = ('digital_twin.modules.reasoning.infrastructure.static_seed.artifact', 'append_rule_to_release_artifact')
 _EXPORTS['ObservationEvidenceReader'] = ('digital_twin.modules.reasoning.application.observation_evidence', 'ObservationEvidenceReader')
+_EXPORTS['DeploymentObservationEvidenceReader'] = ('digital_twin.modules.reasoning.application.observation_evidence.deployment', 'DeploymentObservationEvidenceReader')
 _EXPORTS['TypeDBObservationEvidenceSource'] = ('digital_twin.modules.reasoning.infrastructure.observation_evidence', 'TypeDBObservationEvidenceSource')
 
 __all__ = list(_EXPORTS)

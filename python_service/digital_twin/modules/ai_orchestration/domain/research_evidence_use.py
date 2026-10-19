@@ -16,8 +16,10 @@ def answered_research_scope(research):
 def historical_reference(fact):
     ref = fact.get("historicalDocumentReference") or {}
     text = ref.get("text")
+    from digital_twin.modules.reasoning.contracts import EXACT_QUESTION_DOCUMENT_VERSION
+    dated_issuer = ref.get("purpose") == "dated-issuer-document" and (fact.get("evidenceView") or {}).get("version") == EXACT_QUESTION_DOCUMENT_VERSION
     return bool(ref.get("version") == "research-document-reference-v1"
-                and ref.get("purpose") == "historical-period-comparison"
+                and (ref.get("purpose") == "historical-period-comparison" or dated_issuer)
                 and ref.get("symbol") == fact.get("symbol") and ref.get("sourceUrl") == fact.get("url")
                 and isinstance(text, str) and text
                 and hashlib.sha256(text.encode()).hexdigest() == ref.get("passageTextHash"))
@@ -26,6 +28,18 @@ def historical_reference(fact):
 def usable_fact(fact, field=None):
     if fact.get("valuationDecisionEligible") is False:
         return False
+    from digital_twin.modules.reasoning.contracts import EXACT_QUESTION_DOCUMENT_VERSION
+    ref = fact.get("questionSourceReference") or {}
+    governance = fact.get("evidenceGovernance") or {}
+    if ((fact.get("evidenceView") or {}).get("version") == EXACT_QUESTION_DOCUMENT_VERSION
+            and ref.get("version") == "question-source-reference-v1" and ref.get("sourceKind") == "structured-report"
+            and ref.get("reportObservationId") == fact.get("reportObservationId") and ref.get("periodEnd") == fact.get("periodEnd")
+            and governance.get("verificationStatus") == "verified-primary" and governance.get("sourceTrustState") == "trusted"
+            and governance.get("validationState") == "ready" and not governance.get("conflictingEvidenceIds")
+            and not governance.get("supersededByEvidenceId")
+            and not set((fact.get("promptEvidenceAdmission") or {}).get("reasonCodes", [])) - {"evidence-stale"}):
+        return field is None or field.split(".")[0] in {"periodEnd", "reportedValues", "metricUnits", "metricProvenance",
+            "durationBases", "sourceReferences", "reportObservationId", "sourceRevision", "questionSourceReference"}
     if "historicalDocumentReference" in fact:
         return historical_reference(fact) and (field is None or field in {
             "historicalDocumentReference.text", "historicalDocumentReference.periodEnd",

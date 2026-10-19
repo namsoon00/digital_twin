@@ -14,7 +14,7 @@ mode=research-only이면 notification.send=false입니다. 부분 근거에 기�
 def research_only(packet):
     """Only a frozen, supported read-stage scope can select internal research."""
     scope = packet.get("researchScope") or {}
-    return scope.get("version") == SCOPE_VERSION and scope.get("mode") == "research-only"
+    return scope.get("version") == SCOPE_VERSION and (scope.get("mode") == "research-only" or scope.get("assessmentOnly") is True)
 
 
 def research_disposition(result):
@@ -39,6 +39,9 @@ def instructions(packet):
     from .question_evidence import VERSION as evidence_policy
     if packet.get("questionEvidencePolicy") == evidence_policy and scope.get("mode") == "question-assessment":
         extra += "ready 질문은 caseReviews와 questionResolutions에서 빠짐없이 검토하세요. 근거의 기간·지표·완료 기준을 다시 확인하고 부족하면 구체적인 사유로 wait/research/blocked를 선택하세요.\n"
+    from .question_assessment import enabled, INSTRUCTIONS as assessment_instructions
+    if enabled(packet):
+        extra += assessment_instructions
     return INSTRUCTIONS + extra
 
 
@@ -61,3 +64,10 @@ def validate_plan(result, packet):
         raise PlanValidationError("partial-research-question", "caseReviews", "대기 중인 질문의 답변·종료를 선언하지 말고 원래 기준과 부족 근거를 유지하세요.")
     if scope["mode"] == "research-only" and any(row["action"] in {"answered", "dismissed"} for row in result.get("caseReviews", [])):
         raise PlanValidationError("partial-research-question", "caseReviews", "잠정 연구에서 질문 답변·종료를 선언할 수 없습니다.")
+    from .question_assessment import enabled
+    if enabled(packet) and scope.get("assessmentOnly"):
+        required = {row["caseId"] for row in scope["questions"] if row["selectedFactIds"]}
+        if required - {row["caseId"] for row in result.get("caseReviews", [])}:
+            raise PlanValidationError("partial-question-review-missing", "caseReviews", "선택한 근거가 있는 원래 질문의 부분 답변과 부족분을 각각 검토하세요.")
+        if result["notification"]["send"]:
+            raise PlanValidationError("partial-research-notification", "notification.send", "질문 부분 평가는 내부 저장하며 고객 알림은 false입니다.")

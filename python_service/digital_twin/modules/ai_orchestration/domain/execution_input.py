@@ -17,7 +17,7 @@ from .question_resolution import resolution_prompt, resolution_schema, resolutio
 from .knowledge_research import knowledge_prompt, knowledge_schema, knowledge_review_prompt
 from . import working_retrieval
 from . import scoped_retrieval
-from . import indexed_retrieval, memory_reference
+from . import indexed_retrieval, memory_reference, question_retrieval
 from digital_twin.modules.ai_orchestration.domain.retrieval import (
     RETRIEVAL_PROMPT_VERSION, retrieval_prompt, retrieval_schema, directed_planning_prompt, trace_summary,
     LEGACY_RETRIEVAL_PROMPT_VERSION, legacy, validate_trace,
@@ -40,7 +40,8 @@ READABLE_PROMPT_VERSION = "independent-observation-v14-readable-meaning"
 BUSINESS_PROMPT_VERSION = "independent-observation-v15-business-research"
 QUESTION_PROMPT_VERSION = "independent-observation-v16-question-resolution"
 KNOWLEDGE_PROMPT_VERSION = "independent-observation-v17-research-knowledge"
-PROMPT_VERSION = "independent-observation-v18-indexed-memory"
+INDEXED_PROMPT_VERSION = "independent-observation-v18-indexed-memory"
+PROMPT_VERSION = "independent-observation-v19-question-assessment"
 LEGACY_REPAIR_PROMPT_VERSION = "independent-observation-repair-v1"
 DEVELOPMENT_REPAIR_PROMPT_VERSION = "independent-observation-repair-v2-ontology-development"
 AGENDA_REPAIR_PROMPT_VERSION = "independent-observation-repair-v3-persistent-agenda"
@@ -54,7 +55,8 @@ READABLE_REPAIR_PROMPT_VERSION = "independent-observation-repair-v10-readable-me
 BUSINESS_REPAIR_PROMPT_VERSION = "independent-observation-repair-v11-business-research"
 QUESTION_REPAIR_PROMPT_VERSION = "independent-observation-repair-v12-question-resolution"
 KNOWLEDGE_REPAIR_PROMPT_VERSION = "independent-observation-repair-v13-research-knowledge"
-REPAIR_PROMPT_VERSION = "independent-observation-repair-v14-indexed-memory"
+INDEXED_REPAIR_PROMPT_VERSION = "independent-observation-repair-v14-indexed-memory"
+REPAIR_PROMPT_VERSION = "independent-observation-repair-v15-question-assessment"
 LEGACY_REVIEW_PROMPT_VERSION = "independent-observation-review-v1"
 SOURCE_CLOCK_REVIEW_PROMPT_VERSION = "independent-observation-review-v2-source-clock"
 CITABLE_REVIEW_PROMPT_VERSION = "independent-observation-review-v3-clock-citations"
@@ -120,13 +122,13 @@ def freeze_execution_input(packet, history, research, max_prompt_bytes=DEFAULT_P
 
 def validate_execution_input(envelope):
     from . import research_review
-    if envelope.get("promptVersion") in {research_review.VERSION, research_review.LEGACY_VERSION}:
+    if envelope.get("promptVersion") in research_review.SUPPORTED_VERSIONS:
         return research_review.validate_input(envelope)
     from . import research_work
     if envelope.get("promptVersion") == research_work.PROMPT_VERSION:
         return research_work.validate_input(envelope)
-    if envelope.get("promptVersion") in {working_retrieval.VERSION, scoped_retrieval.VERSION, indexed_retrieval.VERSION}:
-        contract = indexed_retrieval if envelope["promptVersion"] == indexed_retrieval.VERSION else scoped_retrieval if envelope["promptVersion"] == scoped_retrieval.VERSION else working_retrieval
+    if envelope.get("promptVersion") in {working_retrieval.VERSION, scoped_retrieval.VERSION, indexed_retrieval.VERSION, question_retrieval.VERSION}:
+        contract = question_retrieval if envelope["promptVersion"] == question_retrieval.VERSION else indexed_retrieval if envelope["promptVersion"] == indexed_retrieval.VERSION else scoped_retrieval if envelope["promptVersion"] == scoped_retrieval.VERSION else working_retrieval
         if envelope.get("protocolVersion") != EXECUTION_INPUT_PROTOCOL:
             raise EvidenceContractError("unsupported AI execution input")
         validate_evidence_packet(envelope["current"])
@@ -137,7 +139,7 @@ def validate_execution_input(envelope):
                 or len(prompt.encode()) > prompt_budget(envelope.get("promptBudgetBytes"))):
             raise EvidenceContractError("frozen working retrieval input mismatch")
         return content_hash(envelope)
-    if envelope.get("protocolVersion") != EXECUTION_INPUT_PROTOCOL or envelope.get("promptVersion") not in {KNOWLEDGE_PROMPT_VERSION, KNOWLEDGE_REPAIR_PROMPT_VERSION, QUESTION_PROMPT_VERSION, QUESTION_REPAIR_PROMPT_VERSION, QUESTION_REVIEW_PROMPT_VERSION, BUSINESS_REVIEW_PROMPT_VERSION, BUSINESS_PROMPT_VERSION, BUSINESS_REPAIR_PROMPT_VERSION, PROMPT_VERSION, READABLE_PROMPT_VERSION, READABLE_REPAIR_PROMPT_VERSION, READABLE_REVIEW_PROMPT_VERSION, FILING_PROMPT_VERSION, FILING_REPAIR_PROMPT_VERSION, MANAGEMENT_BOUNDS_PROMPT_VERSION, MANAGEMENT_BOUNDS_REPAIR_PROMPT_VERSION, CONTINUITY_PROMPT_VERSION, CONTINUITY_REPAIR_PROMPT_VERSION, DIRECTED_PROMPT_VERSION, DIRECTED_REPAIR_PROMPT_VERSION, AGENDA_PROMPT_VERSION, DEVELOPMENT_PROMPT_VERSION, BOUNDED_PROMPT_VERSION, PREVIOUS_PROMPT_VERSION, LEGACY_PROMPT_VERSION, LEGACY_REPAIR_PROMPT_VERSION, DEVELOPMENT_REPAIR_PROMPT_VERSION, AGENDA_REPAIR_PROMPT_VERSION, REPAIR_PROMPT_VERSION, LEGACY_REVIEW_PROMPT_VERSION, REVIEW_PROMPT_VERSION, CONTINUITY_REVIEW_PROMPT_VERSION, CITABLE_REVIEW_PROMPT_VERSION, SOURCE_CLOCK_PROMPT_VERSION, SOURCE_CLOCK_REPAIR_PROMPT_VERSION, SOURCE_CLOCK_REVIEW_PROMPT_VERSION, CITABLE_PROMPT_VERSION, CITABLE_REPAIR_PROMPT_VERSION, RETRIEVAL_PROMPT_VERSION, LEGACY_RETRIEVAL_PROMPT_VERSION}:
+    if envelope.get("protocolVersion") != EXECUTION_INPUT_PROTOCOL or envelope.get("promptVersion") not in {INDEXED_PROMPT_VERSION, INDEXED_REPAIR_PROMPT_VERSION, KNOWLEDGE_PROMPT_VERSION, KNOWLEDGE_REPAIR_PROMPT_VERSION, QUESTION_PROMPT_VERSION, QUESTION_REPAIR_PROMPT_VERSION, QUESTION_REVIEW_PROMPT_VERSION, BUSINESS_REVIEW_PROMPT_VERSION, BUSINESS_PROMPT_VERSION, BUSINESS_REPAIR_PROMPT_VERSION, PROMPT_VERSION, READABLE_PROMPT_VERSION, READABLE_REPAIR_PROMPT_VERSION, READABLE_REVIEW_PROMPT_VERSION, FILING_PROMPT_VERSION, FILING_REPAIR_PROMPT_VERSION, MANAGEMENT_BOUNDS_PROMPT_VERSION, MANAGEMENT_BOUNDS_REPAIR_PROMPT_VERSION, CONTINUITY_PROMPT_VERSION, CONTINUITY_REPAIR_PROMPT_VERSION, DIRECTED_PROMPT_VERSION, DIRECTED_REPAIR_PROMPT_VERSION, AGENDA_PROMPT_VERSION, DEVELOPMENT_PROMPT_VERSION, BOUNDED_PROMPT_VERSION, PREVIOUS_PROMPT_VERSION, LEGACY_PROMPT_VERSION, LEGACY_REPAIR_PROMPT_VERSION, DEVELOPMENT_REPAIR_PROMPT_VERSION, AGENDA_REPAIR_PROMPT_VERSION, REPAIR_PROMPT_VERSION, LEGACY_REVIEW_PROMPT_VERSION, REVIEW_PROMPT_VERSION, CONTINUITY_REVIEW_PROMPT_VERSION, CITABLE_REVIEW_PROMPT_VERSION, SOURCE_CLOCK_PROMPT_VERSION, SOURCE_CLOCK_REPAIR_PROMPT_VERSION, SOURCE_CLOCK_REVIEW_PROMPT_VERSION, CITABLE_PROMPT_VERSION, CITABLE_REPAIR_PROMPT_VERSION, RETRIEVAL_PROMPT_VERSION, LEGACY_RETRIEVAL_PROMPT_VERSION}:
         raise EvidenceContractError("unsupported AI execution input")
     validate_evidence_packet(envelope["current"])
     if envelope["promptVersion"] == RETRIEVAL_PROMPT_VERSION:
@@ -157,36 +159,36 @@ def validate_execution_input(envelope):
         schema = legacy_planning_schema(envelope["current"])
     else:
         old = envelope["promptVersion"] in {PREVIOUS_PROMPT_VERSION, BOUNDED_PROMPT_VERSION, LEGACY_REPAIR_PROMPT_VERSION}
-        resolved = envelope["promptVersion"] in {KNOWLEDGE_PROMPT_VERSION, KNOWLEDGE_REPAIR_PROMPT_VERSION, PROMPT_VERSION, REPAIR_PROMPT_VERSION, QUESTION_PROMPT_VERSION, QUESTION_REPAIR_PROMPT_VERSION}
+        resolved = envelope["promptVersion"] in {INDEXED_PROMPT_VERSION, INDEXED_REPAIR_PROMPT_VERSION, KNOWLEDGE_PROMPT_VERSION, KNOWLEDGE_REPAIR_PROMPT_VERSION, PROMPT_VERSION, REPAIR_PROMPT_VERSION, QUESTION_PROMPT_VERSION, QUESTION_REPAIR_PROMPT_VERSION}
         business = resolved or envelope["promptVersion"] in {BUSINESS_PROMPT_VERSION, BUSINESS_REPAIR_PROMPT_VERSION}
         readable = business or envelope["promptVersion"] in {READABLE_PROMPT_VERSION, READABLE_REPAIR_PROMPT_VERSION}
         continuous = readable or envelope["promptVersion"] in {FILING_PROMPT_VERSION, FILING_REPAIR_PROMPT_VERSION, MANAGEMENT_BOUNDS_PROMPT_VERSION, MANAGEMENT_BOUNDS_REPAIR_PROMPT_VERSION, CONTINUITY_PROMPT_VERSION, CONTINUITY_REPAIR_PROMPT_VERSION}
-        legacy_research = envelope["promptVersion"] not in {KNOWLEDGE_PROMPT_VERSION, KNOWLEDGE_REPAIR_PROMPT_VERSION, QUESTION_PROMPT_VERSION, QUESTION_REPAIR_PROMPT_VERSION, BUSINESS_PROMPT_VERSION, BUSINESS_REPAIR_PROMPT_VERSION, PROMPT_VERSION, REPAIR_PROMPT_VERSION, READABLE_PROMPT_VERSION, READABLE_REPAIR_PROMPT_VERSION, FILING_PROMPT_VERSION, FILING_REPAIR_PROMPT_VERSION}
+        legacy_research = envelope["promptVersion"] not in {INDEXED_PROMPT_VERSION, INDEXED_REPAIR_PROMPT_VERSION, KNOWLEDGE_PROMPT_VERSION, KNOWLEDGE_REPAIR_PROMPT_VERSION, QUESTION_PROMPT_VERSION, QUESTION_REPAIR_PROMPT_VERSION, BUSINESS_PROMPT_VERSION, BUSINESS_REPAIR_PROMPT_VERSION, PROMPT_VERSION, REPAIR_PROMPT_VERSION, READABLE_PROMPT_VERSION, READABLE_REPAIR_PROMPT_VERSION, FILING_PROMPT_VERSION, FILING_REPAIR_PROMPT_VERSION}
         directed = continuous or envelope["promptVersion"] in {DIRECTED_PROMPT_VERSION, DIRECTED_REPAIR_PROMPT_VERSION}
         citable = directed or envelope["promptVersion"] in {CITABLE_PROMPT_VERSION, CITABLE_REPAIR_PROMPT_VERSION}
         clocked = citable or envelope["promptVersion"] in {SOURCE_CLOCK_PROMPT_VERSION, SOURCE_CLOCK_REPAIR_PROMPT_VERSION}
         managed = clocked or envelope["promptVersion"] in {AGENDA_PROMPT_VERSION, AGENDA_REPAIR_PROMPT_VERSION}
-        builder = knowledge_prompt if envelope["promptVersion"] in {KNOWLEDGE_PROMPT_VERSION, KNOWLEDGE_REPAIR_PROMPT_VERSION, PROMPT_VERSION, REPAIR_PROMPT_VERSION} else resolution_prompt if resolved else business_prompt if business else readable_planning_prompt if readable else continuous_planning_prompt if continuous else bounded_planning_prompt if old else directed_planning_prompt if directed else citable_management_prompt if citable else clocked_management_prompt if clocked else management_prompt if managed else planning_prompt
+        builder = knowledge_prompt if envelope["promptVersion"] in {INDEXED_PROMPT_VERSION, INDEXED_REPAIR_PROMPT_VERSION, KNOWLEDGE_PROMPT_VERSION, KNOWLEDGE_REPAIR_PROMPT_VERSION, PROMPT_VERSION, REPAIR_PROMPT_VERSION} else resolution_prompt if resolved else business_prompt if business else readable_planning_prompt if readable else continuous_planning_prompt if continuous else bounded_planning_prompt if old else directed_planning_prompt if directed else citable_management_prompt if citable else clocked_management_prompt if clocked else management_prompt if managed else planning_prompt
         prompt = builder(envelope["current"], envelope["previousAnalyses"], envelope["researchResults"],
                          **({"legacy_research": legacy_research} if continuous and not readable else {}))
-        if envelope["promptVersion"] in {KNOWLEDGE_REPAIR_PROMPT_VERSION, QUESTION_REPAIR_PROMPT_VERSION, BUSINESS_REPAIR_PROMPT_VERSION, REPAIR_PROMPT_VERSION, READABLE_REPAIR_PROMPT_VERSION, FILING_REPAIR_PROMPT_VERSION, MANAGEMENT_BOUNDS_REPAIR_PROMPT_VERSION, CONTINUITY_REPAIR_PROMPT_VERSION, DIRECTED_REPAIR_PROMPT_VERSION, CITABLE_REPAIR_PROMPT_VERSION, SOURCE_CLOCK_REPAIR_PROMPT_VERSION, AGENDA_REPAIR_PROMPT_VERSION, DEVELOPMENT_REPAIR_PROMPT_VERSION, LEGACY_REPAIR_PROMPT_VERSION}:
+        if envelope["promptVersion"] in {INDEXED_REPAIR_PROMPT_VERSION, KNOWLEDGE_REPAIR_PROMPT_VERSION, QUESTION_REPAIR_PROMPT_VERSION, BUSINESS_REPAIR_PROMPT_VERSION, REPAIR_PROMPT_VERSION, READABLE_REPAIR_PROMPT_VERSION, FILING_REPAIR_PROMPT_VERSION, MANAGEMENT_BOUNDS_REPAIR_PROMPT_VERSION, CONTINUITY_REPAIR_PROMPT_VERSION, DIRECTED_REPAIR_PROMPT_VERSION, CITABLE_REPAIR_PROMPT_VERSION, SOURCE_CLOCK_REPAIR_PROMPT_VERSION, AGENDA_REPAIR_PROMPT_VERSION, DEVELOPMENT_REPAIR_PROMPT_VERSION, LEGACY_REPAIR_PROMPT_VERSION}:
             from digital_twin.modules.ai_orchestration.domain.insight_repair import repair_prompt
             prompt = repair_prompt(prompt, envelope["repair"])
         schema = (citable_management_schema if citable else management_schema)(envelope["current"], envelope["researchResults"]) if managed else (bounded_planning_schema if old else planning_schema)(envelope["current"])
         if continuous:
             schema = continuous_planning_schema(envelope["current"], envelope["researchResults"],
-                bounded_evidence=envelope["promptVersion"] in {KNOWLEDGE_PROMPT_VERSION, KNOWLEDGE_REPAIR_PROMPT_VERSION, QUESTION_PROMPT_VERSION, QUESTION_REPAIR_PROMPT_VERSION, PROMPT_VERSION, REPAIR_PROMPT_VERSION, READABLE_PROMPT_VERSION, READABLE_REPAIR_PROMPT_VERSION, FILING_PROMPT_VERSION, FILING_REPAIR_PROMPT_VERSION, MANAGEMENT_BOUNDS_PROMPT_VERSION, MANAGEMENT_BOUNDS_REPAIR_PROMPT_VERSION},
+                bounded_evidence=envelope["promptVersion"] in {INDEXED_PROMPT_VERSION, INDEXED_REPAIR_PROMPT_VERSION, KNOWLEDGE_PROMPT_VERSION, KNOWLEDGE_REPAIR_PROMPT_VERSION, QUESTION_PROMPT_VERSION, QUESTION_REPAIR_PROMPT_VERSION, PROMPT_VERSION, REPAIR_PROMPT_VERSION, READABLE_PROMPT_VERSION, READABLE_REPAIR_PROMPT_VERSION, FILING_PROMPT_VERSION, FILING_REPAIR_PROMPT_VERSION, MANAGEMENT_BOUNDS_PROMPT_VERSION, MANAGEMENT_BOUNDS_REPAIR_PROMPT_VERSION},
                 legacy_research=legacy_research)
         if business:
-            schema = (knowledge_schema if envelope["promptVersion"] in {KNOWLEDGE_PROMPT_VERSION, KNOWLEDGE_REPAIR_PROMPT_VERSION, PROMPT_VERSION, REPAIR_PROMPT_VERSION} else resolution_schema if resolved else business_schema)(envelope["current"], envelope["researchResults"])
+            schema = (knowledge_schema if envelope["promptVersion"] in {INDEXED_PROMPT_VERSION, INDEXED_REPAIR_PROMPT_VERSION, KNOWLEDGE_PROMPT_VERSION, KNOWLEDGE_REPAIR_PROMPT_VERSION, PROMPT_VERSION, REPAIR_PROMPT_VERSION} else resolution_schema if resolved else business_schema)(envelope["current"], envelope["researchResults"])
         if directed and envelope["current"].get("retrieval"):
             trace = envelope.get("retrievalTrace", [])
             version = envelope["current"]["retrieval"]["version"]
-            if version in {working_retrieval.VERSION, scoped_retrieval.VERSION, indexed_retrieval.VERSION}:
-                contract = indexed_retrieval if version == indexed_retrieval.VERSION else scoped_retrieval if version == scoped_retrieval.VERSION else working_retrieval
+            if version in {working_retrieval.VERSION, scoped_retrieval.VERSION, indexed_retrieval.VERSION, question_retrieval.VERSION}:
+                contract = question_retrieval if version == question_retrieval.VERSION else indexed_retrieval if version == indexed_retrieval.VERSION else scoped_retrieval if version == scoped_retrieval.VERSION else working_retrieval
                 contract.validate_trace(trace)
                 summary = contract.trace_summary(trace, envelope["current"]["retrieval"]["status"])
-                if contract in {scoped_retrieval, indexed_retrieval} and envelope["current"].get("researchScope") != contract.research_scope(trace, envelope["current"]["retrieval"]["status"]):
+                if contract in {scoped_retrieval, indexed_retrieval, question_retrieval} and envelope["current"].get("researchScope") != contract.research_scope(trace, envelope["current"]["retrieval"]["status"]):
                     raise EvidenceContractError("research scope does not match retrieval trace")
             else:
                 validate_trace(trace, version)

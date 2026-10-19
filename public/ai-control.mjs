@@ -1,3 +1,5 @@
+import { questionAssessmentView } from "./modules/research/question-assessment.mjs";
+
 const $ = (id) => document.getElementById(id);
 const escape = (value) => String(value ?? "").replace(/[&<>"']/g, (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const labels = {pending:"대기",processing:"진행 중",completed:"완료",failed:"실패",running:"완료 미확인",observe:"관찰·재검토",research:"추가 조사","research-plan":"추가 조사 계획"};
@@ -25,8 +27,8 @@ function continuityView(result) {
 }
 function retrievalView(retrieval) {
   if (!retrieval) return "";
-  const states = {ready:"조회 완료",deferred:"자료 부족으로 보류","round-limit":"이번 조회 한도 도달","repeated-read":"중복 조회로 중단","context-budget":"입력 용량 한도로 보류","budget-fallback":"호출 여유 부족 · 기본 근거로 관찰","invalid-request":"조회 요청 오류"};
-  const tools = {query_facts:"근거 조회",read_fact:"선택한 근거 확인",recall_memory:"과거 기억 조회"};
+  const states = {ready:"조회 완료","assessment-ready":"질문 부분 평가로 진행","research-ready":"부분 근거로 내부 연구",deferred:"자료 부족으로 보류","round-limit":"이번 조회 한도 도달","repeated-read":"중복 조회로 중단","context-budget":"입력 용량 한도로 보류","budget-fallback":"호출 여유 부족 · 기본 근거로 관찰","invalid-request":"조회 요청 오류"};
+  const tools = {query_facts:"근거 조회",read_fact:"선택한 근거 확인",read_report:"보고 수치 선택 조회",read_document:"원문·출처 선택 조회",read_memory:"기억 상세 조회",recall_memory:"과거 기억 조회"};
   const categories = {quote:"시세",valuation:"가치 평가",company:"기업·재무",research:"조사 자료",macro:"거시 지표",technical:"가격 흐름",flow:"수급",quality:"자료 품질",analyses:"과거 판단",memories:"조사·질문·피드백"};
   return `<details class="retrieval"><summary>AI가 조회한 과정 · ${escape(states[retrieval.status] || retrieval.status)}</summary>${(retrieval.steps || []).map((step, index) => `<p><strong>${index + 1}. ${step.correction ? "요청 보정 · " : ""}${escape(step.reason)}</strong></p>${(step.errors || []).map((error) => `<p class="muted">요청 규격 오류 · ${escape(error.field)} · 허용 형식: ${escape(typeof error.expected === "string" ? error.expected : JSON.stringify(error.expected))}</p>`).join("")}${(step.reads || []).map((read) => `<p>${escape(tools[read.request?.tool] || "조회")} · ${escape(categories[read.request?.category] || read.request?.category)} · ${read.request?.tool === "recall_memory" ? "현재 사실과 구분해 참고" : `사실 ${escape(read.factIds?.length || 0)}개`}<br><small>${read.status === "ok" ? "조회 결과 기록" : escape(states[read.status] || "조회 제한 또는 자료 확인 필요")}${read.omitted?.length ? ` · 용량 한도로 제외 ${escape(read.omitted.length)}개` : ""}${read.nextCursor || read.nextOffset != null ? " · 다음 페이지 있음" : ""}</small></p>`).join("")}`).join("")}<p class="muted">동일한 시점의 근거에서 선택해 읽었습니다. 조회하지 않은 자료가 없다는 뜻은 아닙니다.</p></details>`;
 }
@@ -90,14 +92,15 @@ function brainView(brain = {}) {
       </div>`;
   }).join("");
   const metrics = brain.researchMetrics;
-  return `${metrics ? `<p>전체 질문 ${escape(metrics.questions)}건 · 자료 답변 완료 ${escape(metrics.sourceAnswered)}건 · 부분 답변 ${escape(metrics.sourcePartial)}건 · 답변 미확보 ${escape(metrics.sourceUnavailable)}건 · 추가 조사 계획 ${escape(metrics.planned)}건</p><p class="muted">자료 조사 결과를 집계한 수치입니다. 가설 검증 성과와 구분합니다.</p>` : ""}<p class="muted">${(brain.goals || []).map(escape).join(" · ")}</p>${cards || '<p class="panel">아직 등록된 지속 질문이나 개선 제안이 없습니다. 새 관찰에서 근거가 있는 질문과 제안을 등록합니다.</p>'}`;
+  return `${metrics ? `<p>전체 질문 ${escape(metrics.questions)}건 · 최종 AI 답변 ${metrics.finalAnswered == null ? "집계 대기" : `${escape(metrics.finalAnswered)}건`} · 최종 부분 답변 ${metrics.finalPartial == null ? "집계 대기" : `${escape(metrics.finalPartial)}건`}<br>자료 조사 평가: 답변 확보 ${escape(metrics.sourceAnswered)}건 · 부분 확보 ${escape(metrics.sourcePartial)}건 · 미확보 ${escape(metrics.sourceUnavailable)}건 · 추가 조사 계획 ${escape(metrics.planned)}건</p><p class="muted">자료 조사자의 답변 확보와 원래 질문의 최종 답변은 별도 상태입니다. 가설 검증 성과와 구분합니다.</p>` : ""}<p class="muted">${(brain.goals || []).map(escape).join(" · ")}</p>${cards || '<p class="panel">아직 등록된 지속 질문이나 개선 제안이 없습니다. 새 관찰에서 근거가 있는 질문과 제안을 등록합니다.</p>'}`;
 }
 function researchWorkView(row) {
   const answer = row.answerResolution;
   const contract = row.questionContract;
   const plan = row.researchPlan;
-  const state = {answered:"자료 답변 완료",partial:"부분 답변 · 추가 조사 필요",unavailable:"답변 미확보"};
-  return `${answer ? `<p><strong>질문 답변: ${escape(state[answer.status] || "확인 중")}</strong><br><small>자료 답변의 완료 여부는 투자 관찰 문장 검토와 별도로 기록합니다. 가설 검증을 뜻하지 않습니다.</small></p>` : ""}
+  const state = {answered:"답변 자료 확보",partial:"일부 자료 확보",unavailable:"자료 미확보"};
+  return `${answer ? `<p><strong>원문 조사 평가: ${escape(state[answer.status] || "확인 중")}</strong><br><small>자료 조사자가 남긴 평가입니다. 원래 질문의 최종 AI 답변 및 가설 검증과 별도로 확인합니다.</small></p>` : ""}
+    ${questionAssessmentView(row)}
     ${contract ? `<p>확인 대상: ${escape(contract.target)}<br>대상 기간: ${escape(contract.period)}<br>필요한 증거: ${escape(contract.answerCriterion)}</p>` : ""}
     ${plan ? `<p>다음 조사: ${escape(plan.reason)}<br>다시 확인할 조건: ${escape(plan.resumeWhen)}</p>` : ""}
     ${row.answerMemory?.length ? `<details><summary>앞선 조사에서 확인한 답변</summary>${row.answerMemory.map(item => researchAnswerView({documentaryAnswer:item.answer})).join("")}</details>` : ""}

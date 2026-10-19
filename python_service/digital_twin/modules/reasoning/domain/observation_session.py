@@ -28,7 +28,7 @@ class ObservationEvidenceSession:
                     raise EvidenceContractError("conflicting retrieval evidence identity")
                 self._facts[row["id"]] = compact
 
-    def question_document_index(self, sources):
+    def question_document_index(self, sources, document_views=False):
         """Resolve source-owner IDs only against this frozen graph inventory."""
         rows = []
         for fact in self._facts.values():
@@ -41,10 +41,26 @@ class ObservationEvidenceSession:
                          **({"sourceKind": ref["sourceKind"], "limitation": ref["limitation"],
                              "sourceRevision": ref["sourceRevision"]} if ref.get("sourceKind") else
                             {"documentHash": ref["documentHash"]}),
-                         "bytes": len(canonical_json(fact).encode())})
+                         "bytes": len(canonical_json(fact).encode()),
+                         **({"viewBytes": len(canonical_json(self.read_document(fact["id"])["facts"][0]).encode())}
+                            if document_views else {})})
         return sorted(rows, key=lambda row: row["factId"])[:8]
 
-    def business_baseline(self, question_documents=()):
+    def question_work_inventory(self):
+        """Source changes can resume questions; quote ticks and our prose cannot."""
+        records = []
+        for fact in self._facts.values():
+            ref = fact.get("historicalDocumentReference") or fact.get("questionSourceReference")
+            if ref:
+                state = {name: {key: value for key, value in (fact.get(name) or {}).items()
+                    if key not in {"checkedAt", "ageMinutes"}} for name in ("evidenceGovernance", "promptEvidenceAdmission")}
+                records.append({"id": fact["id"], "reference": {key: value for key, value in ref.items() if key != "observedAt"}, "state": state})
+            elif fact.get("kind") == "company-financial-state":
+                from .observation_evidence import material_fact
+                records.append(material_fact(fact))
+        return sorted(content_hash(row) for row in records)
+
+    def business_baseline(self, question_documents=(), document_views=False):
         """Reserve report history and documentary context before discretionary reads."""
         rows = sorted(self._facts.values(), key=lambda row: (-source_clock(row), row["id"]))
         groups = [[self._facts[row["factId"]] for row in question_documents]] + [
@@ -54,25 +70,33 @@ class ObservationEvidenceSession:
                    [row for row in rows if row.get("documentVerified")],
                    [row for row in rows if row.get("kind") == "company" or row.get("evidenceCategory") == "valuation"]]
         selected, omitted, used = [], [], 0
-        for index in range(4):
-            for group in groups:
-                if index >= len(group):
-                    continue
-                row = group[index]
-                if row["id"] in selected:
-                    continue
-                size = len(canonical_json(row).encode())
-                if used + size > 26000:
-                    omitted.append(row["id"])
-                else:
-                    selected.append(row["id"])
-                    used += size
-        return {"version": "business-evidence-reservation-v1", "factIds": selected,
+        ordered = ([row for row in groups[0]] if document_views else []) + [group[index]
+            for index in range(4) for group in (groups[1:] if document_views else groups) if index < len(group)]
+        for row in ordered:
+            if row["id"] in selected:
+                continue
+            view = (self.read_document(row["id"])["facts"][0] if document_views and
+                    (row.get("historicalDocumentReference") or row.get("questionSourceReference")) else row)
+            size = len(canonical_json(view).encode())
+            if used + size > (32000 if document_views else 26000):
+                omitted.append(row["id"])
+            else:
+                selected.append(row["id"])
+                used += size
+        return {"version": "business-evidence-reservation-v2" if document_views else "business-evidence-reservation-v1", "factIds": selected,
                 "omittedByBudget": omitted, "bytes": used,
+                **({"viewFactIds": [key for key in selected if self._facts[key].get("historicalDocumentReference")
+                                   or self._facts[key].get("questionSourceReference")]} if document_views else {}),
                 "policy": "reported-business-history-before-discretionary-reads"}
 
     def packet(self):
         return deepcopy(self._packet)
+
+    def with_reasoning_binding(self, binding):
+        from .observation_binding import VERSION
+        if binding.get("version") != VERSION:
+            raise EvidenceContractError("unknown observation graph binding")
+        return ObservationEvidenceSession({**self._packet, "reasoningBinding": deepcopy(binding)}, self._facts.values())
 
     def catalog(self):
         return {"sourceSnapshots": deepcopy(self._packet["sourceSnapshots"]),
@@ -115,6 +139,14 @@ class ObservationEvidenceSession:
         return {"facts": [report_view(self._facts[fact_id], metrics)], "nextCursor": None,
                 "sourceSnapshots": deepcopy(self._packet["sourceSnapshots"])}
 
+    def read_document(self, fact_id):
+        from .observation_document_view import document_view
+        if fact_id not in self._facts:
+            raise EvidenceContractError("unknown document evidence")
+        value = document_view(self._facts[fact_id])
+        value["evidenceCategory"] = self._facts[fact_id]["evidenceCategory"]
+        return {"facts": [value], "nextCursor": None, "sourceSnapshots": deepcopy(self._packet["sourceSnapshots"])}
+
     def select(self, fact_ids, views=None):
         """Keep quote and the v2 bounded macro baseline alongside requested facts."""
         selected = set(fact_ids) | {row["id"] for row in self._packet["facts"] if row["kind"] == "stock"
@@ -125,10 +157,14 @@ class ObservationEvidenceSession:
         packet["facts"] = [deepcopy(row) for row in self._facts.values() if row["id"] in selected]
         if views:
             from .observation_report_view import report_view
+            from .observation_document_view import document_view, VERSION as document_version
             for index, row in enumerate(packet["facts"]):
                 view = views.get(row["id"])
                 if view is not None and view != row:
-                    exact = report_view(row, view.get("evidenceView", {}).get("metrics"))
+                    if view.get("evidenceView", {}).get("version") == document_version:
+                        exact = {**document_view(row), "evidenceCategory": row["evidenceCategory"]}
+                    else:
+                        exact = report_view(row, view.get("evidenceView", {}).get("metrics"))
                     if exact != view:
                         raise EvidenceContractError("report view changed captured evidence")
                     packet["facts"][index] = deepcopy(exact)

@@ -97,10 +97,23 @@ class AIControlService:
                     if knowledge and session and self.read_planner:
                         from ..domain.memory_reference import VERSION as memory_policy
                         packet["memoryReadPolicy"] = memory_policy
+                        from ..domain.question_assessment import VERSION as question_policy
+                        packet["questionWorkPolicy"] = question_policy
+                        from ..domain.question_assessment import prepare
+                        research = prepare(research, session.question_work_inventory())
+                        packet["questionWorkPending"] = sorted(row["questionWorkKey"] for row in research
+                            if row.get("questionWorkKey") and not row.get("questionWorkUnchanged"))
                     fingerprint = observation_fingerprint(packet, research)
                     repeat_key = repeat.observation_key(packet, research)
                     retry_identity = retry_key(packet, research)
                     previous_outcome = getattr(self.store, "last_processing_outcome", lambda *_: {})(job["accountId"], job["symbol"])
+                    if (packet.get("questionWorkPolicy") and not packet.get("questionWorkPending")
+                            and previous_outcome.get("questionWorkPending")):
+                        # Parking the last cohort is our bookkeeping, not new
+                        # evidence for an otherwise empty paid research pass.
+                        parked_key = retry_key({**packet, "questionWorkPending": previous_outcome["questionWorkPending"]}, research)
+                        if unchanged_wait(previous_outcome, parked_key):
+                            retry_identity = parked_key
                     if unchanged_wait(previous_outcome, retry_identity) and not any(row.get("transitionVerified") for row in packet["followUpEvaluations"]):
                         return self.complete_wait(job, packet, previous_outcome, [], "unchanged-wait")
                     previous = history[0] if history else {}
@@ -124,7 +137,7 @@ class AIControlService:
                             self.read_planner, lambda value: self.store.save_execution_input(job, value),
                             self.settings.get("aiObservationPromptMaxBytes", 256 * 1024), self.read_round_budget(),
                             record_round=lambda step: self.store.save_retrieval_round(job, step))
-                        if packet["retrieval"]["status"] not in {"ready", "research-ready"}:
+                        if packet["retrieval"]["status"] not in {"ready", "research-ready", "assessment-ready"}:
                             missing = [item for step in retrieval_trace for item in (step.get("decision") or {}).get("missingEvidence", [])]
                             blocked = (not missing or packet["retrieval"]["status"] == "context-budget" or any(
                                 read["result"].get("status") in {"context-budget", "repeated-read"} for step in retrieval_trace for read in step["reads"]))
@@ -209,7 +222,8 @@ class AIControlService:
                     if research_review.needed(result) and (result["quality"]["status"] not in {"accepted", "observation-only"}
                             or (result.get("knowledgeResearch") or {}).get("claims")
                             or (packet.get("questionEvidencePolicy") and any(row["action"] in {"answered", "dismissed"}
-                                for row in result.get("caseReviews", [])))):
+                                for row in result.get("caseReviews", [])))
+                            or (packet.get("questionWorkPolicy") and result.get("caseReviews"))):
                         stage = "research-assessment-review"
                         result["researchQuality"] = {"version": research_review.VERSION, "status": "rejected"}
                         try:

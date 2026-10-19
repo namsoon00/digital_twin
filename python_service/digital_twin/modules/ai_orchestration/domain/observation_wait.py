@@ -29,6 +29,10 @@ def retry_key(packet, research):
                            for key in [answer_review_key(row)] if key)
     return content_hash({"policy": AUTHOR_SCOPE_POLICY if packet.get("researchKnowledge") else POLICY, "researchReviewPolicy": research_review_version,
         **({"memoryReadPolicy": packet["memoryReadPolicy"]} if packet.get("memoryReadPolicy") else {}),
+        **({"questionWorkPolicy": packet["questionWorkPolicy"], "questionWorkPending": packet.get("questionWorkPending", [])}
+           if packet.get("questionWorkPolicy") else {}),
+        **({"reasoningBinding": {key: packet["reasoningBinding"][key] for key in ("deploymentId", "graphStoreBinding")}}
+           if packet.get("reasoningBinding") else {}),
         **({"answerReviewKeys": ready_reviews} if ready_reviews else {}),
         "knowledgePolicy": knowledge_context_identity(packet["researchKnowledge"]) if packet.get("researchKnowledge") else "",
         "researchAssessmentScopePolicy": ASSESSMENT_SCOPE_VERSION,
@@ -43,6 +47,7 @@ def retry_key(packet, research):
 def disposition(packet, key, status, requirements, now=None):
     now = now or datetime.now(timezone.utc)
     return {"version": POLICY, "status": status, "retryKey": key,
+        **({"questionWorkPending": list(packet.get("questionWorkPending", []))} if packet.get("questionWorkPolicy") else {}),
         "requirements": list(requirements), "retryAt": (now+timedelta(hours=3)).isoformat().replace("+00:00", "Z"),
         "resumeOn": ["changed-source-evidence", "changed-question-or-research-result", "changed-runtime-policy"],
         "sourceSnapshotId": packet.get("sourceSnapshotId"), "authority": "operational-only"}

@@ -44,6 +44,9 @@ COMPONENT_REASONS = {
         "question resolution requires current evidence", "reference-only evidence cannot originate a hypothesis",
         "question resolution target missing", "unresolved work cannot simultaneously advance to a hypothesis",
         "deferred question cannot name a target", "reviewed research questions require a hypothesis disposition",
+        "question resolution requires authored judgment impact", "question resolution must preserve unmet original requirements",
+        "question resolution requires its own selected evidence",
+        "question answer requires its original completion contract",
     ),
     "research": (
         "invalid research request fields", "invalid research request types", "non-documentary work cannot request source research",

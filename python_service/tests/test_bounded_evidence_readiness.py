@@ -179,11 +179,20 @@ class BoundedEvidenceReadinessTests(unittest.TestCase):
             {f['id'] for f in value['facts']})['claims'][0]['disposition'])
 
     def test_source_refresh_is_advisory_and_excludes_last_close_and_research(self):
+        from digital_twin.infrastructure.transactions.ai_observation_source_refresh import AIObservationSourceRefresh
         value = packet(); quote = next(f for f in value['facts'] if f['kind'] == 'stock')
         quote.update(sourceAsOf='2026-02-28T22:00:00Z', maxAgeMinutes=10)
         value['quoteAssessment'] = quote_clock_assessment(value['facts'], value['capturedAt'])
         before = deepcopy(value)
         self.assertTrue(evidence_readiness.source_refresh_requirement(value))
+        store = Mock()
+        job = {key: value[key] for key in ('accountId', 'symbol', 'worldId')}
+        job['taskId'] = 'periodic-monitor-wait'
+        waiting = AIObservationSourceRefresh(store)(job, value)
+        self.assertEqual('awaiting-periodic-collection', waiting['status'])
+        self.assertEqual('periodic-monitor', waiting['collectionMode'])
+        self.assertFalse(waiting['requested'])
+        store.transaction.assert_not_called()
         self.assertEqual(before, value)
         value['quoteAssessment']['quotes'][0]['referenceState'] = 'last-close'
         self.assertIsNone(evidence_readiness.source_refresh_requirement(value))
@@ -357,7 +366,7 @@ class SourceRenewalStorageTests(unittest.TestCase):
     def test_coalesces_same_account_refresh_without_stealing_monitor_lease(self):
         from digital_twin.infrastructure.transactions.ai_observation_source_refresh import AIObservationSourceRefresh
         now = datetime.now(timezone.utc)
-        refresh = AIObservationSourceRefresh(self.store, clock=lambda: now)
+        refresh = AIObservationSourceRefresh(self.store, clock=lambda: now, account_queue_enabled=True)
         first = refresh(self.job, self.value)
         self.assertEqual('requested', first['status'], first)
         with self.store.transaction() as c:
@@ -374,7 +383,7 @@ class SourceRenewalStorageTests(unittest.TestCase):
 
     def test_lost_lease_and_rolled_back_refresh_do_not_commit_a_queue_request(self):
         from digital_twin.infrastructure.transactions.ai_observation_source_refresh import AIObservationSourceRefresh
-        refresh = AIObservationSourceRefresh(self.store)
+        refresh = AIObservationSourceRefresh(self.store, account_queue_enabled=True)
         wrong = {**self.job, 'leaseToken': 'previous-worker'}
         self.assertEqual('lease-lost', refresh(wrong, self.value)['status'])
         with self.store.connect() as c:

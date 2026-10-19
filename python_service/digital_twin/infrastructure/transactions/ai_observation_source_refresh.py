@@ -1,4 +1,4 @@
-"""Lease-fenced, coalesced source renewal through the existing monitor queue."""
+"""Mode-aware renewal through the existing collector or leased monitor queue."""
 from datetime import datetime, timedelta, timezone
 import hashlib
 
@@ -8,9 +8,10 @@ from digital_twin.modules.market_data.infrastructure.monitor_refresh import reco
 
 
 class AIObservationSourceRefresh:
-    def __init__(self, store, clock=None):
+    def __init__(self, store, clock=None, *, account_queue_enabled=False):
         self.store = store
         self.clock = clock or (lambda: datetime.now(timezone.utc))
+        self.account_queue_enabled = bool(account_queue_enabled)
 
     def __call__(self, job, packet):
         requirement = source_refresh_requirement(packet)
@@ -23,7 +24,14 @@ class AIObservationSourceRefresh:
         # 160-bit account identity inside that contract; no schema expansion.
         scope = "source-renewal:" + hashlib.sha256(job["accountId"].encode()).hexdigest()[:40]
         receipt = {**requirement, "requested": False, "pipeline": "monitor-snapshot-typedb-observation",
-                   "checkedAt": stamp(now), "taskId": job["taskId"]}
+                   "checkedAt": stamp(now), "taskId": job["taskId"],
+                   "collectionMode": "account-queue" if self.account_queue_enabled else "periodic-monitor"}
+        if not self.account_queue_enabled:
+            # The ordinary monitor collects every configured account on its
+            # periodic cycle. Its runner deliberately does not consume this
+            # optional account queue. Do not create orphan requests or claim
+            # a renewal was requested through a disabled consumer.
+            return {**receipt, "status": "awaiting-periodic-collection"}
         try:
             with self.store.transaction() as connection:
                 owned = connection.execute("SELECT task_id FROM ai_control_tasks WHERE task_id=%s "

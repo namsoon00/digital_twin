@@ -27,7 +27,12 @@ independent research review remain authoritative; paraphrases are not silently
 accepted as equivalent and no previous claim is rewritten automatically.
 
 An unusable intraday source clock can request renewal through the existing
-monitor queue before paid observation work. The AI task's live lease, attempt
+monitor queue before paid observation work when account queue mode is enabled.
+The normal periodic monitor deliberately does not consume that optional queue.
+In periodic mode the receipt is `awaiting-periodic-collection`, with
+`requested=false`; it writes no unconsumed queue job and waits for the normal
+collector and graph pipeline. This is not a completed renewal or a measured
+time to fresh evidence. In queue mode the AI task's live lease, attempt
 and account/subject scope are checked in the same transaction as the request.
 Requests for one account coalesce for five minutes and preserve a live monitor
 lease. Verified last-close references and documentary research do not request

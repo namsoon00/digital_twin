@@ -1,0 +1,16 @@
+{
+  "sourceRevision": "bf9fd9dea + source-clock alert recovery",
+  "contractVersion": "projection-input-execution-v13",
+  "reason": "Invalidate cached ABox quality inputs with projection/snapshot input v7. Provider realtime/live labels no longer override the original source-clock validity; old v6 and v5 execution contracts remain frozen and are replayed explicitly. Native-reader and worker regressions cover the changed quality and publication behavior.",
+  "scenarios": {
+    "full": "daa28b70dab4ffd386752e96625a94a7356fee3d48f97ce0d6f6a923b1822aea",
+    "target": "c2c54cf4fb3c4ae1e31e8919c18cb344fb46ca98bfd7948bd3112b7c08aa67b7",
+    "source-facts": "c53a7b439af3e9e6adb8f43bc12c5bdc57d174ed6aa81a4b34699517eea0d8aa",
+    "live-context": "7a06b33fa8a0c9f241ff3c41ad8eac7f4ab9bfe17e9211c09c6d2471b272e51f",
+    "memory-hit": "0f85d1175c8d4bdcaff55e0b2c4414e404b0841b6621b19122ad51b6f83ebc19",
+    "persistent-hit": "04b625985fc188ec63ffd2c58470ab365069e50f0de2281bafabd4c592e82b5f",
+    "cache-errors": "ff72780ab844c8e283b51de13572d96745be9b70b05959c2122928dce4c494ae",
+    "scoring-failure": "f872113b05f775c00d7fe604d7369aa7a541753e591619f634975f6c2a95a3d0",
+    "world-identity": "94ba99d2da5eb5a363802dcd5305163e65d6488d66c6c47605a894afe9e93390"
+  }
+}

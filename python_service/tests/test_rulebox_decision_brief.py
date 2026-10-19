@@ -353,6 +353,8 @@ class NativeManagementResponseTests(unittest.TestCase):
 
     def test_policy_decision_survives_unqualified_forecasts_and_persists_with_synthesis(self):
         checks = ManagementObservationFlowChecks()
+        from relationship_recovery_checks import assert_native_notification_recovery
+        assert_native_notification_recovery(self, checks)
         from policy_resolution_checks import assert_policy_resolution_flow
         assert_policy_resolution_flow(self, checks)
         from rule_delivery_checks import assert_dispatch_revalidation, assert_receipt_comparison
@@ -780,7 +782,8 @@ class ManagementObservationFlowChecks(unittest.TestCase):
                 elif variant == 'missing-proof':
                     rel['graphStoreInference'].update(traces=[], relations=[])
                 elif variant == 'missing-purpose':
-                    rel['matchedRules'][0]['claimContract'] = {}
+                    for row in [*rel['matchedRules'], *rel['graphStoreInference']['traces'], *rel['graphStoreInference']['relations']]:
+                        row['claimContract'] = {}
                 elif variant == 'missing-response':
                     rel['matchedRules'][0].pop('managementResponse')
                 else:

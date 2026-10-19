@@ -614,6 +614,30 @@ class InvestmentReasoningOrchestrator:
                 metadata["ontologyRelationContext"] = relation
             event.metadata = metadata
 
+    def record_notification_contract_failures(self, case_id, failures):
+        """Keep broken publication wiring distinct from a quiet market result."""
+        outcomes = []
+        for failure in failures or []:
+            subject = self.subject_cases.get_by_scope(
+                case_id, failure["accountId"], failure["symbol"],
+                failure["inferenceGenerationId"], failure["synthesisId"],
+            )
+            if (subject is None or subject.source_abox_snapshot_id != failure["sourceAboxSnapshotId"]
+                    or subject.inference_dispatch_decision is not None):
+                continue
+            dispatch = InferenceDispatchDecision.create(
+                subject, INVALID, failure["reasonCode"], failure["reason"], details=dict(failure),
+            )
+            subject.mark(SUBJECT_BLOCKED, dispatch.reason, dict(failure))
+            subject.record_inference_dispatch(dispatch)
+            _mark_subject_delivery(subject, "failed", dispatch.reason, eligible=False,
+                                   reason_code=dispatch.reason_code, value_class="invalid-notification-contract")
+            self._persist_subject(subject)
+            outcomes.append({"status": "typedb-notification-contract-invalid", "route": INVALID,
+                             "symbol": subject.symbol, "subjectCaseId": subject.subject_case_id,
+                             "reason": dispatch.reason, "reasonCode": dispatch.reason_code, "queued": False})
+        return outcomes
+
     def capture_ai_context(self, case_id: str, context: Mapping[str, object]) -> Dict[str, object]:
         enriched = deepcopy(dict(context or {}))
         subject_case = self.required_subject(case_id, enriched)

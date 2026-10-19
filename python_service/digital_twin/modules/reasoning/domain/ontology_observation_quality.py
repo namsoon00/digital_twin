@@ -27,11 +27,14 @@ def position_observation_profiles(
         max_age_minutes=int_setting(settings, "dataFreshnessQuoteMaxAgeMinutes", 10),
         require_source_as_of=True,
     )
-    # A closed-market quote is a known last-close reference, not a failed
-    # feed. Preserve the adapter's explicit state for ABox and RuleBox use.
-    if position.freshness_status:
-        quote["status"] = position.freshness_status
-    if position.freshness_reason:
+    # Adapter delivery labels cannot replace the source-clock calculation.
+    # Preserve explicit limitations and dated closing references separately.
+    provider_status = str(position.freshness_status or "").strip().lower()
+    if provider_status:
+        quote["providerStatus"] = provider_status
+    if provider_status and provider_status not in {"fresh", "realtime", "live", "ok", "available", "current"}:
+        quote["status"] = provider_status
+    if position.freshness_reason and quote["status"] == provider_status:
         quote["reason"] = position.freshness_reason
     if position.source_timestamp_state:
         quote["sourceTimestampState"] = position.source_timestamp_state
@@ -161,7 +164,7 @@ def observation_profile(
         max_age_minutes = max(1, int(float((record or {}).get("maxAgeMinutes") or 0)))
     except (TypeError, ValueError):
         max_age_minutes = 1
-    closed_market_reference = (
+    closing_reference = (
         domain == "quote"
         and session_status in {"closed", "closed_exception"}
         and raw_status in {"last-close", "market-closed-reference"}
@@ -174,11 +177,21 @@ def observation_profile(
         current_time = current_time.replace(tzinfo=timezone.utc)
     source_age = (current_time - source_time).total_seconds() / 60 if source_time else None
     reference_max_age = max(1, int((record or {}).get("referenceMaxAgeMinutes") or 4320))
-    closed_market_reference = closed_market_reference and source_age is not None and 0 <= source_age <= reference_max_age
+    closed_market_reference = closing_reference and source_age is not None and 0 <= source_age <= reference_max_age
     status = "fresh" if closed_market_reference else raw_status
+    effective_max_age = reference_max_age if closing_reference else max_age_minutes
+    clock_reason = ""
+    if source_time is None:
+        status, clock_reason = "unknown", "원천 기준시각을 확인할 수 없어 투자 판단 근거로 사용할 수 없습니다."
+    elif source_age < 0:
+        status, clock_reason = "future", "원천 기준시각이 확인 시점보다 미래여서 투자 판단 근거로 사용할 수 없습니다."
+    elif source_age > effective_max_age:
+        status, clock_reason = "stale", "원천 기준시각이 허용 시간 " + str(effective_max_age) + "분을 초과했습니다."
     explicit_evidence_usable = (record or {}).get("judgementEvidenceUsable")
     evidence_usable = status == "fresh" and timestamp_present and explicit_evidence_usable is not False
-    if not timestamp_present:
+    if clock_reason:
+        gate_reason = clock_reason
+    elif not timestamp_present:
         gate_reason = "원천 기준시각이 없어 투자 판단 근거로 사용할 수 없습니다."
     elif status != "fresh":
         gate_reason = str((record or {}).get("reason") or "신선도 기준 미충족")
@@ -192,16 +205,17 @@ def observation_profile(
         gate_reason = "원천 기준시각과 거래 세션 기준을 통과했습니다."
     return {
         "observationDomain": domain,
+        **({"providerStatus": record["providerStatus"]} if (record or {}).get("providerStatus") else {}),
         "freshnessRequired": True,
         "freshnessStatus": status,
         "freshnessReferenceState": "last-close" if closed_market_reference else "",
         "freshnessClockBasis": "sourceAsOf",
         "collectionStatus": "missing" if fetched_age_minutes is None else "recent" if fetched_age_minutes <= max_age_minutes else "delayed",
         "referenceMaxAgeMinutes": reference_max_age if closed_market_reference else None,
-        "freshnessReason": str((record or {}).get("reason") or ""),
+        "freshnessReason": clock_reason or str((record or {}).get("reason") or ""),
         "freshnessGateReason": gate_reason,
         "freshnessAgeMinutes": (record or {}).get("ageMinutes"),
-        "maxAgeMinutes": reference_max_age if closed_market_reference else (record or {}).get("maxAgeMinutes"),
+        "maxAgeMinutes": effective_max_age,
         "observationSource": str((record or {}).get("source") or ""),
         "sourceAsOf": source_as_of,
         "sourceFetchedAt": source_fetched_at,

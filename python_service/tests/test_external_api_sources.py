@@ -51,6 +51,8 @@ class MemoryQuoteCache:
 
 class ExternalApiSourceTests(unittest.TestCase):
     def test_closed_quote_uses_source_clock_not_polling_or_queue_delay(self):
+        from relationship_recovery_checks import assert_live_quote_source_clock
+        assert_live_quote_source_clock(self)
         position = normalize_position({
             "symbol": "TEST", "market": "US", "currency": "USD", "currentPrice": 100,
             "dataQuality": "actual", "quoteSource": "Fixture",

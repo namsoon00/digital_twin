@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 import inspect
 from typing import Dict, Iterable, Mapping
 
-from digital_twin.modules.notifications.contracts import typedb_context_observation_contract, typedb_review_observation_contract
+from digital_twin.modules.notifications.contracts import management_observation_assessment, typedb_context_observation_contract, typedb_review_observation_contract
 from digital_twin.modules.market_data.contracts import freshness_from_snapshot_subject
 from digital_twin.modules.model_registry.contracts import relation_lifecycle_transition_contract
 from digital_twin.modules.reasoning.domain.independent_reasoning import IndependentReasoningRequest
@@ -35,6 +35,17 @@ def _float_text(value: object) -> str:
     except (TypeError, ValueError):
         return ""
     return ("%.2f" % number).rstrip("0").rstrip(".")
+
+
+def _notification_contract_failure(relation, synthesis):
+    assessment = management_observation_assessment({
+        "ontologyRelationContext": relation, "v2DecisionSynthesis": synthesis.to_dict(),
+    })
+    if assessment.get("status") != "invalid":
+        return {}
+    return {**assessment, "accountId": synthesis.account_id, "symbol": synthesis.symbol,
+            "synthesisId": synthesis.synthesis_id, "sourceAboxSnapshotId": synthesis.source_abox_snapshot_id,
+            "inferenceGenerationId": synthesis.inference_generation_id}
 
 
 class V2NotificationCadence:
@@ -186,6 +197,8 @@ class V2GraphDecisionCandidateBuilder:
             "ontologyRelationContext": dict(relation),
             "v2DecisionSynthesis": synthesis.to_dict(),
         }
+        if management_observation_assessment(contract_payload).get("status") == "invalid":
+            return None
         context_observation = typedb_context_observation_contract(contract_payload)
         policy_baseline = {}
         management = synthesis.management_decision or {}
@@ -379,6 +392,7 @@ class V2GraphDecisionCandidateBuilder:
         base_events = []
         syntheses = []
         hypothesis_candidates = []
+        notification_contract_failures = []
         for snapshot in snapshots or []:
             account_id = _text(getattr(snapshot, "account_id", ""))
             projection = _mapping(projection_results.get(account_id))
@@ -402,6 +416,9 @@ class V2GraphDecisionCandidateBuilder:
                     continue
                 synthesis = decision_synthesis_from_relation_context(account_id, relation)
                 syntheses.append(synthesis)
+                failure = _notification_contract_failure(relation, synthesis)
+                if failure:
+                    notification_contract_failures.append(failure)
                 hypothesis_candidates.append({
                     "context": {"ontologyRelationContext": dict(relation)},
                 })
@@ -430,6 +447,9 @@ class V2GraphDecisionCandidateBuilder:
                 if relation:
                     synthesis = decision_synthesis_from_relation_context(account_id, relation)
                     syntheses.append(synthesis)
+                    failure = _notification_contract_failure(relation, synthesis)
+                    if failure:
+                        notification_contract_failures.append(failure)
                     hypothesis_candidates.append({
                         "context": {"ontologyRelationContext": dict(relation)},
                     })
@@ -458,6 +478,7 @@ class V2GraphDecisionCandidateBuilder:
             "deliveryReady": delivery_ready,
             "ready": detected,
             "syntheses": syntheses,
+            "notificationContractFailures": notification_contract_failures,
             # Hypothesis capture is an audit boundary, not a notification
             # boundary. A quiet relation context must still become a durable
             # subject decision case even when no user alert is warranted.

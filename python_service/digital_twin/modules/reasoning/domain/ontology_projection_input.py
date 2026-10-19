@@ -23,8 +23,8 @@ from digital_twin.modules.news_intelligence.contracts import company_knowledge_b
 from digital_twin.modules.instruments.contracts import security_lines_for_symbol
 
 
-ONTOLOGY_PROJECTION_INPUT_VERSION = "ontology-projection-input-v6"
-ONTOLOGY_REASONING_SNAPSHOT_INPUT_VERSION = "ontology-reasoning-snapshot-input-v6"
+ONTOLOGY_PROJECTION_INPUT_VERSION = "ontology-projection-input-v7"
+ONTOLOGY_REASONING_SNAPSHOT_INPUT_VERSION = "ontology-reasoning-snapshot-input-v7"
 
 SYMBOL_SIGNAL_GROUPS = {
     "secFilings",

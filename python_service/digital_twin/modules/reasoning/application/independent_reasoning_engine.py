@@ -1585,6 +1585,7 @@ class V2ReasoningEngine:
         hypothesis_candidates = list(
             candidates.get("hypothesisCandidates") or detected_events
         )
+        notification_contract_outcomes = []
         if reasoning_case is not None and verified_accounts:
             reasoning_case = self.reasoning_orchestrator.hypotheses_ready(
                 reasoning_case.case_id,
@@ -1594,6 +1595,10 @@ class V2ReasoningEngine:
                 reasoning_case.case_id,
                 decision_syntheses,
             )
+            if candidates.get("notificationContractFailures"):
+                notification_contract_outcomes = self.reasoning_orchestrator.record_notification_contract_failures(
+                    reasoning_case.case_id, candidates["notificationContractFailures"],
+                )
             events_by_symbol = {}
             for event in detected_events:
                 symbol = str(getattr(event, "symbol", "") or "").strip().upper()
@@ -1736,6 +1741,12 @@ class V2ReasoningEngine:
             ai_handoff_status = "delivery-recorder-unavailable"
             insight_dispatch_status = "delivery-recorder-unavailable"
 
+        if notification_contract_outcomes:
+            insight_dispatch_outcomes = (*insight_dispatch_outcomes, *notification_contract_outcomes)
+            insight_dispatch_routes["INVALID"] = insight_dispatch_routes.get("INVALID", 0) + len(notification_contract_outcomes)
+            if delivery_authorized and not delivery_events:
+                insight_dispatch_status = "invalid-notification-contract"
+
         retry_policies = {
             account_id: projection_retry_policy(projection_results.get(account_id))
             for account_id in failed_accounts
@@ -1769,6 +1780,9 @@ class V2ReasoningEngine:
             reason_code = "unchanged-scoped-manifest"
         elif status == "ok":
             reason = "Independent V2 TypeDB inference completed."
+            if notification_contract_outcomes:
+                reason = "TypeDB inference completed, but notification contract validation failed."
+                reason_code = "notification-contract-invalid"
         elif status == "partial":
             reason = "Independent V2 completed only part of the requested account scope."
         else:
@@ -1808,6 +1822,9 @@ class V2ReasoningEngine:
                 if not delivery_authorized:
                     completion_reason = "현재 v2 배포는 알림 발송 권한이 없어 TypeDB 판단까지만 완료했습니다."
                     completion_source = "typedb-shadow"
+                elif not ready_events and notification_contract_outcomes:
+                    completion_reason = "TypeDB 관리 판단은 생성됐지만 알림 계약 연결에 오류가 있어 운영 확인 대상으로 남겼습니다."
+                    completion_source = "typedb-notification-contract-invalid"
                 elif not ready_events:
                     completion_reason = "새롭거나 중요한 판단 변화가 없어 AI 판단 요청을 생성하지 않았습니다."
                     completion_source = "typedb-no-material-change"
@@ -1898,7 +1915,8 @@ class V2ReasoningEngine:
     def health(self) -> Dict[str, object]:
         result = self.last_result.to_dict() if self.last_result else {}
         return {
-            "status": "ready" if not result or result.get("status") in {"ok", "partial", "excluded"} else "degraded",
+            "status": "ready" if not result or (result.get("status") in {"ok", "partial", "excluded"}
+                and not (result.get("insight_dispatch_routes") or {}).get("INVALID")) else "degraded",
             "engineVersion": "v2",
             "independentExecution": True,
             "directSourceEvents": True,

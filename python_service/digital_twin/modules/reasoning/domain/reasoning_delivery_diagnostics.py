@@ -6,6 +6,8 @@ def reasoning_delivery_diagnostics(state):
     delivery = queues.get("delivery") or queues.get("active") or {}
     control = state.get("control") or {}
     last = (state.get("deliveryDeployment") or {}).get("lastRun") or {}
+    dispatch_outcomes = last.get("dispatchOutcomes") or []
+    contract_failures = [item for item in dispatch_outcomes if item.get("status") == "typedb-notification-contract-invalid"]
     reasons = set(state.get("reasons") or [])
     checks = []
 
@@ -39,6 +41,9 @@ def reasoning_delivery_diagnostics(state):
     if last.get("validationOnly"):
         add("last-run-validation-only", "최근 실행은 엔진 비교 검증",
             "고객 알림과 AI 접수를 하지 않는 검증 실행입니다. 일반 알림 후보 유무와 구분합니다.")
+    elif contract_failures:
+        add("last-run-notification-contract-invalid", "관리 판단의 알림 연결 오류",
+            "TypeDB 관리 판단은 생성됐지만 알림 근거 검증을 통과하지 못했습니다. 아래 원인별 확인이 필요합니다.", "warning")
     elif last.get("status") == "ok" and last.get("traceComplete") and count is not None:
         symbols = " · ".join(str(value) for value in last.get("symbols") or [])
         if count == 0:
@@ -47,12 +52,14 @@ def reasoning_delivery_diagnostics(state):
         else:
             add("last-run-has-candidate", "최근 완료 추론에서 알림 후보 생성",
                 f"{symbols or '해당 분석 범위'} · {count}건. 발송 접수와 실제 전달은 전달 진단에서 확인합니다.")
-    for outcome in last.get("dispatchOutcomes") or []:
+    for outcome in dispatch_outcomes:
         detail = outcome.get("reason") or outcome.get("reasonCode")
         if detail:
+            invalid = outcome in contract_failures
             add("last-admission-" + str(outcome.get("status") or "unknown"),
-                "최근 알림 접수 결과 · " + str(outcome.get("status") or "확인 필요"), str(detail))
-    return {"version": "reasoning-delivery-diagnostics-v1", "checks": checks,
+                "관리 알림 연결 실패 사유" if invalid else "최근 알림 접수 결과 · " + str(outcome.get("status") or "확인 필요"),
+                str(detail), "warning" if invalid else "info")
+    return {"version": "reasoning-delivery-diagnostics-v2", "checks": checks,
             "lastInferenceAt": str(last.get("completedAt") or ""),
             "oldestPendingSourceAt": str(delivery.get("oldestPendingSourceAt") or ""),
             "oldestPendingSourceAgeSeconds": delivery.get("oldestPendingSourceAgeSeconds"),

@@ -5,7 +5,7 @@ import test from "node:test";
 import { questionAssessmentView } from "../../public/modules/research/question-assessment.mjs";
 
 const source = fs.readFileSync(new URL("../../public/ai-control.mjs", import.meta.url), "utf8")
-  .replace('import { questionAssessmentView } from "./modules/research/question-assessment.mjs";', "");
+  .replace(/^import \{ questionAssessmentView \} from "\.\/modules\/research\/question-assessment\.mjs(?:\?v=[^"]+)?";$/m, "");
 function render(input) {
   // Load the rendering functions without starting browser polling or requests.
   return vm.runInNewContext(source.slice(0, source.indexOf("async function request(")) + "\nresearchAnswerView(input)", {input, URL, questionAssessmentView});

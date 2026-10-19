@@ -1,5 +1,20 @@
 # Reasoning Input Latency
 
+## Reuse exact performance observations within one calculation (2026-10-19)
+
+The account performance calculation previously reconstructed the same outcome
+observations for both action and insight reports, including claim parsing and
+fingerprinting. It now builds those observations once per calculation and
+computes each episode's claim identity once before visiting its outcomes.
+There is no cross-request cache, changed cutoff, reduced history or altered
+qualification policy. Outcome observation still commits before history and
+performance reads; those dependent stages are not run concurrently.
+
+A read-only replay of 1,728 frozen operational episodes returned exactly the same
+complete report: calculation time was 2.748s before and 1.513s after. This measures
+calculation only. Input assembly, TypeDB persistence/execution, queue waiting and
+transport latency remain separate operating measurements.
+
 ## Current-state queue and conditional history reads (2026-10-19)
 
 Unclaimed, supersedable price and portfolio deltas from a verified complete

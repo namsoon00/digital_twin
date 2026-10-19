@@ -26,7 +26,7 @@ from digital_twin.modules.model_registry.domain.hypothesis_change_basis import (
 from digital_twin.modules.model_registry.domain.hypothesis_data_readiness import merge_availability, held_availability
 
 
-HYPOTHESIS_LIFECYCLE_VERSION = "typedb-hypothesis-lifecycle-v7"
+HYPOTHESIS_LIFECYCLE_VERSION = "typedb-hypothesis-lifecycle-v8"
 HYPOTHESIS_LIFECYCLE_KEY_VERSION = "v2"
 HYPOTHESIS_LIFECYCLE_KEY_PREFIX = HYPOTHESIS_LIFECYCLE_KEY_VERSION + ":"
 HYPOTHESIS_LIFECYCLE_STATES = (
@@ -36,8 +36,9 @@ HYPOTHESIS_LIFECYCLE_STATES = (
     "weakened",
     "invalidated",
     "expired",
+    "superseded",
 )
-TERMINAL_HYPOTHESIS_LIFECYCLE_STATES = {"invalidated", "expired"}
+TERMINAL_HYPOTHESIS_LIFECYCLE_STATES = {"invalidated", "expired", "superseded"}
 HYPOTHESIS_LIFECYCLE_STATE_LABELS = {
     "observed": "처음 관찰됨",
     "maintained": "근거 유지",
@@ -45,6 +46,7 @@ HYPOTHESIS_LIFECYCLE_STATE_LABELS = {
     "weakened": "근거 약화",
     "invalidated": "가설 무효화",
     "expired": "근거 유효기간 만료",
+    "superseded": "가설 연결 묶음 통합",
 }
 RELATION_LIFECYCLE_TRANSITION_VERSION = "typedb-relation-lifecycle-transition-v4"
 RELATION_LIFECYCLE_CHANGE_KINDS = {
@@ -54,8 +56,10 @@ RELATION_LIFECYCLE_CHANGE_KINDS = {
     "weakened": "weakened",
     "invalidated": "resolved",
     "expired": "expired",
+    "superseded": "reorganized",
 }
 RELATION_LIFECYCLE_CHANGE_LABELS = {
+    "reorganized": "가설 연결 묶음 통합",
     "created": "새 관계가 성립함",
     "maintained": "관계가 유지됨",
     "strengthened": "관계 근거가 강해짐",
@@ -1143,6 +1147,75 @@ def record_for_snapshot(
     return record, transition
 
 
+def regrouped_lifecycle_predecessors(snapshots, records):
+    """Match only unambiguous structural regroupings, never competing claims.
+
+    Family overlays combine matching rules. Adding/removing a member can rotate
+    their structural key while an existing native path remains alive. Such a
+    rotation is evidence continuity, not proof that the old market claim failed.
+    """
+    candidates = {}
+    def same_claims(old, current):
+        before = (old.snapshot.get('observationBasis') or {}).get('nativeClaimFingerprints') or {}
+        after = current.observation_basis.get('nativeClaimFingerprints') or {}
+        shared = set(old.snapshot.get('sourceRuleIds') or []) & set(current.source_rule_ids)
+        return bool(shared) and all(before.get(rid) and before.get(rid) == after.get(rid) for rid in shared)
+    for current in snapshots:
+        if (current.lifecycle_key in records and records[current.lifecycle_key].state != 'superseded') or not current.family_id:
+            continue
+        matches = [old for old in records.values()
+            if old.state not in TERMINAL_HYPOTHESIS_LIFECYCLE_STATES
+            and all(getattr(old, k) == getattr(current, k) for k in
+                    ('scope', 'account_id', 'symbol', 'market_id', 'family_id', 'portfolio_world_id', 'market_world_id'))
+            and same_claims(old, current)]
+        if len(matches) == 1:
+            candidates[current.lifecycle_key] = matches[0]
+    counts = {}
+    for old in candidates.values():
+        counts[old.lifecycle_key] = counts.get(old.lifecycle_key, 0) + 1
+    return {key: old for key, old in candidates.items() if counts[old.lifecycle_key] == 1}
+
+
+def regrouped_lifecycle_baseline(previous, snapshot):
+    """Derive a comparison view; the persisted predecessor stays immutable."""
+    prior = dict(previous.snapshot)
+    prior.update(lifecycleKey=snapshot.lifecycle_key, lifecycleId=snapshot.lifecycle_id,
+                 predecessorLifecycleKeys=list(dict.fromkeys([previous.lifecycle_key, *prior.get('predecessorLifecycleKeys', [])]))[:32],
+                 predecessorSnapshotFingerprint=stable_fingerprint(previous.snapshot))
+    return replace(previous, lifecycle_key=snapshot.lifecycle_key,
+                   lifecycle_id=snapshot.lifecycle_id, snapshot=prior, version=HYPOTHESIS_LIFECYCLE_VERSION)
+
+
+def regrouped_lifecycle_successor(previous, records, generation_id):
+    """Retire an unambiguous view alias without inheriting an unproven claim."""
+    matches = [row for row in records
+        if previous.family_id and row.state not in TERMINAL_HYPOTHESIS_LIFECYCLE_STATES
+        and row.snapshot.get('inferenceGenerationId') == generation_id
+        and (row.snapshot.get('dataAvailability') or {}).get('state') == 'usable'
+        and all(getattr(previous, k) == getattr(row, k) for k in
+                ('scope', 'account_id', 'symbol', 'market_id', 'family_id', 'portfolio_world_id', 'market_world_id'))
+        and set(previous.snapshot.get('sourceRuleIds') or []) & set(row.snapshot.get('sourceRuleIds') or [])]
+    return matches[0] if len(matches) == 1 else None
+
+
+def superseded_lifecycle_record(previous, successor, observed_at):
+    stamp = canonical_timestamp(observed_at, utc_now_iso())
+    reason = "같은 가설의 활성 규칙 연결이 새 묶음으로 통합됐습니다. 기존 조건의 해제나 반증이 아닙니다."
+    record = replace(previous, state='superseded', last_transition_at=stamp,
+                     transition_reason=reason, material_change=False, evidence_delta={}, version=HYPOTHESIS_LIFECYCLE_VERSION,
+                     snapshot={**previous.snapshot, 'successorLifecycleKeys': [successor.lifecycle_key],
+                               'comparisonInherited': previous.lifecycle_key in (successor.snapshot.get('predecessorLifecycleKeys') or []),
+                               'reconciliationGenerationId': successor.inference_generation_id})
+    transition = HypothesisLifecycleTransition(
+        transition_id=stable_id('hypothesis-regrouped', previous.lifecycle_key, successor.lifecycle_key, stamp),
+        lifecycle_key=previous.lifecycle_key, lifecycle_id=previous.lifecycle_id, scope=previous.scope,
+        previous_state=previous.state, current_state='superseded', occurred_at=stamp,
+        previous_generation_id=previous.inference_generation_id,
+        inference_generation_id=successor.inference_generation_id, reason=reason, record=record.to_dict(),
+        change_basis={'category': 'lifecycle-reconciliation', 'successorLifecycleKeys': [successor.lifecycle_key]})
+    return record, transition
+
+
 def record_for_absent_snapshot(
     previous: HypothesisLifecycleRecord,
     observed_at: str,
@@ -1160,6 +1233,13 @@ def record_for_absent_snapshot(
         refresh["checkedAt"] = stamp
         if refresh["status"] != "ready":
             return _retain_source_judgement(previous, refresh, stamp)
+        native_present = sorted(set(prior.source_rule_ids) & set(current_basis.get('nativeRuleIds') or []))
+        if native_present:
+            # A filtered/regrouped read model is not a negative native result.
+            # Keep the last source judgment/clock and record reconciliation only.
+            return replace(previous, material_change=False, version=HYPOTHESIS_LIFECYCLE_VERSION, snapshot={**previous.snapshot,
+                'pathReconciliation': {'status': 'native-path-still-present', 'ruleIds': native_present,
+                    'checkedAt': stamp, 'inferenceGenerationId': current_basis.get('nativeGenerationId') or ''}}), None
     change_basis = compare_change_basis(
         prior.observation_basis, current_basis or {}, prior.source_rule_ids, removed=True,
         require_model_proof="model-signal" in (prior.policy.get("requiredFreshnessDomains") or []),

@@ -117,6 +117,8 @@ def rulebox_decision_brief(context):
                  "invalidationContract": deepcopy(mapping(item.get("ruleInvalidationContract"))),
                  "nextChecks": strings(item.get("nextChecks")),
                  "invalidationConditions": strings(item.get("weakenConditions"))}
+        applicability = mapping(item.get('actionApplicability'))
+        not_applicable = set(strings(applicability.get('notApplicableActions'))) if applicability.get('version') == 'native-action-applicability-v1' else set()
         predictive_action = (entry["ruleKind"] in {"predictive-hypothesis", "predictive"}
                              and action in ACTIONS and effect in {"support", "constrain"}
                              and kind != "REQUIRES_NEXT_CHECK" and not (action == "HOLD" and effect != "support"))
@@ -140,7 +142,7 @@ def rulebox_decision_brief(context):
         if reasons:
             continue
         for code in strings(item.get("blockedActions")):
-            if code in blocked:
+            if code in blocked and code not in not_applicable:
                 restrictions.append({**entry, "action": code})
         # A next check is not a HOLD thesis. A constrained HOLD only limits
         # another action; it does not positively support keeping the position.

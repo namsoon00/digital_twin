@@ -108,6 +108,18 @@ def _event(current, previous, transition, hypothesis, intent):
     # Repeated price/window samples do not create a new evidence role. The
     # lifecycle's semantic proof keys, not polling timestamps, own materiality.
     old_event = (previous.get("notificationIntentContinuity") or {}).get(key) or {}
+    if (not old_event and previous.get('receiptJobId') and previous.get('deliveredAt')
+            and all(previous.get(k) == v for k, v in scope.items())):
+        predecessor_keys = set(basis.get('predecessorLifecycleKeys') or [])
+        inherited = [entry for entry in (previous.get('notificationIntentContinuity') or {}).values()
+                     if entry.get('lifecycleKey') in predecessor_keys
+                     and entry.get('purpose') == intent['purpose']
+                     and (entry.get('intent') or {}).get('claimContractId') == intent['claimContractId']
+                     and (entry.get('intent') or {}).get('claimFingerprint') == intent['claimFingerprint']]
+        if len(inherited) == 1:
+            old_event = inherited[0]
+        elif inherited and len({entry.get('rootJobId') for entry in inherited}) == 1:
+            old_event = {'rootJobId': inherited[0].get('rootJobId')}
     signature = fingerprint(semantic)
     conclusion = fingerprint({"rules": sorted(hypothesis.get("ruleIds") or []),
                               "counterRules": sorted(hypothesis.get("counterRuleIds") or []),
@@ -137,7 +149,7 @@ def _event(current, previous, transition, hypothesis, intent):
 def customer_rule_events(current, previous, transitions):
     events, rejected = [], []
     for transition in transitions:
-        if transition.get("changeCategory") == "data-availability":
+        if transition.get("changeCategory") == "data-availability" or transition.get('currentState') == 'superseded':
             continue  # The receipt-backed source interruption contract owns this.
         hypotheses = _hypotheses(current, previous, transition)
         seen = set()

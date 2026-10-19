@@ -85,6 +85,7 @@ class OntologyRuleMatch:
     rule_output_contract: Dict[str, object] = field(default_factory=dict)
     knowledge_basis: Dict[str, object] = field(default_factory=dict)
     management_response: Dict[str, object] = field(default_factory=dict)
+    action_applicability: Dict[str, object] = field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, object]:
         payload = asdict(self)
@@ -102,6 +103,9 @@ class OntologyRuleMatch:
         payload["actionPolicy"] = payload.pop("action_policy")
         payload["allowedActions"] = payload.pop("allowed_actions")
         payload["blockedActions"] = payload.pop("blocked_actions")
+        applicability = payload.pop("action_applicability")
+        if applicability:
+            payload["actionApplicability"] = applicability
         payload["primaryAction"] = payload.pop("primary_action")
         payload["primaryActionLabel"] = payload.pop("primary_action_label")
         payload["candidateAction"] = payload.pop("candidate_action")

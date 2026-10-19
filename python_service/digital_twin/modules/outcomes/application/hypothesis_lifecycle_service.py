@@ -6,6 +6,7 @@ from typing import Dict, Iterable, List
 from digital_twin.modules.model_registry.contracts import hypothesis_lifecycle_transitioned_event
 from digital_twin.modules.model_registry.contracts import relation_lifecycle_transition_contract
 from digital_twin.modules.model_registry.contracts import lifecycle_observation_basis
+from digital_twin.modules.model_registry.contracts import regrouped_lifecycle_predecessors, regrouped_lifecycle_baseline, regrouped_lifecycle_successor, superseded_lifecycle_record
 from digital_twin.modules.model_registry.contracts import HYPOTHESIS_LIFECYCLE_KEY_PREFIX, HYPOTHESIS_LIFECYCLE_KEY_VERSION, HYPOTHESIS_LIFECYCLE_VERSION, TERMINAL_HYPOTHESIS_LIFECYCLE_STATES, HypothesisLifecycleRecord, HypothesisLifecycleSnapshot, lifecycle_context_summary, lifecycle_snapshots_from_relation_context, record_for_absent_snapshot, record_for_snapshot, snapshot_expiry_reason
 from digital_twin.modules.reasoning.contracts import inferencebox_from_snapshot, relation_contexts_from_snapshot
 from digital_twin.modules.reasoning.contracts import position_observation_profiles
@@ -64,13 +65,29 @@ class HypothesisLifecycleService:
             for item in lifecycle_snapshots_from_relation_context(context, observed_at=observed_at)
         ]
         previous_by_key = self.current_for_subjects(snapshot.account_id, symbols)
+        predecessors = regrouped_lifecycle_predecessors(current_snapshots, previous_by_key)
+        successors = {}
         next_by_key: Dict[str, HypothesisLifecycleRecord] = dict(previous_by_key)
         transitions = []
         active_keys = set()
         for lifecycle_snapshot in current_snapshots:
             active_keys.add(lifecycle_snapshot.lifecycle_key)
             previous = previous_by_key.get(lifecycle_snapshot.lifecycle_key)
+            predecessor = predecessors.get(lifecycle_snapshot.lifecycle_key)
+            if predecessor and (previous is None or previous.state == 'superseded'):
+                previous = regrouped_lifecycle_baseline(predecessor, lifecycle_snapshot)
             record, transition = record_for_snapshot(previous, lifecycle_snapshot, observed_at)
+            predecessor_keys = (previous.snapshot.get('predecessorLifecycleKeys') or []) if previous else []
+            if predecessor_keys:
+                record = replace(record, snapshot={**record.snapshot,
+                    'predecessorLifecycleKeys': list(predecessor_keys)})
+                if transition:
+                    transition = replace(transition, record=record.to_dict(), change_basis={
+                        **transition.change_basis, 'predecessorLifecycleKeys': list(predecessor_keys)})
+            if (predecessor and record.state not in TERMINAL_HYPOTHESIS_LIFECYCLE_STATES
+                    and record.snapshot.get('inferenceGenerationId') == lifecycle_snapshot.inference_generation_id
+                    and (record.snapshot.get('dataAvailability') or {}).get('state') == 'usable'):
+                successors[predecessor.lifecycle_key] = record
             if transition is None:
                 if record != previous:
                     self.store.save(record)
@@ -89,6 +106,15 @@ class HypothesisLifecycleService:
         model_rows = inferencebox.get("modelEvidenceObservations") or {}
         for key, previous in previous_by_key.items():
             if key in active_keys or previous.state in TERMINAL_HYPOTHESIS_LIFECYCLE_STATES:
+                continue
+            successor = successors.get(key) or regrouped_lifecycle_successor(previous,
+                [next_by_key[k] for k in active_keys if k in next_by_key], str(inferencebox.get('inferenceGenerationId') or ''))
+            if successor:
+                record, transition = superseded_lifecycle_record(previous, successor, observed_at)
+                self.store.save(record, transition)
+                next_by_key[key] = record
+                transitions.append((record, transition))
+                self.publish_transition(record, transition)
                 continue
             expiry_reason = self.absent_record_expiry_reason(previous, profiles_by_symbol.get(previous.symbol) or {}, observed_at)
             context = contexts.get(previous.symbol) or {}

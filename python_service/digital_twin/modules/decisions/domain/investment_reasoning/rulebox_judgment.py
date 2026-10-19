@@ -69,10 +69,32 @@ def _assemble(identity, management, candidates, restrictions, relation, checks, 
               "restrictions": deepcopy(restrictions), "conditions": conditions, "sourceRuleIds": used,
               "nextChecks": _unique(checks), "comparisonRequired": len(groups) > 1,
               "finalMarketActionSelected": False, "orderAuthorized": False}
+    applicability = [r['actionApplicability'] for r in _rows(relation.get('matchedRules'))
+                     if (r.get('actionApplicability') or {}).get('version') == 'native-action-applicability-v1']
+    not_applicable = sorted({a for row in applicability for a in row.get('notApplicableActions') or []})
+    available_groups = [g for g in groups if g['action'] not in set(blocked) | set(not_applicable)]
+    result['responsePlan'] = {
+        'version': 'native-response-plan-v1', 'authority': AUTHORITY, **identity,
+        'primaryKind': ('management-response' if management.get('responses') else 'management-resolution' if management.get('resolutions')
+                        else 'restriction' if restrictions else 'candidate-review' if any(g['executionEligible'] for g in available_groups)
+                        else 'qualification-pending' if available_groups else 'evidence-review'),
+        'policyResponses': deepcopy(management.get('responses') or []),
+        'activeRestrictions': deepcopy(restrictions),
+        'notApplicableActions': not_applicable,
+        'reviewCandidates': deepcopy([g for g in available_groups if g['executionEligible']]),
+        'pendingCandidates': [dict(deepcopy(g), pendingReason='execution-qualification-pending') for g in available_groups if not g['executionEligible']],
+        'blockedCandidates': deepcopy([g for g in groups if g['action'] in blocked]),
+        'notApplicableCandidates': deepcopy([g for g in groups if g['action'] in not_applicable]),
+        'releaseChecks': [{'ruleId': r.get('ruleId'), 'condition': r.get('releaseCondition'),
+                          'objective': deepcopy(r.get('objective') or {}), 'targetValue': r.get('targetValue')}
+                         for r in management.get('responses') or []],
+        'comparisonRequired': len(available_groups) > 1,
+        'selectedMarketAction': None, 'orderAuthorized': False}
     # Values and proof identities remain in the record, but repeated polling
     # of the same conclusion is not a new decision.
     semantics = {"status": status, "blockedActions": blocked,
         "candidates": [{k: r[k] for k in ("action", "hypothesisIds", "executionEligible")} for r in groups],
+        'notApplicableActions': result['responsePlan']['notApplicableActions'],
         "responses": [{k: r.get(k) for k in ("code", "objective", "targetValue", "releaseCondition")}
                       for r in management.get("responses", [])],
         'resolvedPolicies': sorted(r['ruleId'] for r in management.get('resolutions', []))}
@@ -95,8 +117,10 @@ def judgment_from_synthesis(synthesis, relation):
                 or e.get("status") != "eligible" or e.get("evidenceUsableForJudgement") is not True or e.get("freshnessStatus") != "fresh"):
             continue
         native[rid] = r
+        applicability = r.get('actionApplicability') or {}
+        not_applicable = set(applicability.get('notApplicableActions') or []) if applicability.get('version') == 'native-action-applicability-v1' else set()
         restrictions.extend({"ruleId": rid, "action": a, "nextChecks": list(r.get("nextChecks") or [])}
-                            for a in r.get("blockedActions") or [] if a in blocked)
+                            for a in r.get("blockedActions") or [] if a in blocked and a not in not_applicable)
     candidates = [{"action": a.action, "hypothesisIds": list(a.hypothesis_ids), "supportingRuleIds": list(a.supporting_rule_ids),
                    "supportingEvidenceIds": list(a.supporting_evidence_ids), "counterEvidenceIds": list(a.counter_evidence_ids),
                    "invalidationConditions": list(a.invalidation_conditions), "executionEligible": a.execution_eligible}

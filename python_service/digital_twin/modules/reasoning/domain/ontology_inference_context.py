@@ -957,6 +957,7 @@ def matches_from_inference(
             action_policy=str(relation.get("actionPolicy") or relation.get("action_policy") or ""),
             allowed_actions=string_list(relation.get("allowedActions") or relation.get("allowed_actions")),
             blocked_actions=string_list(relation.get("blockedActions") or relation.get("blocked_actions")),
+            action_applicability=dict(relation.get("actionApplicability") or {}),
             primary_action=str(relation.get("primaryAction") or relation.get("primary_action") or ""),
             primary_action_label=str(relation.get("primaryActionLabel") or relation.get("primary_action_label") or ""),
             candidate_action=str(relation.get("candidateAction") or relation.get("candidate_action") or ""),

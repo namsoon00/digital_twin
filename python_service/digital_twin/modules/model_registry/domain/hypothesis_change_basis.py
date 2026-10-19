@@ -45,6 +45,11 @@ def lifecycle_observation_basis(context):
                 row["requiredStrengthBand"] = filters["strengthBand"]
                 row["minimumScore"] = signal_strength_floor(filters["strengthBand"])
     return {"version": VERSION, "models": models,
+            "nativeRuleIds": sorted({str(t.get('ruleId')) for t in traces if t.get('ruleId')
+                                     and t.get('matched') is not False and not t.get('managementResolution')}),
+            "nativeClaimFingerprints": {str(t['ruleId']): mapping(t.get('claimContract'))['ruleFingerprint']
+                for t in traces if t.get('ruleId') and mapping(t.get('claimContract')).get('ruleFingerprint')},
+            "nativeGenerationId": context.get('inferenceGenerationId') or mapping(context.get('graphStoreInference')).get('inferenceGenerationId') or '',
             "profiles": deepcopy(mapping(context.get("observationProfiles"))),
             "quote": {k: facts[k] for k in ("sourceAsOf", "currentPrice", "quoteSource") if k in facts}}
 

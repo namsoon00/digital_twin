@@ -64,9 +64,12 @@ def performance_observations(episodes: Iterable[object]) -> List[Dict[str, objec
         facts = episode.get("factsAtDecision") if isinstance(episode.get("factsAtDecision"), dict) else {}
         raw_contract = facts.get("hypothesisOutcomeContract") if isinstance(facts.get("hypothesisOutcomeContract"), dict) else {}
         contract_complete = bool(outcome_contract_completeness(raw_contract).get("complete"))
+        claim_fingerprint = None
         for outcome in episode.get("outcomes") or []:
             if not isinstance(outcome, dict):
                 continue
+            if claim_fingerprint is None:
+                claim_fingerprint = claim_validation_fingerprint(hypothesis.get("claimContract") or {})
             payload = outcome.get("payload") if isinstance(outcome.get("payload"), dict) else {}
             status = str(outcome.get("selectedHypothesisStatus") or "inconclusive")
             raw_return = number(outcome.get("priceChangeFromDecisionPct"))
@@ -84,7 +87,7 @@ def performance_observations(episodes: Iterable[object]) -> List[Dict[str, objec
             observations.append({
                 "episodeId": str(episode.get("episodeId") or ""),
                 "startedAt": str(raw_contract.get("effectiveAt") or episode.get("decidedAt") or episode.get("observedFromAt") or ""),
-                "claimFingerprint": claim_validation_fingerprint(hypothesis.get("claimContract") or {}),
+                "claimFingerprint": claim_fingerprint,
                 "frozenClaimFingerprint": str(raw_contract.get("claimContractFingerprint") or ""),
                 "sourceEventId": str(raw_contract.get("sourceFactIndependenceKey") or ""),
                 "qualificationEvidence": dict(episode.get("qualificationEvidence") or {}),
@@ -148,12 +151,16 @@ def investment_insight_performance_observations(
     """Evaluate AI market direction separately from TypeDB action outcomes."""
 
     episode_rows = [episode_payload(item) for item in episodes or []]
+    return _insight_observations(episode_rows, performance_observations(episode_rows))
+
+
+def _insight_observations(episode_rows, source_observations):
     assessments = {
         str(episode.get("episodeId") or ""): investment_insight_assessment_from_episode(episode)
         for episode in episode_rows
     }
     observations = []
-    for item in performance_observations(episode_rows):
+    for item in source_observations:
         assessment = assessments.get(str(item.get("episodeId") or ""), {})
         direction = str(assessment.get("direction") or "").strip().lower()
         if assessment.get("publishable") is not True or direction not in (
@@ -578,7 +585,7 @@ def evaluate_decision_performance(
     calibration_observations = [item for item in independent_observations if item.get("calibrationEligible")]
     coverage = (len(episodes_with_outcomes) / len(episode_rows) * 100.0) if episode_rows else 0.0
     by_rule = grouped_metrics(observations, "ruleIds", minimum_sample_count, multi_value=True)
-    insight_observations = investment_insight_performance_observations(episode_rows)
+    insight_observations = _insight_observations(episode_rows, observations)
     insight_performance = {
         "version": INVESTMENT_INSIGHT_PERFORMANCE_VERSION,
         "status": "ok" if insight_observations else "insufficient-data",

@@ -56,6 +56,14 @@ def message(context):
 
 
 class RuleBoxDecisionBriefTests(unittest.TestCase):
+    def test_compact_window_comparison_uses_only_frozen_compatible_measurements(self):
+        from relationship_reconciliation_checks import assert_frozen_window_comparison
+        assert_frozen_window_comparison(self)
+
+    def test_native_watchlist_applicability_and_pending_candidates_have_one_saved_plan(self):
+        from relationship_reconciliation_checks import assert_native_applicability
+        assert_native_applicability(self)
+
     def test_restriction_candidate_and_next_check_keep_distinct_meanings(self):
         context = fixture()
         brief = rulebox_decision_brief(context)

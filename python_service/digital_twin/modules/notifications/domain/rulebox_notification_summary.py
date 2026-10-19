@@ -6,30 +6,41 @@ from digital_twin.modules.notifications.domain.relation_change_presentation impo
     FIELDS, condition_clause, current_input_rows, measurement, model_input_change_rows,
 )
 from digital_twin.modules.notifications.domain.relation_observation_language import hypothesis_words, next_check_words
-from digital_twin.modules.notifications.domain.relation_observation_proof import window_limitation, window_name
+from digital_twin.modules.notifications.domain.relation_observation_proof import window_limitation, window_name, source_time
 from digital_twin.modules.notifications.domain.rule_event_presentation import ACTION_LABELS, event_conclusion
 from digital_twin.modules.notifications.domain.rule_policy_lifecycle import release_conclusion
 
 
-VERSION = "compact-rulebox-v2"
+VERSION = "compact-rulebox-v3"
 
 
 def _unique(values):
     return list(dict.fromkeys(v for v in values if v))
 
 
+def _response_plan(judgment):
+    plan = judgment.get('responsePlan') or {}
+    return plan if (plan.get('version') == 'native-response-plan-v1'
+                    and plan.get('authority') == 'typedb-materialized-synthesis'
+                    and all(plan.get(k) == judgment.get(k) for k in
+                            ('accountId', 'symbol', 'worldId', 'inferenceGenerationId', 'sourceAboxSnapshotId'))) else {}
+
+
 def _conclusion(judgment, events):
-    management = judgment.get("managementDecision") or {}
+    plan = _response_plan(judgment)
+    management = {'responses': plan.get('policyResponses') or []} if plan else judgment.get("managementDecision") or {}
     if management.get("responses"):
         return " · ".join(_unique(r.get("label") for r in management["responses"])) + "."
-    actions = [ACTION_LABELS[r["action"]] for r in judgment.get("candidateGroups", []) if r["action"] in ACTION_LABELS]
-    blocked = [ACTION_LABELS[a] for a in judgment.get("blockedActions", []) if a in ACTION_LABELS]
+    groups = [*plan.get('reviewCandidates', []), *plan.get('pendingCandidates', [])] if plan else judgment.get('candidateGroups') or []
+    actions = [ACTION_LABELS[r["action"]] for r in groups if r["action"] in ACTION_LABELS]
+    blocked_codes = _unique(r.get('action') for r in plan.get('activeRestrictions') or []) if plan else judgment.get('blockedActions') or []
+    blocked = [ACTION_LABELS[a] for a in blocked_codes if a in ACTION_LABELS]
     restriction = "·".join(blocked) + " 제한 적용." if blocked else ""
     if len(actions) > 1:
         return " ".join(v for v in (restriction, "·".join(actions) + " 후보의 근거가 엇갈려 최종 판단을 확정하지 않았습니다.") if v)
     if actions:
-        pending = any(not r.get("executionEligible") for r in judgment["candidateGroups"])
-        return " ".join(v for v in (restriction, actions[0] + (" 검토 조건은 확인됐지만 근거의 운영 검증이 남았습니다." if pending
+        pending = any(not r.get("executionEligible") for r in groups)
+        return " ".join(v for v in (restriction, actions[0] + ("에 연결된 가설은 확인됐지만, 이후 가격 흐름에 대한 검증이 부족해 매매 판단은 보류합니다." if pending
                                             else " 검토 조건이 확인됐습니다. 최종 매매 판단은 아직 확정 전입니다.")) if v)
     if restriction:
         return restriction + " 보유분의 유지·매도 판단은 아직 확정되지 않았습니다."
@@ -37,6 +48,24 @@ def _conclusion(judgment, events):
     if released:
         return event_conclusion(released[0])
     return "확인된 근거 변화가 있어 기존 설명을 다시 점검합니다. 이번 자료로 매매 방향을 정하지 않았습니다."
+
+
+def _window_measurement(window, older, condition, old_condition, symbol):
+    if (window_limitation(window, condition, symbol) or window.get('hasSufficientHistory') is not True
+            or numeric(window.get('priceChangePct')) is None):
+        return ''
+    prior = next((w for w in older if condition.get('releaseId') and condition.get('releaseId') == old_condition.get('releaseId')
+                  and w.get('windowKey') == window.get('windowKey')
+                  and w.get('hasSufficientHistory') is True and not window_limitation(w, old_condition, symbol)
+                  and numeric(w.get('priceChangePct')) is not None
+                  and source_time(w.get('knowledgeCutoffAt')) <= source_time(window.get('knowledgeCutoffAt'))), None)
+    text = window_name(window.get('windowKey')) + ' 가격 등락 '
+    if prior and numeric(prior['priceChangePct']) == numeric(window['priceChangePct']):
+        return text + decimal(window['priceChangePct'], signed=True) + '% (이전 알림과 같음)'
+    if prior:
+        text += decimal(prior['priceChangePct'], signed=True) + '% → '
+    text += decimal(window['priceChangePct'], signed=True) + '%'
+    return text + (' (직전 알림 → 이번)' if prior else ' (이전 알림의 같은 기간 수치 없음)')
 
 
 def _purpose(events):
@@ -91,15 +120,18 @@ def _measurements(current, previous, judgment, events, currency, transitions):
                             or condition.get('resolutionMatchedByTypeDB') is True)):
                 continue
             if rule.get("id") in cause_ids and condition.get("modelSignalMatched"):
+                prior = [c for c in before_rules.get(rule.get('id'), {}).get('conditions', [])
+                         if c.get('conditionId') == condition.get('conditionId')]
+                old_condition = prior[0] if len(prior) == 1 else {}
                 for window in condition.get("sourceTemporalWindows") or []:
-                    if (window_limitation(window, condition, current.get("symbol"))
-                            or window.get("hasSufficientHistory") is not True or numeric(window.get("priceChangePct")) is None):
+                    text = _window_measurement(window, old_condition.get('sourceTemporalWindows') or [],
+                                               condition, old_condition, current.get('symbol'))
+                    if not text:
                         continue
                     key = (rule.get("id"), window.get("windowKey"))
                     if key not in seen:
                         seen.add(key)
-                        unchanged.append("규칙 입력: " + window_name(window.get("windowKey")) + " 가격 등락 "
-                                         + decimal(window['priceChangePct'], signed=True) + "% · " + clock(window.get("knowledgeCutoffAt")))
+                        (changed if '→' in text else unchanged).append('규칙 입력: ' + text)
             if field not in FIELDS or numeric(actual) is None or field in seen:
                 continue
             seen.add(field)
@@ -138,7 +170,10 @@ def _measurements(current, previous, judgment, events, currency, transitions):
 
 
 def _comparison(judgment, current, events):
-    groups = judgment.get("candidateGroups") or []
+    plan = _response_plan(judgment)
+    groups = [*plan.get('reviewCandidates', []), *plan.get('pendingCandidates', [])] if plan else judgment.get("candidateGroups") or []
+    if groups and not any(g.get('executionEligible') for g in groups):
+        return '연결된 가설의 예측 검증이 충분하지 않아 매매 대응은 아직 검토 단계입니다.'
     if len(groups) > 1:
         return "서로 다른 대응을 뒷받침하는 근거가 함께 있어 대안 비교가 남아 있습니다."
     if groups:

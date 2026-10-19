@@ -17,7 +17,7 @@ TYPEDB_NATIVE_REASONING_PROFILE_VERSION = "typedb-native-rule-profile-v10"
 
 # V12 also compares allocation facts using the existing ABox precision, so a
 # full-precision context cannot discard a native policy response after reading.
-TYPEDB_NATIVE_RULE_ENGINE_VERSION = "typedb-direct-typeql-rule-engine-v14"
+TYPEDB_NATIVE_RULE_ENGINE_VERSION = "typedb-direct-typeql-rule-engine-v15"
 
 TYPEDB_NATIVE_REASONING_LAYER = "typedb-native-rule"
 

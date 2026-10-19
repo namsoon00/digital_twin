@@ -621,6 +621,7 @@ def action_policy_properties(derivation, stock_properties: Dict[str, object]) ->
     action_policy = str(getattr(derivation, "action_policy", "") or "").strip()
     allowed_actions = [str(item) for item in (getattr(derivation, "allowed_actions", []) or []) if str(item or "").strip()]
     blocked_actions = [str(item) for item in (getattr(derivation, "blocked_actions", []) or []) if str(item or "").strip()]
+    authored_blocked_actions = list(blocked_actions)
     if target_role == WATCHLIST_TARGET_ROLE:
         action_policy = action_policy or WATCHLIST_ACTION_POLICY
         # Target-role safety is a declarative policy boundary. A RuleBox
@@ -636,6 +637,9 @@ def action_policy_properties(derivation, stock_properties: Dict[str, object]) ->
         "actionPolicy": action_policy,
         "allowedActions": allowed_actions,
         "blockedActions": blocked_actions,
+        "actionApplicability": {"version": "native-action-applicability-v1", "targetRole": target_role,
+            "notApplicableActions": list(WATCHLIST_BLOCKED_ACTIONS) if target_role == WATCHLIST_TARGET_ROLE else [],
+            "authoredBlockedActions": authored_blocked_actions},
     }
 
 

@@ -258,6 +258,10 @@ def account_snapshot(generation="generation-1", targets=None, aligned=True, symb
 
 
 class HypothesisLifecycleTests(unittest.TestCase):
+    def test_regrouped_native_paths_preserve_judgement_without_false_invalidation(self):
+        from relationship_reconciliation_checks import assert_lifecycle_regrouping
+        assert_lifecycle_regrouping(self)
+
     def model_basis(self, score=.81869, source_at="2026-10-09T23:56:20Z"):
         return {"models": {"rule.aapl.trend.v1": {
             "signalType": "price-recovery-support", "score": score,

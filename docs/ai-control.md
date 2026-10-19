@@ -11,8 +11,9 @@ the original question and next plan without changing past answers or eligibility
 
 ## Running behavior
 
-Task starts use `central-task-fairness-v1`: expired-lease recovery → observation →
-source collection → observation → research planning, skipping empty or currently
+Task starts use `central-task-fairness-v2-isolated-market`: expired-lease recovery →
+market observation → question assessment → source collection → market observation →
+question assessment → research planning, skipping empty or currently
 budget-ineligible lanes. A persisted cursor, task lease and daily usage update
 commit together, so restarting or adding a second worker preserves the rotation.
 Priority applies within each pending lane; after 20 minutes due work is ordered
@@ -1466,3 +1467,55 @@ requirements can enter the existing once-per-original-case gap follow-up. The
 six-attempt lifetime ceiling, two-attempt intent ceiling, six-hour interval and
 previously consumed recovery slot remain authoritative. Merely rewording the
 question or changing a completion label grants no additional research calls.
+
+### Independent market observations and question work (2026-10-19)
+
+Production composition enables `independent-observation-lanes-v1`. A durable
+`market-observe` root is seeded once per account/symbol/world; existing `observe`
+roots retain original-question work and history. Both use the same central model,
+read tools, frozen-input ledger and shared provider/call limits. Dispatch grants
+separate turns to market observation, question assessment, source collection and
+source planning. Successors, coalescing and failure recovery retain their lane.
+A question's six-hour recovery wait cannot delay a market job. Provider capacity,
+authentication or quota failures remain shared because those limits are real.
+
+Market history is queried separately. Documentary cases appear as read-only
+research context with indexed exact sections; unfinished questions do not select
+the internal-assessment-only route. Existing market observation/development
+tasks remain reviewable, and research claims cannot be changed by the market
+lane. The question lane owns documentary answers and reads other work as context.
+Market repeat identity uses current material evidence and original market task
+contracts. Question identity uses the original completion contract and source
+inventory; quote ticks and self-authored wording cannot reopen it. Empty or
+unchanged question work waits without a paid retrieval. Stable output/contract
+failures are parked until material input or the versioned policy changes;
+transient provider failures retain bounded recovery.
+
+An independently accepted original-question assessment is a new market-memory
+receipt. Its work/review identity can reopen market observation and bring a
+pending market check forward to within fifteen minutes. Reworded answers,
+unreviewed notes and case revision counters cannot do so. Thus new reviewed
+research can inform the shared brain without unfinished research blocking it.
+Market memory also retains up to four recently closed, independently reviewed
+question cases, so marking an answer complete cannot remove its judgment impact
+from the next observation's read index.
+
+Retrieval V7 admits one documentary question per pass. `assess` uses that single
+question's ready/waiting state and gap list; a conflicting nonempty global gap
+list is rejected rather than silently overwritten. Other questions keep their
+original requirements and explicit deferred IDs. The duplicated knowledge
+ontology projection is omitted under its owning context-hash contract, while
+methods, claims, provenance and exact source sections remain available. A valid
+selection exceeding the final input budget records a capacity wait without an
+extra model correction or a false answer checkpoint. Author V20, repair V16 and
+customer review V9 preserve the old frozen versions' reconstruction contracts.
+
+The owner console separates market judgments, internal question assessments,
+checks without a new judgment, notification proposals and delivery receipts.
+`executionHealth` uses market calls/progress, so research activity alone cannot
+establish market judgment health. `executionLanes` reads a bounded 24-hour index
+window (2,000 task IDs, at most 300 results per lane in PK batches) and discloses
+truncation. Proposed or queued alerts are never displayed as actual delivery
+without a transport receipt. These operational changes establish neither better
+predictions nor investment returns; natural authored results and actual receipts
+must be observed after deployment.

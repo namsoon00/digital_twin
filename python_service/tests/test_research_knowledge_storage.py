@@ -148,6 +148,11 @@ class ResearchKnowledgeStorageTests(unittest.TestCase):
         check_wait_progress(self)
 
     def test_partial_research_real_controller_commits_recalls_and_revises_reviewed_knowledge(self):
+        from execution_lane_checks import check_market_knowledge_storage
+        check_market_knowledge_storage(self)
+        self.fixture.clean()
+        self.clean_knowledge()
+        self.control.runtime_settings.pop("aiObservationLanePolicy", None)
         from scoped_knowledge_storage_checks import check_partial_controller
         check_partial_controller(self)
 
@@ -162,6 +167,11 @@ class ResearchKnowledgeStorageTests(unittest.TestCase):
                 self.fixture.clean()
                 self.clean_knowledge()
                 check_persisted_question_assessment(self, answered=answered, accepted=accepted)
+                if answered and accepted:
+                    retained = [row for row in self.agenda.market_memory(self.fixture.subject["accountId"],
+                        self.fixture.subject["symbol"], self.fixture.subject["worldId"]) if row.get("status") == "answered"]
+                    self.assertEqual(1, len(retained))
+                    self.assertTrue(retained[0]["questionAssessment"]["researchReviewInputId"])
         from question_evidence_storage_checks import check_ready_question_answer
         for accepted in (True, False):
             with self.subTest(accepted=accepted):

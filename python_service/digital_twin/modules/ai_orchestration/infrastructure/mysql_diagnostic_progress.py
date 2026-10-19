@@ -30,7 +30,7 @@ class DiagnosticProgressPersistence:
     @staticmethod
     def diagnostic_task(connection, task_id, scope):
         row = connection.execute("SELECT task_id,account_id,symbol,status,available_at,updated_at,last_error,payload_json,result_json "
-            "FROM ai_control_tasks WHERE task_id=%s AND capability='observe'", (task_id,)).fetchone()
+            "FROM ai_control_tasks WHERE task_id=%s AND capability IN ('observe','market-observe')", (task_id,)).fetchone()
         if not row:
             return None
         payload = decode(row["payload_json"])

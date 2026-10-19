@@ -61,6 +61,8 @@ class AITaskDispatchTests(unittest.TestCase):
         self.assertEqual(["observe", "research", "observe", "research-plan"] * 3,
                          [j["capability"] for j in claimed])
         self.assertEqual(12, self.cursor()["dispatchCount"])
+        from execution_lane_checks import check_native_lanes
+        check_native_lanes(self)
 
     def test_expired_plan_lease_recovers_amid_backlog_without_reviving_stale_writer(self):
         self.insert("expired-plan", "research-plan")

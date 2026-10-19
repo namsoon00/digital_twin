@@ -9,14 +9,18 @@ class MySQLPreparationAI(MySQLOperationalConnection):
         if not enabled(self.runtime_settings):
             return {"status": "blocked", "detail": "중앙 AI가 일시 중지돼 있습니다."}
         with self.connect() as connection:
-            rows = connection.execute(
+            rows = []
+            for capability in ("market-observe", "observe"):
+                rows = connection.execute(
                 "SELECT task_id,status,available_at,last_error,updated_at,"
                 "JSON_UNQUOTE(JSON_EXTRACT(result_json,'$.quality.status')) AS quality,"
                 "JSON_UNQUOTE(JSON_EXTRACT(result_json,'$.input.sourceSnapshotId')) AS snapshot_id,"
                 "JSON_UNQUOTE(JSON_EXTRACT(result_json,'$.observedAt')) AS observed_at "
-                "FROM ai_control_tasks WHERE account_id=%s AND symbol=%s AND capability='observe' "
+                "FROM ai_control_tasks WHERE account_id=%s AND symbol=%s AND capability=%s "
                 "AND JSON_UNQUOTE(JSON_EXTRACT(payload_json,'$.worldId'))=%s "
-                "ORDER BY updated_at DESC,task_id DESC LIMIT 20", scope).fetchall()
+                "ORDER BY updated_at DESC,task_id DESC LIMIT 20", (*scope[:2], capability, scope[2])).fetchall()
+                if rows:
+                    break  # New market activity owns preparation; research is separate.
         accepted = next((row for row in rows if row["status"] == "completed"
                          and row["quality"] in {"accepted", "observation-only"} and row["snapshot_id"] not in (None, "", "null")), None)
         latest = rows[0] if rows else {}

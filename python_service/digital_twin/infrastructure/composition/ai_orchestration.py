@@ -46,6 +46,8 @@ def build_ai_control_service(settings=None):
     from digital_twin.modules.ai_orchestration.infrastructure.execution import CURRENT_TASK, CURRENT_INPUT
 
     configured = dict(settings if settings is not None else runtime_settings())
+    from digital_twin.modules.ai_orchestration.domain.execution_lanes import VERSION as lane_policy
+    configured["aiObservationLanePolicy"] = lane_policy
     store = MySQLAIControlStore(configured)
     research_store = investment_research_store(configured)
 
@@ -161,7 +163,8 @@ def build_ai_control_service(settings=None):
                             research_plan_memory=lambda account, symbol, world: agenda.memory(account, symbol, world, research_only=True, max_cases=12 if knowledge else 5),
                             research_gate=agenda.research_admission,
                             knowledge_context=knowledge.context if knowledge else None,
-                            knowledge_refresh=knowledge.refresh if knowledge else None, rulebox_feedback=rulebox_feedback)
+                            knowledge_refresh=knowledge.refresh if knowledge else None, rulebox_feedback=rulebox_feedback,
+                            market_brain_memory=agenda.market_memory)
 
 
 def ai_control_status(settings=None, account_id=""):
@@ -169,6 +172,8 @@ def ai_control_status(settings=None, account_id=""):
     from digital_twin.modules.ai_orchestration.infrastructure.mysql_control import MySQLAIControlStore
     from digital_twin.modules.ai_orchestration.contracts import CAPABILITIES, enabled
     configured = dict(settings if settings is not None else runtime_settings())
+    from digital_twin.modules.ai_orchestration.domain.execution_lanes import VERSION as lane_policy
+    configured["aiObservationLanePolicy"] = lane_policy
     # Dashboard reads must not inherit long worker socket timeouts or its pool.
     configured.update(mysqlOperationTimeoutSeconds=8, _mysqlPoolRole="ai-status")
     status = MySQLAIControlStore(configured).status(account_id)
@@ -200,6 +205,11 @@ def ai_control_status(settings=None, account_id=""):
     for task in status["tasks"]:
         publication = task["result"].get("publication") or {}
         publications.extend(item for item in (publication, publication.get("diagnostic") or {}) if item.get("jobId"))
+    for lane in (status.get("executionLanes") or {}).get("lanes", []):
+        for key in ("latestTask", "latestJudgment", "latestAlert"):
+            publication = (lane.get(key) or {}).get("publication") or {}
+            if publication.get("jobId"):
+                publications.append(publication)
     if publications:
         import json
         from digital_twin.modules.notifications.contracts import delivery_progress

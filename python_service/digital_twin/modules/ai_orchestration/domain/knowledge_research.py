@@ -21,7 +21,10 @@ def knowledge_prompt(packet, history, research):
     from .question_resolution import resolution_prompt
     from .scoped_research import instructions
     from .memory_reference import VERSION, INSTRUCTIONS as memory_instructions
-    return (memory_instructions if packet.get("memoryReadPolicy") == VERSION else "") + instructions(packet) + (INSTRUCTIONS if packet.get("researchKnowledge") else "") + resolution_prompt(packet, history, research)
+    from .execution_lanes import instructions as lane_instructions, market
+    knowledge = ("연구 방법과 과거 설명은 현재 사실이 아닙니다. knowledgeResearch는 claims=[]와 coverageNote만 반환하세요.\n"
+                 if market(packet) else INSTRUCTIONS) if packet.get("researchKnowledge") else ""
+    return lane_instructions(packet) + (memory_instructions if packet.get("memoryReadPolicy") == VERSION else "") + instructions(packet) + knowledge + resolution_prompt(packet, history, research)
 
 
 def knowledge_schema(packet, research):
@@ -34,6 +37,12 @@ def knowledge_schema(packet, research):
     if packet.get("researchScope", {}).get("assessmentPolicy") == AUTHOR_SCOPE_POLICY:
         for key in ("caseReviews", "questionResolutions"):
             schema["properties"][key]["maxItems"] = 0
+    from .execution_lanes import market
+    if market(packet):
+        schema["properties"]["caseReviews"]["maxItems"] = min(5, sum(row.get("kind") == "brain-case" for row in research))
+        schema["properties"]["questionResolutions"]["maxItems"] = min(5, sum(row.get("kind") == "brain-case" and row.get("capability") == "develop-hypothesis" for row in research))
+        if "knowledgeResearch" in schema["properties"]:
+            schema["properties"]["knowledgeResearch"]["properties"]["claims"]["maxItems"] = 0
     return schema
 
 
@@ -41,6 +50,9 @@ def validate_research(value, packet, business_theses=()):
     from .insight_contract import asserts_certainty
     from .validation_diagnostic import PlanValidationError
     from digital_twin.modules.decisions.contracts import narrative_presentation_errors
+    from .execution_lanes import market
+    if market(packet) and isinstance(value, dict) and value.get("claims"):
+        raise PlanValidationError("market-research-write", "knowledgeResearch.claims", "시장 관찰은 연구 기억을 읽기만 하므로 claims=[]입니다.")
     usable = {row["id"] for row in packet["facts"] if usable_fact(row)}
     try:
         result = validate_knowledge_proposals(value, packet.get("researchKnowledge"), packet, usable, business_theses)

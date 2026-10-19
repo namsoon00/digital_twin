@@ -9,7 +9,7 @@ from digital_twin.modules.reasoning.contracts import evidence_change_identity
 from digital_twin.modules.ai_orchestration.domain.brain_management import (
     ACTIVE_CASE_STATES, GOALS, case_identity, later, new_case, review_transition, source_memory, validate_management,
 )
-from digital_twin.modules.ai_orchestration.domain.execution_input import validate_execution_input, PROMPT_VERSION, REPAIR_PROMPT_VERSION
+from digital_twin.modules.ai_orchestration.domain.execution_input import validate_execution_input, PROMPT_VERSION, REPAIR_PROMPT_VERSION, LANE_PROMPT_VERSION, LANE_REPAIR_PROMPT_VERSION
 from digital_twin.modules.ai_orchestration.domain.insight_quality import local_quality
 from digital_twin.modules.ai_orchestration.domain.recovery import retry_delays
 from .mysql_brain_subjects import fill_case_names
@@ -114,7 +114,7 @@ class MySQLBrainAgendaStore(MySQLOperationalConnection):
             raise ValueError("brain memory requires completed frozen model input")
         envelope = json.loads(gzip.decompress(row["artifact_gzip"]))
         validate_execution_input(envelope)
-        if envelope["promptVersion"] not in {PROMPT_VERSION, REPAIR_PROMPT_VERSION} or envelope["current"] != result["input"]:
+        if envelope["promptVersion"] not in {PROMPT_VERSION, REPAIR_PROMPT_VERSION, LANE_PROMPT_VERSION, LANE_REPAIR_PROMPT_VERSION} or envelope["current"] != result["input"]:
             raise ValueError("brain memory input mismatch")
         if any(envelope["current"].get(key) != job[key] for key in ("accountId", "symbol", "worldId", "taskId")):
             raise ValueError("brain memory subject mismatch")
@@ -226,6 +226,9 @@ class MySQLBrainAgendaStore(MySQLOperationalConnection):
         receipt["caseIds"] = list(dict.fromkeys(receipt["caseIds"]))
         if research_accepted:
             receipt["researchReviewInputId"] = result["researchQuality"]["reviewInputId"]
+            from ..domain.execution_lanes import identified, MARKET
+            if identified(result["input"]) and result.get("caseReviews"):
+                self.wake_observation(connection, job["accountId"], job["symbol"], job["worldId"], later(now, 15), capability=MARKET)
         return receipt
 
     def record_questions(self, connection, job, result, children, source, now, receipt, research_only=False):
@@ -341,11 +344,11 @@ class MySQLBrainAgendaStore(MySQLOperationalConnection):
         case["nextCheckAt"] = later(now, 360)
 
     @staticmethod
-    def wake_observation(connection, account, symbol, world, due, changed=True):
+    def wake_observation(connection, account, symbol, world, due, changed=True, capability="observe"):
         return connection.execute("UPDATE ai_control_tasks SET available_at=LEAST(available_at,%s),priority=GREATEST(priority,3) "
-            "WHERE account_id=%s AND symbol=%s AND capability='observe' AND status='pending' AND attempts=0 "
+            "WHERE account_id=%s AND symbol=%s AND capability=%s AND status='pending' AND attempts=0 "
             "AND JSON_UNQUOTE(JSON_EXTRACT(payload_json,'$.worldId'))=%s "
-            "AND (%s OR created_at<=%s)", (due, account, symbol, world, bool(changed), due)).rowcount
+            "AND (%s OR created_at<=%s)", (due, account, symbol, capability, world, bool(changed), due)).rowcount
 
     def research_waiting(self, connection, job, result):
         key = job.get("brainCaseId")
@@ -452,6 +455,10 @@ class MySQLBrainAgendaStore(MySQLOperationalConnection):
             ids.append(key)
         return ids
 
+    def market_memory(self, account, symbol, world):
+        from .mysql_market_memory import market_memory
+        return market_memory(self, account, symbol, world)
+
     def memory(self, account, symbol, world=None, research_only=False, max_cases=5):
         now = stamp()
         with self.connect() as connection:
@@ -509,16 +516,19 @@ class MySQLBrainAgendaStore(MySQLOperationalConnection):
         with self.transaction() as connection:
             from .mysql_research_work import reconcile_and_schedule
             reconcile_and_schedule(self, connection, subjects)
+            from ..domain.execution_lanes import enabled, MARKET
+            lane = ("CASE WHEN kind='question' AND JSON_UNQUOTE(JSON_EXTRACT(payload_json,'$.capability'))='research' "
+                    "THEN 'observe' ELSE '" + MARKET + "' END") if enabled(self.runtime_settings) else "'observe'"
             rows = connection.execute("SELECT account_id,symbol,JSON_UNQUOTE(JSON_EXTRACT(payload_json,'$.worldId')) AS world_id,"
-                "MIN(next_check_at) AS due FROM ai_brain_cases WHERE kind IN ('question','business-thesis') "
+                "MIN(next_check_at) AS due," + lane + " AS lane FROM ai_brain_cases WHERE kind IN ('question','business-thesis') "
                 "AND status IN ('open','waiting','review-needed','blocked','tracking','needs-review','data-needed') AND next_check_at<=%s "
                 "AND NOT (kind='question' AND COALESCE(JSON_UNQUOTE(JSON_EXTRACT(payload_json,'$.capability')),'')='research' "
                 "AND COALESCE(JSON_UNQUOTE(JSON_EXTRACT(payload_json,'$.answerResolution.status')),'')<>'answered') "
                 "AND (account_id,symbol,JSON_UNQUOTE(JSON_EXTRACT(payload_json,'$.worldId'))) IN ("
-                + ",".join(["(%s,%s,%s)"] * len(scopes)) + ") GROUP BY account_id,symbol,world_id",
+                + ",".join(["(%s,%s,%s)"] * len(scopes)) + ") GROUP BY account_id,symbol,world_id,lane",
                 (stamp(), *(value for scope in sorted(scopes) for value in scope))).fetchall()
             for row in rows:
-                self.wake_observation(connection, row["account_id"], row["symbol"], row["world_id"], row["due"], changed=False)
+                self.wake_observation(connection, row["account_id"], row["symbol"], row["world_id"], row["due"], changed=False, capability=row["lane"])
 
     def status(self, account=""):
         with self.connect() as connection:

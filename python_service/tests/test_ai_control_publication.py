@@ -204,6 +204,8 @@ class CentralPublicationStorageTests(unittest.TestCase):
         return task, result, self.queue.job_from_row(row)
 
     def test_successful_send_is_only_baseline_and_cannot_be_replayed(self):
+        from execution_lane_checks import check_market_publication
+        check_market_publication(self)
         from digital_twin.modules.ai_orchestration.contracts import OBSERVATION_WORDING_VERSION
         draft = observation()
         draft['input']['facts'][0]['maxAgeMinutes'] = 15

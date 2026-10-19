@@ -37,11 +37,14 @@ brain.cases.push({kind:'business-thesis',caseId:'business',symbol:'TEST',name:'�
 const server = http.createServer((req,res) => {
   if (req.url === '/api/ai-control/status') {res.setHeader('content-type','application/json');res.end(JSON.stringify({enabled:true,configuredEnabled:true,tasksStartedToday:2,dailyTaskBudget:48,activeTaskCount:1,dailyCallBudget:24,
     modelCallsUsedToday:24,observationScheduling:{status:'budget-wait',reason:'ai-call-budget-exhausted',nextCheckAt:'2026-10-02T00:00:00Z'},
-    taskScheduling:{queues:[{capability:'observe',due:11,processing:0,expiredLeases:0},{capability:'research-plan',due:5,processing:1,expiredLeases:1}]},
+    taskScheduling:{cycle:['recovery','market-observe','observe','research'],queues:[{capability:'market-observe',due:2,processing:0,expiredLeases:0},{capability:'observe',due:11,processing:0,expiredLeases:0},{capability:'research-plan',due:5,processing:1,expiredLeases:1}]},
+    executionLanes:{since:'2026-10-18T00:00:00Z',lanes:[{capability:'market-observe',authored:0,checksWithoutJudgment:3,notificationProposals:0,
+      latestTask:{status:'completed',resultStatus:'unchanged-wait',updatedAt:'2026-10-19T01:00:00Z'},latestAlert:{publication:{status:'queued',deliveryStatus:'pending',reason:'전송 영수증 확인 <script>bad</script>'}}},
+      {capability:'observe',authored:12,internalResearch:12,checksWithoutJudgment:2}]},
     executionHealth:{status:'awaiting-result',reason:'재시작 이후 저장 확인 중',callWindowMinutes:3,centralCallsCompleted:1,centralCallsFailed:0,
       runtime:{startedAt:'2026-10-03T03:00:00Z',lastSeenAt:'2026-10-03T03:03:00Z'},runtimeCoverage:{observedActiveSeconds:180,unobservedSeconds:86220},carriedOverdueObservationTasks:2},
     brain,qualitySummary:{accepted:0,rejected:1},tasks:[{taskId:'fixture',symbol:'TEST',status:'completed',capability:'observe',result}],callsToday:[]}));return;}
-  const file = path.resolve(root,'.'+req.url);
+  const file = path.resolve(root,'.'+new URL(req.url,'http://localhost').pathname);
   if (!file.startsWith(root+path.sep) || !fs.existsSync(file)) {res.writeHead(404);res.end();return;}
   res.setHeader('content-type',file.endsWith('.mjs')?'application/javascript':file.endsWith('.css')?'text/css':'text/html');res.end(fs.readFileSync(file));
 });
@@ -68,7 +71,14 @@ const server = http.createServer((req,res) => {
    await page.locator('.business-research').screenshot({path:'/tmp/orbit-business-panel-'+width+'.png'});
    assert.match(await page.locator('#overview').innerText(),/기록 공백은 정확한 중단 시간이나 AI 실패 횟수를 뜻하지 않습니다/);
    assert.match(await page.locator('#overview').innerText(),/이번 구간에서 판단 저장 미확인/);
-   assert.match(await page.locator('#overview').innerText(),/관찰: 실행 시각 도래 11건/);
+   assert.match(await page.locator('#overview').innerText(),/질문 연구: 실행 시각 도래 11건/);
+   assert.match(await page.locator('#overview').innerText(),/시장 판단 0건/);
+   assert.match(await page.locator('#overview').innerText(),/연구 판단 12건/);
+   assert.match(await page.locator('#overview').innerText(),/실제 발송 영수증 미확인/);
+   assert.doesNotMatch(await page.locator('#overview').innerText(),/실제 발송 확인/);
+   assert.equal(await page.locator('#overview script').count(),0);
+   assert(await page.evaluate(()=>document.documentElement.scrollWidth <= innerWidth+1));
+   await page.locator('#overview').screenshot({path:'/tmp/orbit-ai-lanes-'+width+'.png'});
    assert.match(await page.locator('#overview').innerText(),/실행 기한이 지나 복구할 작업 1건/);
    assert.match(await page.locator('article').innerText(),/동일 예약 2건/);
    await page.getByText('온톨로지 개선 · 현재 진행 기록 없음',{exact:true}).click();

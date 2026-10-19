@@ -14,12 +14,13 @@ from digital_twin.modules.ai_orchestration.domain.execution_input import validat
 from digital_twin.modules.ai_orchestration.domain.budget import AIControlBudgetWait, admission_wait, budget_state, budgets_enabled
 from digital_twin.modules.ai_orchestration.domain.recovery import retry_delays
 from digital_twin.modules.ai_orchestration.domain.retrieval import RETRIEVAL_PROMPT_VERSION, validate_trace
-from ..domain import working_retrieval, scoped_retrieval, indexed_retrieval, question_retrieval
+from ..domain import working_retrieval, scoped_retrieval, indexed_retrieval, question_retrieval, lane_retrieval
 from digital_twin.modules.reasoning.contracts import content_hash
 from digital_twin.modules.ai_orchestration.infrastructure.mysql_execution import AIExecutionPersistence, EXECUTION_SCHEMA
 from digital_twin.modules.ai_orchestration.domain.execution_resilience import safe_diagnostic
 from digital_twin.modules.ai_orchestration.infrastructure.mysql_runtime import AIRuntimePersistence, RUNTIME_SCHEMA
 from digital_twin.modules.ai_orchestration.domain.observation_recovery import same_regular_observation
+from ..domain.execution_lanes import MARKET, OBSERVATIONS, enabled as lanes_enabled
 from ..domain.task_dispatch import SCOPE as DISPATCH_SCOPE, dispatched
 from .mysql_task_dispatch import AITaskDispatchPersistence
 from .mysql_diagnostic_progress import DiagnosticProgressPersistence, SCHEMA as DIAGNOSTIC_SCHEMA
@@ -100,6 +101,12 @@ class MySQLAIControlStore(DiagnosticProgressPersistence, AITaskDispatchPersisten
         job = {**subject, "capability": "observe", "taskId": identity("watch-v1", subject["accountId"], subject["symbol"])}
         with self.transaction() as connection:
             self.insert(connection, job)
+            if lanes_enabled(self.runtime_settings):
+                market_job = {**subject, "capability": MARKET, "taskId": identity("market-observe-v1", subject["accountId"], subject["symbol"], subject["worldId"])}
+                self.insert(connection, market_job)
+                prior = connection.execute("SELECT task_id,status,JSON_UNQUOTE(JSON_EXTRACT(result_json,'$.status')) AS result_status FROM ai_control_tasks WHERE account_id=%s AND symbol=%s AND capability=%s ORDER BY updated_at DESC,task_id DESC LIMIT 1 FOR UPDATE", (subject["accountId"], subject["symbol"], MARKET)).fetchone()
+                if prior and prior["status"] == "completed" and prior["result_status"] == "retired":
+                    self.insert(connection, {**market_job, "taskId": identity(prior["task_id"], subject["worldId"], "rejoin")})
             latest = connection.execute("SELECT task_id,status,result_json FROM ai_control_tasks WHERE account_id=%s AND symbol=%s AND capability='observe' ORDER BY updated_at DESC,task_id DESC LIMIT 1 FOR UPDATE", (subject["accountId"], subject["symbol"])).fetchone()
             if latest and latest["status"] == "completed" and json.loads(latest["result_json"]).get("status") == "retired":
                 self.insert(connection, {**job, "taskId": identity(latest["task_id"], subject["worldId"], "rejoin")})
@@ -170,20 +177,20 @@ class MySQLAIControlStore(DiagnosticProgressPersistence, AITaskDispatchPersisten
                                         (json.dumps(saved_result, ensure_ascii=False), now, job["taskId"], job["leaseToken"], now))
             if not cursor.rowcount:
                 return None
-            if job["capability"] == "observe" and (saved_result.get("quality", {}).get("status") in {"accepted", "observation-only"}
+            if job["capability"] in OBSERVATIONS and (saved_result.get("quality", {}).get("status") in {"accepted", "observation-only"}
                                                     or saved_result.get("status") == "unchanged"):
                 saved_result.setdefault("resumption", {})["coalescedTaskCount"] = self.coalesce_observations(connection, job, now)
             development = getattr(self, "development_writer", None)
-            if development is not None and job["capability"] == "observe" and saved_result.get("summary"):
+            if development is not None and job["capability"] in OBSERVATIONS and saved_result.get("summary"):
                 saved_result["development"] = development(connection, job, saved_result)
             agenda = getattr(self, "agenda_writer", None)
             if agenda is not None:
                 saved_result["brain"] = agenda(connection, job, saved_result, saved_children)
             knowledge = getattr(self, "knowledge_writer", None)
-            if knowledge is not None and job["capability"] == "observe" and (saved_result.get("summary") or saved_result.get("retrievalInputIds")):
+            if knowledge is not None and job["capability"] in OBSERVATIONS and (saved_result.get("summary") or saved_result.get("retrievalInputIds")):
                 saved_result["knowledge"] = knowledge(connection, job, saved_result)
             writer = getattr(self, "outbox_writer", None)
-            if writer is not None and job["capability"] == "observe" and saved_result.get("summary"):
+            if writer is not None and job["capability"] in OBSERVATIONS and saved_result.get("summary"):
                 saved_result["publication"] = writer(connection, job, saved_result)
             connection.execute("UPDATE ai_control_tasks SET result_json=%s WHERE task_id=%s",
                                (json.dumps(saved_result, ensure_ascii=False), job["taskId"]))
@@ -209,9 +216,9 @@ class MySQLAIControlStore(DiagnosticProgressPersistence, AITaskDispatchPersisten
         if not same_regular_observation(original, original):
             return 0
         rows = connection.execute("SELECT task_id,payload_json FROM ai_control_tasks WHERE account_id=%s AND symbol=%s "
-            "AND capability='observe' AND status='pending' AND attempts=0 AND priority=0 AND available_at<=%s AND created_at<=%s "
+            "AND capability=%s AND status='pending' AND attempts=0 AND priority=0 AND available_at<=%s AND created_at<=%s "
             "ORDER BY available_at,task_id LIMIT 100 FOR UPDATE SKIP LOCKED",
-            (job["accountId"], job["symbol"], job["claimedAt"], job["claimedAt"])).fetchall()
+            (job["accountId"], job["symbol"], job["capability"], job["claimedAt"], job["claimedAt"])).fetchall()
         count = 0
         for row in rows:
             if not same_regular_observation(original, json.loads(row["payload_json"])):
@@ -243,10 +250,10 @@ class MySQLAIControlStore(DiagnosticProgressPersistence, AITaskDispatchPersisten
             failure = getattr(self, "agenda_failure", None)
             if changed and terminal and failure is not None:
                 failure(connection, job, error_kind[:100])
-            if changed and terminal and job["capability"] == "observe":
+            if changed and terminal and job["capability"] in OBSERVATIONS:
                 next_due = (now + timedelta(seconds=recovery_delay)).isoformat().replace("+00:00", "Z")
                 self.insert(connection, {**{k: job[k] for k in ("accountId", "symbol", "name", "worldId")},
-                    "capability": "observe", "taskId": identity(job["taskId"], "recovery"), "availableAt": next_due})
+                    "capability": job["capability"], "taskId": identity(job["taskId"], "recovery"), "availableAt": next_due})
         return {"status": status if changed else "lease-lost"}
 
     def defer_research(self, job, wait):
@@ -273,19 +280,19 @@ class MySQLAIControlStore(DiagnosticProgressPersistence, AITaskDispatchPersisten
                 (wait.code, wait.reset_at, int(job.get("budgetDeferrals", 0)) + 1, stamp(),
                  job["taskId"], job["leaseToken"], stamp())).rowcount)
 
-    def last_processing_outcome(self, account_id, symbol):
+    def last_processing_outcome(self, account_id, symbol, capability="observe"):
         with self.connect() as connection:
             rows = connection.execute("SELECT JSON_EXTRACT(result_json,'$.processingOutcome') AS outcome_json "
-                "FROM ai_control_tasks WHERE account_id=%s AND symbol=%s AND capability='observe' AND status='completed' "
-                "ORDER BY updated_at DESC,task_id DESC LIMIT 8", (account_id, symbol)).fetchall()
+                "FROM ai_control_tasks WHERE account_id=%s AND symbol=%s AND capability=%s AND status IN ('completed','failed') "
+                "ORDER BY updated_at DESC,task_id DESC LIMIT 8", (account_id, symbol, capability)).fetchall()
         return next((json.loads(row["outcome_json"]) for row in rows if row["outcome_json"]), {})
 
-    def memory(self, account_id, symbol):
+    def memory(self, account_id, symbol, capability="observe"):
         with self.connect() as connection:
-            rows = connection.execute("SELECT result_json,updated_at FROM ai_control_tasks WHERE account_id=%s AND symbol=%s AND capability='observe' AND status='completed' AND JSON_EXTRACT(result_json,'$.summary') IS NOT NULL ORDER BY updated_at DESC LIMIT 3", (account_id, symbol)).fetchall()
+            rows = connection.execute("SELECT result_json,updated_at FROM ai_control_tasks WHERE account_id=%s AND symbol=%s AND capability=%s AND status='completed' AND JSON_EXTRACT(result_json,'$.summary') IS NOT NULL ORDER BY updated_at DESC LIMIT 3", (account_id, symbol, capability)).fetchall()
             condition_state = connection.execute("SELECT result_json FROM ai_control_tasks WHERE account_id=%s AND symbol=%s "
-                "AND capability='observe' AND status='completed' AND JSON_EXTRACT(result_json,'$.followUpEvaluations') IS NOT NULL "
-                "ORDER BY updated_at DESC,task_id DESC LIMIT 1", (account_id, symbol)).fetchone()
+                "AND capability=%s AND status='completed' AND JSON_EXTRACT(result_json,'$.followUpEvaluations') IS NOT NULL "
+                "ORDER BY updated_at DESC,task_id DESC LIMIT 1", (account_id, symbol, capability)).fetchone()
         result = []
         for row in rows:
             saved = json.loads(row["result_json"])
@@ -310,6 +317,8 @@ class MySQLAIControlStore(DiagnosticProgressPersistence, AITaskDispatchPersisten
         packet = envelope["current"]
         if any(packet.get(key) != job[key] for key in ("accountId", "symbol", "worldId", "taskId")):
             raise ValueError("execution input task ownership mismatch")
+        if packet.get("executionLanePolicy") and packet.get("executionLane") != (MARKET if job["capability"] == MARKET else "question-research"):
+            raise ValueError("execution input lane ownership mismatch")
         input_id = identity(job["taskId"], job["attempts"], digest)
         artifact = gzip.compress(json.dumps(envelope, ensure_ascii=False, allow_nan=False).encode(), mtime=0)
         with self.transaction() as connection:
@@ -339,9 +348,10 @@ class MySQLAIControlStore(DiagnosticProgressPersistence, AITaskDispatchPersisten
                 raise ValueError("retrieval audit requires owned frozen input")
             envelope = json.loads(gzip.decompress(frozen["artifact_gzip"]))
             validate_execution_input(envelope)
-            if envelope["promptVersion"] not in {RETRIEVAL_PROMPT_VERSION, working_retrieval.VERSION, scoped_retrieval.VERSION, indexed_retrieval.VERSION, question_retrieval.VERSION}:
+            if envelope["promptVersion"] not in {lane_retrieval.VERSION, RETRIEVAL_PROMPT_VERSION, working_retrieval.VERSION, scoped_retrieval.VERSION, indexed_retrieval.VERSION, question_retrieval.VERSION}:
                 raise ValueError("retrieval audit requires retrieval input")
-            validator = (question_retrieval.validate_trace if envelope["promptVersion"] == question_retrieval.VERSION else
+            validator = (lane_retrieval.validate_trace if envelope["promptVersion"] == lane_retrieval.VERSION else
+                         question_retrieval.validate_trace if envelope["promptVersion"] == question_retrieval.VERSION else
                          indexed_retrieval.validate_trace if envelope["promptVersion"] == indexed_retrieval.VERSION else
                          scoped_retrieval.validate_trace if envelope["promptVersion"] == scoped_retrieval.VERSION else
                          working_retrieval.validate_trace if envelope["promptVersion"] == working_retrieval.VERSION else validate_trace)
@@ -405,7 +415,7 @@ class MySQLAIControlStore(DiagnosticProgressPersistence, AITaskDispatchPersisten
     @staticmethod
     def review_proof_with_connection(connection, input_id):
         from digital_twin.modules.ai_orchestration.domain.execution_input import (
-            REVIEW_PROMPT_VERSION, CONTINUITY_REVIEW_PROMPT_VERSION, CITABLE_REVIEW_PROMPT_VERSION, LEGACY_REVIEW_PROMPT_VERSION,
+            LANE_REVIEW_PROMPT_VERSION, REVIEW_PROMPT_VERSION, CONTINUITY_REVIEW_PROMPT_VERSION, CITABLE_REVIEW_PROMPT_VERSION, LEGACY_REVIEW_PROMPT_VERSION,
         )
         from digital_twin.modules.ai_orchestration.domain.insight_contract import narrative_digest
         row = connection.execute("SELECT i.task_id,i.artifact_gzip FROM ai_control_inputs i "
@@ -416,7 +426,7 @@ class MySQLAIControlStore(DiagnosticProgressPersistence, AITaskDispatchPersisten
             return {}
         envelope = json.loads(gzip.decompress(row["artifact_gzip"]))
         validate_execution_input(envelope)
-        if envelope["promptVersion"] not in {REVIEW_PROMPT_VERSION, CONTINUITY_REVIEW_PROMPT_VERSION, CITABLE_REVIEW_PROMPT_VERSION, LEGACY_REVIEW_PROMPT_VERSION}:
+        if envelope["promptVersion"] not in {LANE_REVIEW_PROMPT_VERSION, REVIEW_PROMPT_VERSION, CONTINUITY_REVIEW_PROMPT_VERSION, CITABLE_REVIEW_PROMPT_VERSION, LEGACY_REVIEW_PROMPT_VERSION}:
             return {}
         return {"taskId": row["task_id"], "draftHash": narrative_digest({**envelope["draft"], "input": envelope["current"]})}
 
@@ -447,6 +457,8 @@ class MySQLAIControlStore(DiagnosticProgressPersistence, AITaskDispatchPersisten
             from digital_twin.modules.ai_orchestration.domain.planning import enabled
             health = self.operational_health(connection, now, enabled(self.runtime_settings))
             scheduling = self.task_scheduling(connection, now, account_id)
+            from .mysql_lane_status import lane_status
+            lanes = lane_status(connection, now, account_id) if lanes_enabled(self.runtime_settings) else None
         state = budget_state(self.runtime_settings, (budget or {}).get("used_count", 0), (call_budget or {}).get("used_count", 0), now)
         wait = admission_wait(state)
         return {"tasks": [{"taskId": row["task_id"], "accountId": row["account_id"], "symbol": row["symbol"],
@@ -456,4 +468,5 @@ class MySQLAIControlStore(DiagnosticProgressPersistence, AITaskDispatchPersisten
                            "result": json.loads(row["result_json"])} for row in rows],
                 "callsToday": list(calls), **state,
                 "observationScheduling": wait.result() if wait else {"status": "ready"},
-                "activeTaskCount": int(active["count"]), "executionHealth": health, "taskScheduling": scheduling}
+                "activeTaskCount": int(active["count"]), "executionHealth": health, "taskScheduling": scheduling,
+                "executionLanes": lanes}

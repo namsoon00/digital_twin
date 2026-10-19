@@ -9,7 +9,7 @@ REGULAR_KEYS = {"accountId", "symbol", "name", "worldId", "marketWorldId", "capa
 def same_regular_observation(left, right):
     # Research, case/evidence wakes and previously attempted work retain their own audit.
     return (set(left) <= REGULAR_KEYS and set(right) <= REGULAR_KEYS
-            and left.get("capability") == right.get("capability") == "observe"
+            and left.get("capability") == right.get("capability") and left.get("capability") in {"observe", "market-observe"}
             and all(left.get(key) == right.get(key) for key in ("accountId", "symbol", "worldId"))
             and left.get("watchQuestions", []) == right.get("watchQuestions", []))
 

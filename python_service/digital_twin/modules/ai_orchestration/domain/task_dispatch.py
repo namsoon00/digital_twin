@@ -1,9 +1,9 @@
 """Bounded execution opportunities; this policy never judges market evidence."""
 
-VERSION = "central-task-fairness-v1"
+VERSION = "central-task-fairness-v2-isolated-market"
 SCOPE = "central-task-scheduler"
-CYCLE = ("recovery", "observe", "research", "observe", "research-plan")
-CAPABILITIES = ("observe", "research", "research-plan")
+CYCLE = ("recovery", "market-observe", "observe", "research", "market-observe", "observe", "research-plan")
+CAPABILITIES = ("market-observe", "observe", "research", "research-plan")
 AGING_MINUTES = 20
 
 

@@ -5,6 +5,9 @@ from .working_retrieval import POLICY
 
 
 def retry_key(packet, research):
+    from .execution_lanes import identified, material_key
+    if identified(packet):
+        return material_key(packet, research)
     from .research_review import VERSION as research_review_version
     from .research_evidence_use import ASSESSMENT_SCOPE_VERSION, QUESTION_DOCUMENT_READ_VERSION
     # Source-owned inventory hashes include changes to facts excluded from the

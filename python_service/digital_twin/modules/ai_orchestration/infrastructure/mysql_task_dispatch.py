@@ -13,7 +13,7 @@ class AITaskDispatchPersistence:
         wait = None
         # An observation needs two calls; source work can use the final call.
         eligible = [capability for capability in CAPABILITIES if not admission_wait(budget, capability)]
-        excluded = " AND capability<>'observe'" if "observe" not in eligible else ""
+        excluded = " AND capability NOT IN ('observe','market-observe')" if "observe" not in eligible else ""
         cutoff = stamp(now - timedelta(minutes=AGING_MINUTES))
         clock = stamp(now)
         for slot, lane in [*dispatch_order(cursor), (len(CYCLE) - 1, "other")]:
@@ -25,7 +25,7 @@ class AITaskDispatchPersistence:
                 where = "status='pending' AND (available_at<=%s OR last_error='ai-call-budget-exhausted')"
                 params = (clock,)
                 if lane == "other":
-                    where += " AND capability NOT IN (%s,%s,%s)"
+                    where += " AND capability NOT IN (" + ",".join(["%s"] * len(CAPABILITIES)) + ")"
                     params += CAPABILITIES
                 else:
                     where += " AND capability=%s"
@@ -48,7 +48,7 @@ class AITaskDispatchPersistence:
             raise wait
         # With one call left, excluded observations still explain the wait.
         if excluded and eligible:
-            pending = connection.execute("SELECT task_id FROM ai_control_tasks WHERE capability='observe' AND "
+            pending = connection.execute("SELECT task_id FROM ai_control_tasks WHERE capability IN ('observe','market-observe') AND "
                 "((status='pending' AND (available_at<=%s OR last_error='ai-call-budget-exhausted')) "
                 "OR (status='processing' AND lease_until<%s)) LIMIT 1", (clock, clock)).fetchone()
             if pending:

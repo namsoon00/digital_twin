@@ -39,6 +39,6 @@ def admission_wait(state, capability="observe"):
         return AIControlBudgetWait("task", state["budgetResetAt"])
     # Leave capacity for the independent critique before starting a draft.
     # begin_call still enforces the hard limit when workers race for capacity.
-    if state["modelCallsRemainingToday"] < (2 if capability == "observe" else 1):
+    if state["modelCallsRemainingToday"] < (2 if capability in {"observe", "market-observe"} else 1):
         return AIControlBudgetWait("call", state["budgetResetAt"])
     return None

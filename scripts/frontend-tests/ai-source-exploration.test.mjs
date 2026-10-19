@@ -58,3 +58,19 @@ test("source answer completion and further research stay visible when a market d
   for (const text of ["원문 조사 평가", "답변 자료 확보", "최종 AI 답변", "2026년 2분기", "공식 공시 발행", "투자 관찰 문장 검토 문제", "별도 상태"]) assert.ok(html.includes(text), text);
   assert.doesNotMatch(html, /<script>/);
 });
+test("market judgments, question work and receipt-backed delivery remain separate", () => {
+  const lane = {capability:"market-observe",authored:0,checksWithoutJudgment:3,notificationProposals:0,
+    latestTask:{status:"completed",resultStatus:"unchanged-wait",updatedAt:"2026-10-19T01:00:00Z"},
+    latestAlert:{publication:{status:"queued",deliveryStatus:"pending",reason:"<script>waiting</script>"}}};
+  const input = {since:"2026-10-18T01:00:00Z",lanes:[lane,
+    {capability:"observe",authored:12,internalResearch:12,checksWithoutJudgment:2,latestTask:null}]};
+  const renderLanes = () => vm.runInNewContext(source.slice(0, source.indexOf("async function load(")) + "\nlanesView(input)", {input,URL,questionAssessmentView});
+  const html = renderLanes();
+  for (const text of ["시장 판단 0건", "연구 판단 12건", "반복 호출을 막고", "실제 발송 영수증 미확인", "&lt;script&gt;"]) assert.ok(html.includes(text), text);
+  assert.doesNotMatch(html, /실제 발송 확인|<script>/);
+  lane.latestAlert.publication.receipt = {deliveredAt:"2026-10-19T02:00:00Z"};
+  assert.match(renderLanes(), /실제 발송 확인/);
+  assert.doesNotMatch(renderLanes(), /실제 발송 영수증 미확인/);
+  const queue = vm.runInNewContext(source.slice(0, source.indexOf("async function load(")) + '\nqueueView({cycle:["market-observe","observe","research"],queues:[]})', {URL,questionAssessmentView});
+  assert.match(queue, /시장 관찰 → 질문 연구 → 자료 수집/);
+});

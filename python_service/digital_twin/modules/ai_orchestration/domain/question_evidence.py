@@ -65,8 +65,10 @@ def checkpoints(packet, trace):
     """Derive operational checkpoints only from the frozen, final read decision."""
     if packet.get("questionEvidencePolicy") != VERSION or not trace or not trace[-1].get("decision"):
         return []
-    from . import scoped_retrieval, indexed_retrieval, question_retrieval
-    contract = question_retrieval if packet["retrieval"]["version"] == question_retrieval.VERSION else indexed_retrieval if packet["retrieval"]["version"] == indexed_retrieval.VERSION else scoped_retrieval
+    if packet.get("retrieval", {}).get("status") == "context-budget":
+        return []  # An unadmitted selection is not completed question progress.
+    from . import scoped_retrieval, indexed_retrieval, question_retrieval, lane_retrieval
+    contract = lane_retrieval if packet["retrieval"]["version"] == lane_retrieval.VERSION else question_retrieval if packet["retrieval"]["version"] == question_retrieval.VERSION else indexed_retrieval if packet["retrieval"]["version"] == indexed_retrieval.VERSION else scoped_retrieval
     decision = contract.validate_decision(trace[-1]["decision"])
     if decision["action"] == "read":
         return []  # An exhausted read budget is not a completed per-question assessment.

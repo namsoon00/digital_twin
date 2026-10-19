@@ -34,6 +34,8 @@ def brief(row, category):
         fields = ("kind", "caseId", "accountId", "symbol", "worldId", "revision", "status", "reviewDue",
                   "question", "mechanism", "assumption", "alternative", "invalidation", "missingEvidence",
                   "contract", "createdAt", "nextCheckAt", "expiresAt", "observations")
+    elif row.get("kind") == "research-context":
+        fields = ("kind", "caseId", "question", "status", "authority", "reviewedAssessment")
     else:
         fields = ("kind", "caseId", "runId", "requestId", "version", "accountId", "symbol", "worldId", "status",
                   "question", "problem", "proposal", "verification", "category", "completedAt", "stopReason",

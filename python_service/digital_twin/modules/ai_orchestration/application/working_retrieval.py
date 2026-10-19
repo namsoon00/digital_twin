@@ -2,7 +2,7 @@
 from copy import deepcopy
 import json
 from digital_twin.modules.reasoning.contracts import EvidenceContractError, content_hash, validate_evidence_packet, EVIDENCE_PACKET_MAX_BYTES, source_packet_bytes
-from ..domain import working_retrieval as legacy_contract, scoped_retrieval, indexed_retrieval, memory_reference, question_retrieval, question_assessment
+from ..domain import working_retrieval as legacy_contract, scoped_retrieval, indexed_retrieval, memory_reference, question_retrieval, question_assessment, lane_retrieval, execution_lanes
 from ..domain.retrieval import MAX_ROUNDS, PAGE_SIZE, MAX_RESULT_BYTES, MAX_TOTAL_RESULT_BYTES, ReadRequestError, issue, response_audit
 from ..domain.continuity import continuity_memory, merge_recalled
 from ..domain.business_research import evaluate_thesis
@@ -20,12 +20,12 @@ def author_packet(session, packet, ids, seen, research, trace, status, reserve=0
     views = {key: row for key, row in seen.items() if row.get("evidenceView")}
     protected = {key for key, row in seen.items() if row.get("evidenceCategory") == "quality"}
     result = {**packet, **session.select(set(ids) | protected, views=views), "retrieval": contract.trace_summary(trace, status)}
-    if contract in {scoped_retrieval, indexed_retrieval, question_retrieval}:
+    if contract in {scoped_retrieval, indexed_retrieval, question_retrieval, lane_retrieval}:
         result["researchScope"] = contract.research_scope(trace, status)
     result["businessThesisMemory"] = []
     for row in research:
         if row.get("kind") == "business-thesis":
-            value = memory_reference.brief(row, "memories") if contract in {indexed_retrieval, question_retrieval} else deepcopy(row)
+            value = memory_reference.brief(row, "memories") if contract in {indexed_retrieval, question_retrieval, lane_retrieval} else deepcopy(row)
             observations = evaluate_thesis(row, result)
             value.update(reviewDue=value.get("reviewDue", False) or observations != value.get("observations", []), observations=observations)
             result["businessThesisMemory"].append(value)
@@ -44,8 +44,8 @@ def retrieve_working_evidence(session, packet, history, research, decide, save_i
                              max_rounds=MAX_ROUNDS, record_round=None):
     indexed = packet.get("memoryReadPolicy") == memory_reference.VERSION
     question_work = question_assessment.enabled(packet)
-    contract = question_retrieval if question_work else indexed_retrieval if indexed else scoped_retrieval if packet.get("researchKnowledge") else legacy_contract
-    scoped = contract in {scoped_retrieval, indexed_retrieval, question_retrieval}
+    contract = lane_retrieval if execution_lanes.identified(packet) else question_retrieval if question_work else indexed_retrieval if indexed else scoped_retrieval if packet.get("researchKnowledge") else legacy_contract
+    scoped = contract in {scoped_retrieval, indexed_retrieval, question_retrieval, lane_retrieval}
     if question_work:
         research = question_assessment.prepare(research, session.question_work_inventory())
     if scoped:
@@ -61,8 +61,8 @@ def retrieve_working_evidence(session, packet, history, research, decide, save_i
             for source in (case.get("latestSourceAnswer") or {}).get("sources", []):
                 if source.get("evidenceId"):
                     sources.setdefault(source["evidenceId"], []).append(case["caseId"])
-    documents = session.question_document_index(sources, document_views=True) if question_work else session.question_document_index(sources)
-    baseline = session.business_baseline(documents, document_views=True) if question_work else session.business_baseline(documents)
+    documents = session.question_document_index(sources, document_views=True) if question_work or contract is lane_retrieval else session.question_document_index(sources)
+    baseline = session.business_baseline(documents, document_views=True) if question_work or contract is lane_retrieval else session.business_baseline(documents)
     packet = {**packet, "businessEvidence": baseline}
     from ..domain.research_evidence_use import answered_research_scope
     scope = answered_research_scope(research)
@@ -84,7 +84,7 @@ def retrieve_working_evidence(session, packet, history, research, decide, save_i
     tools.known.update({row["factId"]: row["category"] for row in documents})
     continuity = (memory_reference.continuity(history, research) if indexed else
                   continuity_memory(history, research, compact_cases=scoped))
-    context = {"catalog": session.catalog(), "continuity": continuity, "reportIndex": session.report_index(),
+    context = {**({"executionLane": packet["executionLane"]} if execution_lanes.identified(packet) else {}), "catalog": session.catalog(), "continuity": continuity, "reportIndex": session.report_index(),
                "questionDocumentIndex": documents,
                "reportIndexLimit": 32, "reportIndexOrdering": "source-time-descending; excluded older reports remain queryable",
                "roundLimit": rounds, "selectionPolicy": contract.POLICY}
@@ -150,6 +150,13 @@ def retrieve_working_evidence(session, packet, history, research, decide, save_i
             except EvidenceContractError as error:
                 if "exceeds-context-budget" not in error.code:
                     raise
+                if contract is lane_retrieval:
+                    # This is an admission limit, not malformed model output.
+                    # Save the valid choice and stop without a paid correction.
+                    step.update(status="valid", decision=decision)
+                    record(step)
+                    status = "context-budget"
+                    break
                 raise ReadRequestError([issue("selectedFactIds", "최종 입력 한도 초과: 질문과 관계 없는 선택을 해제하거나 보고서 지표를 발췌하세요")])
             plans = []
             for i, request in enumerate(decision["requests"]):

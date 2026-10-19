@@ -41,22 +41,23 @@ class MySQLEvidenceWakeStore(MySQLOperationalConnection):
                 "(scope_id,account_id,symbol,world_id,snapshot_id,event_id,occurred_at) VALUES (%s,%s,%s,%s,%s,%s,%s)",
                 (key, target["accountId"], target["symbol"], target["worldId"], target["sourceSnapshotId"], event["event_id"], event["occurred_at"]))
 
-    @staticmethod
-    def wake_pending(connection, subjects):
+    def wake_pending(self, connection, subjects):
+        from ..domain.execution_lanes import MARKET, enabled
+        capability = MARKET if enabled(self.runtime_settings) else "observe"
         woken = 0
         for subject in subjects:
             key = identity(subject["accountId"], subject["symbol"], subject["worldId"])
             row = connection.execute("SELECT * FROM ai_control_evidence_wakes WHERE scope_id=%s AND pending=1 FOR UPDATE", (key,)).fetchone()
             if not row:
                 continue
-            scope = (subject["accountId"], subject["symbol"], subject["worldId"])
+            scope = (subject["accountId"], subject["symbol"], subject["worldId"], capability)
             tasks = connection.execute("SELECT task_id,available_at FROM ai_control_tasks WHERE account_id=%s AND symbol=%s "
-                "AND JSON_UNQUOTE(JSON_EXTRACT(payload_json,'$.worldId'))=%s AND capability='observe' "
+                "AND JSON_UNQUOTE(JSON_EXTRACT(payload_json,'$.worldId'))=%s AND capability=%s "
                 "AND status='pending' AND attempts=0 FOR UPDATE", scope).fetchall()
             if not tasks:
                 continue  # A processing/retrying task leaves this wake for its successor.
             failed = connection.execute("SELECT task_id FROM ai_control_tasks WHERE account_id=%s AND symbol=%s "
-                "AND JSON_UNQUOTE(JSON_EXTRACT(payload_json,'$.worldId'))=%s AND capability='observe' AND status='failed' "
+                "AND JSON_UNQUOTE(JSON_EXTRACT(payload_json,'$.worldId'))=%s AND capability=%s AND status='failed' "
                 "ORDER BY updated_at DESC,task_id DESC LIMIT 1", scope).fetchone()
             now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
             recovery_id = identity(failed["task_id"], "recovery") if failed else ""
@@ -66,7 +67,7 @@ class MySQLEvidenceWakeStore(MySQLOperationalConnection):
             if not tasks:
                 continue
             recent = connection.execute("SELECT MAX(updated_at) AS last_at FROM ai_control_tasks WHERE account_id=%s AND symbol=%s "
-                "AND JSON_UNQUOTE(JSON_EXTRACT(payload_json,'$.worldId'))=%s AND capability='observe' AND status='completed'", scope).fetchone()
+                "AND JSON_UNQUOTE(JSON_EXTRACT(payload_json,'$.worldId'))=%s AND capability=%s AND status='completed'", scope).fetchone()
             due = datetime.now(timezone.utc)
             if recent and recent["last_at"]:
                 due = max(due, datetime.fromisoformat(recent["last_at"].replace("Z", "+00:00")) + timedelta(minutes=15))

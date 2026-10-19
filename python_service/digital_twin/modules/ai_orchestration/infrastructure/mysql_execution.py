@@ -8,6 +8,7 @@ from digital_twin.modules.ai_orchestration.domain.execution_resilience import (
 )
 from digital_twin.modules.ai_orchestration.infrastructure.mysql_runtime import RUNTIME
 from digital_twin.modules.ai_orchestration.domain.runtime_coverage import runtime_view
+from ..domain.execution_lanes import MARKET, OBSERVATIONS, enabled as lanes_enabled
 
 
 EXECUTION_SCHEMA = """CREATE TABLE IF NOT EXISTS ai_control_execution_state (
@@ -15,6 +16,7 @@ EXECUTION_SCHEMA = """CREATE TABLE IF NOT EXISTS ai_control_execution_state (
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4"""
 SCOPE = "shared-local-model"
 PROGRESS = "central-observation-progress"
+MARKET_PROGRESS = "market-observation-progress"
 
 
 class AIExecutionPersistence:
@@ -67,33 +69,37 @@ class AIExecutionPersistence:
                  job["taskId"], job["leaseToken"], now)).rowcount)
 
     def record_observation_progress(self, connection, job, result, now):
-        if job["capability"] != "observe" or not (result.get("summary") or result.get("status") in {"unchanged", "awaiting-evidence", "unchanged-wait"}):
+        if job["capability"] not in OBSERVATIONS or not (result.get("summary") or result.get("status") in {"unchanged", "awaiting-evidence", "unchanged-wait"}):
             return
         clock = datetime.fromisoformat(now.replace("Z", "+00:00"))
-        state = self._locked_execution_state(connection, PROGRESS, clock)
+        scope = MARKET_PROGRESS if job["capability"] == MARKET else PROGRESS
+        state = self._locked_execution_state(connection, scope, clock)
         state["lastObservationCheckAt"] = max(state.get("lastObservationCheckAt") or now, now, key=instant)
         if result.get("summary"):
             state["lastJudgmentAt"] = max(state.get("lastJudgmentAt") or now, now, key=instant)
-        self._save_execution_state(connection, PROGRESS, state, clock)
+        self._save_execution_state(connection, scope, state, clock)
 
     def operational_health(self, connection, now, enabled=True):
+        lane = MARKET if lanes_enabled(self.runtime_settings) else "observe"
+        progress_scope = MARKET_PROGRESS if lane == MARKET else PROGRESS
         states = {row["scope_key"]: json.loads(row["state_json"]) for row in connection.execute(
-            "SELECT scope_key,state_json FROM ai_control_execution_state WHERE scope_key IN (%s,%s,%s)", (SCOPE, PROGRESS, RUNTIME)).fetchall()}
+            "SELECT scope_key,state_json FROM ai_control_execution_state WHERE scope_key IN (%s,%s,%s)", (SCOPE, progress_scope, RUNTIME)).fetchall()}
         runtime = runtime_view(states.get(RUNTIME, {}), now)
         started = instant(runtime["startedAt"])
         since = max(now - timedelta(hours=1), started) if started and started <= now else now - timedelta(hours=1)
-        calls = connection.execute("SELECT workload,status,COUNT(*) AS count FROM ai_control_calls WHERE started_at>=%s "
-            "AND started_at<=%s GROUP BY workload,status", (stamp(since), stamp(now))).fetchall()
+        calls = connection.execute("SELECT c.workload,c.status,COUNT(*) AS count FROM ai_control_calls c "
+            "JOIN ai_control_tasks t ON t.task_id=c.task_id WHERE c.started_at>=%s "
+            "AND c.started_at<=%s AND t.capability=%s GROUP BY c.workload,c.status", (stamp(since), stamp(now), lane)).fetchall()
         overdue = connection.execute("SELECT COUNT(*) AS count FROM ai_control_tasks WHERE status='pending' "
-            "AND available_at<%s AND capability='observe'", (stamp(now - timedelta(minutes=20)),)).fetchone()
+            "AND available_at<%s AND capability=%s", (stamp(now - timedelta(minutes=20)), lane)).fetchone()
         expired = connection.execute("SELECT COUNT(*) AS count FROM ai_control_tasks WHERE status='processing' "
-            "AND lease_until<%s AND capability='observe'", (stamp(now),)).fetchone()
+            "AND lease_until<%s AND capability=%s", (stamp(now), lane)).fetchone()
         # Delay before the current runtime interval is not active-worker latency.
         grace = bool(started and now - started < timedelta(minutes=20))
-        health = execution_health(now, states.get(SCOPE, {}), states.get(PROGRESS, {}), calls,
+        health = execution_health(now, states.get(SCOPE, {}), states.get(progress_scope, {}), calls,
                                   0 if grace else int(overdue["count"]), enabled,
                                   expired_leases=0 if grace else int(expired["count"]))
-        health.update(version="central-ai-operational-health-v2", runtime=runtime, callWindowStart=stamp(since),
+        health.update(version="central-ai-operational-health-v3-isolated-market", executionLane=lane, runtime=runtime, callWindowStart=stamp(since),
                       callWindowMinutes=round((now - since).total_seconds() / 60, 2),
                       carriedOverdueObservationTasks=int(overdue["count"]) if grace else 0,
                       runtimeCoverage=self.runtime_report(connection, now - timedelta(hours=24), now))

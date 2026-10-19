@@ -70,6 +70,7 @@ ONTOLOGY_CONTEXT_KEYS = (
     "activeInvestmentOpinion",
     "ontologyReviewContext",
     "v2DecisionSynthesis",
+    "rulePolicyReceiptBaseline",
     "hypothesisLifecycle",
     "relationLifecycleTransition",
     "reasoningDeliveryTrigger",

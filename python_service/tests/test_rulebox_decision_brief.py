@@ -353,6 +353,8 @@ class NativeManagementResponseTests(unittest.TestCase):
 
     def test_policy_decision_survives_unqualified_forecasts_and_persists_with_synthesis(self):
         checks = ManagementObservationFlowChecks()
+        from policy_resolution_checks import assert_policy_resolution_flow
+        assert_policy_resolution_flow(self, checks)
         from rule_delivery_checks import assert_dispatch_revalidation, assert_receipt_comparison
         assert_dispatch_revalidation(self, checks)
         assert_receipt_comparison(self, checks)
@@ -675,7 +677,7 @@ def management_only_fixture():
 
 
 class ManagementObservationFlowChecks(unittest.TestCase):
-    def engine_run(self, *, validation_only=False, delivery_authorized=True, context=None):
+    def engine_run(self, *, validation_only=False, delivery_authorized=True, context=None, baseline=None):
         from dataclasses import replace
         from types import SimpleNamespace
         from unittest.mock import Mock, patch
@@ -705,7 +707,7 @@ class ManagementObservationFlowChecks(unittest.TestCase):
             def enqueue(self, job):
                 policy = NotificationAdmissionPolicy()
                 rule = default_notification_rule('investmentInsight')
-                job.context['_relationDeliveredSnapshot'] = {}
+                job.context['_relationDeliveredSnapshot'] = baseline or {}
                 decision = policy.evaluate(job, rule, policy.prepare(job, rule))
                 self.admission = policy.apply_result(job, decision)
                 self.job = job
@@ -723,13 +725,14 @@ class ManagementObservationFlowChecks(unittest.TestCase):
         projection = {account: {'status': 'ok', 'inferenceBox': {
             **deepcopy(rel['graphStoreInference']), 'generationAligned': True, 'nativeTypeDbReasoningCompleted': True}}}
         queue, ai = AdmittedQueue(), Mock()
+        queue.rule_policy_receipt_baseline = lambda *_: deepcopy(baseline or {})
         orchestrator = InvestmentReasoningOrchestrator(Repository())
         service = InvestmentInsightDispatchService(FakeIngress(), queue, ai, orchestrator, legacy_ai_handoff_enabled=False)
         engine = V2ReasoningEngine(replace(descriptor(), deployment_id='management:test', status='active'),
             SimpleNamespace(assemble=lambda _: {'status': 'ready', 'preflight': {'ready': True},
                                                 'snapshots': [snapshot], 'previousByAccount': {}}),
             SimpleNamespace(execute=lambda _request, _snapshots: projection),
-            V2GraphDecisionCandidateBuilder({}, SimpleNamespace(sent={})),
+            V2GraphDecisionCandidateBuilder({}, SimpleNamespace(sent={}), delivery_history_store=queue),
             delivery_authorized_provider=lambda: delivery_authorized, reasoning_orchestrator=orchestrator,
             insight_dispatch_service=service)
         request = independent_reasoning_request('management:test', [source_event('MSTR', [account])])
@@ -836,12 +839,12 @@ class ManagementObservationFlowChecks(unittest.TestCase):
                 self.assertEqual({}, queue.jobs)
                 ai.enqueue.assert_not_called()
 
-    def assert_policy_only_candidate_survives_worker_gates_and_records_transport_receipt(self):
+    def assert_policy_only_candidate_survives_worker_gates_and_records_transport_receipt(self, context=None, baseline=None):
         from datetime import datetime, timezone
         from types import SimpleNamespace
         from digital_twin.infrastructure.notifications import NotificationResult
         from digital_twin.modules.notifications.application.notification_service import NotificationQueueRunner
-        result, queue, ai, _ = self.engine_run()
+        result, queue, ai, _ = self.engine_run(context=context, baseline=baseline)
         job, sent, receipts = queue.job, [], []
         queue.pending = lambda limit=10: [job] if job.status == 'pending' else []
         queue.mark_processing = lambda item: setattr(item, 'status', 'processing')
@@ -864,7 +867,7 @@ class ManagementObservationFlowChecks(unittest.TestCase):
         self.assertEqual(1, runner.run_once())
         self.assertEqual('done', job.status, (job.last_error, runner.last_run_details))
         self.assertEqual(1, len(sent))
-        self.assertIn('계좌 비중을 설정 상한 이내로 조정', sent[0])
+        self.assertIn('비중 조정 요구 해제' if baseline else '계좌 비중을 설정 상한 이내로 조정', sent[0])
         self.assertTrue(receipts[0]['delivered'])
         self.assertTrue(receipts[0]['metadata']['receiptVerified'])
         self.assertTrue(receipts[0]['metadata']['destinationVerified'])

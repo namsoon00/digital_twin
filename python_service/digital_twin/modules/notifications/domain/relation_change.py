@@ -10,6 +10,7 @@ from digital_twin.modules.notifications.domain.relation_follow_up import follow_
 from digital_twin.modules.notifications.domain.rule_notification_event import customer_rule_events
 from digital_twin.modules.notifications.domain.rule_policy_event import policy_events
 from digital_twin.modules.notifications.domain.rule_outcome_event import outcome_events
+from digital_twin.modules.notifications.domain.rule_policy_lifecycle import policy_lifecycle
 
 
 VERSION = "relation-change-evidence-v1"
@@ -128,6 +129,7 @@ def relation_change_snapshot(context):
                 "conditionId", "label", "field", "operator", "observedValue", "matched", "evidenceIds",
                 "matchedByTypeDB", "observedAt", "source", "freshnessStatus", "judgementEvidenceUsable",
                 "sourceFetchedAt", "freshnessRequired", "maxAgeMinutes", "validUntil", "marketSessionStatus",
+                "resolutionMatchedByTypeDB", "resolutionOperator",
             ) if isinstance(condition.get(key), (str, int, float, bool, list, dict))}
             captured["expectedValue"] = deepcopy(condition.get("expectedValue", condition.get("value")))
             captured["resolvedThreshold"] = resolved_rule_threshold(captured, facts)
@@ -146,6 +148,8 @@ def relation_change_snapshot(context):
                            "nextChecks": strings(item.get("nextChecks")) or existing.get("nextChecks", []),
                            "invalidationContract": deepcopy(mapping(item.get("ruleInvalidationContract"))) or existing.get("invalidationContract", {}),
                            "claimContract": deepcopy(mapping(item.get("claimContract"))) or existing.get("claimContract", {})}
+        if item.get('managementResolution'):
+            rules[identity]['managementResolution'] = deepcopy(item['managementResolution'])
     fact_rows = []
     for key, value in facts.items():
         # Structured/vendor payloads are not an ABox fact table. Never copy
@@ -299,7 +303,8 @@ def relation_change_evidence(context, baseline=None, *, require_recovery_receipt
             "baselineAvailable": bool(previous), "baselineDeliveredAt": previous.get("deliveredAt") or "",
             "current": current, "previous": previous, "transitions": transitions, "changes": changes,
             "followUp": follow_up, "suppressedTransitions": suppressed,
-            "customerEventVersion": "rule-notification-event-v1", "customerEvents": admitted_events}
+            "customerEventVersion": "rule-notification-event-v1", "customerEvents": admitted_events,
+            'policyLifecycle': policy_lifecycle(current, previous, admitted_events)}
 
 
 def relation_change_summary(packet):

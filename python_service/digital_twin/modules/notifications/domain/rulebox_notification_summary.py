@@ -8,6 +8,7 @@ from digital_twin.modules.notifications.domain.relation_change_presentation impo
 from digital_twin.modules.notifications.domain.relation_observation_language import hypothesis_words, next_check_words
 from digital_twin.modules.notifications.domain.relation_observation_proof import window_limitation, window_name
 from digital_twin.modules.notifications.domain.rule_event_presentation import ACTION_LABELS, event_conclusion
+from digital_twin.modules.notifications.domain.rule_policy_lifecycle import release_conclusion
 
 
 VERSION = "compact-rulebox-v1"
@@ -61,6 +62,10 @@ def _purpose(events):
 
 def _measurements(current, previous, judgment, events, currency, transitions):
     before_rules = {r.get("id"): r for r in previous.get("rules", [])}
+    for event in events:
+        for rid in event.get('sourceRuleIds') or []:
+            if rid not in before_rules and event.get('previousConditions'):
+                before_rules[rid] = {'conditions': event['previousConditions']}
     cause_ids = {rid for e in events for rid in e.get("sourceRuleIds") or []}
     used = cause_ids | set(judgment.get("sourceRuleIds") or [])
     changed, unchanged, reference = [], [], []
@@ -82,7 +87,8 @@ def _measurements(current, previous, judgment, events, currency, transitions):
             field, actual = condition.get("field"), condition.get("observedValue")
             if (condition.get("judgementEvidenceUsable") is False
                     or condition.get("freshnessStatus") in {"stale", "expired", "missing", "unknown"}
-                    or not (condition.get("matchedByTypeDB") is True or condition.get("matched") is True)):
+                    or not (condition.get("matchedByTypeDB") is True or condition.get("matched") is True
+                            or condition.get('resolutionMatchedByTypeDB') is True)):
                 continue
             if rule.get("id") in cause_ids and condition.get("modelSignalMatched"):
                 for window in condition.get("sourceTemporalWindows") or []:
@@ -108,8 +114,10 @@ def _measurements(current, previous, judgment, events, currency, transitions):
             saved = condition.get("resolvedThreshold") or {}
             expected = saved.get("value")
             if expected is not None and condition.get("operator"):
-                text += " / 기준 " + value_text(field, expected) + " " + {
-                    ">": "초과", ">=": "이상", "<": "미만", "<=": "이하", "=": "일치", "==": "일치"}.get(condition["operator"], condition["operator"])
+                resolution = condition.get('resolutionMatchedByTypeDB') is True
+                operator = condition.get('resolutionOperator') if resolution else condition['operator']
+                text += (" / 해제 기준 " if resolution else " / 기준 ") + value_text(field, expected) + " " + {
+                    ">": "초과", ">=": "이상", "<": "미만", "<=": "이하", "=": "일치", "==": "일치"}.get(operator, operator)
             at = condition.get("observedAt")
             if at and at != current.get("observedAt"):
                 text += " · " + clock(at)
@@ -161,6 +169,13 @@ def _next(judgment, events, currency):
                            else condition_clause(field, objective.get("operator"), response["targetValue"], currency))
     if targets:
         return " · ".join(targets[:2]) + "인지 새 자료에서 각각 확인합니다. 다른 제한 조건도 함께 재검사합니다."
+    if any(e.get('policyState') == 'released' for e in events):
+        boundaries = [condition_clause(c['field'], c['operator'], c['resolvedThreshold']['value'], currency)
+                      for e in events if e.get('policyState') == 'released' for c in e.get('conditions') or []
+                      if c.get('resolutionMatchedByTypeDB') is True and c.get('field') in FIELDS
+                      and numeric((c.get('resolvedThreshold') or {}).get('value')) is not None]
+        return (' · '.join(_unique(boundaries)[:2]) + ' 조건이 다시 성립하는지 새 자료에서 확인합니다.' if boundaries
+                else '새 자료에서 해제된 관리 조건이 다시 성립하는지 확인합니다.')
     restriction_ids = {r.get("ruleId") for r in judgment.get("restrictions") or []}
     cause_ids = {rid for e in events for rid in e.get("sourceRuleIds") or []}
     conditions = []
@@ -198,14 +213,28 @@ def compact_rulebox_summary(packet):
         market += " (전일 " + decimal(daily, signed=True) + "%)"
     if profit is not None and (numeric(facts.get("quantity")) or 0) > 0:
         market += " · 보유 수익률 " + decimal(profit, signed=True) + "%"
-    lead = _conclusion(judgment, events)
+    released_lead = release_conclusion(packet)
+    lead = released_lead or _conclusion(judgment, events)
     prior_judgment = (previous.get("decisionBrief") or {}).get("judgment") or {}
-    if (judgment.get("conclusionFingerprint") and judgment.get("conclusionFingerprint") == prior_judgment.get("conclusionFingerprint")
+    if (not released_lead and judgment.get("conclusionFingerprint") and judgment.get("conclusionFingerprint") == prior_judgment.get("conclusionFingerprint")
             and judgment.get("status") in {"management-response", "restriction-only"}):
         lead = "기존 관리 대응 유지: " + lead
+    lifecycle = packet.get('policyLifecycle') or {}
+    causes = {t.get('cause') for t in lifecycle.get('transitions') or []}
+    target_changes = [t for transition in lifecycle.get('transitions') or [] for t in transition.get('targetChanges') or []]
+    target_text = ' · '.join(FIELDS[t['field']][0] + ' 관리 목표 ' + decimal(t['previous']) + '% → ' + decimal(t['current']) + '%'
+                            for t in target_changes[:2] if t['field'] in FIELDS)
+    purpose = ('설정된 관리 목표가 바뀌어 해당 제한의 해제 기준을 충족했습니다. 시장 개선을 뜻하지 않습니다.'
+               if released_lead and 'policy-target-changed' in causes else
+               '새 자료에서 이전 관리 조건의 해제 기준을 충족한 사실을 확인했습니다.' if released_lead else
+               '설정된 관리 목표가 바뀌었습니다. 시장이 새로 악화됐다는 뜻은 아닙니다.' if causes == {'policy-target-changed'} else
+               '해제됐던 관리 조건이 다시 성립해 해당 대응을 재적용합니다.' if causes == {'policy-reapplied'} else
+               '현재 자료에서 이 관리 대응의 적용을 처음 확인해 알려드립니다.' if causes == {'first-delivered-confirmation'} else _purpose(events))
+    together = ('해제된 조건에 대한 후속 안내입니다. 추가매수 허용이나 매수·매도 권유를 뜻하지 않습니다.' if released_lead
+                else _comparison(judgment, current, events))
     return {"version": VERSION, "lead": lead, "judgment": judgment,
-        "sections": [("notification-purpose", "알림 이유", [_purpose(events)]),
-                     ("decision-impact", "핵심 수치", [_measurements(current, previous, judgment, events, currency, packet.get("transitions") or [])]),
-                     ("decision-basis", "함께 보면", [_comparison(judgment, current, events)]),
+        "sections": [("notification-purpose", "알림 이유", [purpose]),
+                     ("decision-impact", "핵심 수치", [' · '.join(v for v in (target_text, _measurements(current, previous, judgment, events, currency, packet.get("transitions") or [])) if v)]),
+                     ("decision-basis", "함께 보면", [together]),
                      ("current-snapshot", "현재", [market]),
                      ("next-check-contract", "다음 확인", [_next(judgment, events, currency)])]}

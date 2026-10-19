@@ -5033,6 +5033,10 @@ def materialize_typedb_native_matches(
         subject = entities_by_id.get(str(match.get("sourceId") or ""))
         if not rule or not subject:
             continue
+        if match.get('managementResolution'):
+            from digital_twin.modules.reasoning.domain.management_resolution import materialize_management_resolution
+            materialize_management_resolution(graph, rule, subject, match, evidence_index)
+            continue
         materialize_rule_inference(graph, rule, subject, {
             "matchedConditions": list(match.get("matchedConditions") or []),
             "evidenceRelationIds": list(match.get("evidenceRelationIds") or []),

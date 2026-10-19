@@ -238,6 +238,8 @@ def inferencebox_trace_payload(row: Dict[str, object]) -> Dict[str, object]:
         "materializationSource": str(row.get("materializationSource") or ""),
         "matchedConditionIds": matched_condition_ids,
         "matchedConditions": matched_conditions,
+        **({'matched': False, 'managementResolution': deepcopy(properties['managementResolution'])}
+           if properties.get('managementResolution') and properties.get('matched') is False else {}),
         "ruleConditionShapes": [
             dict(item)
             for item in properties.get("ruleConditionShapes") or row.get("ruleConditionShapes") or []

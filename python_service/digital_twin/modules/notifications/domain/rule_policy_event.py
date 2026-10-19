@@ -30,8 +30,10 @@ def policy_events(current, previous):
         return []
     current_rules = {r["id"]: r for r in rows(current.get("rules"))}
     prior_rules = {r["id"]: r for r in rows(previous.get("rules"))}
+    history = {rid: entry for entry in (previous.get('notificationIntentContinuity') or {}).values()
+               if entry.get('policyState') for rid in entry.get('sourceRuleIds') or []}
     result = []
-    rule_ids = dict.fromkeys(r.get("ruleId") for r in rows(brief.get("restrictions")) + rows(prior.get("restrictions")))
+    rule_ids = dict.fromkeys([*(r.get("ruleId") for r in rows(brief.get("restrictions")) + rows(prior.get("restrictions"))), *history])
     for rule_id in rule_ids:
         rule, old_rule = current_rules.get(rule_id) or {}, prior_rules.get(rule_id) or {}
         intent = rule_notification_intent(rule.get("claimContract"))
@@ -40,9 +42,14 @@ def policy_events(current, previous):
             continue
         actions = sorted({r.get("action") for r in rows(brief.get("restrictions")) if r.get("ruleId") == rule_id})
         old_actions = sorted({r.get("action") for r in rows(prior.get("restrictions")) if r.get("ruleId") == rule_id})
+        if rule_id in history:
+            old_actions = sorted(history[rule_id].get('blockedActions') or [])
         conditions = rows(rule.get("conditions"))
         release = not actions and bool(old_actions)
         if release:
+            if rule.get('managementResolution') and not any(
+                    r.get('ruleId') == rule_id for r in (brief.get('managementDecision') or {}).get('resolutions') or []):
+                continue
             # Absence, stale data or a missing rule is never a policy release.
             if not (rule.get("nativeProof") and rule.get("matched") is False and any(
                 c.get("matched") is False and c.get("judgementEvidenceUsable") is True
@@ -63,11 +70,16 @@ def policy_events(current, previous):
         result.append({"version": VERSION, **scope, "eventId": "rule-policy:" + fingerprint([key, signature])[:24],
             "intentKey": key, "intent": intent, "purpose": intent["purpose"], "changeKind": "policy-changed",
             "policyState": "released" if release else "updated" if actions == old_actions else "applied",
+            'previousPolicyState': history.get(rule_id, {}).get('policyState') or ('applied' if old_actions else ''),
             "inferenceGenerationId": current.get("inferenceGenerationId"), "sourceAboxSnapshotId": current.get("sourceAboxSnapshotId"),
             "transitionId": "", "lifecycleKey": "", "observedAt": current.get("observedAt"),
             "hypothesis": {}, "sourceRuleIds": [rule_id], "conditions": deepcopy(conditions),
             "ruleLabel": rule.get("label") or intent["expectedOutcome"],
             "blockedActions": actions, "previousBlockedActions": old_actions,
+            'previousConditions': deepcopy(history.get(rule_id, {}).get('conditions') or rows(old_rule.get('conditions'))),
+            'previousManagementResponses': deepcopy(history.get(rule_id, {}).get('managementResponses') or
+                [r for r in rows((prior.get('managementDecision') or {}).get('responses')) if r.get('ruleId') == rule_id]),
+            'remainingRestrictions': deepcopy(rows(brief.get('restrictions'))),
             **({"managementResponses": deepcopy(responses),
                 "managementResponseChanged": _signature({}, [], [], responses) != _signature({}, [], [], old_responses)} if responses else {}),
             "decisionImpact": {"status": "changed" if prior else "first-observation",

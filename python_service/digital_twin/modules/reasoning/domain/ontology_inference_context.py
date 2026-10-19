@@ -585,7 +585,7 @@ def relation_context_from_inferencebox(
         facts.get("market") or position.market or "global"
     ).world_id
     matches = matches_from_inference(relations, traces, facts=facts, source_name=source_name, context_version=context_version)
-    if not matches:
+    if not matches and not any(t.get('managementResolution') for t in traces):
         return {}
     assessment_bundle = decision_assessment_bundle(matches, relations)
     decision = decision_from_inference(

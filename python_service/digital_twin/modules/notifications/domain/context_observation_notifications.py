@@ -750,7 +750,7 @@ def context_observation_delivery_decision(value: object) -> Dict[str, object]:
     # Before enqueueing, no receipt has been loaded yet. Admit proven recovery
     # to that check; the durable delivery gate freezes a packet (even when its
     # previous receipt is empty) and enforces the actual delivered baseline.
-    comparison = rule_delivery_comparison(payload, saved.get("previous"), stage="publication",
+    comparison = rule_delivery_comparison(payload, saved.get("previous") or payload.get('rulePolicyReceiptBaseline'), stage="publication",
                                          require_recovery_receipt=bool(saved))
     relation_change = comparison["relationChangeEvidence"]
     authorization_sources = ["typedb-relation-transition"] if relation_change["eligible"] else []

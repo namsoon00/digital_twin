@@ -3,6 +3,7 @@
 from digital_twin.modules._exports import resolve_export
 
 
+
 _EXPORTS = {'MODEL_REVIEW_PROMPT_VERSION': ('digital_twin.modules.model_registry.domain.model_review',
                                  'MODEL_REVIEW_PROMPT_VERSION'),
  'ModelReviewJob': ('digital_twin.modules.model_registry.domain.model_review', 'ModelReviewJob')}
@@ -153,6 +154,8 @@ _EXPORTS['validate_evolution_plan'] = ('digital_twin.modules.model_registry.doma
 _EXPORTS['evolution_fingerprint'] = ('digital_twin.modules.model_registry.domain.ontology_evolution', 'fingerprint')
 _EXPORTS['comparison_measurement'] = ('digital_twin.modules.model_registry.domain.ontology_evolution', 'comparison_measurement')
 _EXPORTS['validate_observation_development_context'] = ('digital_twin.modules.model_registry.domain.observation_development', 'validate_observation_development_context')
+
+_EXPORTS['management_resolution_probe'] = ('digital_twin.modules.model_registry.domain.management_response', 'management_resolution_probe')
 
 __all__ = list(_EXPORTS)
 

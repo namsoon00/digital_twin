@@ -47,10 +47,10 @@ def _assemble(identity, management, candidates, restrictions, relation, checks, 
         group["executionEligible"] |= bool(candidate.get("executionEligible"))
     groups = sorted(groups.values(), key=lambda r: r["action"])
     blocked = sorted({r["action"] for r in restrictions})
-    status = ("management-response" if management else "competing-candidates" if len(groups) > 1
+    status = ("management-response" if management.get('responses') else "management-resolution" if management.get('resolutions') else "competing-candidates" if len(groups) > 1
               else "candidate-review" if groups else "restriction-only" if blocked else "evidence-review")
     used = _unique([r.get("ruleId") for r in restrictions] + [rid for g in groups for rid in g["supportingRuleIds"]]
-                   + [r.get("ruleId") for r in management.get("responses", [])])
+                   + [r.get("ruleId") for r in [*management.get("responses", []), *management.get('resolutions', [])]])
     conditions = []
     for trace in _rows((relation.get("graphStoreInference") or {}).get("traces")):
         rid = trace.get("ruleId") or trace.get("rule_id")
@@ -59,7 +59,8 @@ def _assemble(identity, management, candidates, restrictions, relation, checks, 
         for c in _rows(trace.get("matchedConditions")):
             if (c.get("judgementEvidenceUsable") is False
                     or c.get("freshnessStatus") in {"stale", "expired", "missing", "unknown"}
-                    or not (c.get("matchedByTypeDB") is True or c.get("matched") is True)):
+                    or not (c.get("matchedByTypeDB") is True or c.get("matched") is True
+                            or c.get('resolutionMatchedByTypeDB') is True)):
                 continue
             conditions.append({"ruleId": rid, **deepcopy(c),
                                "resolvedThreshold": resolved_rule_threshold(c, relation.get("facts") or {})})
@@ -73,7 +74,8 @@ def _assemble(identity, management, candidates, restrictions, relation, checks, 
     semantics = {"status": status, "blockedActions": blocked,
         "candidates": [{k: r[k] for k in ("action", "hypothesisIds", "executionEligible")} for r in groups],
         "responses": [{k: r.get(k) for k in ("code", "objective", "targetValue", "releaseCondition")}
-                      for r in management.get("responses", [])]}
+                      for r in management.get("responses", [])],
+        'resolvedPolicies': sorted(r['ruleId'] for r in management.get('resolutions', []))}
     result["conclusionFingerprint"] = hashlib.sha256(json.dumps(semantics, sort_keys=True, ensure_ascii=True).encode()).hexdigest()
     return result
 

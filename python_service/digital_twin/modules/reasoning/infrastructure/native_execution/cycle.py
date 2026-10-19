@@ -896,6 +896,10 @@ def _run_rulebox_unlocked(
                 "typedbQueryMetrics": _store.query_metrics_snapshot(),
                 **runtime_rulebox_metadata,
             }
+        from .policy_resolution import append_policy_resolutions
+        append_policy_resolutions(_store, native_match_result, execution_rules, target_symbols,
+                                  world_id, materialization_evidence_read_index, stable_abox_write_lease_held)
+        runtime_rulebox_metadata['managementResolutionEvaluation'] = native_match_result['policyResolutionEvaluation']
         native_matches = [
             item
             for item in native_match_result.get("matches") or []
@@ -1205,7 +1209,7 @@ def _run_rulebox_unlocked(
         inferencebox_limit = max(
             80, min(500, int(number_or_none(payload.get("inferenceSnapshotLimit")) or 500))
         )
-        invalid_abox_generation = bool(inference_graph.relations) and not source_generation_valid
+        invalid_abox_generation = bool(inference_graph.relations or inference_graph.entities) and not source_generation_valid
         if invalid_abox_generation:
             previous_inferencebox = _store.inferencebox_snapshot(
                 symbols=rule_target_symbols,

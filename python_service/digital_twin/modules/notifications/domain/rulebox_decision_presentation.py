@@ -4,6 +4,7 @@ from digital_twin.modules.decisions.contracts import resolved_rule_threshold
 from digital_twin.modules.notifications.domain.observation_market_snapshot import decimal, numeric, snapshot_facts
 from digital_twin.modules.notifications.domain.alert_formatting import price_money
 from digital_twin.modules.notifications.domain.relation_observation_language import hypothesis_words
+from digital_twin.modules.notifications.domain.rule_policy_lifecycle import release_conclusion
 
 
 LABELS = {"BUY": "신규 매수", "ADD": "추가매수", "HOLD": "보유 유지",
@@ -159,6 +160,31 @@ def decision_brief_presentation(packet):
     if any(brief.get(k) != current.get(k) for k in ("accountId", "symbol", "worldId", "inferenceGenerationId", "sourceAboxSnapshotId")):
         return {}
     management = brief.get("managementDecision") or {}
+    released = release_conclusion(packet)
+    if released:
+        rows, checks = [], []
+        labels = {'positionAccountWeight': '계좌 전체 대비 비중', 'profitLossRate': '보유 수익률'}
+        for event in packet.get('customerEvents') or []:
+            if event.get('policyState') != 'released':
+                continue
+            prior = {(c.get('conditionId'), c.get('field')): c for c in event.get('previousConditions') or []}
+            for condition in event.get('conditions') or []:
+                field = condition.get('field')
+                actual = numeric(condition.get('observedValue'))
+                if field not in labels or actual is None or condition.get('resolutionMatchedByTypeDB') is not True:
+                    continue
+                previous = numeric(prior.get((condition.get('conditionId'), field), {}).get('observedValue'))
+                target = numeric((condition.get('resolvedThreshold') or {}).get('value'))
+                sign = {'<=': '이하', '>=': '이상', '<': '미만', '>': '초과'}
+                rows.append(labels[field] + ': ' + (decimal(previous) + '% → ' if previous is not None else '현재 ')
+                            + decimal(actual) + '%' + (' · 해제 기준 ' + decimal(target) + '% '
+                            + sign.get(condition.get('resolutionOperator'), '') if target is not None else ''))
+                if target is not None:
+                    checks.append(labels[field] + ' ' + decimal(target) + '% ' + sign.get(condition.get('operator'), '')
+                                  + ' 조건이 다시 성립하는지 새 자료에서 확인합니다.')
+        remaining = management_decision_presentation(management).get('sections') or []
+        return {'lead': released, 'sections': [('decision-resolution', '해제된 관리 조건과 비교 수치', rows),
+            ('decision-resolution-check', '다시 제한을 확인할 조건', checks), *remaining]}
     if management and all(management.get(k) == current.get(k) for k in ("accountId", "symbol", "worldId", "inferenceGenerationId", "sourceAboxSnapshotId")):
         presentation = management_decision_presentation(management)
         if presentation:

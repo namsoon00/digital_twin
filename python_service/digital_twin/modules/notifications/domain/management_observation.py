@@ -43,8 +43,8 @@ def management_observation_contract(context):
         return row.get("ruleId") or row.get("rule_id") or row.get("sourceRuleId")
     native_ids = {rule_id(r) for r in [*(graph.get("traces") or []), *(graph.get("relations") or [])]
                   if isinstance(r, Mapping)}
-    rules = {rule_id(r): r for r in relation.get("matchedRules") or [] if isinstance(r, Mapping)}
-    ids = sorted({r["ruleId"] for r in management["responses"]})
+    rules = {rule_id(r): r for r in [*(graph.get('traces') or []), *(relation.get("matchedRules") or [])] if isinstance(r, Mapping)}
+    ids = sorted({r["ruleId"] for r in [*management["responses"], *management.get('resolutions', [])]})
     for identity in ids:
         row = rules.get(identity) or {}
         intent = rule_notification_intent(row.get("claimContract") or row.get("claim_contract"))

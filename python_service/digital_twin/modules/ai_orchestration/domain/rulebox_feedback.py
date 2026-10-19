@@ -41,6 +41,9 @@ def improvement_feedback(packet, notifications, episodes, unavailable=(), cases=
         notices.append({"jobId": row["jobId"], "observedAt": row["observedAt"], "category": category,
                         "reasonCode": reason, "baselineJobId": comparison.get("baselineJobId") or "",
                         "sourceRuleIds": sorted(comparison.get("sourceRuleIds") or []),
+                        'policyTransitions': list(comparison.get('policyTransitions') or [])[:6],
+                        'remainingPolicyRuleIds': list(comparison.get('remainingPolicyRuleIds') or [])[:12],
+                        'unverifiedPreviousPolicyRuleIds': list(comparison.get('unverifiedPreviousPolicyRuleIds') or [])[:12],
                         "recheckRequested": (row.get("recheck") or {}).get("requested") is True})
     for episode in episodes:
         # Older outcome ledgers can lack a world identity. These are explicitly
@@ -71,4 +74,5 @@ def improvement_feedback(packet, notifications, episodes, unavailable=(), cases=
              "use": "원천 재확인·전송 실패·반복 억제와 가설 반증을 구분해 다음 연구를 정합니다. 발송 수와 조건 일치는 예측 성과가 아닙니다. "
                     "규칙 개선이 필요하면 현재 사용 가능한 사실을 인용해 develop-hypothesis로 요청합니다. "
                     "누락·자료 부족은 실패한 예측으로 세지 않습니다. 운영/관리 정책과 코드 문제는 serviceFeedback으로 제안합니다. "
+                    "관리 제한의 적용·해제·재적용과 설정 목표 변경을 구분합니다. 남은 제한과 미확인 제한은 해소로 세지 않습니다. "
                     "이 기록은 현재 시장 근거나 규칙 수정·배포 권한이 아니며 기존 격리 실험과 승격 검증을 유지합니다."}]

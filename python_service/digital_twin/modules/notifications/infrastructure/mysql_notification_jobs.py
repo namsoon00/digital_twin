@@ -2170,6 +2170,24 @@ class MySQLNotificationJobStore(DiagnosticThreadStore, InvestmentConversationSto
             selected_context["_relationBaselineFingerprint"] = current_fingerprint
         return selected_context
 
+    def rule_policy_receipt_baseline(self, account_id, symbol, world_id):
+        """Bound a clearance candidate to an actual account/subject/world receipt."""
+        if not all((account_id, symbol, world_id)):
+            return {}
+        with self.connect() as connection:
+            row = connection.execute(
+                "SELECT job_id, completed_at, JSON_EXTRACT(metadata_json, '$.relationChangeSnapshot') AS snapshot "
+                "FROM notification_delivery_attempts WHERE status='delivered' "
+                "AND JSON_UNQUOTE(JSON_EXTRACT(metadata_json, '$.accountId'))=%s "
+                "AND JSON_UNQUOTE(JSON_EXTRACT(metadata_json, '$.relationChangeSnapshot.symbol'))=%s "
+                "AND JSON_UNQUOTE(JSON_EXTRACT(metadata_json, '$.relationChangeSnapshot.worldId'))=%s "
+                "ORDER BY completed_at DESC, attempt_id DESC LIMIT 1", (account_id, symbol, world_id)).fetchone()
+        baseline = _json_loads(row.get('snapshot'), {}) if row else {}
+        if baseline and all(baseline.get(k) == v for k, v in
+                            (('accountId', account_id), ('symbol', symbol), ('worldId', world_id))):
+            return {**baseline, 'deliveredAt': str(row['completed_at']), 'receiptJobId': str(row['job_id'])}
+        return {}
+
     def relation_delivery_snapshot_with_connection(self, connection, job):
         """Successful receipt scoped to account and subject, surviving job retention."""
         row = connection.execute(

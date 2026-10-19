@@ -76,5 +76,6 @@
     "bodyHash": "72d7da052b6c8ae1833f1a50776d569d3691c9730d7c1ee0667c1435d89cf50f",
     "reason": "Carry optional authored management response metadata through native RuleBox JSON reads; absent metadata leaves legacy row contracts unchanged.",
     "regressionTest": "test_rulebox_decision_brief.NativeManagementResponseTests.test_rulebox_storage_round_trip_and_materialized_response_bind_the_native_fact_basis"
-  }
+  },
+  "TypeDBOntologyGraphRepository._run_rulebox_unlocked": {"baselineHash": "88b8d6d3d811cc81703f82555fd184e8c5fc61ee2f06cfb1f438e26eed432b5c", "bodyHash": "07979893feee76c8b4077f1568f4cfb26fb13132834a6fbedf45bedd418afdff", "reason": "Owner-approved management lifecycle: read existing authored policy objectives through positive TypeQL probes under the exact ABox lease, preserve normal active restrictions on probe failure, and validate trace-only generation provenance. No new policy threshold or market action.", "regressionTest": "test_rulebox_decision_brief.NativeManagementResponseTests.test_policy_decision_survives_unqualified_forecasts_and_persists_with_synthesis"}
 }

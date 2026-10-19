@@ -187,6 +187,17 @@ class V2GraphDecisionCandidateBuilder:
             "v2DecisionSynthesis": synthesis.to_dict(),
         }
         context_observation = typedb_context_observation_contract(contract_payload)
+        policy_baseline = {}
+        management = synthesis.management_decision or {}
+        if management.get('resolutions'):
+            reader = getattr(self.cadence.delivery_history_store, 'rule_policy_receipt_baseline', None)
+            if callable(reader):
+                policy_baseline = reader(synthesis.account_id, synthesis.symbol, management['worldId'])
+            prior_ids = {r.get('ruleId') for r in (policy_baseline.get('decisionBrief') or {}).get('restrictions') or []}
+            prior_ids.update(rid for entry in (policy_baseline.get('notificationIntentContinuity') or {}).values()
+                             if entry.get('policyState') in {'applied', 'updated'} for rid in entry.get('sourceRuleIds') or [])
+            if not management.get('responses') and not prior_ids.intersection(r['ruleId'] for r in management['resolutions']):
+                return None
         review_observation = typedb_review_observation_contract(contract_payload)
         narrative_observation = context_observation or review_observation
         disposition_delivery = reasoning_disposition_delivery(contract_payload)
@@ -319,6 +330,7 @@ class V2GraphDecisionCandidateBuilder:
             "relationLifecycleTransition": lifecycle_transition,
             "reasoningDeliveryTrigger": source_trigger,
             "reasoningDispositionDelivery": disposition_delivery,
+            **({'rulePolicyReceiptBaseline': policy_baseline} if policy_baseline else {}),
         }
         if narrative_observation:
             metadata.update({

@@ -1,5 +1,30 @@
 """Authoring contract for non-predictive, native RuleBox management decisions."""
 
+from copy import deepcopy
+
+
+def management_resolution_probe(rule):
+    """Read an existing authored objective; never author a new policy boundary.
+
+    A positive TypeQL match of this objective disproves that policy's exact
+    required predicate. Missing predicates or missing profile links do not.
+    """
+    responses = [d for d in rule.derivations if d.management_response]
+    if len(responses) != 1 or management_response_violations(rule, responses[0]):
+        return {}
+    response = responses[0].management_response
+    condition = next(c for c in rule.conditions if c.condition_id == response['conditionId'])
+    objective = response['objective']
+    predicate = deepcopy(condition.to_dict())
+    predicate['operator'] = objective['operator']
+    predicate['value'] = ({'field': objective['valueField']} if objective.get('valueField') else objective['value'])
+    holding = next((c.to_dict() for c in rule.conditions if c.kind == 'subject_property'
+                    and c.field == 'source' and c.operator == '==' and c.value == 'holding'), None)
+    if not holding or not rule.enabled:
+        return {}
+    return {'rule_id': rule.rule_id, 'source_kind': rule.source_kind,
+            'conditions': [holding, predicate], 'managementResponse': deepcopy(response)}
+
 
 def management_response_violations(rule, derivation):
     response = derivation.management_response

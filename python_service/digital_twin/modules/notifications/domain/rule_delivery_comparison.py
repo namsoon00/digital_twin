@@ -18,6 +18,7 @@ def rule_delivery_comparison(context, baseline=None, *, stage="admission", requi
             "reason": packet["reason"], "changedComponents": components,
             "materialComponents": components, "contextComponents": [],
             "decisionTransition": {"version": VERSION, "material": packet["eligible"],
+                'policyLifecycle': packet['policyLifecycle'],
                 "kind": "rule-notice-change" if packet["eligible"] else "unchanged",
                 "summary": packet["reason"], "impacts": [e.get("decisionImpact") or {} for e in events]}}
     audit = {"version": VERSION, "stage": stage,
@@ -25,6 +26,10 @@ def rule_delivery_comparison(context, baseline=None, *, stage="admission", requi
              "baselineJobId": previous.get("receiptJobId") or "", "baselineDeliveredAt": packet["baselineDeliveredAt"],
              "eligible": packet["eligible"], "reasonCode": packet["nonDeliveryReasonCode"],
              "customerEventIds": [e["eventId"] for e in events],
+             'policyTransitions': [{k: t[k] for k in ('eventId', 'sourceRuleIds', 'previous', 'current', 'cause')}
+                                   for t in packet['policyLifecycle']['transitions']],
+             'remainingPolicyRuleIds': sorted({r['ruleId'] for r in packet['policyLifecycle']['remainingRestrictions']}),
+             'unverifiedPreviousPolicyRuleIds': packet['policyLifecycle']['unverifiedPreviousRuleIds'],
              "sourceRuleIds": sorted({rid for e in events for rid in e.get("sourceRuleIds", [])})}
     return {"relationChangeEvidence": packet, "ontologyRelationDiff": diff,
             "decisionTransition": diff["decisionTransition"], "ruleNotificationComparison": audit}

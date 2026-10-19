@@ -432,6 +432,10 @@ class DeliveryHistoryDatabaseTests(StabilizationDatabaseCase):
         self.assertEqual("delivered", attempts[0]["status"])
         self.assertEqual("MSTR", attempts[0]["metadata"]["relationChangeSnapshot"]["symbol"])
         second = NotificationJob.create("same", account_id=first.account_id, message_type=first.message_type, context=deepcopy(context))
+        world = attempts[0]['metadata']['relationChangeSnapshot']['worldId']
+        self.assertEqual(first.job_id, store.rule_policy_receipt_baseline(first.account_id, 'MSTR', world)['receiptJobId'])
+        self.assertEqual({}, store.rule_policy_receipt_baseline(first.account_id, 'MSTR', 'foreign-world'))
+        self.assertEqual({}, store.rule_policy_receipt_baseline('other-account', 'MSTR', world))
         with store.connect() as connection:
             baseline = store.relation_delivery_snapshot_with_connection(connection, second)
             self.assertTrue(baseline["deliveredAt"])

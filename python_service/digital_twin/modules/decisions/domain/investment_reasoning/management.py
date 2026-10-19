@@ -81,11 +81,14 @@ def management_decision_from_relation(account_id, relation):
                     scenario["currency"] = facts.get("currency") or ""
             response["adjustmentScenario"] = scenario
         responses[(rule_id, response["code"])] = response
-    if not responses:
+    from .management_resolution import management_resolutions
+    resolutions = management_resolutions(relation)
+    if not responses and not resolutions:
         return {}
     ordered = sorted(responses.values(), key=lambda row: (-(_number(row.get("displayPriority")) or 0), row["ruleId"], row["code"]))
     result = {"version": "management-decision-v1", "authority": "typedb-materialized-account-policy", **identity,
-              "status": "POLICY_RESPONSE_SELECTED", "responses": ordered,
+              "status": "POLICY_RESPONSE_SELECTED" if ordered else "POLICY_RESOLUTION_VERIFIED", "responses": ordered,
+              **({'resolutions': resolutions} if resolutions else {}),
               "forecastActionSelected": False, "orderAuthorized": False}
     result["decisionId"] = "management-decision:" + hashlib.sha256(
         json.dumps(result, ensure_ascii=True, sort_keys=True, separators=(",", ":")).encode()).hexdigest()[:32]

@@ -18,6 +18,29 @@ are never rewritten. Historical diagnoses do not establish current outages.
 
 ## Focused original-document extraction
 
+Question-directed collection also supports Korean DART originals through
+`dart-question-original-v1`. It reuses the provider's verified symbol/corporation
+mapping and discovered official receipt numbers. If the normal short disclosure
+lookback lacks a comparable report, one bounded official list page can discover
+older receipts; at most two selected originals are read through the existing
+provider guard. Future dates, another issuer, malformed receipt identities,
+HTML error pages and unavailable API responses cannot establish body evidence.
+
+ZIP members and expansion are bounded before reads. Whole passages retain table
+headings, units and comparison periods where present. UTF-8 exclusions are
+explicit; a large table is never cut into apparently complete evidence. Reporting
+periods from official titles remain metadata and do not verify consolidation,
+single-quarter versus cumulative duration, or table units.
+
+The source owner checks publisher/issuer/receipt identity, exact excerpt hashes,
+period and publication clocks, active lifecycle and primary-evidence governance
+before creating a historical document reference. Changed DART question documents
+use the existing committed research event and graph-projection path. They become
+scoped, dated original-text reads in ABox, not direct current-price evidence or
+automatic question completion. Existing age/quality policies and independent
+answer review still apply. API access failure is retained for the next plan and
+does not mean that the original report is unpublished.
+
 The AI may choose `extract` after reading a document, supplying the known candidate
 ID and one to four missing topics. This re-fetches the original, checks the exact
 content hash, and selects passages for those topics. HTML tables retain nearby

@@ -9,6 +9,38 @@ Question-specific collection failures and bounded, same-revision focused reads
 follow the [source recovery contract](source-recovery.md). Diagnostics return to
 the original question and next plan without changing past answers or eligibility.
 
+## Bounded evidence renewal and exact retention
+
+Production enables `bounded-evidence-readiness-v1`: author v21, repair v17,
+customer review v10 and retrieval v8. Earlier artifacts continue to use their
+original prompt/schema constructors. The new read schema issues exact category,
+fact, report-metric and memory-section arguments from the frozen session. Read
+permission is separate from selection: an indexed but unread document cannot
+be cited by the final author. A market `finish` which also declares required
+missing evidence becomes `defer` conservatively, retaining the original response
+in the audit and avoiding a paid correction that merely removes the warning.
+
+For existing research claims, `retain` offers the exact captured question,
+mechanism, assumption, alternative and invalidation text in the output schema.
+Changing that content requires an explicit `revise`. The owning validator and
+independent research review remain authoritative; paraphrases are not silently
+accepted as equivalent and no previous claim is rewritten automatically.
+
+An unusable intraday source clock can request renewal through the existing
+monitor queue before paid observation work. The AI task's live lease, attempt
+and account/subject scope are checked in the same transaction as the request.
+Requests for one account coalesce for five minutes and preserve a live monitor
+lease. Verified last-close references and documentary research do not request
+this price renewal. A recorded request does not renew the frozen quote, authorize
+publication, or block otherwise useful filing/news explanations. Only later
+source collection, native graph completion and the existing evidence wake can
+provide a new observation. Failures are operational receipts, not market facts.
+
+Measure actual source clocks, v8 invalid/correction rounds, v21 author repairs,
+original-question completion and transport receipts separately. A successful
+schema replay or refresh request does not establish better research answers,
+forecast accuracy, lower billing or investment performance.
+
 ## Running behavior
 
 Task starts use `central-task-fairness-v2-isolated-market`: expired-lease recovery →

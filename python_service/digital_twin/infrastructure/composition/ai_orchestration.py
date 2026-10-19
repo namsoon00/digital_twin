@@ -48,6 +48,8 @@ def build_ai_control_service(settings=None):
     configured = dict(settings if settings is not None else runtime_settings())
     from digital_twin.modules.ai_orchestration.domain.execution_lanes import VERSION as lane_policy
     configured["aiObservationLanePolicy"] = lane_policy
+    from digital_twin.modules.ai_orchestration.domain.evidence_readiness import VERSION as read_policy
+    configured["aiEvidenceReadPolicy"] = read_policy
     store = MySQLAIControlStore(configured)
     research_store = investment_research_store(configured)
 
@@ -156,6 +158,7 @@ def build_ai_control_service(settings=None):
             unavailable.append("publication-history")
         return improvement_feedback(packet, notices, outcomes, unavailable, cases)
 
+    from digital_twin.infrastructure.transactions.ai_observation_source_refresh import AIObservationSourceRefresh
     return AIControlService(store, subjects, evidence, planner, researcher, research_memory, configured,
                             delivery_memory=publication.memory, reviewer=planner, development_memory=development.memory,
                             brain_memory=lambda account, symbol, world: agenda.memory(account, symbol, world, max_cases=12 if knowledge else 5), brain_waker=wake_brain, read_planner=planner,
@@ -164,7 +167,7 @@ def build_ai_control_service(settings=None):
                             research_gate=agenda.research_admission,
                             knowledge_context=knowledge.context if knowledge else None,
                             knowledge_refresh=knowledge.refresh if knowledge else None, rulebox_feedback=rulebox_feedback,
-                            market_brain_memory=agenda.market_memory)
+                            market_brain_memory=agenda.market_memory, source_refresher=AIObservationSourceRefresh(store))
 
 
 def ai_control_status(settings=None, account_id=""):

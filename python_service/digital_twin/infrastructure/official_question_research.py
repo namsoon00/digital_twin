@@ -52,6 +52,9 @@ def collect_question_documents(provider, target, signals, tasks):
     if not tasks or not question_terms(tasks):
         return [], []
     symbol = target.normalized_symbol()
+    if re.fullmatch(r"\d{6}", symbol) and ((signals.get('dartDisclosures') or {}).get(symbol) or target.normalized_market() == 'KR'):
+        from .dart_question_research import collect_dart_question_documents
+        return collect_dart_question_documents(provider, target, signals, tasks)
     sec = (signals.get('secFilings') or {}).get(symbol) or {}
     base = {'source': 'official-question-research', 'symbol': symbol, 'version': VERSION,
             'taskIds': [t.get('taskId', '') for t in tasks], 'queryTerms': question_terms(tasks)}

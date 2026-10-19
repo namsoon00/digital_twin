@@ -26,6 +26,14 @@ CAUSES = {
 
 
 def failure_cause(code):
+    if code == "issuer-identity-unavailable":
+        return "issuer-unverified"
+    if code in {"invalid-document-archive", "document-encoding-unavailable", "document-text-unavailable"}:
+        return "extraction-unavailable"
+    if code in {"dart-document-014", "dart-document-800", "metadata-unavailable"}:
+        return "transport-failed"
+    if code == "dart-document-020":
+        return "rate-limited"
     if code in {"document-access-blocked", "official-document-unavailable", "document-http-401", "document-http-403"}:
         return "access-denied"
     if code in {"document-http-429", "deferred", "cooldown"}:

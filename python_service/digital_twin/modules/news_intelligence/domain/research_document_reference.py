@@ -27,12 +27,15 @@ def question_document_changed_symbols(changes):
         if isinstance(row, dict) and str(row.get("symbol") or "").strip()
         and str(row.get("evidenceId") or "").startswith(
             tuple("research:" + str(row["symbol"]).strip().upper() + ":" + suffix
-                  for suffix in ("sec-question:", "explored:", "financial-report:")))
+                  for suffix in ("sec-question:", "dart-question:", "explored:", "financial-report:")))
     })
 
 
 def research_document_reference(item):
     """Fail closed; this reference never changes the filing's event eligibility."""
+    if item.kind == "disclosure" and (item.raw_payload.get("documentIssuerIdentity") or {}).get("verification") == "opendart-discovered-issuer-document":
+        from .dart_document_reference import dart_document_reference
+        return dart_document_reference(item)
     if item.kind == "issuer-ir":
         from .question_source_reference import issuer_document_reference
         return issuer_document_reference(item)

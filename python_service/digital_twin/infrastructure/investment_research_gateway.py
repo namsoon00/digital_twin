@@ -52,7 +52,7 @@ class ExistingApiResearchGateway:
             sector=str(target.sector or "기타"),
             source="research",
         )
-        provider = self.provider_for(requested)
+        provider = self.provider_for(requested, question_directed=True) if tasks else self.provider_for(requested)
         signals = provider.signals_for_positions([position])
         items = research_evidence_from_external_signals(target.normalized_symbol(), signals)
         company = (signals.get("companyKnowledge") or {}).get(target.normalized_symbol()) or {}
@@ -88,7 +88,7 @@ class ExistingApiResearchGateway:
             payload.setdefault("market", market)
             item.raw_payload = payload
 
-    def provider_for(self, requested: set):
+    def provider_for(self, requested: set, question_directed=False):
         if self.provider:
             return self.provider
         official_requested = not requested or bool(requested.intersection({"official", "official-filing", "company-ir"}))
@@ -104,6 +104,11 @@ class ExistingApiResearchGateway:
             "externalAlphaEnabled": "1" if market_requested else "0",
             "externalYFinanceEnabled": "1" if market_requested else "0",
         }
+        if question_directed and official_requested:
+            # Discover metadata once, then read the question-selected original.
+            # A prefix-only body fetch here would duplicate the full read and
+            # consume the same document's provider cooldown before extraction.
+            provider_settings.update(externalDartDocumentTextEnabled="0", externalSecDocumentTextEnabled="0")
         return ExternalSignalProvider(
             provider_settings,
             evidence_store=NoopResearchEvidenceStore(),

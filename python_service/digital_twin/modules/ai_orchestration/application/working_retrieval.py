@@ -8,6 +8,7 @@ from ..domain.continuity import continuity_memory, merge_recalled
 from ..domain.business_research import evaluate_thesis
 from ..domain.execution_input import freeze_execution_input, prompt_budget
 from ..domain.knowledge_research import knowledge_prompt
+from ..domain import bounded_retrieval, evidence_readiness
 from .read_tools import ObservationReadTools
 from .retrieval import RetrievalLeaseLost, RetrievalContractFailure
 
@@ -20,12 +21,12 @@ def author_packet(session, packet, ids, seen, research, trace, status, reserve=0
     views = {key: row for key, row in seen.items() if row.get("evidenceView")}
     protected = {key for key, row in seen.items() if row.get("evidenceCategory") == "quality"}
     result = {**packet, **session.select(set(ids) | protected, views=views), "retrieval": contract.trace_summary(trace, status)}
-    if contract in {scoped_retrieval, indexed_retrieval, question_retrieval, lane_retrieval}:
+    if contract in {scoped_retrieval, indexed_retrieval, question_retrieval, lane_retrieval, bounded_retrieval}:
         result["researchScope"] = contract.research_scope(trace, status)
     result["businessThesisMemory"] = []
     for row in research:
         if row.get("kind") == "business-thesis":
-            value = memory_reference.brief(row, "memories") if contract in {indexed_retrieval, question_retrieval, lane_retrieval} else deepcopy(row)
+            value = memory_reference.brief(row, "memories") if contract in {indexed_retrieval, question_retrieval, lane_retrieval, bounded_retrieval} else deepcopy(row)
             observations = evaluate_thesis(row, result)
             value.update(reviewDue=value.get("reviewDue", False) or observations != value.get("observations", []), observations=observations)
             result["businessThesisMemory"].append(value)
@@ -44,8 +45,8 @@ def retrieve_working_evidence(session, packet, history, research, decide, save_i
                              max_rounds=MAX_ROUNDS, record_round=None):
     indexed = packet.get("memoryReadPolicy") == memory_reference.VERSION
     question_work = question_assessment.enabled(packet)
-    contract = lane_retrieval if execution_lanes.identified(packet) else question_retrieval if question_work else indexed_retrieval if indexed else scoped_retrieval if packet.get("researchKnowledge") else legacy_contract
-    scoped = contract in {scoped_retrieval, indexed_retrieval, question_retrieval, lane_retrieval}
+    contract = bounded_retrieval if evidence_readiness.enabled(packet) else lane_retrieval if execution_lanes.identified(packet) else question_retrieval if question_work else indexed_retrieval if indexed else scoped_retrieval if packet.get("researchKnowledge") else legacy_contract
+    scoped = contract in {scoped_retrieval, indexed_retrieval, question_retrieval, lane_retrieval, bounded_retrieval}
     if question_work:
         research = question_assessment.prepare(research, session.question_work_inventory())
     if scoped:
@@ -61,8 +62,8 @@ def retrieve_working_evidence(session, packet, history, research, decide, save_i
             for source in (case.get("latestSourceAnswer") or {}).get("sources", []):
                 if source.get("evidenceId"):
                     sources.setdefault(source["evidenceId"], []).append(case["caseId"])
-    documents = session.question_document_index(sources, document_views=True) if question_work or contract is lane_retrieval else session.question_document_index(sources)
-    baseline = session.business_baseline(documents, document_views=True) if question_work or contract is lane_retrieval else session.business_baseline(documents)
+    documents = session.question_document_index(sources, document_views=True) if question_work or contract in {lane_retrieval, bounded_retrieval} else session.question_document_index(sources)
+    baseline = session.business_baseline(documents, document_views=True) if question_work or contract in {lane_retrieval, bounded_retrieval} else session.business_baseline(documents)
     packet = {**packet, "businessEvidence": baseline}
     from ..domain.research_evidence_use import answered_research_scope
     scope = answered_research_scope(research)
@@ -120,6 +121,8 @@ def retrieve_working_evidence(session, packet, history, research, decide, save_i
             selectedFactIds=sorted(selected),
             knownFacts=[{"factId": key, "category": row["evidenceCategory"], "kind": row["kind"],
                          "bytes": byte_size(row), "view": row.get("evidenceView", {})} for key, row in seen.items()])
+        if contract is bounded_retrieval:
+            context.update(tools.issued_context())
         try:
             envelope = contract.freeze(current, context, prompt_bytes)
         except EvidenceContractError:
@@ -150,7 +153,7 @@ def retrieve_working_evidence(session, packet, history, research, decide, save_i
             except EvidenceContractError as error:
                 if "exceeds-context-budget" not in error.code:
                     raise
-                if contract is lane_retrieval:
+                if contract in {lane_retrieval, bounded_retrieval}:
                     # This is an admission limit, not malformed model output.
                     # Save the valid choice and stop without a paid correction.
                     step.update(status="valid", decision=decision)

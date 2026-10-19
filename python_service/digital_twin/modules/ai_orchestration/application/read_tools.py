@@ -27,6 +27,14 @@ class ObservationReadTools:
                 "availableCursors": [{"cursor": token, **row["scope"]} for token, row in self.cursors.items()],
                 "knownFacts": [{"factId": key, "category": value} for key, value in self.known.items()]}
 
+    def issued_context(self):
+        groups = {}
+        for category, memory_id, path in sorted(self.memory_paths):
+            groups.setdefault((category, memory_id), []).append(path)
+        return {"readableFacts": [{"factId": key, "category": value} for key, value in sorted(self.known.items())],
+                "readableMemorySections": [{"category": category, "memoryId": memory_id, "paths": paths}
+                                           for (category, memory_id), paths in groups.items()]}
+
     def resolve(self, request, index=0):
         scope = {key: value for key, value in request.items() if key != "cursor"}
         path = "requests[" + str(index) + "]"

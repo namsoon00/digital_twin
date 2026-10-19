@@ -14,7 +14,7 @@ from digital_twin.modules.ai_orchestration.domain.execution_input import validat
 from digital_twin.modules.ai_orchestration.domain.budget import AIControlBudgetWait, admission_wait, budget_state, budgets_enabled
 from digital_twin.modules.ai_orchestration.domain.recovery import retry_delays
 from digital_twin.modules.ai_orchestration.domain.retrieval import RETRIEVAL_PROMPT_VERSION, validate_trace
-from ..domain import working_retrieval, scoped_retrieval, indexed_retrieval, question_retrieval, lane_retrieval
+from ..domain import working_retrieval, scoped_retrieval, indexed_retrieval, question_retrieval, lane_retrieval, bounded_retrieval, evidence_readiness
 from digital_twin.modules.reasoning.contracts import content_hash
 from digital_twin.modules.ai_orchestration.infrastructure.mysql_execution import AIExecutionPersistence, EXECUTION_SCHEMA
 from digital_twin.modules.ai_orchestration.domain.execution_resilience import safe_diagnostic
@@ -348,9 +348,10 @@ class MySQLAIControlStore(DiagnosticProgressPersistence, AITaskDispatchPersisten
                 raise ValueError("retrieval audit requires owned frozen input")
             envelope = json.loads(gzip.decompress(frozen["artifact_gzip"]))
             validate_execution_input(envelope)
-            if envelope["promptVersion"] not in {lane_retrieval.VERSION, RETRIEVAL_PROMPT_VERSION, working_retrieval.VERSION, scoped_retrieval.VERSION, indexed_retrieval.VERSION, question_retrieval.VERSION}:
+            if envelope["promptVersion"] not in {bounded_retrieval.VERSION, lane_retrieval.VERSION, RETRIEVAL_PROMPT_VERSION, working_retrieval.VERSION, scoped_retrieval.VERSION, indexed_retrieval.VERSION, question_retrieval.VERSION}:
                 raise ValueError("retrieval audit requires retrieval input")
-            validator = (lane_retrieval.validate_trace if envelope["promptVersion"] == lane_retrieval.VERSION else
+            validator = (bounded_retrieval.validate_trace if envelope["promptVersion"] == bounded_retrieval.VERSION else
+                         lane_retrieval.validate_trace if envelope["promptVersion"] == lane_retrieval.VERSION else
                          question_retrieval.validate_trace if envelope["promptVersion"] == question_retrieval.VERSION else
                          indexed_retrieval.validate_trace if envelope["promptVersion"] == indexed_retrieval.VERSION else
                          scoped_retrieval.validate_trace if envelope["promptVersion"] == scoped_retrieval.VERSION else
@@ -426,7 +427,7 @@ class MySQLAIControlStore(DiagnosticProgressPersistence, AITaskDispatchPersisten
             return {}
         envelope = json.loads(gzip.decompress(row["artifact_gzip"]))
         validate_execution_input(envelope)
-        if envelope["promptVersion"] not in {LANE_REVIEW_PROMPT_VERSION, REVIEW_PROMPT_VERSION, CONTINUITY_REVIEW_PROMPT_VERSION, CITABLE_REVIEW_PROMPT_VERSION, LEGACY_REVIEW_PROMPT_VERSION}:
+        if envelope["promptVersion"] not in {evidence_readiness.REVIEW_VERSION, LANE_REVIEW_PROMPT_VERSION, REVIEW_PROMPT_VERSION, CONTINUITY_REVIEW_PROMPT_VERSION, CITABLE_REVIEW_PROMPT_VERSION, LEGACY_REVIEW_PROMPT_VERSION}:
             return {}
         return {"taskId": row["task_id"], "draftHash": narrative_digest({**envelope["draft"], "input": envelope["current"]})}
 

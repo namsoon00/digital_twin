@@ -6,7 +6,7 @@ from digital_twin.modules.reasoning.contracts import EvidenceContractError, Evid
 from digital_twin.modules.ai_orchestration.application.retrieval import RetrievalLeaseLost, RetrievalContractFailure
 from .working_retrieval import retrieve_working_evidence
 from ..domain.observation_wait import retry_key, disposition, unchanged_wait
-from ..domain import research_repeat as repeat, execution_lanes as lanes
+from ..domain import research_repeat as repeat, execution_lanes as lanes, evidence_readiness
 from digital_twin.modules.ai_orchestration.domain.planning import enabled, identity, stamp, validate_plan, observation_fingerprint
 from digital_twin.modules.ai_orchestration.domain.execution_input import LANE_PROMPT_VERSION, freeze_execution_input, freeze_review_input, freeze_repair_input, PROMPT_VERSION
 from digital_twin.modules.ai_orchestration.domain.insight_repair import correction_warranted
@@ -21,7 +21,7 @@ from digital_twin.modules.ai_orchestration.domain.validation_diagnostic import t
 
 
 class AIControlService:
-    def __init__(self, store, subjects, evidence, planner, researcher, research_memory, settings=None, delivery_memory=None, reviewer=None, development_memory=None, brain_memory=None, brain_waker=None, read_planner=None, evidence_waker=None, read_round_budget=None, company_memory=None, research_plan_memory=None, research_gate=None, knowledge_context=None, knowledge_refresh=None, rulebox_feedback=None, market_brain_memory=None):
+    def __init__(self, store, subjects, evidence, planner, researcher, research_memory, settings=None, delivery_memory=None, reviewer=None, development_memory=None, brain_memory=None, brain_waker=None, read_planner=None, evidence_waker=None, read_round_budget=None, company_memory=None, research_plan_memory=None, research_gate=None, knowledge_context=None, knowledge_refresh=None, rulebox_feedback=None, market_brain_memory=None, source_refresher=None):
         self.store, self.subjects, self.evidence = store, subjects, evidence
         self.planner, self.researcher, self.research_memory = planner, researcher, research_memory
         self.settings = dict(settings or {})
@@ -40,6 +40,7 @@ class AIControlService:
         self.knowledge_context = knowledge_context
         self.knowledge_refresh = knowledge_refresh or (lambda context, packet: context)
         self.rulebox_feedback = rulebox_feedback or (lambda packet: [])
+        self.source_refresher = source_refresher or (lambda job, packet: {})
 
     def run_once(self):
         self.store.record_runtime_pulse()
@@ -74,6 +75,13 @@ class AIControlService:
                         raise ValueError("current verified graph facts unavailable")
                     if lanes.enabled(self.settings):
                         packet = lanes.annotate(packet, job)
+                    if self.settings.get("aiEvidenceReadPolicy") == evidence_readiness.VERSION:
+                        packet = evidence_readiness.annotate(packet)
+                        recovery = self.source_refresher(job, packet)
+                        if recovery.get("status") == "lease-lost":
+                            return {"status": "lease-lost", "taskId": job["taskId"]}
+                        if recovery:
+                            packet["dataRecovery"] = recovery
                     history = (self.store.memory(job["accountId"], job["symbol"], lanes.MARKET) if lanes.market(job)
                                else self.store.memory(job["accountId"], job["symbol"]))
                     stage = "memory-and-followup"
@@ -137,13 +145,14 @@ class AIControlService:
                     from digital_twin.modules.ai_orchestration.domain.brain_management import due_memory
                     if (not due_memory(research) and not any(row.get("reviewDue") for row in research if row.get("kind") == "business-thesis")
                             and (previous.get("inputFingerprint") == fingerprint or previous.get("observationRepeatKey") == repeat_key) and previous.get("observedAt")
-                            and previous.get("executionPromptVersion") == (LANE_PROMPT_VERSION if lanes.identified(packet) else PROMPT_VERSION)
+                            and previous.get("executionPromptVersion") == (evidence_readiness.PROMPT_VERSION if evidence_readiness.enabled(packet) else LANE_PROMPT_VERSION if lanes.identified(packet) else PROMPT_VERSION)
                             and previous.get("quality", {}).get("status") in {"accepted", "observation-only"}
                             and datetime.fromisoformat(previous["observedAt"].replace("Z", "+00:00")) <= datetime.now(timezone.utc)
                             and not any(row.get("transitionVerified") for row in packet["followUpEvaluations"])):
                         due = lanes.wait_until(packet) if lanes.market(packet) else (datetime.now(timezone.utc) + timedelta(hours=6)).isoformat().replace("+00:00", "Z")
                         child = {**self.subject(job), "capability": job["capability"], "watchQuestions": job.get("watchQuestions", []), "taskId": identity(job["taskId"], "unchanged"), "availableAt": due}
                         saved = self.store.complete(job, {"status": "unchanged", "reason": "새 근거가 없어 AI 호출을 생략했습니다.",
+                            **({"dataRecovery": packet["dataRecovery"]} if packet.get("dataRecovery") else {}),
                             "resumption": observation_resume(job, packet),
                             "followUpEvaluations": packet["followUpEvaluations"]}, [child])
                         return {"status": "unchanged" if saved else "lease-lost", "taskId": job["taskId"]}
@@ -187,7 +196,7 @@ class AIControlService:
                     plan, raw, envelope, input_id, validation_repair = validate_author(raw, envelope, input_id,
                         self.planner, lambda value: self.store.save_execution_input(job, value))
                     result = {**plan, "input": packet, "inputFingerprint": fingerprint, "observationRepeatKey": repeat_key, "observedAt": stamp(),
-                              "executionInputId": input_id, "executionPromptVersion": LANE_PROMPT_VERSION if lanes.identified(packet) else PROMPT_VERSION,
+                              "executionInputId": input_id, "executionPromptVersion": evidence_readiness.PROMPT_VERSION if evidence_readiness.enabled(packet) else LANE_PROMPT_VERSION if lanes.identified(packet) else PROMPT_VERSION,
                               "wordingVersion": OBSERVATION_WORDING_VERSION,
                               "memoryCoverage": envelope["memoryCoverage"],
                               "judgmentContinuity": judgment_continuity(envelope),
@@ -196,6 +205,8 @@ class AIControlService:
                               "comparisonFacts": historical_facts(envelope["previousAnalyses"])}
                     if validation_repair:
                         result["validationRepair"] = validation_repair
+                    if packet.get("dataRecovery"):
+                        result["dataRecovery"] = packet["dataRecovery"]
                     for verification in range(2):
                         result["quality"] = local_quality(result)
                         if result["notification"]["send"] and result["quality"]["status"] == "awaiting-review" and self.reviewer:
@@ -360,6 +371,8 @@ class AIControlService:
                   "retrievalInputIds": [row["inputId"] for row in trace],
                   "followUpEvaluations": packet.get("followUpEvaluations", []),
                   "resumption": observation_resume(job, packet)}
+        if packet.get("dataRecovery"):
+            result["dataRecovery"] = packet["dataRecovery"]
         child = {**self.subject(job), "capability": job["capability"], "watchQuestions": job.get("watchQuestions", []),
                  "taskId": identity(job["taskId"], "wait"), "availableAt": outcome["retryAt"]}
         children = [child]

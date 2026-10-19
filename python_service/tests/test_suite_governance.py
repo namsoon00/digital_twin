@@ -360,7 +360,12 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # Reused candidate bootstrap must bind a verified executable readback.
         # Frozen policy migration review rejects unapproved actions and numeric/input gaps.
         # Exact paired inputs need complete dependencies without widening live events.
-        self.assertLessEqual(total, 2392)
+        # Sixteen bounded-evidence contracts cover exact retention, safe read
+        # arguments, original-question continuity, DART source/graph proof,
+        # immutable v21 replay and lease-fenced source renewal/rollback.
+        # Three concurrent relation regressions preserve regrouped lifecycle
+        # continuity, owned reply parents and frozen comparable measurements.
+        self.assertLessEqual(total, 2411)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

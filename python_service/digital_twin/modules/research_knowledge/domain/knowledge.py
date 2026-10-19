@@ -81,6 +81,37 @@ def proposal_schema(context, fact_ids):
     return obj({"claims": array(item, 3), "coverageNote": text})
 
 
+def exact_proposal_schema(context, fact_ids):
+    """Mirror the existing retain invariant without changing its business rule.
+
+    Older frozen inputs retain proposal_schema byte-for-byte. A new consumer
+    opts into an exact copied claim or an explicit revision, never paraphrase
+    acceptance or automatic rewriting of persisted knowledge.
+    """
+    value = proposal_schema(context, fact_ids)
+    item = value["properties"]["claims"]["items"]
+    edited = deepcopy(item)
+    edited["properties"]["disposition"]["enum"] = ["create", "revise", "retire"]
+    alternatives = [edited]
+    frameworks = {row["id"]: row for row in context["frameworks"]}
+    for claim in context["claims"]:
+        framework = frameworks.get(claim["frameworkId"])
+        if (not framework or claim.get("frameworkVersion") != framework["version"]
+                or claim.get("status") == "retired"):
+            continue
+        retained = deepcopy(item)
+        props = retained["properties"]
+        props["claimId"]["enum"] = [claim["claimId"]]
+        props["frameworkId"]["enum"] = [claim["frameworkId"]]
+        props["disposition"]["enum"] = ["retain"]
+        for key in TEXT_FIELDS:
+            if key != "reason":
+                props[key] = {"type": "string", "enum": [claim[key]]}
+        alternatives.append(retained)
+    value["properties"]["claims"]["items"] = {"anyOf": alternatives}
+    return value
+
+
 def validate_proposals(value, context, packet, usable_ids, business_theses=()):
     if not context:
         if value is not None:

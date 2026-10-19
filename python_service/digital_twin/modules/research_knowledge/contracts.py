@@ -5,6 +5,7 @@ _EXPORTS = {
     "framework_catalog": ("digital_twin.modules.research_knowledge.domain.frameworks", "framework_catalog"),
     "service_research_policy": ("digital_twin.modules.research_knowledge.domain.frameworks", "service_research_policy"),
     "knowledge_proposal_schema": ("digital_twin.modules.research_knowledge.domain.knowledge", "proposal_schema"),
+    "exact_knowledge_proposal_schema": ("digital_twin.modules.research_knowledge.domain.knowledge", "exact_proposal_schema"),
     "validate_knowledge_proposals": ("digital_twin.modules.research_knowledge.domain.knowledge", "validate_proposals"),
     "raw_knowledge_proposals": ("digital_twin.modules.research_knowledge.domain.knowledge", "raw_proposals"),
     "knowledge_context_identity": ("digital_twin.modules.research_knowledge.domain.context", "context_material_identity"),

@@ -57,6 +57,10 @@ def validate_research(value, packet, business_theses=()):
     try:
         result = validate_knowledge_proposals(value, packet.get("researchKnowledge"), packet, usable, business_theses)
     except ValueError as error:
+        from .evidence_readiness import enabled
+        if enabled(packet) and str(error) == "retaining knowledge cannot silently rewrite the claim":
+            raise PlanValidationError("knowledge-retain-content-changed", "knowledgeResearch.claims",
+                "retain은 동결된 question/mechanism/assumption/alternative/invalidation을 그대로 복사합니다. 설명을 바꾸려면 revise로 현재 근거와 변경 이유를 작성하세요.") from error
         raise PlanValidationError("research-knowledge-contract", "knowledgeResearch",
             "동결된 연구 틀·주장 ID·현재 사용 가능한 근거를 참조하고, 설명·반론·자료 부족·기존 가설 인덱스를 출력 계약에 맞게 작성하세요.") from error
     if result:

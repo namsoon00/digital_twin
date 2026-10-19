@@ -58,6 +58,8 @@ def material_key(packet, research):
               "authorPolicy": LANE_PROMPT_VERSION,
               "account": packet["accountId"], "symbol": packet["symbol"], "world": packet["worldId"],
               "binding": packet.get("reasoningBinding", {}).get("deploymentId")}
+    if packet.get("evidenceReadPolicy"):
+        common["readPolicy"] = packet["evidenceReadPolicy"]
     if market(packet):
         common["evidence"] = evidence_change_identity(packet, [], [])
         common["observationCases"] = sorted([{key: row[key] for key in ("caseId", "capability", "question", "completionCriterion") if key in row}

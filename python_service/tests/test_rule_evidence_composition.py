@@ -287,3 +287,32 @@ class RuleEvidenceCompositionTests(unittest.TestCase):
         _, nodes = scored_nodes()
         result = native_evidence_composition({**IDENTITY, "symbol": "OTHER"}, relation(nodes))
         self.assertEqual([], result["evidenceGroups"])
+
+    def test_market_measurements_do_not_replace_active_policy_release_checks(self):
+        from digital_twin.modules.notifications.domain.rulebox_notification_summary import compact_rulebox_summary
+        _, nodes = scored_nodes()
+        composition = native_evidence_composition(IDENTITY, relation(nodes))
+        self.assertFalse(composition["compositions"])
+        responses = [
+            {"ruleId": "graph.position.concentration.guard.v1", "label": "계좌 비중을 설정 상한 이내로 조정",
+             "objective": {"field": "positionAccountWeight", "operator": "<="},
+             "observedValue": 78.37, "targetValue": 45},
+            {"ruleId": "graph.instrument_profile.averaging_down_policy.v1", "label": "손실 구간의 추가매수를 중단",
+             "objective": {"field": "profitLossRate", "operator": ">="},
+             "observedValue": -5.82, "targetValue": 0},
+        ]
+        judgment = {**IDENTITY, "authority": "typedb-materialized-synthesis",
+                    "evidenceComposition": composition, "managementDecision": {"responses": responses}}
+        current = {**IDENTITY, "market": "US", "decisionBrief": {"judgment": judgment}}
+        event = {"purpose": "hypothesis-evidence", "sourceRuleIds": [RATE],
+                 "nextCheck": {"condition": "금리 변화가 유지되는지 확인"}}
+        for events in ([], [event]):
+            summary = compact_rulebox_summary({"current": current, "customerEvents": events})
+            sections = {key: "\n".join(rows) for key, _, rows in summary["sections"]}
+            self.assertIn("45% 이하", sections["next-check-contract"])
+            self.assertIn("0%", sections["next-check-contract"])
+            self.assertIn("각각 확인", sections["next-check-contract"])
+            self.assertIn("미국 10년 국채 금리", sections["decision-impact"])
+            self.assertIn("IEF", sections["decision-impact"])
+            if events:
+                self.assertIn("금리 변화", sections["next-check-contract"])

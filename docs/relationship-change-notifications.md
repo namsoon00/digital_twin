@@ -821,7 +821,11 @@ investment predicates, account targets and execution qualification are retained.
 `compact-rulebox-v4` shows actual source measurements before unrelated account
 reference values. It keeps market conditions and policy restrictions visible
 together, names the comparison asset and period, and uses only compatible
-previous receipts for before/after numbers. A new combination is released in a
+previous receipts for before/after numbers. Within the compact measurement
+budget, a rule's distinguishing input precedes confirmation values shared with
+other rules. Active policy release targets remain in the next check even when
+market evidence has no matching composition rule; a changed hypothesis keeps
+its own authored follow-up alongside those targets. A new combination is released in a
 separate immutable candidate database and must pass paired-input promotion
 checks; updating Python alone does not deploy new RuleBox predicates.
 
@@ -832,7 +836,7 @@ V17 compiler fixtures retain the pre-existing rule predicate hashes separately.
 The TBox is unchanged: these rules do not introduce a new kind of market fact.
 Release preflight checks every permitted model release in a composition predicate.
 
-The additive release builder copies the active release artifact, appends only
+The additive release builder copies the active release artifact, appends
 only three composition rules, and preserves every original rule, static
 node and TBox metadata value. `native-composition-migration-review-v1` retains the raw paired replay
 comparison. It explains only references to these three declared context rules,
@@ -847,3 +851,13 @@ composition class also changes lifecycle TBox metadata stamped on every ABox
 fact. V17 uses the existing NextCheck vocabulary and requires an identical
 TBox. Input-parity checks remain strict, including retained source dependencies;
 no incomparable replay counts as successful promotion evidence.
+
+The subsequent production comparison still failed input equality: portfolio
+lifecycle enrichment reads the latest persisted risk/exposure records at
+execution time, while the paired market snapshot is frozen. The active graph
+also retained subject evidence scopes absent from the candidate. These are
+separate rollout blockers, not authorized composition differences. Before
+promoting the three new rules, capture the portfolio context at the source
+boundary and establish identical, complete subject dependency sets in both
+databases. Preserve the raw failed comparison; do not count matching displayed
+prices or management targets as proof of identical inference inputs.

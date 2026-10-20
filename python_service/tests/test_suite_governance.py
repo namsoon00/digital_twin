@@ -373,7 +373,9 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # Four source-closure regressions preserve focused original contracts,
         # bounded filing-history coverage, graph-readable source receipts and
         # immutable AI counter-evidence across the article delivery ledger.
-        self.assertLessEqual(total, 2433)
+        # Mixed market/policy messages preserve each active release target
+        # and the distinguishing measurement from each contributing rule.
+        self.assertLessEqual(total, 2434)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

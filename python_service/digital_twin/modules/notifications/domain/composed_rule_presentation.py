@@ -116,7 +116,12 @@ def exact_measurements(current, previous, events, currency, limit=4):
     # Give each rule one measurement before taking additional fields from it.
     # No interpretation is based on the number of clauses.
     ordered, seen, used = [], set(), set()
-    choices.sort(key=lambda c: c[:4])
+    owners = {}
+    for _, _, rid, _, semantic, _ in choices:
+        owners.setdefault(semantic, set()).add(rid)
+    # Prefer the rule's own distinguishing input before a confirmation value
+    # shared with another rule. Changed values and triggering rules stay first.
+    choices.sort(key=lambda c: (*c[:3], len(owners[c[4]]), c[3]))
     for first_pass in (True, False):
         for cause, unchanged, rid, field, semantic, text in choices:
             if semantic in seen or (first_pass and rid in used):
@@ -150,7 +155,7 @@ def composition_explanation(judgment):
 def composition_next(judgment, events, currency):
     packet = saved_composition(judgment)
     policies = [r for r in packet.get("compositions") or [] if r.get("policyRuleId")]
-    if policies:
+    if policies or (judgment.get("managementDecision") or {}).get("responses"):
         return ""  # The policy renderer uses the saved numeric release targets.
     values = exact_measurements(judgment, {}, events, currency, limit=2)
     if values:

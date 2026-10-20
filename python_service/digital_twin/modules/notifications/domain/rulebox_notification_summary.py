@@ -221,12 +221,17 @@ def _comparison(judgment, current, events):
 
 def _next(judgment, events, currency):
     composed_policy = any(r.get("policyRuleId") for r in saved_composition(judgment).get("compositions") or [])
+    active_policy = (judgment.get("managementDecision") or {}).get("responses")
+    hypothesis_next = ""
     if not composed_policy and events and all(e.get('purpose') in {'hypothesis-evidence', 'context-evidence'} for e in events):
         for event in events:
             text = next_check_words((event.get('nextCheck') or {}).get('condition') or
                                     (event.get('hypothesis') or {}).get('falsificationContract'))
             if text and len(text) <= 150:
-                return text.rstrip('. ') + '.'
+                hypothesis_next = text.rstrip('. ') + '.'
+                if not active_policy:
+                    return hypothesis_next
+                break
     targets = []
     for response in (judgment.get("managementDecision") or {}).get("responses", []):
         objective = response.get("objective") or {}
@@ -237,7 +242,8 @@ def _next(judgment, events, currency):
                            if field in {"positionAccountWeight", "positionWeight"}
                            else condition_clause(field, objective.get("operator"), response["targetValue"], currency))
     if targets:
-        return " · ".join(targets[:2]) + "인지 새 자료에서 각각 확인합니다. 다른 제한 조건도 함께 재검사합니다."
+        return (" · ".join(targets[:2]) + "인지 새 자료에서 각각 확인합니다. 다른 제한 조건도 함께 재검사합니다."
+                + (" 가설 확인: " + hypothesis_next if hypothesis_next else ""))
     if any(e.get('policyState') == 'released' for e in events):
         boundaries = [condition_clause(c['field'], c['operator'], c['resolvedThreshold']['value'], currency)
                       for e in events if e.get('policyState') == 'released' for c in e.get('conditions') or []

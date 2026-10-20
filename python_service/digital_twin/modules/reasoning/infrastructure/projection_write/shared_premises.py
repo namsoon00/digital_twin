@@ -579,6 +579,7 @@ def prepare_shared_premises(
         stage_started = time.perf_counter()
         rulebox_payload = {
             "worldId": shared_world.world_id,
+            "evidenceEvaluationAsOf": str(snapshot.generated_at or ""),
             "worldType": str(shared_world.world_type or "MarketWorld"),
             "tenantId": str(shared_world.tenant_id or "shared"),
             "accountId": "",

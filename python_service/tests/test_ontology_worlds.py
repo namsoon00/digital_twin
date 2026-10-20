@@ -445,8 +445,10 @@ class MultiAccountProjectionTests(unittest.TestCase):
             settings={"ontologyTenantId": "tenant-a", "ontologyMarketWorldId": "kr"},
         )
 
-        first = recorder.record_snapshot(self.snapshot("account-a", "005930", "Samsung"))
-        second = recorder.record_snapshot(self.snapshot("account-b", "000660", "SK Hynix"))
+        snapshots = [self.snapshot("account-a", "005930", "Samsung"),
+                     self.snapshot("account-b", "000660", "SK Hynix")]
+        first = recorder.record_snapshot(snapshots[0])
+        second = recorder.record_snapshot(snapshots[1])
 
         self.assertEqual("portfolio:tenant-a:account-a", first["ontologyWorld"]["worldId"])
         self.assertEqual("portfolio:tenant-a:account-b", second["ontologyWorld"]["worldId"])
@@ -455,6 +457,8 @@ class MultiAccountProjectionTests(unittest.TestCase):
             [item["worldId"] for item in repository.rulebox_payloads],
         )
         self.assertEqual(2, len(repository.saved_portfolios))
+        self.assertEqual([s.generated_at for s in snapshots],
+                         [p["evidenceEvaluationAsOf"] for p in repository.rulebox_payloads])
         self.assertNotEqual(
             repository.saved_portfolios[0].worldview["worldviewManifestId"],
             repository.saved_portfolios[1].worldview["worldviewManifestId"],

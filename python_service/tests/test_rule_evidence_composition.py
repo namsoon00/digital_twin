@@ -85,6 +85,59 @@ def migration_jobs():
 
 
 class RuleEvidenceCompositionTests(unittest.TestCase):
+    def test_native_grounding_uses_source_clock_across_a_queue_expiry_boundary(self):
+        from datetime import datetime, timezone
+        from unittest.mock import patch
+        from digital_twin.modules.market_data.domain import data_freshness
+        from digital_twin.modules.reasoning.domain.ontology_inference_materializer import grounded_inference_context
+
+        rule = next(r for r in default_graph_inference_rules()
+                    if r.rule_id == "graph.instrument_profile.bitcoin_sensitive.crypto_linkage.v1")
+        stock = OntologyEntity("stock:MSTR", "Strategy", "stock",
+                               {"source": "holding", "freshnessRequired": False})
+        archetype = OntologyEntity("archetype:MSTR", "Bitcoin proxy", "investment-archetype",
+                                   {"instrumentArchetype": "BitcoinProxy", "freshnessRequired": False})
+        crypto = OntologyEntity("crypto:MSTR", "BTC exposure", "crypto-exposure",
+                                {"cryptoSymbol": "BTC", "sourceAsOf": "2026-10-20T12:00:00Z",
+                                 "maxAgeMinutes": 25})
+        graph = PortfolioOntology("fixture", entities=[stock, archetype, crypto], relations=[
+            OntologyRelation(stock.entity_id, archetype.entity_id, "HAS_ARCHETYPE",
+                             properties={"_relationId": "relation:archetype"}),
+            OntologyRelation(stock.entity_id, crypto.entity_id, "HAS_CRYPTO_EXPOSURE",
+                             properties={"_relationId": "relation:crypto"}),
+        ])
+        graph.worldview["evidenceEvaluationAsOf"] = "2026-10-20T12:10:00Z"
+        native_proof = {"matchedConditions": [
+            {"conditionId": c.condition_id, "matchedByTypeDB": True} for c in rule.conditions]}
+        results = []
+        for execution_minute in (24, 26):
+            with patch.object(data_freshness, "datetime", wraps=datetime) as clock:
+                clock.now.return_value = datetime(2026, 10, 20, 12, execution_minute, tzinfo=timezone.utc)
+                results.append(grounded_inference_context(graph, rule, stock, native_proof))
+                clock.now.assert_not_called()
+        self.assertEqual(results[0], results[1])
+        self.assertTrue(results[0]["evidenceUsableForJudgement"], results[0])
+        measurement = next(c for c in results[0]["matchedConditions"] if c["conditionId"] == "btc-exposure")
+        self.assertEqual(10, measurement["freshnessAgeMinutes"])
+        self.assertEqual(graph.worldview["evidenceEvaluationAsOf"], measurement["freshnessEvaluatedAt"])
+        graph.worldview["evidenceEvaluationAsOf"] = "2026-10-20T12:30:00Z"
+        later = grounded_inference_context(graph, rule, stock, native_proof)
+        self.assertFalse(later["evidenceUsableForJudgement"])
+        self.assertEqual("stale", next(c for c in later["matchedConditions"]
+                                      if c["conditionId"] == "btc-exposure")["freshnessStatus"])
+
+    def test_frozen_clock_rejects_future_evidence_and_never_upgrades_explicit_stale_evidence(self):
+        from digital_twin.modules.reasoning.domain.ontology_inference_materializer import observation_metadata
+        properties = {"sourceAsOf": "2026-10-20T12:00:00Z", "maxAgeMinutes": 25}
+        stale = observation_metadata({**properties, "freshnessStatus": "stale"}, 1, "2026-10-20T12:10:00Z")
+        self.assertFalse(stale["judgementEvidenceUsable"])
+        future = observation_metadata({**properties, "freshnessStatus": "fresh",
+                                       "judgementEvidenceUsable": True}, 1, "2026-10-20T11:59:00Z")
+        self.assertFalse(future["judgementEvidenceUsable"])
+        self.assertIn("분석 기준 시각 이후", future["freshnessGateReason"])
+        with self.assertRaises(ValueError):
+            observation_metadata(properties, 1, "invalid-clock")
+
     def test_additive_release_preserves_every_original_rule_and_static_entity(self):
         records = migration_artifacts()
         old, new = (r["artifact"] for r in records)

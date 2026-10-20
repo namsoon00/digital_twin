@@ -873,3 +873,20 @@ heads written after their market cutoff. Unavailable historical heads remain
 unavailable. Complete paired subject snapshots retire absent subject scopes
 only after reference-safety checks; unrelated/shared omissions retain their
 previous generations. The existing strict input-parity gate is unchanged.
+
+The R10 production comparison exposed a separate clock defect: the same BTC
+exposure source crossed its 25-minute freshness boundary between two queue
+executions. The ABox inputs and matched native rules were identical, but grounding
+fell back to wall-clock age and produced different evidence eligibility.
+Native projection now binds `evidenceEvaluationAsOf` to the source snapshot's
+`generated_at`, including shared-premise projection. Grounding records
+`freshnessEvaluatedAt` on the measured conditions and derived evidence.
+The actual generation/write timestamp stays separate. An invalid or future
+evaluation clock fails execution; future source evidence is ineligible and
+explicit stale evidence cannot become fresh. Legacy callers without a snapshot
+clock retain execution-time evaluation.
+
+This makes replay deterministic; it does not make delayed alerts current.
+The receipt-locked dispatch check still evaluates premise expiry against the
+actual sending time and suppresses an expired job. Preserve R10's failed
+comparison and validate a fresh immutable candidate after the fix.

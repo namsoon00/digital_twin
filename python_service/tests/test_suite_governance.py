@@ -377,7 +377,9 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # and the distinguishing measurement from each contributing rule.
         # Four paired-input regressions cover immutable source binding, actual
         # projection use, subject-only retirement and real MySQL cutoff reads.
-        self.assertLessEqual(total, 2438)
+        # Two clock regressions cover the observed BTC queue-boundary divergence
+        # and rejection of future/stale evidence in frozen native evaluation.
+        self.assertLessEqual(total, 2440)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

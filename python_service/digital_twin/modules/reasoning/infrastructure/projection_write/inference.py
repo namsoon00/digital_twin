@@ -340,6 +340,7 @@ def attach_graph_store_inference_result(
             )
         payload = {
             "worldId": world_id,
+            "evidenceEvaluationAsOf": str(snapshot.generated_at or ""),
             "worldType": (
                 str((result.get("ontologyWorld") or {}).get("worldType") or "")
                 if isinstance(result.get("ontologyWorld"), dict)

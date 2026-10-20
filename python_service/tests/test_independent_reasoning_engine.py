@@ -2705,6 +2705,7 @@ class IndependentReasoningEngineTests(unittest.TestCase):
                 },
             },
             "ruleboxExecution": {
+                "evidenceEvaluationAsOf": "2026-10-20T12:10:00Z",
                 "modelSignalBridgeExecution": {
                     "status": "ok",
                     "sourceRowCount": 4,
@@ -2736,6 +2737,7 @@ class IndependentReasoningEngineTests(unittest.TestCase):
             ["graph.price.recovery.v1"],
             compact["modelSignalBridgeExecution"]["matchedContractIds"],
         )
+        self.assertEqual("2026-10-20T12:10:00Z", compact["evidenceEvaluationAsOf"])
         self._assert_compact_projection_preserves_bounded_rule_match_proof()
         self._assert_inference_trace_preserves_exact_match_target_for_batched_run()
         self._assert_compact_match_identity_resolves_symbol_token_in_source_id()

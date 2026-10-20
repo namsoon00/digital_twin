@@ -394,6 +394,7 @@ def compact_projection_result(projection: object) -> Dict[str, object]:
         "relationCount": int(values.get("relationCount") or 0),
         "sourceAboxSnapshotId": identity["sourceAboxSnapshotId"],
         "inferenceGenerationId": identity["inferenceGenerationId"],
+        "evidenceEvaluationAsOf": str(rulebox_execution.get("evidenceEvaluationAsOf") or ""),
         "nativeTypeDbReasoningCompleted": identity["nativeTypeDbReasoningCompleted"],
         "generationAligned": identity["generationAligned"],
         "inferenceRelationCount": identity["relationCount"],

@@ -36,6 +36,7 @@ from digital_twin.modules.reasoning.infrastructure.typeql.rule_shape import (
     typedb_source_kind_uses_symbol_scope,
 )
 from typing import Dict
+from digital_twin.modules.market_data.contracts import parse_datetime
 import copy
 import time
 from .cycle_ports import NativeExecutionCycleStore, NativeExecutionCycleRuntime
@@ -124,6 +125,11 @@ def _run_rulebox_unlocked(
     generation_id = requested_generation_id or _bindings.inference_generation_id()
     fresh_inference_generation = not bool(requested_generation_id)
     generation_at = _bindings.utc_now()
+    evidence_evaluation_at = str(payload.get("evidenceEvaluationAsOf") or generation_at)
+    evidence_clock = parse_datetime(evidence_evaluation_at)
+    generation_clock = parse_datetime(generation_at)
+    if not evidence_clock or not generation_clock or evidence_clock > generation_clock:
+        raise ValueError("Native evidence evaluation requires a valid non-future observation clock")
     clear_requested = force_clear_requested and destructive_clear_allowed
     clear_result = {}
     if force_clear_requested and not clear_requested:
@@ -1000,6 +1006,7 @@ def _run_rulebox_unlocked(
         graph.worldview.update(
             {
                 "worldId": world_id,
+                "evidenceEvaluationAsOf": evidence_evaluation_at,
                 "worldType": str(abox_metadata.get("worldType") or payload.get("worldType") or ""),
                 "tenantId": str(abox_metadata.get("tenantId") or payload.get("tenantId") or ""),
                 "accountId": str(abox_metadata.get("accountId") or payload.get("accountId") or ""),
@@ -1176,6 +1183,7 @@ def _run_rulebox_unlocked(
         # facts may retain the manifest that first created them, so the
         # active scope pointer is the authoritative membership check.
         runtime_rulebox_metadata["sourceAboxGenerationValid"] = source_generation_valid
+        runtime_rulebox_metadata["evidenceEvaluationAsOf"] = evidence_evaluation_at
         runtime_rulebox_metadata["sourceAboxSnapshotIds"] = list(source_abox_snapshot_ids)
         inference_graph_started = time.perf_counter()
         _bindings.materialize_typedb_native_matches(graph, execution_rules, native_match_result)
@@ -1545,6 +1553,7 @@ def _run_rulebox_unlocked(
         "materializationSource": TYPEDB_NATIVE_MATERIALIZATION_SOURCE,
         "inferenceGenerationId": generation_id,
         "inferenceGenerationAt": generation_at,
+        "evidenceEvaluationAsOf": evidence_evaluation_at,
         "targetSymbols": target_symbols,
         "ruleTargetSymbols": rule_target_symbols,
         "reasoningSubjectKinds": reasoning_subject_kinds,

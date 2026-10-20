@@ -1,6 +1,6 @@
 from typing import Dict, Iterable, List, Mapping, Tuple
 
-from digital_twin.modules.market_data.contracts import age_minutes
+from digital_twin.modules.market_data.contracts import age_minutes, parse_datetime
 from digital_twin.modules.market_data.contracts import number
 from digital_twin.modules.reasoning.domain.ontology_contracts import OntologyBelief, OntologyEntity, OntologyEvidence, OntologyRelation, PortfolioOntology, entity_id
 from digital_twin.modules.reasoning.domain.ontology_decision_state import ACTION_LEVEL_RANK, DATA_STATE_LABELS, REVIEW_LEVEL_LABELS, conflict_state_from_roles, review_level_for
@@ -319,6 +319,7 @@ def materialize_rule_inference(
             "requiredConditionCount": int(number(context.get("requiredConditionCount"))),
             "groundedConditionCount": int(number(context.get("groundedConditionCount"))),
             "freshnessStatus": str(context.get("freshnessStatus") or "unknown"),
+            "freshnessEvaluatedAt": str(context.get("freshnessEvaluatedAt") or ""),
             "freshnessGateReason": str(context.get("freshnessGateReason") or ""),
             "temporalEvidenceCount": int(number(context.get("temporalEvidenceCount"))),
             "evidenceUsableForJudgement": bool(context.get("evidenceUsableForJudgement")),
@@ -416,6 +417,7 @@ def materialize_rule_inference(
             "aiInfluenceLabel": derivation.ai_influence_label or derivation.belief_label or target_label,
             "inferenceTraceId": trace_id,
             "freshnessStatus": str(context.get("freshnessStatus") or "unknown"),
+            "freshnessEvaluatedAt": str(context.get("freshnessEvaluatedAt") or ""),
             "freshnessGateReason": str(context.get("freshnessGateReason") or ""),
             "evidenceUsableForJudgement": bool(context.get("evidenceUsableForJudgement")),
             "source": GRAPH_REASONER_VERSION,
@@ -657,6 +659,7 @@ def grounded_inference_context(
     evidence_index: Dict[str, object] = None,
 ) -> Dict[str, object]:
     payload = dict(context or {})
+    evaluation_at = str((graph.worldview or {}).get("evidenceEvaluationAsOf") or "")
     conditions_by_id = {
         str(item.condition_id or ""): item
         for item in list(rule.conditions or [])
@@ -689,7 +692,7 @@ def grounded_inference_context(
                     stock_observation_properties.update(freshnessRequired=False,
                         observationKind="account-policy", source="account-policy", provider="account-policy",
                         sourceAsOf="", observedAt="", sourceFetchedAt="", fetchedAt="")
-                item.update(observation_metadata(stock_observation_properties, observed_value))
+                item.update(observation_metadata(stock_observation_properties, observed_value, evaluation_at))
                 item["field"] = field
                 source_fact_ids = _condition_source_fact_ids(
                     stock_observation_properties,
@@ -717,7 +720,7 @@ def grounded_inference_context(
                     target_properties.setdefault("observationKind", target.kind if target else "")
                     target_properties.setdefault("observationRelationType", relation.relation_type)
                     observed_value = evidence_observed_value(target, condition)
-                    item.update(observation_metadata(target_properties or {}, observed_value))
+                    item.update(observation_metadata(target_properties or {}, observed_value, evaluation_at))
                     matched_property_keys = set(
                         str(key)
                         for key in (getattr(condition, "target_property_filters", {}) or {}).keys()
@@ -830,6 +833,7 @@ def grounded_inference_context(
         "dataState": data_state,
         "dataStateLabel": DATA_STATE_LABELS[data_state],
         "freshnessStatus": freshness_status,
+        "freshnessEvaluatedAt": evaluation_at,
         "freshnessGateReason": freshness_gate_reason,
         "temporalEvidenceCount": len(temporal_conditions),
         "evidenceUsableForJudgement": evidence_usable,
@@ -1053,8 +1057,11 @@ def evidence_observed_value(target: OntologyEntity, condition):
     return filter_values or target.label
 
 
-def observation_metadata(properties: Dict[str, object], observed_value: object) -> Dict[str, object]:
+def observation_metadata(properties: Dict[str, object], observed_value: object, evaluation_at: str = "") -> Dict[str, object]:
     properties = properties or {}
+    evaluation_clock = parse_datetime(evaluation_at) if evaluation_at else None
+    if evaluation_at and evaluation_clock is None:
+        raise ValueError("Evidence evaluation requires a valid frozen observation clock")
     source = str(
         properties.get("provider")
         or properties.get("observationSource")
@@ -1098,7 +1105,12 @@ def observation_metadata(properties: Dict[str, object], observed_value: object) 
     maximum_age = int(number(properties.get("maxAgeMinutes"))) or default_observation_max_age(properties)
     freshness_age = properties.get("freshnessAgeMinutes")
     if freshness_age in (None, "") and source_as_of:
-        freshness_age = age_minutes(source_as_of)
+        freshness_age = age_minutes(source_as_of, now=evaluation_clock)
+    source_clock = parse_datetime(source_as_of) if source_as_of else None
+    future_source = bool(evaluation_clock and source_clock and source_clock > evaluation_clock)
+    if future_source:
+        freshness = "unavailable"
+        freshness_age = None
     if freshness_required and freshness == "unknown" and freshness_age is not None:
         freshness = "fresh" if number(freshness_age) <= maximum_age else "stale"
     if not freshness_required:
@@ -1118,6 +1130,8 @@ def observation_metadata(properties: Dict[str, object], observed_value: object) 
         gate_reason = "시간에 따라 바뀌지 않는 구조·정책 근거입니다."
     elif not source_timestamp_present:
         gate_reason = "원천 기준시각이 없어 투자 판단 근거로 사용할 수 없습니다."
+    elif future_source:
+        gate_reason = "분석 기준 시각 이후의 자료이므로 이번 판단에 사용하지 않습니다."
     elif freshness != "fresh":
         gate_reason = str(properties.get("freshnessReason") or "원천 데이터가 허용 시간보다 오래되었습니다.")
     elif not judgement_usable:
@@ -1133,6 +1147,7 @@ def observation_metadata(properties: Dict[str, object], observed_value: object) 
         "freshnessRequired": freshness_required,
         "freshnessStatus": freshness,
         "freshnessAgeMinutes": freshness_age,
+        "freshnessEvaluatedAt": evaluation_at,
         "maxAgeMinutes": maximum_age if freshness_required else None,
         "freshnessGateReason": gate_reason,
         "marketSessionStatus": str(properties.get("marketSessionStatus") or ""),

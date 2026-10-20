@@ -46,7 +46,12 @@ def progress_state(task, delivery=None, receipt=None):
         return {**base, "stage": "retry", "reasons": ["분석을 완료하지 못해 재시도 일정에 따라 다시 확인합니다."],
                 "nextCheckAt": task.get("nextCheckAt") or task["availableAt"]}
     if outcome.get("status") in {"data-wait", "retrieval-blocked"}:
-        return {**base, "stage": "waiting", "reasons": list(outcome.get("requirements") or ["분석에 필요한 자료가 아직 준비되지 않았습니다."])}
+        # Legacy captures did not record a typed retrieval blocker. Their
+        # renewal receipt still identifies the same operational quote wait.
+        reason_code = outcome.get("reasonCode") or (result.get("dataRecovery") or {}).get("reasonCode")
+        return {**base, "stage": "waiting", "reasonCode": reason_code or "required-source",
+                "resumeCondition": outcome.get("resumeCondition", "필수 자료 또는 실행 조건의 변경"),
+                "reasons": list(outcome.get("requirements") or ["분석에 필요한 자료가 아직 준비되지 않았습니다."])}
     if ((result.get("quality") or {}).get("status") == "rejected"
             or (publication.get("status") == "recorded" and result.get("notification", {}).get("send") is True)):
         reasons = list((result.get("quality") or {}).get("errors") or [])
@@ -65,6 +70,19 @@ def progress_state(task, delivery=None, receipt=None):
 
 def progress_fingerprint(state):
     # Polling clocks, the next scheduled wake and repeated task IDs are not news.
+    if state["stage"] == "waiting":
+        code = state.get("reasonCode", "required-source")
+        return identity("waiting", "current-quote" if code == "unusable-current-quote-clock" else code)
     return identity(state["stage"], sorted(set(state.get("reasons") or [])),
                     (state.get("repair") or {}).get("status"),
                     (state.get("validationRepair") or {}).get("status"), state.get("deliveryJobId", ""))
+
+
+def should_notify(state, update):
+    # Every latest state remains visible in the durable record. Intermediate
+    # work is not a customer result, and repeating paraphrased gaps is noise.
+    if update["stage"] in {"reviewing", "validated"}:
+        return False
+    if update.get("terminal"):
+        return True
+    return progress_fingerprint(update) not in state.get("notifiedStates", [])

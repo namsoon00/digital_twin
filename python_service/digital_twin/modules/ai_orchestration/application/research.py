@@ -79,7 +79,7 @@ def execute_research(job, research_store, orchestrator_factory):
     # Keep the authored collection scope, but allow the source owner to review
     # the collected answer independently of market-observation quality gates.
     run = orchestrator.run(question, NewsCollectionTarget(job["symbol"], job["name"]),
-        {"documentaryReviewOnly": True, "documentarySourceExploration": documentary,
+        {"documentaryReviewOnly": True, "documentarySourceExploration": documentary or "news" in sources,
          "previousSourceRecovery": previous_recovery(job, research_store),
          "sourceExplorationResume": ((existing or {}).get("executedPlan") or {}).get("sourceExploration"),
          "researchPlan": {"planId": job["taskId"], "tasks": [task], "unresolvedQuestions": [job["question"]]}},

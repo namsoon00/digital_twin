@@ -52,7 +52,7 @@ def market_memories(rows):
     return scoped_memories(rows, True)
 
 
-def material_key(packet, research):
+def material_key(packet, research, *, evidence_identity=None):
     from .execution_input import LANE_PROMPT_VERSION
     common = {"policy": VERSION, "lane": packet["executionLane"],
               "authorPolicy": LANE_PROMPT_VERSION,
@@ -62,8 +62,10 @@ def material_key(packet, research):
         common["readPolicy"] = packet["evidenceReadPolicy"]
     if packet.get("evidenceReadCompletionPolicy"):
         common["readCompletionPolicy"] = packet["evidenceReadCompletionPolicy"]
+    if packet.get("evidencePurposePolicy"):
+        common["purposePolicy"] = packet["evidencePurposePolicy"]
     if market(packet):
-        common["evidence"] = evidence_change_identity(packet, [], [])
+        common["evidence"] = evidence_identity if evidence_identity is not None else evidence_change_identity(packet, [], [])
         common["observationCases"] = sorted([{key: row[key] for key in ("caseId", "capability", "question", "completionCriterion") if key in row}
             for row in research if row.get("kind") == "brain-case"], key=content_hash)
         common["reviewedQuestionReceipts"] = sorted([{"caseId": row["caseId"],

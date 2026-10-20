@@ -2,7 +2,7 @@
 from datetime import datetime, timezone
 import math
 from digital_twin.modules.ai_orchestration.contracts import OBSERVATION_METRICS, OBSERVATION_WORDING_VERSION, resolve_observation_ref
-from digital_twin.modules.ai_orchestration.contracts import observation_subject_quote, QUOTE_SELECTION_VERSIONS
+from digital_twin.modules.ai_orchestration.contracts import observation_subject_quote, QUOTE_SELECTION_VERSIONS, dated_observation
 from digital_twin.modules.reasoning.contracts import quote_clock_assessment, OBSERVATION_QUOTE_KINDS
 from digital_twin.modules.notifications.domain.observation_price_basis import PRICE_PRESENTATION_VERSION, observation_price_basis
 from zoneinfo import ZoneInfo
@@ -48,13 +48,18 @@ def render_ai_observation(result, *, sent_at="", debug_number=""):
     # Persisted jobs without this version retain their original rendered bytes.
     quote = (observation_subject_quote(packet) if result.get("quoteSelectionVersion") in QUOTE_SELECTION_VERSIONS
              else next((row for row in packet["facts"] if figure(row.get("currentPrice")) and float(row["currentPrice"]) > 0), {}))
+    dated = dated_observation(result)
+    if dated and quote.get("id") not in result.get("evidenceIds", []):
+        quote = {}
     assessment = {}
     if "quoteAssessment" in packet or result.get("pricePresentationVersion") == PRICE_PRESENTATION_VERSION:
         current = quote_clock_assessment(packet["facts"], sent_at or result["observedAt"])
         assessment = next((row for row in current["quotes"] if row["evidenceId"] == quote.get("id")), {})
     basis = observation_price_basis(quote, assessment) if result.get("pricePresentationVersion") == PRICE_PRESENTATION_VERSION else {}
     lines = [f"🧠 AI 관찰 · {packet['name']} ({packet['symbol']})", ""]
-    if basis and not basis["currentUseAllowed"]:
+    if dated:
+        lines += ["각 근거에 표시된 시점의 자료로 작성한 관찰입니다.", ""]
+    if basis and not basis["currentUseAllowed"] and (quote or not dated):
         lines += [basis["label"] + " 기준 · " + clock_label(basis.get("sourceAsOf")), basis["reason"], ""]
     lines.append(result["summary"])
     lines += ["", "이전 알림과 비교", result["comparison"]]
@@ -72,7 +77,8 @@ def render_ai_observation(result, *, sent_at="", debug_number=""):
             label = "관측 시점 가격: " + label.split(": ", 1)[1]
         lines.append("• " + label + " → " + metric(current, field).split(": ", 1)[1])
         compared.add(field)
-    lines += ["", "확인한 데이터" if assessment else "확인한 현재 데이터"]
+    if quote or not dated:
+        lines += ["", "확인한 데이터" if assessment or dated else "확인한 현재 데이터"]
     fields = ["currentPrice", "change24h", "change7d", "volume24h", "marketCap", "changeRate", "averagePrice", "profitLossRate", "positionWeight", "ma5", "ma20", "ma60", "volume", "volumeRatio"]
     cited_fields = {ref["field"] for refs in result.get("claimEvidence", {}).values() for ref in refs if ref["period"] == "current" and ref["factId"] == quote.get("id")}
     if result.get("businessResearch", {}).get("theses") or result.get("businessResearch", {}).get("reviews"):
@@ -94,7 +100,9 @@ def render_ai_observation(result, *, sent_at="", debug_number=""):
         if key == "changeRate" and value == 0 and quote.get("dataState") == "partial":
             continue
         text = metric(quote, key)
-        if key == "currentPrice" and basis:
+        if key == "currentPrice" and dated:
+            text = "관측 시점 가격: " + text.split(": ", 1)[1]
+        elif key == "currentPrice" and basis:
             text = basis["label"] + ": " + text.split(": ", 1)[1]
         elif key == "currentPrice" and assessment and assessment["status"] != "fresh":
             text = "기준 시점 가격: " + text.split(": ", 1)[1]
@@ -103,8 +111,9 @@ def render_ai_observation(result, *, sent_at="", debug_number=""):
         lines.append("거래량 비율은 같은 장중 시각끼리의 비교가 아닙니다.")
     session = (" · 출처의 마감 참고값" if assessment.get("referenceState") == "last-close" else "") if assessment else (
         " · 장 마감 자료" if quote.get("marketSessionStatus") == "closed" else "")
-    lines += [(basis.get("sourceClockLabel", "시세 기준") + " ") + clock_label(quote.get("sourceAsOf") or quote.get("asOf")) + session,
-              "출처 " + source_label(quote)]
+    if quote or not dated:
+        lines += [(basis.get("sourceClockLabel", "시세 기준") + " ") + clock_label(quote.get("sourceAsOf") or quote.get("asOf")) + session,
+                  "출처 " + source_label(quote)]
     if assessment:
         status = assessment["status"]
         if status == "stale":
@@ -132,7 +141,9 @@ def render_ai_observation(result, *, sent_at="", debug_number=""):
                 continue
             seen.add(fact["id"])
             title = str(fact.get("label") or fact.get("title") or "추가 근거")[:80]
-            citations.append("• " + title + " · " + source_label(fact))
+            source_clock = fact.get("sourceAsOf") or fact.get("publishedAt") or fact.get("asOf")
+            dated_suffix = " · 자료 기준 " + clock_label(source_clock) if dated and source_clock else ""
+            citations.append("• " + title + " · " + source_label(fact) + dated_suffix)
     if citations:
         lines += ["", "함께 확인한 근거", *citations[:3]]
     business = result.get("businessResearch") or {}

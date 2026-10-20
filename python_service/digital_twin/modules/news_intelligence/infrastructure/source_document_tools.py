@@ -17,6 +17,7 @@ from ..domain.investment_research import ResearchEvidence, target_aliases
 from ..domain.question_passages import select_question_passages
 from ..domain.source_exploration import VERSION, public_url
 from ..domain.source_recovery import EXTRACTION_VERSION
+from ..domain.source import SourceRegistry
 from .public_document_http import fetch_public_document
 
 
@@ -40,13 +41,14 @@ class _Metadata(HTMLParser):
             self.explicit_dates.append(values.get("content", ""))
         if tag == "time" and values.get("datetime") and values.get("itemprop") != "dateModified":
             self.dates.append(values["datetime"])
-        if tag in {"span", "div"}:
+        if tag in {"span", "div", "p"}:
+            article_time = "article__time" in values.get("class", "").split()
             if self.date_depth:
                 self.date_depth += 1
-            elif (re.search(r"(?:^|[-_\s])(?:date|published)(?:$|[-_\s])", values.get("class", "") + " " + values.get("id", ""), re.I)
+            elif ((article_time or re.search(r"(?:^|[-_\s])(?:date|published)(?:$|[-_\s])", values.get("class", "") + " " + values.get("id", ""), re.I))
                   and not re.search(r"updated|modified", values.get("class", "") + " " + values.get("id", ""), re.I)):
                 self.date_depth = 1
-                self.article_date = bool(re.search(r"(?:article|release|publication|publish)[-_]date(?:$|\s)",
+                self.article_date = article_time or bool(re.search(r"(?:article|release|publication|publish)[-_]date(?:$|\s)",
                                                    values.get("class", "") + " " + values.get("id", ""), re.I)
                     or re.search(r"(?:^|\s)(?:post-info|post-meta|entry-meta|article-header|entry-header|post-header)(?:$|\s)", context, re.I))
 
@@ -63,7 +65,7 @@ class _Metadata(HTMLParser):
                 break
         if tag == "title":
             self.in_title = False
-        if tag in {"span", "div"} and self.date_depth:
+        if tag in {"span", "div", "p"} and self.date_depth:
             self.date_depth -= 1
             if not self.date_depth:
                 (self.article_dates if self.article_date else self.dates).append(" ".join(self.date_parts))
@@ -120,8 +122,9 @@ def index_publication(candidate, hosts):
 
 
 class SourceDocumentTools:
-    def __init__(self, search_provider, fetch=fetch_public_document, pdf_reader=pdf_pages):
+    def __init__(self, search_provider, fetch=fetch_public_document, pdf_reader=pdf_pages, source_registry=None):
         self.search_provider, self.fetch, self.pdf_reader = search_provider, fetch, pdf_reader
+        self.source_registry = source_registry or SourceRegistry()
 
     def seeds(self, target, packets):
         source = issuer_ir_source(target.normalized_symbol())
@@ -151,6 +154,9 @@ class SourceDocumentTools:
         source = issuer_ir_source(target.normalized_symbol())
         hosts = {_host(value) for value in source.source_urls} if source else set()
         source_bound = _host(url) in hosts
+        publisher = self.source_registry.by_host(_host(url))
+        public_source = (publisher if publisher and publisher.tier in {"A", "B", "C"}
+                         and any("news" in row.get("sourceTypes", []) for row in tasks) else None)
         requested = urlsplit(candidate["url"])
         issuer_redirect = (data.startswith(b"%PDF-") and _host(candidate["url"]) in hosts
                            and requested.path.lower().endswith(".pdf") and not requested.query
@@ -216,16 +222,26 @@ class SourceDocumentTools:
             "publicationProof": date_proof, "passages": passages, **page_info,
             "issuerVerification": "registered-issuer-source" if source_bound else "official-issuer-redirect" if issuer_redirect else "official-linked-document" if linked_pdf else "unverified-source",
             "readScope": "question-selected-passages", "redirects": receipt.get("redirects", [])}
+        if public_source:
+            document["publisherVerification"] = {"kind": "registered-publisher-host", "publisher": public_source.to_dict()}
         if focus:
             document["extraction"] = {"version": EXTRACTION_VERSION, "focus": list(focus),
                 "originalDocumentHash": expected_hash, "scope": "selected-passages-with-nearby-context"}
         result = {"status": "document-read", "document": document, "candidates": links}
         reasons = []
-        if not (source_bound or linked_pdf or issuer_redirect):
+        issuer_document = source_bound or linked_pdf or issuer_redirect
+        if not (issuer_document or public_source):
             reasons.append("issuer-source-unverified")
         subject_text = " ".join([title, *blocks]).casefold()
-        if not any(re.search(r"(?<![\w])" + re.escape(alias.casefold()) + r"(?![\w])", subject_text)
-                   for alias in target_aliases(target) if len(alias) >= 3):
+        subject_bound = any(re.search(r"(?<![\w])" + re.escape(alias.casefold()) + r"(?![\w])", subject_text)
+                            for alias in target_aliases(target) if len(alias) >= 3)
+        # Public authority context need not name the company, but must match
+        # two explicit question terms. This is relevance, never causal proof.
+        terms = {str(term).casefold().strip() for row in tasks for term in row.get("queryTerms", [])
+                 if len(str(term).strip()) >= 4}
+        topic_bound = bool(public_source and public_source.primary and sum(
+            bool(re.search(r"(?<![\w])" + re.escape(term) + r"(?![\w])", subject_text)) for term in terms) >= 2)
+        if not subject_bound and not (not issuer_document and topic_bound):
             reasons.append("document-subject-unconfirmed")
         if not date:
             reasons.append("publication-date-unverified")
@@ -239,6 +255,32 @@ class SourceDocumentTools:
             return result
         text = "\n\n".join(row["quote"] for row in passages)
         symbol = target.normalized_symbol()
+        if not issuer_document:
+            # News stays in the article governance/review path. Host and date
+            # verification do not approve any statement, opinion or valuation.
+            raw = {"provider": "question-source-exploration", "sourcePublisher": public_source.name,
+                "sourcePublisherId": public_source.publisher_id, "sourceTier": public_source.tier,
+                "sourceContentType": public_source.default_content_type, "primarySource": public_source.primary,
+                "officialSource": public_source.primary, "relationScope": "direct" if subject_bound else "market",
+                "articleText": text, "articleCanonicalUrl": url,
+                "articleFacts": {"bodyAvailable": True, "bodyText": text, "bodyReadScope": "selected-passages"},
+                "readScope": "question-selected-passages", "documentType": document_type, "documentPassages": passages,
+                "sourceDocumentHash": document_hash, "sourceRevision": document_hash,
+                "publicationProof": date_proof, "sourceAsOf": date, "sourceObservedAt": now,
+                "publisherVerification": document["publisherVerification"],
+                "researchTaskIds": [row["taskId"] for row in tasks], "sourceExplorationVersion": VERSION,
+                "valuationInputEligible": False, "validationState": "conditional",
+                "documentUsePolicy": "attributed-public-source-pending-independent-review"}
+            result["evidence"] = ResearchEvidence(
+                evidence_id="research:" + symbol + ":public-document:" + hashlib.sha256(url.encode()).hexdigest()[:24],
+                symbol=symbol, kind="news", source=public_source.name, title=title[:300], summary=text[:1000],
+                url=url, observed_at=now, published_at=date, raw_payload=raw)
+            from ..domain.article import article_source_revision
+            # Keep the exact transport hash for audit while the source owner's
+            # content revision ignores unrelated HTML/footer/request metadata.
+            result["evidence"].raw_payload["sourceRevision"] = article_source_revision(result["evidence"])
+            result["status"] = "document-collected"
+            return result
         raw = {"provider": "question-source-exploration", "sourcePublisher": source.issuer_name,
             "officialSource": True, "primarySource": True, "relationScope": "direct",
             "officialDocumentText": text, "officialDocumentType": document_type,

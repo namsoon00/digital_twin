@@ -117,6 +117,11 @@ class DiagnosticProgressStorageTests(StabilizationDatabaseCase):
             rows=c.execute('SELECT payload_json FROM ai_observation_diagnostic_events WHERE root_job_id=%s ORDER BY created_at,event_id',(root.job_id,)).fetchall()
         return [json.loads(row['payload_json']) for row in rows]
 
+    def latest_state(self, root):
+        with self.control.connect() as c:
+            row = c.execute('SELECT state_json FROM ai_observation_diagnostic_followups WHERE root_job_id=%s', (root.job_id,)).fetchone()
+        return json.loads(row['state_json'])['latestState']
+
     def waiting(self, task, reasons=None):
         result={'status':'awaiting-evidence', 'processingOutcome':{'status':'data-wait','requirements': reasons or ['공식 보고서의 비교 수치']}}
         self.control.complete(task,result,[])
@@ -124,11 +129,9 @@ class DiagnosticProgressStorageTests(StabilizationDatabaseCase):
     def test_real_lineage_replies_once_and_survives_retained_parent_receipt(self):
         parent, root=self.root()
         child=self.task(identity(parent['taskId'],'next'))
-        self.assertEqual(1,self.progress.run_once()['queued'])
-        first=self.progress_events(root)[0]
-        self.assertEqual('reviewing',first['stage'])
-        self.send(self.job(first['eventId']))
-        self.assertEqual(101,self.notifier.post_message.call_args.args[0]['reply_parameters']['message_id'])
+        self.assertEqual(0,self.progress.run_once()['queued'])
+        self.assertEqual([],self.progress_events(root))
+        self.assertEqual('reviewing',self.latest_state(root)['stage'])
         self.waiting(child)
         self.assertEqual(1,self.progress.run_once()['queued'])
         waiting=self.progress_events(root)[-1]
@@ -148,7 +151,8 @@ class DiagnosticProgressStorageTests(StabilizationDatabaseCase):
         result=self.result(False); persist_review(self.control,child,result)
         self.control.complete(child,result,[])
         self.progress.run_once()
-        self.assertEqual('validated',self.progress_events(root)[-1]['stage'])
+        self.assertEqual([],self.progress_events(root))
+        self.assertEqual('validated',self.latest_state(root)['stage'])
         normal=self.job(result['publication']['jobId'])
         with self.notifications.transaction() as c:
             c.execute("UPDATE notification_jobs SET status='failed' WHERE job_id=%s", (normal.job_id,))
@@ -215,7 +219,7 @@ class DiagnosticProgressStorageTests(StabilizationDatabaseCase):
         self.assertEqual(0,self.progress.run_once()['queued'])
         with self.control.transaction() as c:
             c.execute("UPDATE ai_control_tasks SET payload_json=JSON_SET(payload_json,'$.worldId',%s) WHERE task_id=%s",(self.subject['worldId'],task['taskId']))
-        self.assertEqual(1,self.progress.run_once()['queued'])
+        self.assertEqual(0,self.progress.run_once()['queued'])
         self.control.fail(task, 'TimeoutError')
         self.assertEqual(1, self.progress.run_once()['queued'])
         self.assertEqual('retry', self.progress_events(root)[-1]['stage'])

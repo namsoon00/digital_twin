@@ -10,7 +10,7 @@ from digital_twin.modules.ai_orchestration.domain.brain_management import (
     ACTIVE_CASE_STATES, GOALS, case_identity, later, new_case, review_transition, source_memory, validate_management,
 )
 from digital_twin.modules.ai_orchestration.domain.execution_input import validate_execution_input, PROMPT_VERSION, REPAIR_PROMPT_VERSION, LANE_PROMPT_VERSION, LANE_REPAIR_PROMPT_VERSION
-from ..domain import evidence_readiness
+from ..domain import evidence_readiness, evidence_purpose
 from digital_twin.modules.ai_orchestration.domain.insight_quality import local_quality
 from digital_twin.modules.ai_orchestration.domain.recovery import retry_delays
 from .mysql_brain_subjects import fill_case_names
@@ -115,7 +115,7 @@ class MySQLBrainAgendaStore(MySQLOperationalConnection):
             raise ValueError("brain memory requires completed frozen model input")
         envelope = json.loads(gzip.decompress(row["artifact_gzip"]))
         validate_execution_input(envelope)
-        if envelope["promptVersion"] not in {evidence_readiness.PROMPT_VERSION, evidence_readiness.REPAIR_VERSION, PROMPT_VERSION, REPAIR_PROMPT_VERSION, LANE_PROMPT_VERSION, LANE_REPAIR_PROMPT_VERSION} or envelope["current"] != result["input"]:
+        if envelope["promptVersion"] not in {evidence_purpose.PROMPT_VERSION, evidence_purpose.REPAIR_VERSION, evidence_readiness.PROMPT_VERSION, evidence_readiness.REPAIR_VERSION, PROMPT_VERSION, REPAIR_PROMPT_VERSION, LANE_PROMPT_VERSION, LANE_REPAIR_PROMPT_VERSION} or envelope["current"] != result["input"]:
             raise ValueError("brain memory input mismatch")
         if any(envelope["current"].get(key) != job[key] for key in ("accountId", "symbol", "worldId", "taskId")):
             raise ValueError("brain memory subject mismatch")

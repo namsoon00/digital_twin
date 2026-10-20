@@ -1,5 +1,6 @@
 {
   "tests": [
+    {"file": "test_purpose_scoped_evidence.py", "tier": "contract", "core": true},
     {"file": "test_crypto_ai_observation.py", "tier": "contract", "core": true},
     {"file": "test_rule_evidence_composition.py", "tier": "contract", "core": true},
     {"file": "test_crypto_context_delivery.py", "tier": "contract", "core": true},

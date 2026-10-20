@@ -383,7 +383,10 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # follow-ups, delivery, research continuity and external renewal.
         # Three graph-routing regressions cover separate native snapshots,
         # pre-model readiness deferral and persistent wait/failure budgets.
-        self.assertLessEqual(total, 2449)
+        # Ten purpose-scoped regressions cover dated/current publication, frozen
+        # replay and DB proof, quote-wait resumption, quiet follow-ups, news-only
+        # discovery, publisher/revision/date admission and public macro context.
+        self.assertLessEqual(total, 2459)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

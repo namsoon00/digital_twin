@@ -104,7 +104,8 @@ class SourceExplorationService:
                     and callable(getattr(self.tools, "extract", None))):
                 allowed.append("extract")
             context = {"version": VERSION, "subject": {"symbol": target.normalized_symbol(), "name": target.name},
-                "tasks": [{key: row.get(key) for key in ("taskId", "question", "purpose", "queryTerms", "maxAgeMinutes", "requiredPeriodEnds", "requiredMetrics")}
+                "publicSourcePolicy": "registered-public-documents-v1",
+                "tasks": [{key: row.get(key) for key in ("taskId", "question", "purpose", "sourceTypes", "queryTerms", "maxAgeMinutes", "requiredPeriodEnds", "requiredMetrics")}
                           for row in tasks],
                 "assessments": assessments, "existingEvidence": packets[:6],
                 "candidates": list(candidates.values()), "documents": documents,

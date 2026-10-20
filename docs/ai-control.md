@@ -1602,3 +1602,51 @@ limitation. Central publication still checks review provenance, freshness,
 rendered-body equality, and successful prior delivery receipts. News digest
 deduplication remains separate. Existing failed outbox rows are not automatically
 repaired or resent with old market data.
+
+### Purpose-scoped evidence and quiet recovery (2026-10-21)
+
+New bounded-lane executions capture `purpose-scoped-evidence-v1`, author V22,
+retrieval V9, repair V18 and review V11. Historical constructors and frozen
+input verifiers remain available. Retrieval records `purpose` and `blocker`:
+`current-state` requires an eligible source quote, `source-dated` explains the
+explicit source period, and `original-question` retains the original question's
+period and completion criteria. Fetch time never renews source time. A quote
+with a missing/future time or a fetch-time fallback cannot become a dated price
+reference. Public documents and commentary remain attributed source claims.
+
+An incidental periodic quote-refresh receipt no longer labels an otherwise
+completed observation as a data wait. For a dated observation, publication does
+not require a current quote; it still requires cited non-quote evidence, frozen
+input/review proof, a recent analysis capture and novelty/delivery checks. Cited
+prices must have a verified source clock and are labelled by their observation
+time. Current-state delivery rechecks quote eligibility at send time. This does
+not relax rule-triggered measurement validity or authorize trade actions.
+
+After an explicit current-quote wait, another unusable quote tick does not
+justify a paid model call. The source-owned wait identity retains all other
+evidence and excluded-inventory changes; usable quotes, changed source evidence,
+question receipts, policy changes and verified follow-up transitions can resume
+work. A known quote refresh gap does not generate another documentary research
+plan. Missing source answers and partial answers still retain their independent
+question contracts and bounded research budgets.
+
+Diagnostic follow-ups persist their latest state on every check. Reviewing and
+validation-queue progress is quiet. A repeated waiting cause is announced once
+per original draft, independent of reworded prose or intermediate stages.
+Verified delivery/closure and changed failure states remain separately tracked.
+The AI control page shows the stored wait reason, analysis purpose, last check
+and resume condition. These records are operational status, not investment
+accuracy or model running time.
+
+News-only questions may use the existing bounded original-document explorer
+after fixed-source collection is exhausted. Exact registered publisher hosts
+and public-authority hosts can contribute dated HTML sources to article
+governance and independent review; issuer documents retain their own admission
+path. Authority documents without a company mention require at least two
+explicit question terms and enter as market context, never direct company
+results. Redirect hosts, publication metadata, selected passages and exact
+document hashes are retained. Missing dates, unknown sources and insufficient
+passages remain reference-only. News cannot satisfy official-filing criteria.
+Stable article identities and source-owned content revisions distinguish real
+revisions from incidental transport/HTML changes. The two-search/three-read
+budget, persistent recovery budget and public-network safeguards are unchanged.

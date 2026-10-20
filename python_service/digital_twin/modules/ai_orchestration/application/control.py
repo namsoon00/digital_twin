@@ -6,7 +6,7 @@ from digital_twin.modules.reasoning.contracts import EvidenceContractError, Evid
 from digital_twin.modules.ai_orchestration.application.retrieval import RetrievalLeaseLost, RetrievalContractFailure
 from .working_retrieval import retrieve_working_evidence
 from ..domain.observation_wait import retry_key, disposition, unchanged_wait
-from ..domain import research_repeat as repeat, execution_lanes as lanes, evidence_readiness
+from ..domain import research_repeat as repeat, execution_lanes as lanes, evidence_readiness, evidence_purpose
 from digital_twin.modules.ai_orchestration.domain.planning import enabled, identity, stamp, validate_plan, observation_fingerprint
 from digital_twin.modules.ai_orchestration.domain.execution_input import LANE_PROMPT_VERSION, freeze_execution_input, freeze_review_input, freeze_repair_input, PROMPT_VERSION
 from digital_twin.modules.ai_orchestration.domain.insight_repair import correction_warranted
@@ -76,7 +76,7 @@ class AIControlService:
                     if lanes.enabled(self.settings):
                         packet = lanes.annotate(packet, job)
                     if self.settings.get("aiEvidenceReadPolicy") == evidence_readiness.VERSION:
-                        packet = evidence_readiness.annotate(packet)
+                        packet = evidence_purpose.annotate(evidence_readiness.annotate(packet))
                         recovery = self.source_refresher(job, packet)
                         if recovery.get("status") == "lease-lost":
                             return {"status": "lease-lost", "taskId": job["taskId"]}
@@ -135,7 +135,10 @@ class AIControlService:
                         parked_key = retry_key({**packet, "questionWorkPending": previous_outcome["questionWorkPending"]}, research)
                         if unchanged_wait(previous_outcome, parked_key):
                             retry_identity = parked_key
-                    if unchanged_wait(previous_outcome, retry_identity) and not any(row.get("transitionVerified") for row in packet["followUpEvaluations"]):
+                    same_quote_wait = (previous_outcome.get("reasonCode") == "current-quote"
+                        and bool(previous_outcome.get("quoteWaitKey"))
+                        and previous_outcome["quoteWaitKey"] == evidence_purpose.quote_wait_key(packet, research))
+                    if (unchanged_wait(previous_outcome, retry_identity) or same_quote_wait) and not any(row.get("transitionVerified") for row in packet["followUpEvaluations"]):
                         return self.complete_wait(job, packet, previous_outcome, [], "unchanged-wait")
                     if (lanes.identified(packet) and not lanes.market(packet) and packet.get("questionWorkPolicy")
                             and not packet.get("questionWorkPending")):
@@ -145,7 +148,7 @@ class AIControlService:
                     from digital_twin.modules.ai_orchestration.domain.brain_management import due_memory
                     if (not due_memory(research) and not any(row.get("reviewDue") for row in research if row.get("kind") == "business-thesis")
                             and (previous.get("inputFingerprint") == fingerprint or previous.get("observationRepeatKey") == repeat_key) and previous.get("observedAt")
-                            and previous.get("executionPromptVersion") == (evidence_readiness.PROMPT_VERSION if evidence_readiness.enabled(packet) else LANE_PROMPT_VERSION if lanes.identified(packet) else PROMPT_VERSION)
+                            and previous.get("executionPromptVersion") == (evidence_purpose.PROMPT_VERSION if evidence_purpose.enabled(packet) else evidence_readiness.PROMPT_VERSION if evidence_readiness.enabled(packet) else LANE_PROMPT_VERSION if lanes.identified(packet) else PROMPT_VERSION)
                             and previous.get("quality", {}).get("status") in {"accepted", "observation-only"}
                             and datetime.fromisoformat(previous["observedAt"].replace("Z", "+00:00")) <= datetime.now(timezone.utc)
                             and not any(row.get("transitionVerified") for row in packet["followUpEvaluations"])):
@@ -156,6 +159,7 @@ class AIControlService:
                             "resumption": observation_resume(job, packet),
                             "followUpEvaluations": packet["followUpEvaluations"]}, [child])
                         return {"status": "unchanged" if saved else "lease-lost", "taskId": job["taskId"]}
+                    waiting_source_packet = packet
                     retrieval_trace = []
                     stage = "evidence-retrieval"
                     if session and self.read_planner:
@@ -169,6 +173,7 @@ class AIControlService:
                                 read["result"].get("status") in {"context-budget", "repeated-read"} for step in retrieval_trace for read in step["reads"]))
                             state = disposition(packet, retry_identity, "retrieval-blocked" if blocked else "data-wait",
                                 missing or ["조회 범위 또는 호출 한도 안에서 필요한 근거를 선택하지 못했습니다."])
+                            state.update(evidence_purpose.waiting_metadata(waiting_source_packet, retrieval_trace, research))
                             return self.complete_wait(job, packet, state, retrieval_trace)
                     from ..domain.business_research import evaluate_thesis
                     from copy import deepcopy
@@ -196,7 +201,7 @@ class AIControlService:
                     plan, raw, envelope, input_id, validation_repair = validate_author(raw, envelope, input_id,
                         self.planner, lambda value: self.store.save_execution_input(job, value))
                     result = {**plan, "input": packet, "inputFingerprint": fingerprint, "observationRepeatKey": repeat_key, "observedAt": stamp(),
-                              "executionInputId": input_id, "executionPromptVersion": evidence_readiness.PROMPT_VERSION if evidence_readiness.enabled(packet) else LANE_PROMPT_VERSION if lanes.identified(packet) else PROMPT_VERSION,
+                              "executionInputId": input_id, "executionPromptVersion": evidence_purpose.PROMPT_VERSION if evidence_purpose.enabled(packet) else evidence_readiness.PROMPT_VERSION if evidence_readiness.enabled(packet) else LANE_PROMPT_VERSION if lanes.identified(packet) else PROMPT_VERSION,
                               "wordingVersion": OBSERVATION_WORDING_VERSION,
                               "memoryCoverage": envelope["memoryCoverage"],
                               "judgmentContinuity": judgment_continuity(envelope),
@@ -271,7 +276,7 @@ class AIControlService:
                                                   "sameSnapshotRepairSkipped": True}
                     from ..domain.scoped_research import research_disposition
                     result["processingOutcome"] = disposition(packet, retry_identity,
-                        research_disposition(result) or ("data-wait" if result.get("dataRecovery") else "output-invalid" if result["quality"]["status"] == "rejected" else "ready"),
+                        research_disposition(result) or (evidence_purpose.authored_status(result) if evidence_purpose.enabled(packet) else "data-wait" if result.get("dataRecovery") else "output-invalid" if result["quality"]["status"] == "rejected" else "ready"),
                         result["quality"].get("errors", []))
                     children = []
                     for question in result["researchQuestions"]:
@@ -380,7 +385,8 @@ class AIControlService:
         child = {**self.subject(job), "capability": job["capability"], "watchQuestions": job.get("watchQuestions", []),
                  "taskId": identity(job["taskId"], "wait"), "availableAt": outcome["retryAt"]}
         children = [child]
-        if status != "unchanged-wait" and outcome.get("status") == "data-wait" and outcome.get("requirements"):
+        if (status != "unchanged-wait" and outcome.get("status") == "data-wait" and outcome.get("requirements")
+                and outcome.get("reasonCode") != "current-quote"):
             from ..domain.research_work import PRIORITY
             children.append({**self.subject(job), "capability": "research-plan", "priority": PRIORITY,
                 "taskId": identity("research-gap-v1", job["accountId"], job["symbol"], job["worldId"], outcome["retryKey"]),

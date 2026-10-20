@@ -72,6 +72,26 @@ def publication_block(result, now=None):
     if captured is None or not 0 <= (now - captured).total_seconds() <= 1800:
         return "분석 근거를 수집한 지 오래되어 다음 관찰에서 다시 확인합니다."
     quote = quote_from(packet)
+    from . import evidence_purpose
+    if evidence_purpose.enabled(packet) and packet.get("analysisPurpose") == "current-state":
+        from digital_twin.modules.reasoning.contracts import quote_clock_assessment
+        checked = quote_clock_assessment(packet["facts"], now.isoformat())
+        permitted = evidence_purpose.uses({**packet, "quoteAssessment": checked})
+        if not any(row["evidenceId"] == quote.get("id") and row["currentStateEligible"] for row in permitted["quotes"]):
+            return "현재 상태를 설명할 시세가 발송 시점의 갱신 기준을 충족하지 못했습니다."
+    if dated_observation(result):
+        from digital_twin.modules.reasoning.contracts import EvidenceContractError, OBSERVATION_QUOTE_KINDS
+        try:
+            evidence_purpose.validate(packet)
+        except EvidenceContractError:
+            return "자료 사용 시점과 선택한 분석 목적을 확인하지 못했습니다."
+        cited = set(result.get("evidenceIds", []))
+        if not any(row["id"] in cited and row["kind"] not in OBSERVATION_QUOTE_KINDS for row in packet["facts"]):
+            return "자료 시점의 관찰을 뒷받침할 시세 외 근거가 없습니다."
+        if quote.get("id") in cited and not any(row["evidenceId"] == quote["id"] and row["datedReferenceEligible"]
+                                               for row in packet["evidenceUses"]["quotes"]):
+            return "인용한 가격의 원천 시각을 확인하지 못했습니다."
+        return ""
     if quote.get("id") not in result.get("evidenceIds", []):
         return "표시할 시세가 분석에서 인용한 근거에 포함되지 않아 재확인이 필요합니다."
     clock = instant(quote.get("sourceAsOf") or quote.get("asOf"))
@@ -80,6 +100,12 @@ def publication_block(result, now=None):
     if str(quote.get("freshnessStatus", "")).lower() in {"stale", "expired", "invalid", "missing"}:
         return "시세의 유효성이 확인되지 않아 다음 수집 결과를 기다립니다."
     return ""
+
+
+def dated_observation(result):
+    from . import evidence_purpose
+    packet = result.get("input") or {}
+    return evidence_purpose.enabled(packet) and packet.get("analysisPurpose") == "source-dated"
 
 
 def repeat_block(result, receipts, account_id, symbol, now=None):

@@ -164,6 +164,39 @@ def evidence_change_identity(packet, research, questions=()):
     return content_hash(value)
 
 
+def quote_use_assessment(packet):
+    """Source-owned quote eligibility; collection clocks cannot renew a quote."""
+    facts = {row["id"]: row for row in packet.get("facts", [])}
+    result = []
+    for row in packet.get("quoteAssessment", {}).get("quotes", []):
+        fact = facts.get(row["evidenceId"], {})
+        verified_time = (fact.get("sourceTimestampPresent") is not False
+            and fact.get("sourceTimestampState") not in {"queried-at-fallback", "fetched-at-fallback"})
+        result.append({"evidenceId": row["evidenceId"], "sourceAsOf": row["sourceAsOf"],
+            "currentStateEligible": (row["status"] == "fresh" and row.get("referenceState") != "last-close"
+                and fact.get("judgementEvidenceUsable") is True and verified_time),
+            "datedReferenceEligible": row["status"] in {"fresh", "stale", "unknown-budget"} and verified_time,
+            "reasonCode": row["status"]})
+    return result
+
+
+def unavailable_quote_wait_identity(packet):
+    """Only after a current-quote wait: another unusable tick is not readiness.
+
+    Other source inventories (including excluded facts) remain material. A
+    usable quote immediately releases the gate; no validity window is extended.
+    """
+    quotes = packet.get("quoteAssessment", {}).get("quotes", [])
+    if not quotes or any(row["currentStateEligible"] for row in quote_use_assessment(packet)):
+        return ""
+    view = {**packet, "facts": [row for row in packet.get("facts", []) if row["kind"] not in OBSERVATION_QUOTE_KINDS],
+            "coverage": {key: value for key, value in packet.get("coverage", {}).items() if key != "quote"}}
+    view.pop("quoteAssessment", None)
+    return content_hash({"nonQuoteEvidence": evidence_change_identity(view, [], []),
+        "quoteRequirements": sorted([{key: row.get(key) for key in ("evidenceId", "maxAgeMinutes", "referenceState")}
+                                     for row in quotes], key=canonical_json)})
+
+
 def source_clock(row):
     for key in ("sourceAsOf", "asOf", "observedAt", "publishedAt"):
         try:

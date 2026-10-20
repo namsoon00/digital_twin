@@ -8,7 +8,7 @@ import unittest
 import zipfile
 from unittest.mock import Mock, patch
 
-from digital_twin.modules.ai_orchestration.domain import evidence_readiness, execution_lanes, bounded_retrieval, memory_reference
+from digital_twin.modules.ai_orchestration.domain import evidence_readiness, execution_lanes, bounded_retrieval, memory_reference, evidence_purpose, purpose_retrieval
 from digital_twin.modules.ai_orchestration.domain.execution_input import (
     freeze_execution_input, freeze_repair_input, freeze_review_input, validate_execution_input,
 )
@@ -83,7 +83,7 @@ class BoundedEvidenceReadinessTests(unittest.TestCase):
         refresh = Mock(return_value={'status': 'requested', 'requested': True, 'authority': 'operational-source-renewal-only'})
         service, store, author = AIControlTests().runner(
             evidence=Mock(return_value=ObservationEvidenceSession(value, value['facts'])),
-            read_planner=Mock(return_value=scoped_decision('finish', ['quote-1', 'report-2025'])),
+            read_planner=Mock(return_value={**scoped_decision('finish', ['quote-1', 'report-2025']), 'purpose': 'source-dated', 'blocker': 'none'}),
             knowledge_context=lambda p: context(p), source_refresher=refresh)
         service.settings.update(aiObservationLanePolicy=execution_lanes.VERSION, aiEvidenceReadPolicy=evidence_readiness.VERSION)
         store.claim.return_value['capability'] = execution_lanes.MARKET
@@ -92,9 +92,10 @@ class BoundedEvidenceReadinessTests(unittest.TestCase):
         outcome = service.run_once()
         self.assertEqual('completed', outcome['status'], outcome)
         result = store.complete.call_args.args[1]
-        self.assertEqual(evidence_readiness.PROMPT_VERSION, result['executionPromptVersion'])
+        self.assertEqual(evidence_purpose.PROMPT_VERSION, result['executionPromptVersion'])
+        self.assertNotEqual('data-wait', result['processingOutcome']['status'])
         self.assertEqual('requested', result['dataRecovery']['status'])
-        self.assertEqual(bounded_retrieval.VERSION, result['input']['retrieval']['version'])
+        self.assertEqual(purpose_retrieval.VERSION, result['input']['retrieval']['version'])
         self.assertEqual(1, refresh.call_count)
         store.memory.return_value = [{**result, 'quality': {'status': 'accepted'}}]
         author.reset_mock(); service.read_planner.reset_mock()
@@ -350,6 +351,26 @@ class DartQuestionOriginalTests(unittest.TestCase):
 
 @unittest.skipUnless(os.environ.get('MYSQL_DATABASE') == 'orbit_alpha_test', 'isolated MySQL required')
 class SourceRenewalStorageTests(unittest.TestCase):
+    def test_purpose_read_author_and_review_keep_completed_call_proof(self):
+        from digital_twin.infrastructure.transactions.ai_control_research_knowledge import AIControlResearchKnowledge
+        value = evidence_purpose.annotate(owned_packet(self.subject, self.job['taskId']))
+        def save(env):
+            identifier = self.store.save_execution_input(self.job, env)
+            call = self.store.begin_call('independent-observation', env['promptHash'], self.job['taskId'], identifier)
+            self.store.finish_call(call)
+            return identifier
+        selected, history, memory, trace = retrieve_working_evidence(
+            ObservationEvidenceSession(value, value['facts']), value, [], [],
+            Mock(return_value={**scoped_decision('finish', ['quote-1','report-2025']), 'purpose':'source-dated','blocker':'none'}),
+            save, 262144, record_round=lambda step:self.store.save_retrieval_round(self.job, step))
+        with self.store.connect() as c:
+            self.assertEqual(trace, AIControlResearchKnowledge.read_proof(c, self.job,
+                {'input':selected,'retrievalInputIds':[step['inputId'] for step in trace]}))
+        env = freeze_execution_input(selected, history, memory, retrieval_trace=trace)
+        result = {'input':selected,'summary':'보고 시점을 보존한 관찰','executionInputId':save(env)}
+        reviewed = freeze_review_input(result)
+        self.assertEqual(self.job['taskId'], self.store.review_proof(save(reviewed))['taskId'])
+
     def setUp(self):
         from test_ai_control import AIControlStorageTests, SUBJECT
         from digital_twin.infrastructure.mysql_monitoring import MySQLMonitorAccountJobStore

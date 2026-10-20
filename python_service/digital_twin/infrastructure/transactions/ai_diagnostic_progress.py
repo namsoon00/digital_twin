@@ -2,7 +2,7 @@
 from datetime import datetime, timedelta, timezone
 
 from digital_twin.modules.ai_orchestration.domain.planning import identity
-from digital_twin.modules.ai_orchestration.domain.diagnostic_progress import VERSION, progress_state, progress_fingerprint
+from digital_twin.modules.ai_orchestration.domain.diagnostic_progress import VERSION, progress_state, progress_fingerprint, should_notify
 from digital_twin.modules.ai_orchestration.infrastructure.mysql_diagnostic_progress import decode
 from digital_twin.modules.notifications.application.ai_observation_diagnostic import render_diagnostic_progress
 from digital_twin.modules.notifications.domain.notifications import NotificationJob, notification_debug_number
@@ -82,6 +82,7 @@ class AIDiagnosticProgress:
                     previous_id = identity("ai-diagnostic-progress", scope["root_job_id"], state["revision"])
                     previous = connection.execute("SELECT status FROM notification_jobs WHERE job_id=%s", (previous_id,)).fetchone()
                     if previous and previous["status"] != "done":
+                        state["notifiedStates"] = [key for key in state.get("notifiedStates", []) if key != state.get("fingerprint")]
                         state["fingerprint"] = ""
                 delivered, failed = None, None
                 for job_id, task_id in candidates.items():
@@ -97,9 +98,10 @@ class AIDiagnosticProgress:
                     update = None  # The original already describes this attempt.
                 event = None
                 if update:
+                    state["latestState"] = update
                     fingerprint = progress_fingerprint(update)
                     duplicate = fingerprint == state.get("fingerprint") or (update["stage"] == "reviewing" and state.get("reviewNotified"))
-                    if not duplicate:
+                    if not duplicate and should_notify(state, update):
                         revision = int(state.get("revision", 0)) + 1
                         event_id = identity("ai-diagnostic-progress", scope["root_job_id"], revision)
                         event = {**update, "version": VERSION, "eventId": event_id,
@@ -117,6 +119,7 @@ class AIDiagnosticProgress:
                             state["reviewNotified"] = True
                         else:
                             state["fingerprint"] = fingerprint
+                        state["notifiedStates"] = list(dict.fromkeys([*state.get("notifiedStates", []), fingerprint]))[-32:]
                         emitted += 1
                 self.control.save_diagnostic_progress(connection, scope, state, task["taskId"], event)
         return {"status": "ok", "checked": len(rows), "queued": emitted}

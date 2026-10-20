@@ -67,8 +67,8 @@ def checkpoints(packet, trace):
         return []
     if packet.get("retrieval", {}).get("status") == "context-budget":
         return []  # An unadmitted selection is not completed question progress.
-    from . import scoped_retrieval, indexed_retrieval, question_retrieval, lane_retrieval, bounded_retrieval
-    contract = bounded_retrieval if packet["retrieval"]["version"] == bounded_retrieval.VERSION else lane_retrieval if packet["retrieval"]["version"] == lane_retrieval.VERSION else question_retrieval if packet["retrieval"]["version"] == question_retrieval.VERSION else indexed_retrieval if packet["retrieval"]["version"] == indexed_retrieval.VERSION else scoped_retrieval
+    from . import scoped_retrieval, indexed_retrieval, question_retrieval, lane_retrieval, bounded_retrieval, purpose_retrieval
+    contract = purpose_retrieval if packet["retrieval"]["version"] == purpose_retrieval.VERSION else bounded_retrieval if packet["retrieval"]["version"] == bounded_retrieval.VERSION else lane_retrieval if packet["retrieval"]["version"] == lane_retrieval.VERSION else question_retrieval if packet["retrieval"]["version"] == question_retrieval.VERSION else indexed_retrieval if packet["retrieval"]["version"] == indexed_retrieval.VERSION else scoped_retrieval
     decision = contract.validate_decision(trace[-1]["decision"])
     if decision["action"] == "read":
         return []  # An exhausted read budget is not a completed per-question assessment.

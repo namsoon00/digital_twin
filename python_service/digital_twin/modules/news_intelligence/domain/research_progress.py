@@ -80,7 +80,9 @@ def evidence_packets(items: Iterable[ResearchEvidence], claims: Iterable[object]
         if ("financial-fact" in types and report.get("officialSource") is True
                 and financial_report_contract_assessment(report, str(raw.get("frequency") or "")).get("eligible")):
             types.add("official-filing")
-        if item.kind.lower() == "news" and str(raw.get("articleReadStatus") or raw.get("readScope") or "") in {"body", "full-body", "full", "article-body"}:
+        selected_passages = raw.get("readScope") == "question-selected-passages"
+        if (item.kind.lower() == "news" and not selected_passages
+                and str(raw.get("articleReadStatus") or raw.get("readScope") or "") in {"body", "full-body", "full", "article-body"}):
             types.add("news-full-text")
         source_types = set()
         if "official-filing" in types:
@@ -138,6 +140,10 @@ def evidence_packets(items: Iterable[ResearchEvidence], claims: Iterable[object]
                 documentType=str(raw.get("officialDocumentType") or ""),
                 reportDate=str(raw.get("reportDate") or ""),
                 documentScope=str(raw.get("officialDocumentScope") or ""))
+        if selected_passages:
+            packet.update(readScope="question-selected-passages", documentScope="question-selected-passages",
+                          documentType=str(raw.get("documentType") or ""),
+                          sourceDocumentHash=str(raw.get("sourceDocumentHash") or ""))
         from .filing_history import verified_filing_history
         history = verified_filing_history(raw.get("filingHistory"), item.symbol,
                                          str((raw.get("documentIssuerIdentity") or {}).get("cik") or "").zfill(10))

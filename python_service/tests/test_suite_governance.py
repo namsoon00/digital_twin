@@ -375,7 +375,9 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # immutable AI counter-evidence across the article delivery ledger.
         # Mixed market/policy messages preserve each active release target
         # and the distinguishing measurement from each contributing rule.
-        self.assertLessEqual(total, 2434)
+        # Four paired-input regressions cover immutable source binding, actual
+        # projection use, subject-only retirement and real MySQL cutoff reads.
+        self.assertLessEqual(total, 2438)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

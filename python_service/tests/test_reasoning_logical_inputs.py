@@ -132,7 +132,9 @@ class ReasoningLogicalInputTests(unittest.TestCase):
                                    get=lambda _key: {"status": "shadow"})
         service = PairedReasoningValidationService(registry, lambda _account, _symbols: [snapshot],
                                                   lambda event: events.append(event) or {"saved": True},
-                                                  lambda: "2026-10-18T00:01:00Z")
+                                                  lambda: "2026-10-18T00:01:00Z",
+                                                  lambda account, stamp: {"portfolioId": "portfolio:" + account,
+                                                                          "asOf": stamp, "status": "unavailable"})
         first = service.request(["NVDA"], limit=1)
         second = service.request(["NVDA"], limit=1)
         self.assertEqual("requested", first["status"])
@@ -151,17 +153,30 @@ class ReasoningLogicalInputTests(unittest.TestCase):
         self.assertEqual(request.account_ids, repaired_request.account_ids)
         self.assertEqual(events[0].payload["validationPair"], durable.payload["validationPair"])
         from digital_twin.modules.reasoning.domain.ontology_projection_audit import compact_reasoning_request_context
-        self.assertEqual("paired-complete-dependencies-v1", repaired_request.context["validationInputMode"])
+        from digital_twin.modules.reasoning.domain.reasoning_comparison_identity import PAIRED_VALIDATION_INPUT_VERSION
+        self.assertEqual(PAIRED_VALIDATION_INPUT_VERSION, repaired_request.context["validationInputMode"])
+        self.assertEqual(events[0].payload["validationPortfolioContext"], durable.payload["validationPortfolioContext"])
+        self.assertEqual({"acct": events[0].payload["validationPortfolioContext"]}, repaired_request.context["validationPortfolioContexts"])
+        for broken in ("missing", "wrong-fingerprint"):
+            invalid = deepcopy(durable)
+            if broken == "missing":
+                invalid.payload.pop("validationPortfolioContext")
+            else:
+                invalid.payload["validationPair"]["portfolioContextHash"] = "invalid"
+            with self.subTest(broken=broken), self.assertRaises(ValueError):
+                independent_reasoning_request("baseline", [invalid])
         self.assertEqual([], repaired_request.context["requestedScopeFamilies"])
         self.assertEqual({}, repaired_request.context["changedFieldsBySymbol"])
         self.assertFalse(repaired_request.context["eventFactBoundaryAuthoritative"])
         compact = compact_reasoning_request_context(repaired_request.context)
         self.assertTrue(compact["validationOnly"])
         self.assertEqual(repaired_request.context["validationInputMode"], compact["validationInputMode"])
+        self.assertEqual(repaired_request.context["validationPortfolioContexts"], compact["validationPortfolioContexts"])
         ordinary = deepcopy(durable)
         ordinary.payload.pop("candidateValidationReplay")
         self.assertNotIn("validationInputMode", independent_reasoning_request("baseline", [ordinary]).context)
         self.assertEqual("unavailable-source", service.request(["UNKNOWN"])["status"])
         blocked = PairedReasoningValidationService(registry, lambda *_args: [snapshot],
-                                                  lambda _event: {"status": "control-pair-changed"}, service.now_provider)
+                                                  lambda _event: {"status": "control-pair-changed"}, service.now_provider,
+                                                  service.portfolio_context_reader)
         self.assertEqual("blocked", blocked.request(["NVDA"])["status"])

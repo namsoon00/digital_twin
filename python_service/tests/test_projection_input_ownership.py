@@ -100,6 +100,8 @@ class ProjectionInputOwnershipTests(unittest.TestCase):
         contract = json.loads(
             (ROOT / "tests/fixtures/projection_input_ownership_v1.json").read_text()
         )
+        changes = json.loads((ROOT / "tests/fixtures/projection_input_semantic_changes.json").read_text())
+        self.assertLessEqual(set(changes), set(contract["members"]))
         for name, entry in contract["members"].items():
             with self.subTest(member=name):
                 tree = ast.parse((ROOT / entry["path"]).read_text())
@@ -152,7 +154,15 @@ class ProjectionInputOwnershipTests(unittest.TestCase):
                         ast.Module(body=body, type_ignores=[]), include_attributes=False
                     ).encode()
                 ).hexdigest()
-                self.assertEqual(entry["bodyHash"], digest)
+                change = changes.get(name)
+                if change:
+                    self.assertEqual(entry["bodyHash"], change["baselineHash"])
+                    self.assertTrue(change["reason"])
+                    test_file, test_class, test_method = change["regressionTest"].split(".")
+                    tree = ast.parse((ROOT / "tests" / (test_file + ".py")).read_text())
+                    owner = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == test_class)
+                    self.assertTrue(any(isinstance(n, ast.FunctionDef) and n.name == test_method for n in owner.body))
+                self.assertEqual(change["bodyHash"] if change else entry["bodyHash"], digest)
 
     def test_projection_input_execution_and_progress_match_policy_fact_contract(self):
         expected = json.loads(

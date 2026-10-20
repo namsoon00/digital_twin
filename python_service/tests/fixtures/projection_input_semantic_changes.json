@@ -1,0 +1,8 @@
+{
+  "runtime_context": {
+    "baselineHash": "c16fcdcb24e9d257e321cd4a1da7e5f4f2b7d06801c67ecf32548404cbf81ae1",
+    "bodyHash": "5edf13933f457b3641f1a1cdebdd6deb0d1921bd8076c356bea89a80a8fad8eb",
+    "reason": "Read portfolio lifecycle at the exact market source cutoff. Mutable heads updated later are omitted, not relabelled as past facts. Paired validation separately binds the retained portfolio receipt while temporal reads and model execution remain independent.",
+    "regressionTest": "test_paired_portfolio_input.PairedPortfolioInputTests.test_capture_uses_the_frozen_portfolio_but_retains_independent_market_reads"
+  }
+}

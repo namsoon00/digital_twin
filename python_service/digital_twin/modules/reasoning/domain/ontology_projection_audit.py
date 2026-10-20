@@ -223,7 +223,8 @@ def compact_reasoning_request_context(
     ][:20]
     return {
         "version": str(values.get("version") or REASONING_REQUEST_CONTEXT_VERSION),
-        **({"validationOnly": True, "validationInputMode": PAIRED_VALIDATION_INPUT_VERSION}
+        **({"validationOnly": True, "validationInputMode": PAIRED_VALIDATION_INPUT_VERSION,
+            "validationPortfolioContexts": dict(values.get("validationPortfolioContexts") or {})}
            if values.get("validationOnly") is True and values.get("validationInputMode") == PAIRED_VALIDATION_INPUT_VERSION else {}),
         "requestEventIds": clean_list(values.get("requestEventIds"), limit=80),
         "sourceEventIds": clean_list(values.get("sourceEventIds"), limit=80),

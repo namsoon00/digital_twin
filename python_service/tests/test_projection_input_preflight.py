@@ -64,10 +64,11 @@ class ProjectionInputPreflightTests(unittest.TestCase):
         return result, kwargs, events
 
     def test_paired_validation_reads_complete_facts_but_keeps_computation_on_the_requested_subject(self):
-        context = {"validationOnly": True, "validationInputMode": "paired-complete-dependencies-v1"}
+        from digital_twin.modules.reasoning.domain.reasoning_comparison_identity import PAIRED_VALIDATION_INPUT_VERSION
+        context = {"validationOnly": True, "validationInputMode": PAIRED_VALIDATION_INPUT_VERSION}
         result, kwargs, _ = self.assemble(ready_manifest(), context=context)
         self.assertEqual("full", result.graph_input["mode"])
-        self.assertEqual("incremental-target-patch", result.persistence_graph.worldview["targetScopeRetentionMode"])
+        self.assertEqual("complete-target-snapshot", result.persistence_graph.worldview["targetScopeRetentionMode"])
         call = kwargs["_store"].build_projection_graph.call_args.kwargs
         self.assertFalse(call["target_scoped_input"])
         self.assertEqual(["AAPL"], call["target_symbols"])

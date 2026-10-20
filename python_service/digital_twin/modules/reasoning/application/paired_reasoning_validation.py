@@ -8,14 +8,16 @@ from digital_twin.shared_kernel.events import DomainEvent
 from digital_twin.modules.reasoning.domain.independent_reasoning import shard_reasoning_event, reasoning_event_scope
 from digital_twin.modules.reasoning.domain.verified_snapshot_reasoning import verified_monitor_snapshot_reasoning_event
 from digital_twin.modules.reasoning.domain.reasoning_comparison_identity import PAIRED_VALIDATION_INPUT_VERSION
+from digital_twin.modules.reasoning.domain.validation_portfolio_input import freeze_validation_portfolio_input
 
 
 class PairedReasoningValidationService:
-    def __init__(self, registry, snapshot_reader, event_recorder, now_provider):
+    def __init__(self, registry, snapshot_reader, event_recorder, now_provider, portfolio_context_reader=None):
         self.registry = registry
         self.snapshot_reader = snapshot_reader
         self.event_recorder = event_recorder
         self.now_provider = now_provider
+        self.portfolio_context_reader = portfolio_context_reader
 
     def request(self, symbols, account_id="", limit=1):
         control = self.registry.control()
@@ -32,6 +34,8 @@ class PairedReasoningValidationService:
         warmed_bootstrap = status in {"provisioning", "replaying"} and release.get("status") == "ready" and release.get("warmed") is True
         if status not in {"shadow", "candidate"} and not warmed_bootstrap:
             return {"status": "blocked", "reason": "candidate-validation-not-ready"}
+        if not callable(self.portfolio_context_reader):
+            return {"status": "blocked", "reason": "validation-portfolio-context-unavailable"}
         queued = []
         covered = set()
         for snapshot in self.snapshot_reader(account_id, sorted(selected)):
@@ -46,11 +50,17 @@ class PairedReasoningValidationService:
                 boundary = dict(payload.get("verifiedSourceSnapshot") or {})
                 if boundary.get("sourceFactCoverageComplete") is not True:
                     continue
+                portfolio_packet = freeze_validation_portfolio_input(
+                    snapshot.account_id, str(boundary.get("snapshotId") or ""), snapshot.generated_at,
+                    self.portfolio_context_reader(snapshot.account_id, snapshot.generated_at),
+                )
                 pair = {"baselineDeploymentId": baseline, "candidateDeploymentId": candidate,
                         "sourceSnapshotId": str(boundary.get("snapshotId") or ""), "symbols": subject,
-                        "inputMode": PAIRED_VALIDATION_INPUT_VERSION}
+                        "inputMode": PAIRED_VALIDATION_INPUT_VERSION,
+                        "portfolioContextHash": portfolio_packet["sha256"]}
                 identity = hashlib.sha256(json.dumps(pair, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
                 payload.update(candidateValidationReplay=True, validationPair=pair,
+                               validationPortfolioContext=portfolio_packet,
                                trigger="paired-current-source-validation", workClass="GOVERNANCE",
                                importanceGate="non-fungible")
                 event = DomainEvent(name=shard.name, aggregate_id=shard.aggregate_id,

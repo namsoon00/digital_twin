@@ -6,7 +6,7 @@ from typing import Mapping
 
 
 COMPARISON_INPUT_CONTRACT_VERSION = "reasoning-comparison-input-v6"
-PAIRED_VALIDATION_INPUT_VERSION = "paired-complete-dependencies-v1"
+PAIRED_VALIDATION_INPUT_VERSION = "paired-frozen-portfolio-dependencies-v2"
 
 
 def _mapping(value):

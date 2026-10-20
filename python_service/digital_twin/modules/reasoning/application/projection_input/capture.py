@@ -8,6 +8,9 @@ from digital_twin.modules.reasoning.domain.ontology_projection_input import proj
 from digital_twin.modules.portfolio.contracts import AccountSnapshot
 from digital_twin.modules.reasoning.domain.reasoning_shadow import frozen_projection_runtime_context
 from digital_twin.modules.reasoning.domain.reasoning_shadow import pack_projection_runtime_contexts
+from digital_twin.modules.reasoning.domain.reasoning_comparison_identity import PAIRED_VALIDATION_INPUT_VERSION
+from digital_twin.modules.reasoning.domain.reasoning_source_snapshot import reasoning_source_snapshot_id
+from digital_twin.modules.reasoning.domain.validation_portfolio_input import read_validation_portfolio_input
 import time
 from .ports import CaptureInputs, PreparedGraphInput
 
@@ -94,6 +97,14 @@ def capture_graph_input(
             "runtime_context." + str(stage or "unknown"), **details
         ),
     )
+    if ((reasoning_context or {}).get("validationOnly") is True
+            and (reasoning_context or {}).get("validationInputMode") == PAIRED_VALIDATION_INPUT_VERSION):
+        packet = dict((reasoning_context or {}).get("validationPortfolioContexts") or {}).get(snapshot.account_id)
+        runtime_context["portfolioLifecycle"] = read_validation_portfolio_input(
+            packet or {}, snapshot.account_id,
+            reasoning_source_snapshot_id(snapshot.account_id, snapshot.generated_at), snapshot.generated_at,
+        )
+        _inputs.last_runtime_contexts[snapshot.account_id] = frozen_projection_runtime_context(runtime_context)
     source_facts = [
         dict(item)
         for item in (reasoning_context or {}).get("sourceFacts") or []

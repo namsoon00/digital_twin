@@ -102,17 +102,19 @@ def assemble_source(
     material_snapshot_id = projection_graph["materialSnapshotId"]
     scoped_identity = projection_graph["scopedIdentity"]
     runtime_stages.update(dict(projection_graph.get("runtimeStages") or {}))
-    if str(graph_assembly.get("inputMode") or "") == "target-scoped" or complete_dependency_validation:
+    if complete_dependency_validation:
+        # All current facts and model computations for the requested subject
+        # are present. Missing target scopes are retired, while unrelated
+        # computations and shared history remain outside this deletion boundary.
+        persistence_graph.worldview["targetScopeRetentionMode"] = "complete-target-snapshot"
+    elif str(graph_assembly.get("inputMode") or "") == "target-scoped":
         # A target-scoped graph is an incremental patch by contract.
         # Missing scopes therefore mean "reuse the active generation".
         # Deletion requires an explicit scoped source fact or operator
         # rebuild; no timer may expand this request to the whole world.
         # This avoids turning one-symbol mailbox work into a complete
         # manifest rewrite while preserving explicit deletion checks
-        # on the full projection path. Paired validation also computes only
-        # its requested subject: complete raw dependencies do not give an
-        # omitted, unrelated computation deletion meaning. Supplied shared
-        # and target facts still pass the normal complete-source merge.
+        # on the full projection path.
         persistence_graph.worldview["targetScopeRetentionMode"] = (
             "incremental-target-patch"
         )
@@ -130,7 +132,7 @@ def assemble_source(
             }
         )
     )
-    if observation_followup_targets:
+    if observation_followup_targets and not complete_dependency_validation:
         # A target-scoped source intentionally omits unrelated and
         # temporarily absent target facts. For a raw quote follow-up
         # that omission means "retain the last verified context", not

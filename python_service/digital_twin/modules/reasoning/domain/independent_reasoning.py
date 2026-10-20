@@ -890,6 +890,22 @@ def independent_reasoning_request(
         for event in events
     )
     if complete_dependency_validation:
+        from .validation_portfolio_input import read_validation_portfolio_input
+        packets = {}
+        for event in events:
+            payload = event.payload or {}
+            boundary = payload["verifiedSourceSnapshot"]
+            packet = dict(payload.get("validationPortfolioContext") or {})
+            account_id = str(boundary.get("accountId") or "")
+            read_validation_portfolio_input(
+                packet, account_id, boundary["snapshotId"], boundary["generatedAt"],
+            )
+            if packet.get("sha256") != payload["validationPair"].get("portfolioContextHash"):
+                raise ValueError("Validation portfolio input fingerprint mismatch")
+            if account_id in packets and packets[account_id] != packet:
+                raise ValueError("Validation batch mixes different portfolio inputs")
+            packets[account_id] = packet
+        context["validationPortfolioContexts"] = packets
         # A bounded comparison prepares current dependency facts, rather than
         # claiming ownership of one market event's narrow field slots. Keep
         # original source facts/revisions as audit and native subjects bounded.

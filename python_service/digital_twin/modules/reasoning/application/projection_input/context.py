@@ -154,7 +154,7 @@ def runtime_context(
             return {}
         try:
             return _inputs.investment_domain_store.ontology_portfolio_lifecycle_context(
-                "portfolio:" + str(snapshot.account_id or "default")
+                "portfolio:" + str(snapshot.account_id or "default"), as_of=as_of,
             )
         except (
             Exception

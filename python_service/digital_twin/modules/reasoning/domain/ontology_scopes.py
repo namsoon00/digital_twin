@@ -2246,6 +2246,11 @@ def select_target_scoped_manifest_patch(
         "sourceGraphComplete": bool(source_graph_complete),
         "factSlot": dict(fact_slot_plan or {}),
     }
+    if target_scope_retention_mode == "complete-target-snapshot" and not source_graph_complete:
+        return {
+            **base, "status": "skipped-complete-target-source-required", "applied": False,
+            "fallbackReason": "complete-target-source-required",
+        }
     if not requested_symbols:
         return {
             **base,
@@ -2626,6 +2631,11 @@ def select_target_scoped_manifest_patch(
             for scope_id in active_by_scope
             if scope_id not in incoming
             and scope_symbol(scope_id) in requested_symbols
+        )
+    elif target_scope_retention_mode == "complete-target-snapshot" and source_graph_complete:
+        removed_relevant_scopes = sorted(
+            scope_id for scope_id in active_by_scope
+            if scope_id not in incoming and is_target_owned_scope(scope_id)
         )
     elif retain_missing_target_scopes:
         removed_relevant_scopes = removed_complete_derived_companion_scope_ids

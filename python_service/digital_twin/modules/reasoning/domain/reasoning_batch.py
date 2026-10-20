@@ -26,6 +26,7 @@ def reasoning_batch_key(event, lane):
         account_ids,
         bool(payload.get("candidateValidationReplay")),
         str(pair.get("inputMode") or ""),
+        str(pair.get("portfolioContextHash") or ""),
         tuple(sorted({str(value).upper().strip() for value in symbols if str(value or "").strip()})),
         str(boundary.get("accountId") or ""),
         str(boundary.get("snapshotId") or ""),

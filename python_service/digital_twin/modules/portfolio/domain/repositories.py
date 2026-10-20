@@ -76,7 +76,7 @@ class InvestmentDomainRepository(Protocol):
     def save_portfolio_analysis_bundle(self, risk_snapshot, exposure, rebalance_proposal, decision_cycle, domain_event=None, reasoning_event=None, rebalance_state=None, rebalance_transition=None, rebalance_event=None, rebalance_reasoning_event=None) -> Dict[str, object]:
         ...
 
-    def ontology_portfolio_lifecycle_context(self, portfolio_id: str) -> Dict[str, object]:
+    def ontology_portfolio_lifecycle_context(self, portfolio_id: str, as_of: str = "") -> Dict[str, object]:
         ...
 
     def save_rebalance_proposal(self, proposal: RebalanceProposal) -> RebalanceProposal:

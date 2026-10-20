@@ -861,3 +861,13 @@ promoting the three new rules, capture the portfolio context at the source
 boundary and establish identical, complete subject dependency sets in both
 databases. Preserve the raw failed comparison; do not count matching displayed
 prices or management targets as proof of identical inference inputs.
+
+The follow-up input contract `paired-frozen-portfolio-dependencies-v2` captures
+the portfolio lifecycle once at the market source cutoff and binds its compressed
+receipt to the account, source snapshot and request fingerprint. Both independent
+jobs consume that receipt; temporal backend reads and native rule evaluation
+remain independent. Live lifecycle reads now exclude observations and mutable
+heads written after their market cutoff. Unavailable historical heads remain
+unavailable. Complete paired subject snapshots retire absent subject scopes
+only after reference-safety checks; unrelated/shared omissions retain their
+previous generations. The existing strict input-parity gate is unchanged.

@@ -340,3 +340,32 @@ computed results retain their verified generations. Explicit full reconciliation
 and ordinary source-deletion contracts remain unchanged. Regression coverage
 reproduces the removed shared-link fallback, preserves the unrelated model and
 quote, and verifies refreshed account, macro and requested-price fragments.
+
+### Portfolio cutoff and complete subject omission (2026-10-20)
+
+The composition candidate comparison exposed two further input differences:
+portfolio risk rows were selected at each worker's execution time, and the
+active graph retained six old subject evidence/valuation scopes absent from the
+candidate. Matching market snapshots and temporal windows did not prove matching
+native inputs. The failed paired receipts remain in the audit.
+
+`paired-frozen-portfolio-dependencies-v2` captures the portfolio lifecycle at
+request time with the exact market cutoff. Portfolio reads bound both observation
+and last-write clocks: a mutable current row updated later is omitted because
+the store has no historical revision of its previous contents. The secret-free
+compressed receipt binds account, source snapshot, cutoff and content hash.
+Durable ingress, batching, request compaction and graph assembly preserve and
+verify it. Different receipts cannot share a batch, and missing or altered
+receipts fail before graph writes. Repeated requests with identical contents
+remain idempotent; a changed portfolio receipt is a different input. Independent
+time-series reads and model execution are retained.
+
+A verified paired source now declares `complete-target-snapshot`. The complete
+raw source and the requested subject's computed evidence give absent **target**
+scopes deletion meaning. This is not authority to delete omitted shared or
+unrelated subject computations. The existing dependency checks block retirement
+while retained references remain; partial input cannot claim this mode. Ordinary
+incremental market events retain their existing omission semantics. Incoming and
+persisted logical scope fingerprints must still match across deployments.
+Regression coverage: `test_paired_portfolio_input`, `test_reasoning_logical_inputs`
+and `test_projection_input_preflight`, including real isolated MySQL cutoff reads.

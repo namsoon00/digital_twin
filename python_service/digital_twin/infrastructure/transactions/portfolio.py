@@ -838,69 +838,53 @@ class MySQLInvestmentDomainStore(MySQLOperationalConnection):
             "currentPosition": position,
         }
 
-    def ontology_portfolio_lifecycle_context(self, portfolio_id: str) -> Dict[str, object]:
+    def ontology_portfolio_lifecycle_context(self, portfolio_id: str, as_of: str = "") -> Dict[str, object]:
         portfolio_key = str(portfolio_id or "")
+        cutoff = str(as_of or "").strip()
+
+        def read(connection, table, columns, order="", limit=1, extra="", extra_params=(), select="payload_json"):
+            # Mutable rows have no historical payload revision. If their last
+            # write is newer than the source, omit them; never present today's
+            # value as an observation known at the replay cutoff.
+            where = "portfolio_id = %s" + extra
+            params = [portfolio_key, *extra_params]
+            if cutoff:
+                for column in dict.fromkeys(columns):
+                    where += " AND " + column + " <> '' AND " + column + " <= %s"
+                    params.append(cutoff)
+            query = "SELECT " + select + " FROM " + table + " WHERE " + where
+            if order:
+                query += " ORDER BY " + order
+            query += " LIMIT " + str(limit)
+            cursor = connection.execute(query, tuple(params))
+            return cursor.fetchone() if limit == 1 else cursor.fetchall()
+
         with self.connect() as connection:
-            reconciliation = connection.execute(
-                "SELECT payload_json FROM portfolio_reconciliations WHERE portfolio_id = %s "
-                "ORDER BY source_snapshot_at DESC, reconciliation_id DESC LIMIT 1",
-                (portfolio_key,),
-            ).fetchone()
-            inferred_rows = connection.execute(
-                "SELECT payload_json FROM portfolio_ledger_entries WHERE portfolio_id = %s "
-                "AND entry_type IN (" + ",".join(["%s"] * len(INFERRED_SNAPSHOT_ENTRY_TYPES)) + ") "
-                "ORDER BY occurred_at DESC, entry_id DESC LIMIT 20",
-                (portfolio_key, *sorted(INFERRED_SNAPSHOT_ENTRY_TYPES)),
-            ).fetchall()
-            decision_cycle = connection.execute(
-                "SELECT payload_json FROM portfolio_decision_cycles WHERE portfolio_id = %s "
-                "ORDER BY created_at DESC, cycle_id DESC LIMIT 1",
-                (portfolio_key,),
-            ).fetchone()
-            risk_snapshot = connection.execute(
-                "SELECT payload_json FROM portfolio_risk_snapshots WHERE portfolio_id = %s "
-                "ORDER BY observed_at DESC, risk_snapshot_id DESC LIMIT 1",
-                (portfolio_key,),
-            ).fetchone()
-            exposure = connection.execute(
-                "SELECT payload_json FROM portfolio_exposure_snapshots WHERE portfolio_id = %s "
-                "ORDER BY observed_at DESC, exposure_snapshot_id DESC LIMIT 1",
-                (portfolio_key,),
-            ).fetchone()
-            rebalance = connection.execute(
-                "SELECT payload_json FROM portfolio_rebalance_proposals WHERE portfolio_id = %s "
-                "ORDER BY created_at DESC, proposal_id DESC LIMIT 1",
-                (portfolio_key,),
-            ).fetchone()
-            rebalance_state = connection.execute(
-                "SELECT current_payload_json, revision, transition_type FROM portfolio_rebalance_states "
-                "WHERE portfolio_id = %s LIMIT 1",
-                (portfolio_key,),
-            ).fetchone()
-            checkpoint = connection.execute(
-                "SELECT payload_json FROM portfolio_snapshot_checkpoints WHERE portfolio_id = %s",
-                (portfolio_key,),
-            ).fetchone()
-            episodes = connection.execute(
-                "SELECT payload_json FROM portfolio_activity_episodes WHERE portfolio_id = %s "
-                "ORDER BY observed_at DESC, episode_id DESC LIMIT 8",
-                (portfolio_key,),
-            ).fetchall()
-            state = connection.execute(
-                "SELECT payload_json FROM portfolio_state_snapshots WHERE portfolio_id = %s "
-                "ORDER BY observed_at DESC, state_id DESC LIMIT 1",
-                (portfolio_key,),
-            ).fetchone()
-            action_observations = connection.execute(
-                "SELECT payload_json FROM portfolio_decision_action_observations WHERE portfolio_id = %s "
-                "ORDER BY observed_at DESC, observation_id DESC LIMIT 8",
-                (portfolio_key,),
-            ).fetchall()
-            quarantines = connection.execute(
-                "SELECT payload_json FROM portfolio_snapshot_quarantines WHERE portfolio_id = %s "
-                "ORDER BY observed_at DESC, quarantine_id DESC LIMIT 8",
-                (portfolio_key,),
-            ).fetchall()
+            reconciliation = read(connection, "portfolio_reconciliations",
+                                  ("source_snapshot_at", "updated_at"), "source_snapshot_at DESC, reconciliation_id DESC")
+            inferred_rows = read(connection, "portfolio_ledger_entries", ("occurred_at", "created_at"),
+                                 "occurred_at DESC, entry_id DESC", limit=20,
+                                 extra=" AND entry_type IN (" + ",".join(["%s"] * len(INFERRED_SNAPSHOT_ENTRY_TYPES)) + ")",
+                                 extra_params=sorted(INFERRED_SNAPSHOT_ENTRY_TYPES))
+            decision_cycle = read(connection, "portfolio_decision_cycles", ("created_at", "updated_at"),
+                                  "created_at DESC, cycle_id DESC")
+            risk_snapshot = read(connection, "portfolio_risk_snapshots", ("observed_at", "updated_at"),
+                                 "observed_at DESC, risk_snapshot_id DESC")
+            exposure = read(connection, "portfolio_exposure_snapshots", ("observed_at", "created_at"),
+                            "observed_at DESC, exposure_snapshot_id DESC")
+            rebalance = read(connection, "portfolio_rebalance_proposals", ("created_at", "updated_at"),
+                             "created_at DESC, proposal_id DESC")
+            rebalance_state = read(connection, "portfolio_rebalance_states", ("observed_at", "updated_at"),
+                                   select="current_payload_json, revision, transition_type")
+            checkpoint = read(connection, "portfolio_snapshot_checkpoints", ("observed_at", "updated_at"))
+            episodes = read(connection, "portfolio_activity_episodes", ("observed_at", "created_at"),
+                            "observed_at DESC, episode_id DESC", limit=8)
+            state = read(connection, "portfolio_state_snapshots", ("observed_at", "created_at"),
+                         "observed_at DESC, state_id DESC")
+            action_observations = read(connection, "portfolio_decision_action_observations", ("observed_at", "created_at"),
+                                       "observed_at DESC, observation_id DESC", limit=8)
+            quarantines = read(connection, "portfolio_snapshot_quarantines", ("observed_at", "created_at"),
+                               "observed_at DESC, quarantine_id DESC", limit=8)
         rebalance_state_payload = _json_loads((rebalance_state or {}).get("current_payload_json"), {})
         if rebalance_state_payload:
             rebalance_state_payload["revision"] = str((rebalance_state or {}).get("revision") or "")
@@ -931,6 +915,9 @@ class MySQLInvestmentDomainStore(MySQLOperationalConnection):
         payload["status"] = "ready" if any(
             value for key, value in payload.items() if key not in {"portfolioId", "status"}
         ) else "unavailable"
+        if cutoff:
+            payload["asOf"] = cutoff
+            payload["historyPolicy"] = "known-at-cutoff-mutable-heads-omitted"
         return payload
 
     def latest_portfolio_lifecycle(self, portfolio_id: str) -> Dict[str, object]:

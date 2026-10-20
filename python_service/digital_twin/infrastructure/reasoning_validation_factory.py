@@ -14,6 +14,7 @@ def build_paired_reasoning_validation_service(settings=None):
     registry = stores.reasoning_engine_registry_store(configured)
     monitor = stores.ontology_reasoning_monitor_store(configured)
     jobs = stores.reasoning_engine_job_store(configured)
+    portfolio = stores.investment_domain_store(configured)
 
     def read_snapshots(account_id, symbols):
         for account in stores.account_reader(configured).load() or []:
@@ -36,4 +37,9 @@ def build_paired_reasoning_validation_service(settings=None):
             insert_domain_event_with_connection(connection, event)
             return jobs.ingress_event_with_connection(connection, event)
 
-    return PairedReasoningValidationService(registry, read_snapshots, record, utc_now)
+    return PairedReasoningValidationService(
+        registry, read_snapshots, record, utc_now,
+        portfolio_context_reader=lambda account_id, as_of: portfolio.ontology_portfolio_lifecycle_context(
+            "portfolio:" + account_id, as_of=as_of,
+        ),
+    )

@@ -333,9 +333,13 @@ def compact_rulebox_summary(packet):
         # not silently replace the persisted multi-rule conclusion.
         lead = _conclusion(judgment, events) if (judgment.get("managementDecision") or {}).get("responses") else native_rows[0]["label"]
     next_text = composition_next(judgment, events, currency) or _next(judgment, events, currency)
+    measurements = _measurements(current, previous, judgment, events, currency, packet.get("transitions") or [])
+    # Separate rows survive the shared customer-language normalizer, which
+    # deliberately folds whitespace inside a single prose row.
+    measurement_rows = ([target_text] if target_text else []) + measurements.splitlines()
     return {"version": VERSION, "lead": lead, "judgment": judgment, "decisionImpact": impact,
         "sections": [("notification-purpose", "알림 이유", [purpose]),
-                     ("decision-impact", "핵심 수치", [' · '.join(v for v in (target_text, _measurements(current, previous, judgment, events, currency, packet.get("transitions") or [])) if v)]),
+                     ("decision-impact", "핵심 수치", measurement_rows),
                      ("decision-basis", "함께 보면", [together]),
                      ("current-snapshot", "현재", [market]),
                      ("next-check-contract", "다음 확인", [next_text])]}

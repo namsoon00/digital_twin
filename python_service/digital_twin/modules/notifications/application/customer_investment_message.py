@@ -16,8 +16,14 @@ def render_customer_investment_document(
         parts = ["<b>" + html.escape(document.headline, quote=False) + "</b>", html.escape(document.lead, quote=False)]
         for section in document.sections:
             if section.rows:
-                parts.append("<b>" + html.escape(section.title, quote=False) + ":</b> "
-                             + html.escape(" · ".join(section.rows), quote=False))
+                if section.key == "notification-purpose" and section.rows == (document.lead,):
+                    continue
+                title = "<b>" + html.escape(section.title, quote=False) + ":</b>"
+                if len(section.rows) > 1:
+                    parts.append(title + "\n" + "\n".join(
+                        "• " + html.escape(row, quote=False) for row in section.rows))
+                else:
+                    parts.append(title + " " + html.escape(section.rows[0], quote=False))
         if document.detail_url:
             parts.append('<a href="' + html.escape(document.detail_url, quote=True) + '">전체 판단 근거·현재 데이터 보기</a>')
         footer = " · ".join(v for v in ["기준 " + document.reference_at if document.reference_at else "",

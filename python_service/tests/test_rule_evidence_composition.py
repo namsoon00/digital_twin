@@ -316,3 +316,17 @@ class RuleEvidenceCompositionTests(unittest.TestCase):
             self.assertIn("IEF", sections["decision-impact"])
             if events:
                 self.assertIn("금리 변화", sections["next-check-contract"])
+            from digital_twin.modules.read_models.contracts import (
+                CustomerInvestmentDocument, CustomerInvestmentSection, normalized_customer_investment_document,
+            )
+            from digital_twin.modules.notifications.application.customer_investment_message import render_customer_investment_document
+            document = normalized_customer_investment_document(CustomerInvestmentDocument(
+                role="typedb-observation", headline="관계 변화", lead=summary["lead"], layout="compact-rulebox-v1",
+                sections=tuple(CustomerInvestmentSection(key, title, tuple(rows))
+                               for key, title, rows in summary["sections"]),
+            ))
+            rendered = render_customer_investment_document(document)
+            numeric_rows = next(s.rows for s in document.sections if s.key == "decision-impact")
+            self.assertEqual(4, len(numeric_rows))
+            self.assertEqual(4, len([line for line in rendered.splitlines() if line.startswith("• ")]))
+            self.assertTrue(any("IEF" in line for line in rendered.splitlines() if line.startswith("• ")))

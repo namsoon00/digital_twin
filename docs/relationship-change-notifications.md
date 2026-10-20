@@ -823,7 +823,9 @@ reference values. It keeps market conditions and policy restrictions visible
 together, names the comparison asset and period, and uses only compatible
 previous receipts for before/after numbers. Within the compact measurement
 budget, a rule's distinguishing input precedes confirmation values shared with
-other rules. Active policy release targets remain in the next check even when
+other rules. Each exact measurement is a separate document row, retained through
+language normalization and rendered on its own line; a purpose sentence identical
+to the lead is not repeated in the transport body. Active policy release targets remain in the next check even when
 market evidence has no matching composition rule; a changed hypothesis keeps
 its own authored follow-up alongside those targets. A new combination is released in a
 separate immutable candidate database and must pass paired-input promotion

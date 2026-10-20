@@ -12,6 +12,7 @@ from digital_twin.modules.notifications.domain.follow_up_transition_evidence imp
 from digital_twin.modules.notifications.domain.relation_change import relation_change_evidence, relation_change_snapshot
 from digital_twin.modules.notifications.domain.management_observation import management_observation_contract, management_only_observation_requested
 from digital_twin.modules.notifications.domain.rule_delivery_comparison import rule_delivery_comparison
+from digital_twin.modules.notifications.domain.rule_context_event import native_context_rule_ids
 
 
 CONTEXT_OBSERVATION_NOTIFICATION_VERSION = "typedb-context-observation-notification-v2"
@@ -351,6 +352,18 @@ def typedb_context_observation_contract(value: object) -> Dict[str, object]:
             return {}  # A broken policy proof cannot fall back to a generic notice.
         return {"schemaVersion": CONTEXT_OBSERVATION_NOTIFICATION_VERSION, "status": "eligible",
                 "decisionMode": CONTEXT_OBSERVATION_DECISION_MODE, **management}
+    context_rule_ids = native_context_rule_ids(relation)
+    if context_rule_ids and not any(_hypothesis_rows(relation)):
+        subject = _mapping(relation.get('subject'))
+        return {'schemaVersion': CONTEXT_OBSERVATION_NOTIFICATION_VERSION, 'status': 'eligible',
+                'decisionMode': CONTEXT_OBSERVATION_DECISION_MODE,
+                'messageClass': 'typedb-context-rule-observation', 'ruleKind': 'context-observation',
+                'decisionEligibility': 'reference-only', 'requiresHypothesis': False,
+                'requiresAiJudgement': False, 'requiresAiNarrative': False, 'action': 'NO_ACTION',
+                'validationState': 'typedb-context-verified', 'symbol': subject.get('symbol'),
+                'market': subject.get('market'), 'relationIds': context_rule_ids,
+                'sourceAboxSnapshotId': relation['sourceAboxSnapshotId'],
+                'inferenceGenerationId': relation['inferenceGenerationId']}
     # Purpose-bound notices can describe a constraint or a registered outcome
     # without inventing a market hypothesis. Publication authority is unchanged.
     publication = _mapping(payload.get("typedbObservationPublication")) or _mapping(payload.get("decisionPublication"))

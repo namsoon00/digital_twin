@@ -39,6 +39,8 @@ SOURCE_FACT_FIELD_TYPES = {
 # compact inference proof so the web read model and AI prompt can show the same
 # ABox -> model -> RuleBox lineage.
 LINEAGE_TARGET_PROPERTY_KEYS = {
+    # Keep the exact market observation behind a causal-context trace.
+    "eventType", "eventCategory", "horizon", "direction", "changePct", "thresholdPct",
     "symbol",
     "signalType",
     "signalFamily",

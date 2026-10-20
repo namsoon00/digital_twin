@@ -489,7 +489,9 @@ def readable_relation_change(packet):
             "이번 알림은 관리 조건의 변화입니다. 가설 " + str(len(hypotheses))
             + "개의 기간별 분석은 상세 근거에 보존했습니다. 가격 전망에 따른 매매 의견과 계정 정책에 따른 관리 대응은 구분합니다."])]
     if not stories and not policy_only:
-        stories = [("hypotheses", "이번에 확인한 내용", ["연결된 가설 설명이 기록되지 않았습니다.",
+        context_only = events and all(e.get('contextState') for e in events)
+        stories = [("hypotheses", "이번에 확인한 내용", [
+                    '예측 가설을 생성하지 않는 시장 관측입니다.' if context_only else "연결된 가설 설명이 기록되지 않았습니다.",
                     *[str(rule.get("label") or "규칙") + " — " + " · ".join(rule_conditions(rule, facts, currency)) for rule in rules[:3]]])]
     notes = []
     if not packet.get("baselineAvailable"):

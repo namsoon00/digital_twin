@@ -242,6 +242,8 @@ class V2GraphDecisionCandidateBuilder:
             # TypeDB already selected a fresh, purpose-bound policy response.
             # This is notification priority, not a market action or forecast.
             severity = "WATCH"
+        if not severity and context_observation.get('messageClass') == 'typedb-context-rule-observation':
+            severity = 'WATCH'
         if (
             not severity
             and review_observation

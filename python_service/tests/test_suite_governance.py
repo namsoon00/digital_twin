@@ -366,7 +366,10 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # Three concurrent relation regressions preserve regrouped lifecycle
         # continuity, owned reply parents and frozen comparable measurements.
         # Includes the captured price-only finish/receipt disposition regression.
-        self.assertLessEqual(total, 2412)
+        # Five crypto-observation regressions cover native causal proof without
+        # an investment hypothesis, identity rejection, receipt novelty, direct
+        # publication and the source-measured customer message.
+        self.assertLessEqual(total, 2417)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

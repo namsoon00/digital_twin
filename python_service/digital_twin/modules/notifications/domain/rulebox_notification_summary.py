@@ -98,6 +98,16 @@ def _measurements(current, previous, judgment, events, currency, transitions):
     cause_ids = {rid for e in events for rid in e.get("sourceRuleIds") or []}
     used = cause_ids | set(judgment.get("sourceRuleIds") or [])
     changed, unchanged, reference = [], [], []
+    for event in events:
+        if not event.get('contextState'):
+            continue
+        for value in event.get('measurements') or []:
+            horizon = {'24h': '24시간', '7d': '7일'}.get(value.get('horizon'))
+            change, threshold = numeric(value.get('changePct')), numeric(value.get('thresholdPct'))
+            if horizon and change is not None and threshold is not None:
+                signed_threshold = -abs(threshold) if value.get('direction') == 'down' else abs(threshold)
+                unchanged.append(horizon + ' 변동 ' + decimal(change, signed=True) + '% / 관찰 기준 '
+                                 + decimal(signed_threshold, signed=True) + '%')
     for transition in transitions:
         for comparison in (transition.get("changeBasis") or {}).get("ruleComparisons") or []:
             if comparison.get("ruleId") not in cause_ids:

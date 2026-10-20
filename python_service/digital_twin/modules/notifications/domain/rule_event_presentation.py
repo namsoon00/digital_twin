@@ -11,6 +11,8 @@ ACTION_LABELS = {"BUY": "신규 매수", "ADD": "추가매수", "HOLD": "보유 
 
 
 def event_conclusion(event):
+    if event.get('contextState'):
+        return '시장 관측: ' + str(event.get('ruleLabel') or '새 시장 문맥') + '. 투자 행동 판단은 포함하지 않습니다.'
     if event.get("purpose") in {"management-policy", "execution-constraint"}:
         if event.get("managementResponses"):
             return "관리 규칙의 대응: " + " · ".join(r.get("label") or "" for r in event["managementResponses"]) + ". 적용 기준과 규모는 ‘결정된 관리 대응과 조정 규모’에 표시했습니다."
@@ -49,6 +51,8 @@ def event_conclusion(event):
 
 
 def event_impact(event, brief=None):
+    if event.get('contextState'):
+        return '관측된 시장 상태를 안내합니다. 이 규칙은 매수·매도나 보유 유지 판단을 정하지 않습니다.'
     impact = event.get("decisionImpact") or {}
     state = impact.get("status")
     before, after = impact.get("previous") or {}, impact.get("current") or {}
@@ -106,6 +110,9 @@ def tracking_rows(events):
                 result.append("추적 시작 이후 주가 등락 " + decimal(outcome["priceChangeFromDecisionPct"], signed=True) + "%")
             continue
         registrations = check.get("tracking") or []
+        if check.get('trackingStatus') == 'context-reevaluation':
+            result.extend(check.get('nextChecks') or [check.get('condition') or '다음 원천 자료에서 같은 시장 조건이 유지되는지 확인합니다.'])
+            continue
         if registrations:
             for row in registrations[:2]:
                 horizons = (row.get("outcomeContract") or {}).get("outcomeHorizonMinutes") or []

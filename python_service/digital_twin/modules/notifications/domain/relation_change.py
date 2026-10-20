@@ -12,6 +12,7 @@ from digital_twin.modules.notifications.domain.rule_policy_event import policy_e
 from digital_twin.modules.notifications.domain.rule_outcome_event import outcome_events
 from digital_twin.modules.notifications.domain.rule_policy_lifecycle import policy_lifecycle
 from digital_twin.modules.notifications.domain.rule_dispatch_validity import rule_event_proof
+from digital_twin.modules.notifications.domain.rule_context_event import context_rule_events
 
 
 VERSION = "relation-change-evidence-v1"
@@ -136,6 +137,9 @@ def relation_change_snapshot(context):
             captured["expectedValue"] = deepcopy(condition.get("expectedValue", condition.get("value")))
             captured["resolvedThreshold"] = resolved_rule_threshold(captured, facts)
             measured = mapping(condition.get("matchedTargetProperties"))
+            if measured.get('eventCategory') == 'crypto-market-threshold':
+                captured['contextMeasurement'] = {key: deepcopy(measured[key]) for key in
+                    ('eventType', 'symbol', 'horizon', 'direction', 'changePct', 'thresholdPct') if key in measured}
             captured.update(capture_model_proof(measured, symbol))
             captured["modelSignalMatched"] = bool(measured.get("contractMatched") or condition.get("matchedByModelSignalInterpretationPolicy"))
             conditions[str(condition.get("conditionId") or len(conditions))] = captured
@@ -247,6 +251,7 @@ def relation_change_evidence(context, baseline=None, *, require_recovery_receipt
     events, rejected = customer_rule_events(current, previous, transitions) if current["proofIdentityVerified"] else ([], [])
     if current["proofIdentityVerified"]:
         events.extend(policy_events(current, previous))
+        events.extend(context_rule_events(current, previous))
     if receipt_scope and current["proofIdentityVerified"]:
         events.extend(outcome_events(current, previous))
     # An unavailable rule in one hypothesis must not discard an independent
@@ -311,6 +316,7 @@ def relation_change_evidence(context, baseline=None, *, require_recovery_receipt
     return {"version": VERSION, "authority": "typedb-hypothesis-lifecycle", "eligible": bool(transitions or admitted_events),
             "reason": " · ".join(str(row.get("changeLabel") or row.get("reason") or "관계 상태 변경") for row in transitions)
             if transitions else ("등록된 가설의 확인 결과가 새로 저장됐습니다." if any(e.get("outcome") for e in admitted_events) else
+                                 "새로운 시장 문맥이 확인됐습니다." if admitted_events and all(e.get('contextState') for e in admitted_events) else
                                  "관리 기준의 적용 상태가 달라졌습니다." if admitted_events else suppressed[0]["reason"] if suppressed else
                                  "판단 보류: " + " · ".join(wait_reasons) if wait_reasons else
                                  "룰박스 관계의 새 의미 변화가 없어 웹 이력에만 저장합니다."),

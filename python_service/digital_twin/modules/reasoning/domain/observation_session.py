@@ -54,7 +54,11 @@ class ObservationEvidenceSession:
             if ref:
                 state = {name: {key: value for key, value in (fact.get(name) or {}).items()
                     if key not in {"checkedAt", "ageMinutes"}} for name in ("evidenceGovernance", "promptEvidenceAdmission")}
-                records.append({"id": fact["id"], "reference": {key: value for key, value in ref.items() if key != "observedAt"}, "state": state})
+                reference = {key: value for key, value in ref.items() if key != "observedAt"}
+                if reference.get("filingHistory"):
+                    from digital_twin.modules.news_intelligence.contracts import filing_history_material
+                    reference["filingHistory"] = filing_history_material(reference["filingHistory"])
+                records.append({"id": fact["id"], "reference": reference, "state": state})
             elif fact.get("kind") == "company-financial-state":
                 from .observation_evidence import material_fact
                 records.append(material_fact(fact))

@@ -7,7 +7,7 @@ import uuid
 
 from digital_twin.modules.notifications.public import NotificationAdmissionPolicy
 from digital_twin.modules.read_models.contracts import investment_decision_key
-from digital_twin.modules.notifications.domain.message_types import HOLDING_TIMING, INVESTMENT_CALENDAR_REMINDER, INVESTMENT_INSIGHT, MODEL_BUY, MODEL_SELL, NEWS_DIGEST, OPERATOR_REASONING_REPORT, WATCHLIST_BUY_CANDIDATE, WATCHLIST_ONTOLOGY_SIGNAL
+from digital_twin.modules.notifications.domain.message_types import AI_OBSERVATION, AI_OBSERVATION_DIAGNOSTIC, HOLDING_TIMING, INVESTMENT_CALENDAR_REMINDER, INVESTMENT_INSIGHT, MODEL_BUY, MODEL_SELL, NEWS_DIGEST, OPERATOR_REASONING_REPORT, WATCHLIST_BUY_CANDIDATE, WATCHLIST_ONTOLOGY_SIGNAL
 from digital_twin.modules.notifications.domain.notification_rules import DEFAULT_NOTIFICATION_RULES, NotificationRuleConfig, default_notification_rule, notification_fingerprint, ontology_relation_delivery_metadata, notification_subject_group_key, notification_state_group_key
 from digital_twin.modules.notifications.domain.notification.lifecycle import age_minutes_since
 from digital_twin.modules.notifications.domain.context_observation_notifications import typedb_context_observation_contract
@@ -1902,7 +1902,11 @@ class MySQLNotificationJobStore(DiagnosticThreadStore, InvestmentConversationSto
         return any(marker in blob for marker in article_markers)
 
     def apply_sent_article_filter_with_connection(self, connection, job: NotificationJob) -> bool:
-        if str(job.message_type or "") == OPERATOR_REASONING_REPORT:
+        # These messages render a frozen, independently checked result. Removing
+        # an already delivered article also removes limitation/counter-evidence
+        # references and invalidates the reviewed body. Central observation
+        # novelty is checked against successful receipts by its delivery guard.
+        if str(job.message_type or "") in {OPERATOR_REASONING_REPORT, AI_OBSERVATION, AI_OBSERVATION_DIAGNOSTIC}:
             return False
         if not self.sent_article_filter_enabled():
             return False

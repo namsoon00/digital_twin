@@ -360,6 +360,50 @@ class CentralPublicationStorageTests(unittest.TestCase):
         self.assertNotIn("aiControlObservation", metadata)
         self.assertEqual(task["taskId"], metadata["aiObservationDiagnostic"]["taskId"])
 
+    def test_previously_delivered_article_cannot_remove_frozen_counter_evidence(self):
+        from ai_insight_fixtures import packet, plan, ref
+        from digital_twin.modules.notifications.domain.sent_article_filter import collect_article_identity_keys_from_context
+        from digital_twin.modules.reasoning.domain.observation_evidence import select_evidence
+        evidence, raw = packet(), plan()
+        fact = {"id": "disclosure-limitation", "kind": "research-evidence", "symbol": "TEST",
+                "label": "공시 원문 확인 한계", "title": "Quarterly filing",
+                "url": "https://example.com/official/filing", "source": "official",
+                "sourceTrustState": "trusted", "investmentJudgmentEligible": False,
+                "sourceAsOf": evidence["capturedAt"], "evidenceCategory": "research",
+                "sourceEntityId": "filing", "sourceWorldId": evidence["worldId"],
+                "sourceSnapshotId": evidence["sourceSnapshotId"]}
+        evidence["facts"], evidence["coverage"] = select_evidence([*evidence["facts"], fact])
+        raw["evidenceIds"].append(fact["id"])
+        raw["claimEvidence"]["counterEvidence"].append(ref("investmentJudgmentEligible", fact_id=fact["id"]))
+        result = {**validate_plan(raw, evidence), "input": evidence, "observedAt": stamp(),
+                  "inputFingerprint": identity(evidence["facts"])}
+        news = {"messageType": "newsDigest", "researchEvidence": [fact]}
+        keys = collect_article_identity_keys_from_context(news)
+        self.assertTrue(keys)
+        try:
+            with self.queue.transaction() as connection:
+                self.queue.record_article_delivery_context_with_connection(connection, SUBJECT["accountId"],
+                    "newsDigest", news, source_job_id="prior-digest", delivered_at=stamp(), identity_keys=keys)
+            _, result, job = self.publish(result)
+            self.assertEqual(result["input"], job.context["aiControlObservation"]["input"])
+            message = NotificationRenderingService().render(job)
+            notifier = Mock(supports_delivery_checkpoints=False)
+            notifier.send.return_value = SimpleNamespace(delivered=True, label="synthetic", reason="", metadata={})
+            with patch("digital_twin.infrastructure.settings.runtime_settings", return_value=self.settings):
+                NotificationDispatchService(self.queue, lambda _: notifier,
+                    delivery_guard=self.publication.delivery_guard).deliver(job, {job.account_id: object()}, message)
+            notifier.send.assert_called_once()
+            saved = next(row for row in self.publication.memory(job.account_id, "TEST")["facts"] if row["id"] == fact["id"])
+            self.assertIs(False, saved["investmentJudgmentEligible"])
+            # The receipt guard, rather than deleting a citation, rejects replay.
+            with patch("digital_twin.infrastructure.settings.runtime_settings", return_value=self.settings):
+                with self.assertRaises(NotificationDeliverySuppressed), self.publication.delivery_guard(job, message):
+                    self.fail("duplicate observation reached transport")
+        finally:
+            with self.queue.transaction() as connection:
+                connection.execute("DELETE FROM notification_article_delivery_ledger WHERE source_job_id=%s AND account_id=%s",
+                                   ("prior-digest", SUBJECT["accountId"]))
+
     def test_tampered_subject_body_or_retired_subject_cannot_reach_transport(self):
         _, result, job = self.publish()
         message = NotificationRenderingService().render(job)

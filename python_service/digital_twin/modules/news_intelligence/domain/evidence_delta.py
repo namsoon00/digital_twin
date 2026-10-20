@@ -86,8 +86,11 @@ def _normalized_key(value: object) -> str:
 def _stable_payload(value: object) -> object:
     """Drop operational refresh noise while retaining the persisted fact body."""
     if isinstance(value, Mapping):
+        from .filing_history import VERSION as HISTORY_VERSION, history_material
         return {
-            str(key): _stable_payload(candidate)
+            str(key): history_material(candidate) if str(key) == "filingHistory"
+            and isinstance(candidate, Mapping) and candidate.get("version") == HISTORY_VERSION
+            else _stable_payload(candidate)
             for key, candidate in value.items()
             if _normalized_key(key) not in VOLATILE_PAYLOAD_KEYS
         }

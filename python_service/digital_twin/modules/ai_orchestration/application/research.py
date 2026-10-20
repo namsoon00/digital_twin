@@ -51,6 +51,20 @@ def execute_research(job, research_store, orchestrator_factory):
         # fingerprint and model input. Keep the original question intact.
         task["purpose"] = "원래 질문의 대상·기간·완료 기준을 모두 확인합니다: " + json.dumps(job["questionContract"], ensure_ascii=False, sort_keys=True)
     previous_answer = job.get("knownSourceAnswer") or {}
+    missing = job.get("evidenceRequirements") or previous_answer.get("missingRequirements", [])
+    if missing:
+        from digital_twin.modules.news_intelligence.contracts import source_research_focus
+        task["sourceFocus"] = source_research_focus(missing)
+    prior_plan = (existing or {}).get("executedPlan") or {}
+    if prior_plan.get("sourceExploration"):
+        # A deployed selector must not change the identity of an already
+        # checkpointed exploration or reset its consumed call/read budget.
+        prior_task = next((row for row in prior_plan.get("tasks", [])
+                           if row.get("taskId") == source_task_id), {})
+        if "sourceFocus" in prior_task:
+            task["sourceFocus"] = deepcopy(prior_task["sourceFocus"])
+        else:
+            task.pop("sourceFocus", None)
     if job.get("evidenceRequirements"):
         task["purpose"] += "\n원문 조회에서 확인한 미확인 항목만 보완합니다: " + json.dumps(job["evidenceRequirements"], ensure_ascii=False)
     if previous_answer.get("status") == "partial" or (previous_answer.get("status") == "answered" and job.get("evidenceRequirements")):

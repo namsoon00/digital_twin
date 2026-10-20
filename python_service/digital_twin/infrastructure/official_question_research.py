@@ -66,6 +66,29 @@ def collect_question_documents(provider, target, signals, tasks):
     filings = [*(sec.get('reportFilings') or []), sec.get('latestFiling') or {}, *(sec.get('recentFilings') or [])]
     candidates = [(row, str(row.get('url') or ''), '') for row in select_question_filings(filings, tasks, now)]
     seen, evidence, statuses, fetched = set(), [], [], 0
+    history = {}
+    try:
+        from .question_filing_history import collect_filing_history
+        history = collect_filing_history(provider, sec, symbol, tasks, filings)
+        if history:
+            statuses.append({**base, 'ok': True, 'status': 'filing-history-collected',
+                             'complete': history['complete'], 'coverageGaps': history['coverageGaps']})
+            # A discovered amendment is eligible for a bounded original read.
+            # Listing presence itself does not establish what was corrected.
+            amendments = []
+            periods = {row.get('reportDate') for row, _, _ in candidates}
+            for row in history['rows']:
+                if row['form'].endswith('/A') and row['reportDate'] in periods:
+                    url = ('https://www.sec.gov/Archives/edgar/data/' + str(int(history['cik'])) + '/'
+                           + row['accessionNumber'].replace('-', '') + '/' + row['primaryDocument'])
+                    amendments.append(({**row, 'url': url}, url, ''))
+            candidates = amendments[:1] + candidates
+    except ExternalCallDeferred as error:
+        statuses.append({**base, 'ok': False, 'status': 'filing-history-deferred',
+                         'reason': error.reason, 'retryAt': error.retry_at})
+    except Exception as error:
+        statuses.append({**base, 'ok': False, 'status': 'filing-history-unavailable',
+                         'errorKind': type(error).__name__})
     # The same bounded, provider-guarded transport serves primary documents and
     # exhibits. URLs are discovered from issuer filings, never supplied by AI.
     while candidates and fetched < 3:
@@ -108,9 +131,12 @@ def collect_question_documents(provider, target, signals, tasks):
             for row in rows:
                 digest = hashlib.sha256((url + '|' + '|'.join(p['passageHash'] for p in passages)).encode()).hexdigest()[:24]
                 row.evidence_id = 'research:' + symbol + ':sec-question:' + digest
-                row.observed_at = now
+                row.observed_at = datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z')
                 row.raw_payload.update(documentIssuerIdentity={'symbol': symbol, 'cik': cik, 'accessionNumber': accession, 'sourceUrl': url, 'verification': 'sec-discovered-issuer-document'}, researchTaskIds=base['taskIds'], researchQueryTerms=base['queryTerms'],
                                        parentDocumentUrl=parent, sourceDocumentHash=hashlib.sha256(str(raw).encode()).hexdigest())
+                row.raw_payload['reportPeriodEnd'] = metadata.get('reportDate', '')
+                if history:
+                    row.raw_payload['filingHistory'] = history
             evidence.extend(rows)
         except ExternalCallDeferred as error:
             statuses.append({**base, 'ok': False, 'status': 'deferred',

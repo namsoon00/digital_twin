@@ -25,6 +25,52 @@ def reviewed_run():
 
 
 class DocumentaryAnswerTests(unittest.TestCase):
+    def test_remaining_requirements_reach_collection_without_changing_original_question(self):
+        from digital_twin.modules.news_intelligence.domain.research_progress import task_contract
+        from test_ai_control import SUBJECT
+        from types import SimpleNamespace
+        missing = ["부문 정의와 반올림·재분류 차이의 근거를 확인해야 합니다."]
+        contract = {"target": "동일 기준 재무 비교", "period": "2026-07-26 및 2025-07-27",
+                    "answerCriterion": "동일 범위·기간·단위의 지표와 정정 여부 확인"}
+        job = {**SUBJECT, "taskId": "focus-test", "question": "매출과 순이익은 같은 기준으로 어떻게 달라졌는가?",
+               "researchRequest": validate_research_request({"queryTerms": ["segment information rounding"],
+                    "sourceTypes": ["official-filing"], "maxAgeMinutes": 527040}, True),
+               "questionContract": contract, "evidenceRequirements": missing,
+               "knownSourceAnswer": {"status": "partial", "text": "매출 표는 확보했습니다.", "sources": []}}
+        store, orchestrator = Mock(), Mock()
+        store.get_run.return_value = None
+        orchestrator.run.return_value = SimpleNamespace(run_id="run", to_dict=lambda: {"status": "evidence-unavailable"})
+        execute_research(job, store, lambda: orchestrator)
+        task = orchestrator.run.call_args.args[2]["researchPlan"]["tasks"][0]
+        self.assertEqual(job["question"], task["question"])
+        self.assertEqual(missing, task["sourceFocus"]["missingRequirements"])
+        self.assertIn(contract["answerCriterion"], task["purpose"])
+        self.assertEqual(task["sourceFocus"], task_contract(task)["sourceFocus"])
+        generic = "Revenue net income operating income operating cash flow profitability and data center sales. " * 5
+        focused = "Segment information: our reportable segments differ from the data center platform. Amounts may differ due to rounding and reclassification of comparable periods."
+        selected = select_question_passages([generic, focused], [task], limit=600)
+        self.assertEqual(focused, selected[0]["quote"])
+        self.assertEqual(missing, job["evidenceRequirements"])
+        for prior_focus in (None, task["sourceFocus"]):
+            previous_task = copy.deepcopy(task)
+            if prior_focus is None:
+                previous_task.pop("sourceFocus")
+            audit = {"taskFingerprint": "preserved-resume", "readCount": 2}
+            store.get_run.return_value = {"status": "research-cooldown", "executedPlan": {
+                "tasks": [previous_task], "sourceExploration": audit}}
+            execute_research(job, store, lambda: orchestrator)
+            resumed = orchestrator.run.call_args.args[2]
+            self.assertEqual(prior_focus, resumed["researchPlan"]["tasks"][0].get("sourceFocus"))
+            self.assertEqual(audit, resumed["sourceExplorationResume"])
+
+    def test_submission_listing_cannot_assert_absence_beyond_captured_coverage(self):
+        from filing_history_checks import check_history_coverage
+        check_history_coverage(self)
+
+    def test_submission_history_and_focused_original_passages_survive_the_graph_read_boundary(self):
+        from filing_history_checks import check_source_to_graph
+        check_source_to_graph(self)
+
     def test_material_identity_ignores_source_polling_but_preserves_values_and_units(self):
         from digital_twin.modules.news_intelligence.contracts import research_material_fingerprint
         packet = {"symbol": "TEST", "kind": "financial-fact", "source": "official", "periodEnd": "2026-06-30",

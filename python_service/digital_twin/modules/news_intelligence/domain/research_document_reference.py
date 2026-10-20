@@ -87,4 +87,13 @@ def research_document_reference(item):
              "passageHashes": [row["passageHash"] for row in exact], "text": text,
              "passageTextHash": digest(text), "sourceNormalization": "disclosure-document-quality-v3",
              "limitation": "해당 보고 기간의 원문 발췌입니다. 최신 사건·현재 수치·현재 주가의 원인을 증명하지 않습니다."}
+    from .filing_history import verified_filing_history
+    history = verified_filing_history(raw.get("filingHistory"), item.symbol, str(issuer.get("cik") or "").zfill(10))
+    if history:
+        value["filingHistory"] = history
+        if len(json.dumps(value, ensure_ascii=False).encode()) > MAX_BYTES:
+            value.pop("filingHistory")
+            # Shorter than the original limitation, so the omission notice
+            # cannot push a previously fitting document over the byte limit.
+            value["limitation"] = "과거 원문으로 현재 사실을 입증하지 않습니다. 제출 이력은 크기 제한으로 생략됐습니다."
     return deepcopy(value) if len(json.dumps(value, ensure_ascii=False).encode()) <= MAX_BYTES else {}

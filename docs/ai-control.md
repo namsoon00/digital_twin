@@ -1565,3 +1565,37 @@ truncation. Proposed or queued alerts are never displayed as actual delivery
 without a transport receipt. These operational changes establish neither better
 predictions nor investment returns; natural authored results and actual receipts
 must be observed after deployment.
+
+### Remaining source requirements and frozen notification evidence (2026-10-20)
+
+An existing partial answer's recorded missing requirements travel to the source
+owner as `source-research-focus-v1`. The original question and completion
+contract remain unchanged. Question passages V3 prioritizes those gaps, including
+segment definitions, reclassification, rounding and correction notes, within the
+existing three-document and eight-passage limits. Finding a relevant passage is
+not an answer; independent source and question reviews still decide coverage.
+
+For a correction/history question, the official source adapter may make one
+provider-guarded read of the issuer's SEC submissions index. Its bounded
+`sec-filing-history-v1` receipt records issuer identity, exact source hash,
+observation cutoff, covered forms and date interval. The collector scans the
+complete recent array before retaining at most 24 matching records. Overlapping
+unread archives, an uncovered start date or a truncated result make coverage
+incomplete. At most one discovered amendment for a selected reporting period
+gets priority within the same three-document budget.
+
+This receipt establishes submission-list coverage only. It cannot establish the
+contents of a correction or the absence of a financial restatement. The source
+assessment and bounded graph document reference retain that limitation. A graph
+reference that cannot fit the receipt explicitly reports its omission. Polling
+clocks and an unchanged index do not create new research material or another
+question-work identity. Existing case attempt limits and repeat guards remain
+authoritative.
+
+Central `aiObservation` and its diagnostic messages retain the complete frozen
+input used for their result. The generic sent-article filter must not remove an
+already delivered filing that is still cited as counter-evidence or a source
+limitation. Central publication still checks review provenance, freshness,
+rendered-body equality, and successful prior delivery receipts. News digest
+deduplication remains separate. Existing failed outbox rows are not automatically
+repaired or resent with old market data.

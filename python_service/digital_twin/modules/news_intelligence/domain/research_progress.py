@@ -56,6 +56,8 @@ def task_contract(task: Dict[str, object]) -> Dict[str, object]:
     )}
     if "requiresDocumentBody" in task:
         contract["requiresDocumentBody"] = task["requiresDocumentBody"]
+    if "sourceFocus" in task:
+        contract["sourceFocus"] = task["sourceFocus"]
     return contract
 
 
@@ -136,6 +138,11 @@ def evidence_packets(items: Iterable[ResearchEvidence], claims: Iterable[object]
                 documentType=str(raw.get("officialDocumentType") or ""),
                 reportDate=str(raw.get("reportDate") or ""),
                 documentScope=str(raw.get("officialDocumentScope") or ""))
+        from .filing_history import verified_filing_history
+        history = verified_filing_history(raw.get("filingHistory"), item.symbol,
+                                         str((raw.get("documentIssuerIdentity") or {}).get("cik") or "").zfill(10))
+        if history:
+            packet["filingHistory"] = history
         packet["researchMaterialFingerprint"] = research_material_fingerprint(research_source_packet(item))
         packet["inputFingerprint"] = fingerprint(packet)
         result.append(packet)

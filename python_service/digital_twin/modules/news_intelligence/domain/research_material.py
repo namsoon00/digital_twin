@@ -26,6 +26,9 @@ def research_material_fingerprint(packet):
         material["passages"] = sorted({str(row.get("quote") or "") for row in passages if row.get("quote")})
     if packet.get("sourceTextHash"):
         material["sourceTextHash"] = packet["sourceTextHash"]
+    if packet.get("filingHistory"):
+        from .filing_history import history_material
+        material["filingHistory"] = history_material(packet["filingHistory"])
     if not values and not passages and not packet.get("sourceTextHash"):
         # A headline or an AI paraphrase cannot reopen a stalled source question.
         return ""
@@ -43,4 +46,5 @@ def research_source_packet(item):
         "periodEnd": raw.get("periodEnd") or raw.get("reportPeriodEnd") or "",
         "documentType": raw.get("officialDocumentType", ""),
         "documentScope": raw.get("officialDocumentScope", ""),
-        "sourceTextHash": hashlib.sha256(body.encode()).hexdigest() if body else ""}
+        "sourceTextHash": hashlib.sha256(body.encode()).hexdigest() if body else "",
+        **({"filingHistory": raw["filingHistory"]} if raw.get("filingHistory") else {})}

@@ -4,7 +4,7 @@ import re
 from datetime import date
 
 
-VERSION = 'question-passages-v2'
+VERSION = 'question-passages-v3'
 _TOPICS = (
     (r'순손실|적자|손실|net loss', ('net loss', 'operating loss', 'losses')),
     (r'순이익|수익성|profitability', ('net income', 'profitability', 'operating income')),
@@ -21,6 +21,10 @@ _TOPICS = (
     (r'현금.?흐름|cash flow', ('cash flow', 'operating activities')),
     (r'투자.?지출|설비.?투자|capital', ('capital expenditure', 'capital spending', 'purchases of property', 'payments for property')),
     (r'세금|법인세|tax', ('income tax', 'tax provision', 'tax expense')),
+    (r'부문|segment|범위\s*정의', ('segment information', 'reportable segments', 'compute & networking', 'chief operating decision maker')),
+    (r'정정|재작성|restat|amend', ('restatement', 'restated', 'amendment', 'correction', 'error')),
+    (r'반올림|차이|round|reconcil', ('rounding', 'rounded', 'reconciliation')),
+    (r'재분류|reclassif', ('reclassified', 'reclassification')),
 )
 
 
@@ -36,15 +40,25 @@ def question_terms(tasks):
 
 
 def select_question_passages(blocks, tasks, limit=6000, *, max_block_chars=12000):
+    from .source_focus import focused_tasks
     terms = question_terms(tasks)
+    focus_terms = question_terms(focused_tasks(tasks))
+    # Specific missing topics precede generic income/revenue tables. The full
+    # original question remains the review contract, including excluded gaps.
+    specific = {"segment information", "reportable segments", "chief operating decision maker",
+                "restatement", "restated", "amendment", "correction", "rounding",
+                "rounded", "reconciliation", "reclassified", "reclassification"}
+    priority = set(focus_terms) & specific
     candidates = []
     for index, block in enumerate(dict.fromkeys(blocks)):
         if not 80 <= len(block) <= (max(12000, min(14000, max_block_chars)) if '\n' in block else 2800):
             continue
-        matched = [term for term in terms if term in block.casefold()]
+        text = block.casefold()
+        matched = [term for term in sorted(set(terms) | set(focus_terms)) if term in text]
         if matched:
-            candidates.append((len(matched), index, block, matched))
-    candidates.sort(key=lambda row: (-row[0], row[1]))
+            rank = (bool(priority.intersection(matched)), len(set(focus_terms).intersection(matched)), len(matched))
+            candidates.append((rank, index, block, matched))
+    candidates.sort(key=lambda row: (tuple(-int(value) for value in row[0]), row[1]))
     remaining, result = max(500, min(20000, int(limit))), []
     for _, _, quote, matched in candidates:
         size = len(quote) + (2 if result else 0)

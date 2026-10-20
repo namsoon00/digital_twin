@@ -4,6 +4,7 @@ import { activeOntologyAccountId } from "../ontology/requests.mjs";
 import { render } from "../render/scheduler.mjs";
 import { requestJson } from "../requests/json.mjs";
 import { createLatestRequestLane } from "../requests/latest.mjs";
+import { modelRefreshDelay, modelRefreshPending } from "./model-refresh.mjs";
 import { isStaticPreviewHost } from "../shell/static-preview.mjs";
 import { decisionsState } from "../state/decisions.mjs";
 import { navigationState } from "../state/navigation.mjs";
@@ -68,14 +69,10 @@ function loadInvestmentModel(force) {
     decisionsState.investmentModelError = "";
     return Promise.resolve(decisionsState.investmentModel);
   }
-  var polling = Boolean(
-    decisionsState.investmentModel && (
-      decisionsState.investmentModel.status === "warming" ||
-      ((decisionsState.investmentModel.cache || {}).refreshing)
-    )
-  );
+  var polling = modelRefreshPending(decisionsState.investmentModel);
   if (decisionsState.investmentModelLoading && !force) return Promise.resolve(decisionsState.investmentModel);
   if (decisionsState.investmentModelLoaded && !force && !polling) return Promise.resolve(decisionsState.investmentModel);
+  if (force) decisionsState.investmentModelPollCount = 0;
   decisionsState.investmentModelLoading = true;
   decisionsState.investmentModelError = "";
   return requestJson("/api/investment-model" + (force ? "?refresh=1" : ""), {
@@ -85,15 +82,12 @@ function loadInvestmentModel(force) {
   }).then(function (payload) {
     decisionsState.investmentModel = payload && typeof payload === "object" ? payload : {};
     decisionsState.investmentModelLoaded = true;
-    var refreshPending = decisionsState.investmentModel.status === "warming" || Boolean((decisionsState.investmentModel.cache || {}).refreshing);
+    var refreshPending = modelRefreshPending(decisionsState.investmentModel);
     if (refreshPending && decisionsState.investmentModelPollCount < 12) {
       decisionsState.investmentModelPollCount += 1;
       window.setTimeout(function () {
-        if (decisionsState.investmentModel && (
-          decisionsState.investmentModel.status === "warming" ||
-          Boolean((decisionsState.investmentModel.cache || {}).refreshing)
-        )) loadInvestmentModel(false);
-      }, 1800);
+        if (modelRefreshPending(decisionsState.investmentModel)) loadInvestmentModel(false);
+      }, modelRefreshDelay(decisionsState.investmentModel));
     } else if (!refreshPending) {
       decisionsState.investmentModelPollCount = 0;
     }

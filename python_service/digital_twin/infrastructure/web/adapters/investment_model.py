@@ -75,7 +75,7 @@ def _investment_model_source_payload() -> Dict[str, object]:
             results[key] = {}
             errors.append(key + ": " + str(error)[:180])
     if not results.get("platform"):
-        raise RuntimeError("운영 배포 상태를 확인하지 못했습니다.")
+        raise RuntimeError("현재 배포의 상세 검증 자료를 읽지 못했습니다.")
     if source_control != _current_control():
         raise RuntimeError("조회 중 운영 배포가 변경되어 다시 확인합니다.")
     payload = investment_model_projection(
@@ -137,6 +137,7 @@ def investment_model_api_payload(force: bool = False) -> Dict[str, object]:
             "일부 검증 자료가 갱신되지 않아 다시 확인합니다." if partial else ""
         ),
         "controlVerified": control is not None,
+        "retryAfterSeconds": current.get("retryAfterSeconds", 0),
     }
     if stale:
         payload["status"] = "warming" if refreshing or partial else "unavailable"

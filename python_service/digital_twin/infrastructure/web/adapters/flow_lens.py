@@ -307,8 +307,15 @@ def flow_lens_read_payload(query: Dict[str, List[str]]) -> Dict[str, object]:
             FLOW_LENS_CAPITAL_CACHE, capital_key, load_capital,
             force=changed, blocking_first_load=False,
         )
+        payload["capitalFlow"].setdefault("contract", "capital-flow-summary-v1")
         if payload["capitalFlow"].get("sourceSnapshotAt") != source_clock:
             payload["capitalFlow"]["readCache"]["stale"] = True
+            freshness = payload["capitalFlow"].get("dataFreshness")
+            if freshness:
+                payload["capitalFlow"]["dataFreshness"] = {
+                    **(freshness if isinstance(freshness, dict) else {}),
+                    "status": "stale", "stale": True,
+                }
             payload["capitalFlow"]["effectiveFreshness"] = {
                 "status": "stale", "reason": "현재 보유 스냅샷에 맞춰 자금 흐름을 갱신하고 있습니다.",
             }

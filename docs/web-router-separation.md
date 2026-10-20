@@ -169,7 +169,9 @@ changed control identity, partial diagnostics, expiration, and active refresh
 cannot certify validation or promotion. No engine control or release identity
 is written by this read path. A fast HTTP 200 warming response is not proof
 that diagnostics loaded: inspect `cache`, `diagnostics`, and the returned
-release after refresh.
+release after refresh. The browser honors the cache retry cooldown after a
+cold dependency timeout, keeps its bounded retry count, and allows a manual
+refresh to start a new retry window.
 
 Flow Lens keeps portfolio data available while capital-flow analytics refresh
 asynchronously. The analytics carry `sourceSnapshotAt`; a mismatch is explicitly

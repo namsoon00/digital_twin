@@ -1,5 +1,5 @@
 [
-  {"reason": "Keep the last same-release diagnostics readable during asynchronous refresh and visibly withhold current validation until refreshed; test_investment_model_read_adapter and investment-model-cache.test.mjs cover stale/failed/control-change contracts.", "functions": ["renderInvestmentModelOverview"]},
+  {"reason": "Keep the last same-release diagnostics readable during asynchronous refresh and visibly withhold current validation until refreshed; test_investment_model_read_adapter and investment-model-cache.test.mjs cover stale/failed/control-change contracts.", "functions": ["renderInvestmentModelOverview", "loadInvestmentModel"]},
   {"reason": "Retire legacy investment AI controls and direct users to independent central observation settings. Covered by test_ai_control_publication and test_ai_inference_worker_runtime.", "functions": ["renderRuntimeSettingsSummary", "renderSettingsAiRuntimeGroup", "settingsAiRuntimeWorkDetailPayload"]},
   {"reason": "Expose central AI observation, research and execution records from operations. Covered by test_ai_control.", "functions": ["renderOperationsHealthConsole"]},
   {

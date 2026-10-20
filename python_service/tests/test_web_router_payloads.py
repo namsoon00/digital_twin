@@ -144,6 +144,7 @@ class WebRouterPayloadTests(unittest.TestCase):
                     self.assertEqual("old-clock", result["capitalFlow"]["sourceSnapshotAt"])
                     self.assertTrue(result["capitalFlow"]["readCache"]["stale"])
                     self.assertEqual("stale", result["capitalFlow"]["effectiveFreshness"]["status"])
+                    self.assertEqual("stale", result["capitalFlow"]["dataFreshness"]["status"])
                 finally:
                     release.set()
                     deadline = time.monotonic() + 2

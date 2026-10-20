@@ -35,3 +35,52 @@ test("first model load is warming and later dependency failures are escaped", ()
   assert.match(html, /&lt;script&gt;offline/);
   assert.doesNotMatch(html, /<script>/);
 });
+
+test("model refresh retries after a cold dependency timeout and stops once current", async () => {
+  const { modelRefreshDelay, modelRefreshPending } = await import("../../public/modules/decisions/model-refresh.mjs");
+  const source = readFileSync(new URL("../../public/modules/decisions/requests.mjs", import.meta.url), "utf8")
+    .replace(/^import .*;$/gm, "").replace(/^export .*;$/gm, "");
+  const pending = { status: "unavailable", cache: {stale: true, retryAfterSeconds: 20} };
+  const ready = { status: "review", cache: {stale: false, retryAfterSeconds: 0} };
+  const timers = [];
+  const requests = [];
+  const state = { investmentModel: pending, investmentModelLoaded: true, investmentModelPollCount: 0 };
+  let response = pending;
+  const context = vm.createContext({decisionsState: state, shellState: {}, window: {setTimeout: (fn, delay) => timers.push({fn, delay})},
+    createLatestRequestLane: () => ({}), isStaticPreviewHost: () => false, render: () => {},
+    modelRefreshDelay, modelRefreshPending,
+    requestJson: async (path, options) => { requests.push({path, options}); return response; },
+  });
+  vm.runInContext(source, context);
+  await context.loadInvestmentModel(false);
+  assert.equal(timers[0].delay, 20000);
+  assert.equal(requests[0].path, "/api/investment-model");
+  assert.equal(requests[0].options.force, true);
+  response = ready;
+  await timers[0].fn();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(requests.length, 2);
+  assert.equal(timers.length, 1);
+  assert.equal(state.investmentModelPollCount, 0);
+  assert.equal(state.investmentModel.cache.stale, false);
+  state.investmentModelPollCount = 12;
+  response = pending;
+  await context.loadInvestmentModel(true);
+  assert.equal(state.investmentModelPollCount, 1);
+  assert.equal(timers.length, 2);
+  assert.equal(modelRefreshPending({status: "unavailable", cache: {stale: true, retryAfterSeconds: 0}}), false);
+});
+
+test("capital flow labels a cached portfolio calculation with its actual snapshot clock", () => {
+  const source = readFileSync(new URL("../../public/modules/decisions/evidence.mjs", import.meta.url), "utf8")
+    .replace(/^import .*;$/gm, "").replace(/^export .*;$/gm, "");
+  const context = vm.createContext({ escapeHtml, capitalFlowModel: snapshot => snapshot.capitalFlow });
+  vm.runInContext(source, context);
+  const html = context.renderInvestmentMoneyFlowPanel({capitalFlow: {status: "ready", readCache: {stale: true},
+    sourceSnapshotAt: "2026-10-21T00:00:00Z"}});
+  assert.match(html, /이전 집계 · 갱신 대기/);
+  assert.match(html, /보유 자료 기준: 2026-10-21T00:00:00Z/);
+  assert.doesNotMatch(html, /tone-chip watch/);
+  const warming = context.renderInvestmentMoneyFlowPanel({capitalFlow: {status: "warming", readCache: {refreshing: true}}});
+  assert.match(warming, /저장된 수급 자료를 불러오고/);
+});

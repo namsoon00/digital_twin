@@ -170,8 +170,10 @@ function renderInvestmentMoneyFlowPanel(snapshot) {
   var storage = flow.storageQuality || {};
   var storageFlow = storage.capitalFlow || storage;
   var windowDays = Number(flow.windowDays || 5);
-  var statusLabel = flow.status === "ready" ? "관측 중" : (flow.status === "unavailable" ? "저장소 오류" : "수집 대기");
-  var statusTone = flow.status === "ready" ? "watch" : "caution";
+  var cache = flow.readCache || {};
+  var cachedReference = Boolean(cache.stale || cache.refreshing);
+  var statusLabel = cachedReference ? (flow.sourceSnapshotAt ? "이전 집계 · 갱신 대기" : "집계 확인 중") : (flow.status === "ready" ? "관측 중" : (flow.status === "unavailable" ? "저장소 오류" : "수집 대기"));
+  var statusTone = !cachedReference && flow.status === "ready" ? "watch" : "caution";
   var portfolioAvailable = portfolio.status === "ready";
   var coverageText = Number(quality.subjectCount || 0) > 0
     ? Number(quality.sufficientSubjectCount || 0) + "/" + Number(quality.subjectCount || 0) + " 종목"
@@ -197,6 +199,7 @@ function renderInvestmentMoneyFlowPanel(snapshot) {
     '</div>',
     '<div class="capital-flow-head-meta"><span class="tone-chip ' + statusTone + '">' + escapeHtml(statusLabel) + '</span><span class="metric">' + escapeHtml(subjects.length + "종목 · " + windowDays + "일") + '</span></div>',
     '</div>',
+    cachedReference ? '<p class="subtle" role="status">' + escapeHtml(flow.sourceSnapshotAt ? "이전 집계를 표시하고 있습니다. 보유 자료 기준: " + flow.sourceSnapshotAt + ". 갱신이 끝나면 새 집계로 바뀝니다." : "저장된 수급 자료를 불러오고 있습니다.") + '</p>' : '',
     '<div class="capital-flow-quality-strip">',
     '<section><span>판단 가능</span><strong>' + escapeHtml(coverageText) + '</strong><em>필요 관측 충족</em></section>',
     '<section><span>보유 유출 노출</span><strong>' + escapeHtml(outflowExposure) + '</strong><em>' + escapeHtml(outflowHoldingText) + '</em></section>',

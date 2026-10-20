@@ -86,6 +86,7 @@ class InvestmentModelReadAdapterTests(unittest.TestCase):
         self.assertTrue(result["cache"]["stale"])
         self.assertFalse(result["validation"]["promotionReady"])
         self.assertEqual("offline", result["cache"]["lastError"])
+        self.assertGreater(result["cache"]["retryAfterSeconds"], 0)
 
     def test_live_control_change_or_outage_never_reuses_old_pass(self):
         self.cache.store_success("active", model_payload())

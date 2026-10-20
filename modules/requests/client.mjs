@@ -6,6 +6,7 @@ export function createJsonClient({ fetch: fetchJson, AbortController: Abort, now
   const cache = new Map();
   const pending = new Set();
   let disposed = false;
+  let sequence = 0;
 
   function request(path, options = {}) {
     if (disposed) return Promise.reject(new Error("Request client is disposed"));
@@ -22,13 +23,15 @@ export function createJsonClient({ fetch: fetchJson, AbortController: Abort, now
       return Promise.resolve(cached.payload);
     }
     const controller = Abort ? new Abort() : null;
-    const entry = { path, controller, cacheable: true, promise: null };
+    const startedAt = now();
+    const requestId = "web-" + startedAt.toString(36) + "-" + (++sequence).toString(36);
+    const entry = { path, controller, cacheable: true, promise: null, timedOut: false };
     const token = begin(path, key, options);
     let status = 0;
     let outcome = "ok";
-    const timer = controller ? setTimer(() => controller.abort(), Math.max(1000, Number(options.timeoutMs || 12000))) : null;
+    const timer = controller ? setTimer(() => { entry.timedOut = true; controller.abort(); }, Math.max(1000, Number(options.timeoutMs || 12000))) : null;
     entry.promise = Promise.resolve().then(() => fetchJson(path, {
-      headers: { Accept: "application/json" }, cache: "no-store", signal: controller?.signal
+      headers: { Accept: "application/json", "X-Request-ID": requestId }, cache: "no-store", signal: controller?.signal
     })).then(async response => {
       status = Number(response.status || 0);
       const payload = await response.json();
@@ -41,14 +44,14 @@ export function createJsonClient({ fetch: fetchJson, AbortController: Abort, now
       }
       return payload;
     }).catch(error => {
-      outcome = error?.name === "AbortError" ? "timeout" : "error";
-      if (error?.name === "AbortError") throw new Error("응답 시간이 초과되었습니다. 마지막 데이터를 유지합니다.");
+      outcome = error?.name === "AbortError" ? (entry.timedOut ? "timeout" : "cancelled") : "error";
+      if (outcome === "timeout") throw new Error("응답 시간이 초과되었습니다. 마지막 데이터를 유지합니다.");
       throw error;
     }).finally(() => {
       if (timer !== null) clearTimer(timer);
       if (active.get(key) === entry) active.delete(key);
       pending.delete(entry);
-      end(token, { status, outcome });
+      end(token, { status, outcome, requestId, path: String(path).split("?")[0], durationMs: Math.max(0, now() - startedAt) });
     });
     active.set(key, entry);
     pending.add(entry);

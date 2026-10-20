@@ -167,7 +167,7 @@ function renderInvestmentModelEvolution(evolution) {
 
 function renderInvestmentModelOverview(operator) {
   var payload = investmentModelPayload();
-  if ((decisionsState.investmentModelLoading && !decisionsState.investmentModelLoaded) || payload.status === "warming") {
+  if ((decisionsState.investmentModelLoading && !decisionsState.investmentModelLoaded) || (payload.status === "warming" && !(payload.cache || {}).lastSuccessAt)) {
     return '<section class="investment-model-loading" aria-busy="true"><span class="spinner"></span><strong>활성 투자모델을 확인하는 중입니다</strong><p>릴리스·RuleBox·가설 인벤토리를 한 계약으로 읽고 있습니다.</p></section>';
   }
   if (decisionsState.investmentModelError && !decisionsState.investmentModelLoaded) {
@@ -211,6 +211,7 @@ function renderInvestmentModelOverview(operator) {
     '<aside><span class="status-pill ' + escapeHtml(meta.tone) + '">' + escapeHtml(meta.label) + '</span><strong>' + escapeHtml(release.deploymentId || "활성 릴리스 없음") + '</strong><em>release ' + escapeHtml(release.releaseShortHash || "-") + '</em></aside>',
     '</section>',
     renderInvestmentModelContractNavigation(),
+    cache.stale ? '<section class="investment-model-note" role="status"><strong>' + escapeHtml(cache.refreshing ? "최신 검증 자료를 갱신하고 있습니다" : "최신 검증 자료 확인이 필요합니다") + '</strong><p>' + escapeHtml(cache.lastError || "이전 조회 자료가 포함되어 있으며 갱신이 끝날 때까지 검증 통과 여부를 확정하지 않습니다.") + (cache.lastSuccessAt ? ' 마지막 성공 조회: ' + escapeHtml(cache.lastSuccessAt) : '') + '</p></section>' : '',
     modelContract,
     renderInvestmentModelEvolution(payload.evolution || {}),
     readinessMarkup,

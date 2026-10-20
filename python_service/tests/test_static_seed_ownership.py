@@ -149,20 +149,16 @@ class StaticSeedOwnershipTests(unittest.TestCase):
 
     def test_original_schema_fingerprints_queries_and_restore_results_match(self):
         golden = json.loads(
-            (ROOT / "tests/fixtures/static_seed_execution_v4.json").read_text()
+            (ROOT / "tests/fixtures/static_seed_execution_v3.json").read_text()
         )
         self.assertEqual(golden["scenarios"], execution_contracts(api))
-        from composition_catalog_fixture import pre_composition_catalog
-        with pre_composition_catalog():
-            previous = json.loads((ROOT / "tests/fixtures/static_seed_execution_v3.json").read_text())["scenarios"]
+        from research_knowledge_fixture import pre_research_knowledge_catalog
+        previous = json.loads((ROOT / "tests/fixtures/static_seed_execution_v2.json").read_text())["scenarios"]
+        with pre_research_knowledge_catalog():
             self.assertEqual(previous, execution_contracts(api))
-            from research_knowledge_fixture import pre_research_knowledge_catalog
-            previous = json.loads((ROOT / "tests/fixtures/static_seed_execution_v2.json").read_text())["scenarios"]
-            with pre_research_knowledge_catalog():
-                self.assertEqual(previous, execution_contracts(api))
-                frozen_previous_artifact = artifact()
-            with patch("static_seed_fixture.artifact", side_effect=lambda: copy.deepcopy(frozen_previous_artifact)):
-                self.assertEqual(previous, execution_contracts(api))
+            frozen_previous_artifact = artifact()
+        with patch("static_seed_fixture.artifact", side_effect=lambda: copy.deepcopy(frozen_previous_artifact)):
+            self.assertEqual(previous, execution_contracts(api))
 
     def test_facade_retains_signatures_and_write_coordinator_guards(self):
         contract = json.loads(CONTRACT.read_text())

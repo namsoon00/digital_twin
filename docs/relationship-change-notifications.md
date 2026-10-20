@@ -803,7 +803,7 @@ decimal places), retain day-only macro dates without inventing a time, and do
 not borrow quote clocks for stock-level flow fields. Legacy missing receipts
 stay missing; notification rendering must not fetch current data to fill them.
 
-The V16 catalog adds three non-predictive `RuleEvidenceComposition` rules:
+The V17 catalog adds three non-predictive composition rules using existing `NextCheck` assertions:
 confirmed support and risk conditions together, support with the account-weight
 ceiling, and support with the averaging-down restriction. They execute native
 TypeQL predicates and persist `compositionResponse` in InferenceBox. The two
@@ -828,17 +828,22 @@ checks; updating Python alone does not deploy new RuleBox predicates.
 Validation: `test_rule_evidence_composition` covers original scorer-to-ABox
 receipts, altered/future/wrong-scope proof, duplicate and horizon treatment,
 native composition authority, exact thresholds/benchmarks and missing history.
-V16 compiler fixtures retain the pre-existing rule predicate hashes separately.
-Newly authored catalogs use TBox v15. Versioned projection/static-seed fixtures
-replay the prior vocabulary separately, including restoration of frozen artifacts.
+V17 compiler fixtures retain the pre-existing rule predicate hashes separately.
+The TBox is unchanged: these rules do not introduce a new kind of market fact.
 Release preflight checks every permitted model release in a composition predicate.
 
 The additive release builder copies the active release artifact, appends only
-the composition class and rules, and preserves every original rule and static
-node. `native-composition-migration-review-v1` retains the raw paired replay
+only three composition rules, and preserves every original rule, static
+node and TBox metadata value. `native-composition-migration-review-v1` retains the raw paired replay
 comparison. It explains only references to these three declared context rules,
 after verifying immutable artifacts, identical source inputs, 100% fact/rule
 coverage, zero shadow delivery and unchanged investment actions, policy targets
 and qualification. It rejects edits to existing rules, static ontology or
 undeclared actions. Such a review is not an exception to freshness or empirical
 qualification and cannot approve an investment action.
+
+Runtime validation of the initial candidate exposed that adding a dedicated
+composition class also changes lifecycle TBox metadata stamped on every ABox
+fact. V17 uses the existing NextCheck vocabulary and requires an identical
+TBox. Input-parity checks remain strict, including retained source dependencies;
+no incomparable replay counts as successful promotion evidence.

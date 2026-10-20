@@ -50,8 +50,9 @@ def declared_composition_additions(baseline, candidate, declaration):
             raise ValueError("addition-is-not-an-actionless-native-composition")
     old_nodes = {n["id"]: n for n in baseline["graph"]["entities"] if (n.get("properties") or {}).get("ontologyBox") == "TBox"}
     new_nodes = {n["id"]: n for n in candidate["graph"]["entities"] if (n.get("properties") or {}).get("ontologyBox") == "TBox"}
-    if (any(new_nodes.get(k) != v for k, v in old_nodes.items())
-            or set(new_nodes) - set(old_nodes) != {"tbox-class:RuleEvidenceComposition"}):
+    if (new_nodes != old_nodes or declaration.get("tboxUnchanged") is not True
+            or candidate.get("tboxMetadata") != baseline.get("tboxMetadata")
+            or candidate.get("tboxFingerprint") != baseline.get("tboxFingerprint")):
         raise ValueError("undeclared-tbox-change")
     old_graph = {n["id"]: n for n in baseline["graph"]["entities"]}
     new_graph = {n["id"]: n for n in candidate["graph"]["entities"]}

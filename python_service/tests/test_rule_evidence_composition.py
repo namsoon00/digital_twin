@@ -69,10 +69,6 @@ def migration_artifacts():
     from digital_twin.modules.reasoning.infrastructure.static_seed.composition import composition_release_artifact
     from digital_twin.modules.market_data.contracts import payload_fingerprint
     old = ontology_release_seed_artifact([r for r in default_graph_inference_rules() if not r.rule_id.startswith("graph.composition.")])
-    cid = "tbox-class:RuleEvidenceComposition"
-    old["graph"]["entities"] = [r for r in old["graph"]["entities"] if r["id"] != cid]
-    old["graph"]["relations"] = [r for r in old["graph"]["relations"] if cid not in {r["source"], r["target"]}]
-    old["tboxMetadata"]["fingerprint"] = old["tboxFingerprint"] = "fixture-before-composition"
     new = composition_release_artifact(old, "baseline")
     return [{"valid": True, "artifact": a, "artifactFingerprint": payload_fingerprint(a),
              "ruleboxFingerprint": a["ruleboxFingerprint"]} for a in (old, new)]
@@ -93,6 +89,8 @@ class RuleEvidenceCompositionTests(unittest.TestCase):
         records = migration_artifacts()
         old, new = (r["artifact"] for r in records)
         self.assertEqual(old["rules"], new["rules"][:len(old["rules"])])
+        self.assertEqual(old["tboxMetadata"], new["tboxMetadata"])
+        self.assertEqual(old["tboxFingerprint"], new["tboxFingerprint"])
         nodes = {r["id"]: r for r in new["graph"]["entities"]}
         self.assertTrue(all(nodes[r["id"]] == r for r in old["graph"]["entities"]))
         from digital_twin.modules.reasoning.domain.composition_upgrade_review import declared_composition_additions

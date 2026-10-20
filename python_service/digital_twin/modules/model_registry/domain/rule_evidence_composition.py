@@ -105,7 +105,7 @@ def composition_rules(production_rules):
             derivations=[GraphRuleDerivation(
                 relation_type="REQUIRES_NEXT_CHECK", target_kind="next-check",
                 target_key="{subjectId}:" + short, target_label="{displayName} " + label,
-                tbox_class="NextCheck", tbox_classes=["NextCheck", "RuleEvidenceComposition"],
+                tbox_class="NextCheck", tbox_classes=["NextCheck"],
                 polarity="context", evidence_role="context", decision_effect="defer",
                 action_group="context", action_level="review", decision_stage="MACRO_REGIME",
                 decision_label="여러 조건을 함께 확인", next_checks=[check],

@@ -85,6 +85,7 @@ class OntologyRuleMatch:
     rule_output_contract: Dict[str, object] = field(default_factory=dict)
     knowledge_basis: Dict[str, object] = field(default_factory=dict)
     management_response: Dict[str, object] = field(default_factory=dict)
+    composition_response: Dict[str, object] = field(default_factory=dict)
     action_applicability: Dict[str, object] = field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, object]:
@@ -130,6 +131,9 @@ class OntologyRuleMatch:
         payload["ruleDependencyContractVersion"] = payload.pop("rule_dependency_contract_version")
         payload["ruleOutputContract"] = payload.pop("rule_output_contract")
         payload["knowledgeBasis"] = payload.pop("knowledge_basis")
+        composition = payload.pop("composition_response")
+        if composition:
+            payload["compositionResponse"] = composition
         response = payload.pop("management_response")
         if response:
             payload["managementResponse"] = response

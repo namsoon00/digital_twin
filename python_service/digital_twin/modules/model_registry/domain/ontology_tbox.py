@@ -105,6 +105,7 @@ CLASS_DEFS: List[TBoxClassDef] = [
     TBoxClassDef("StatisticalModelRelease", "reasoning-insight", "통계 모델 릴리스", description="고정된 특징 집합, 점수 산식, 검증 상태와 행동 적격성을 가진 버전형 통계 모델 릴리스입니다."),
     TBoxClassDef("ModelSignalObservation", "observation-data", "통계 모델 신호", parent="Observation", description="불변 기간 특징에서 계산된 점수·확률·신뢰도입니다. 투자 행동은 TypeDB 관계 규칙이 별도로 판단합니다."),
     TBoxClassDef("ModelHypothesisEvidence", "observation-data", "모델 가설 계약 근거", parent="Observation", description="한 모델 신호가 어떤 예측 규칙의 시장 조건을 정확히 충족했는지 식별하는 시점 고정 근거입니다. 계정 조건은 포함하지 않습니다."),
+    TBoxClassDef("RuleEvidenceComposition", "reasoning-insight", "여러 규칙의 근거 조합", parent="NextCheck", description="원천 관측의 중복·상반 조건과 계좌 관리 제한을 함께 해석하는 비예측 계약입니다. 규칙 수로 투자 행동을 선택하거나 관리 제한을 해제하지 않습니다."),
     TBoxClassDef("ModelHypothesisAssessment", "reasoning-insight", "모델 가설 평가", parent="ActionabilityAssessment", description="특정 기준시각에 예측 가설 계약을 시험한 결과입니다. 지지됨, 현재 근거 없음, 자료 부족을 구분하며 현재 근거 없음은 가설 기각을 뜻하지 않습니다."),
     TBoxClassDef("SignalEligibilityAssessment", "reasoning-insight", "통계 신호 적격성 평가", parent="ActionabilityAssessment", description="표본, 신선도, 역사적 검증과 확률 교정 상태를 기준으로 모델 신호의 판단 사용 가능 범위를 제한합니다."),
     TBoxClassDef("PriceObservation", "observation-data", "가격 관측", parent="Observation"),

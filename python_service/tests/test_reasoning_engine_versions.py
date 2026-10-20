@@ -911,6 +911,18 @@ class ReasoningEngineVersionTests(unittest.TestCase):
         self.assertTrue(
             set(release_ids).issubset(compatible_contract["availableReleaseIds"])
         )
+        # Native composition permits several frozen source releases in one
+        # predicate. Preflight must validate each, not stringify the list.
+        filters = {"releaseId": release_ids}
+        multi_release = {"rules": [{"conditions": [{
+            "relation_type": "HAS_MODEL_SIGNAL", "target_property_filters": filters,
+        }]}]}
+        self.assertEqual("matched", v2_model_signal_release_contract(multi_release)["status"])
+        filters["releaseId"] = release_ids + ["unavailable-composition-source"]
+        self.assertEqual(
+            ["unavailable-composition-source"],
+            v2_model_signal_release_contract(multi_release)["missingReleaseIds"],
+        )
 
     def test_v2_watch_waits_for_release_database_without_process_exit(self):
         from digital_twin.infrastructure.cli import watch_v2_reasoning_engine

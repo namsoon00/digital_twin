@@ -122,6 +122,9 @@ STATISTICAL_MODEL_RULE_IDS = frozenset({
 MARKET_OBSERVATION_RULE_IDS = frozenset()
 
 ONTOLOGY_SEMANTIC_RULE_IDS = frozenset({
+    "graph.composition.opposing_market.v1",
+    "graph.composition.position_limit_support.v1",
+    "graph.composition.loss_policy_support.v1",
     "graph.benchmark.beta.context.v1",
     "graph.valuation.expensive.review.v2",
     "graph.crypto.market.24h.down.major.v1",

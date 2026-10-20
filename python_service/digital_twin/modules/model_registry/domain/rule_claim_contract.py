@@ -452,7 +452,7 @@ def _rule_semantic_fingerprint(rule: object) -> str:
     if isinstance(source.get("derivations"), (list, tuple)):
         source["derivations"] = [
             {key: value for key, value in derivation.items()
-             if key != "management_response" or value}
+             if key not in {"management_response", "composition_response"} or value}
             for derivation in source["derivations"]
         ]
     if not source.get("conditions"):

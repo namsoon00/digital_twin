@@ -369,7 +369,7 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # Five crypto-observation regressions cover native causal proof without
         # an investment hypothesis, identity rejection, receipt novelty, direct
         # publication and the source-measured customer message.
-        self.assertLessEqual(total, 2417)
+        self.assertLessEqual(total, 2429)  # Twelve evidence/composition and immutable-rollout contracts.
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

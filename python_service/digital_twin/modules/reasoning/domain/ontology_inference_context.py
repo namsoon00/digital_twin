@@ -883,7 +883,8 @@ def matches_from_inference(
             and response.get("authority") == "account-policy"
             and (relation.get("knowledgeBasis") or {}).get("ruleKind") == "policy-constraint"
         ) else ""
-        key = (inference_causal_path_key(relation), response_code or "")
+        key = (inference_causal_path_key(relation), response_code or "",
+               (relation.get("compositionResponse") or {}).get("code") or "")
         if key in seen:
             continue
         seen.add(key)
@@ -967,6 +968,7 @@ def matches_from_inference(
             weaken_conditions=string_list(relation.get("weakenConditions") or relation.get("weaken_conditions")),
             next_checks=string_list(relation.get("nextChecks") or relation.get("next_checks")),
             management_response=dict(relation.get("managementResponse") or {}),
+            composition_response=dict(relation.get("compositionResponse") or {}),
             notification_category=str(relation.get("notificationCategory") or relation.get("notification_category") or ""),
             notification_severity=str(relation.get("notificationSeverity") or relation.get("notification_severity") or ""),
             rule_source_kind=str(relation.get("ruleSourceKind") or relation.get("rule_source_kind") or ""),

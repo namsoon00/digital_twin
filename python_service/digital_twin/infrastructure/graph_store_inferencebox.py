@@ -27,6 +27,12 @@ def management_response_payload(properties, row):
     return {"managementResponse": deepcopy(response)} if isinstance(response, dict) and response else {}
 
 
+def composition_response_payload(properties, row):
+    """Preserve authored native composition through both persisted read paths."""
+    response = properties.get("compositionResponse", row.get("compositionResponse"))
+    return {"compositionResponse": deepcopy(response)} if isinstance(response, dict) and response else {}
+
+
 def inferencebox_snapshot_from_rows(rowsets: Dict[str, List[Dict[str, object]]], source: str, symbols: List[str] = None) -> Dict[str, object]:
     entity_count_row = first_row(rowsets.get("entityCounts"))
     relation_count_row = first_row(rowsets.get("relationCounts"))
@@ -77,6 +83,7 @@ def inferencebox_entity_payload(row: Dict[str, object]) -> Dict[str, object]:
         "knowledgeBasis": knowledge_basis,
         "claimContract": claim_contract,
         **management_response_payload(properties, row),
+        **composition_response_payload(properties, row),
         "ruleKind": str(knowledge_basis.get("ruleKind") or properties.get("ruleKind") or ""),
         "theoryFamily": str(knowledge_basis.get("theoryFamily") or properties.get("theoryFamily") or ""),
         "thesisFamily": str(knowledge_basis.get("thesisFamily") or properties.get("thesisFamily") or ""),
@@ -132,6 +139,7 @@ def inferencebox_relation_payload(row: Dict[str, object]) -> Dict[str, object]:
         "knowledgeBasis": knowledge_basis,
         "claimContract": claim_contract,
         **management_response_payload(properties, row),
+        **composition_response_payload(properties, row),
         "ruleKind": str(knowledge_basis.get("ruleKind") or properties.get("ruleKind") or ""),
         "theoryFamily": str(knowledge_basis.get("theoryFamily") or properties.get("theoryFamily") or ""),
         "thesisFamily": str(knowledge_basis.get("thesisFamily") or properties.get("thesisFamily") or ""),

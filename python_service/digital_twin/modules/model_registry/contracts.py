@@ -13,6 +13,9 @@ _EXPORTS['rule_notification_intent'] = ('digital_twin.modules.model_registry.dom
 
 
 _EXPORTS.update({
+    "composition_rules": ("digital_twin.modules.model_registry.domain.rule_evidence_composition", "composition_rules"),
+    "composition_response_violations": ("digital_twin.modules.model_registry.domain.rule_evidence_composition", "composition_response_violations"),
+    "verified_measurement_packet": ("digital_twin.modules.model_registry.domain.statistical_signals.measurements", "verified_measurement_packet"),
     "study_readiness": ("digital_twin.modules.model_registry.domain.hypothesis_study", "study_readiness"),
     'information_event_lifecycle': ('digital_twin.modules.model_registry.domain.information_event_lifecycle', 'information_event_lifecycle'),
     'observation_requirements': ('digital_twin.modules.model_registry.domain.experiment_observations', 'observation_requirements'),

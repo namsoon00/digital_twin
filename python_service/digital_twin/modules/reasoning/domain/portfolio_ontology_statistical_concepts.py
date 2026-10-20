@@ -272,6 +272,14 @@ def add_position_statistical_signal_concepts(
             for value in signal.get("hypothesisContractIds") or []
             if str(value or "").strip()
         }):
+            matched_contracts = [
+                row for row in _mapping(signal.get("inputFeatures")).get("contractMatches") or []
+                if isinstance(row, dict) and row.get("ruleId") == contract_id
+            ]
+            exact_contract = matched_contracts[0] if len(matched_contracts) == 1 else {}
+            exact_ids = exact_contract.get("evidenceIds")
+            if exact_ids is None:
+                exact_ids = _mapping(signal.get("inputFeatures")).get("evidenceIds") or []
             contract_properties = {
                 **relation_properties,
                 "tboxClass": "ModelHypothesisEvidence",
@@ -294,10 +302,11 @@ def add_position_statistical_signal_concepts(
                 "freshnessCompatible": bool(signal.get("freshnessCompatible", True)),
                 "materialHash": str(signal.get("materialHash") or ""),
                 "sourceFeatureSnapshotId": feature_reference,
-                "modelEvidenceIds": list(
-                    (_mapping(signal.get("inputFeatures"))).get("evidenceIds") or []
-                )[:64],
-                "sourceTemporalWindows": list(_mapping(signal.get("inputFeatures")).get("sourceTemporalWindows") or [])[:8],
+                "modelEvidenceIds": list(exact_ids)[:64],
+                "sourceMeasurements": exact_contract.get("sourceMeasurements") or {},
+                "sourceTemporalWindows": [
+                    window for window in _mapping(signal.get("inputFeatures")).get("sourceTemporalWindows") or []
+                    if window.get("evidenceId") in exact_ids][:8],
                 "sourceObservation": {
                     "verified": _mapping(_mapping(signal.get("inputFeatures")).get("familyInputFeatures")).get("sourceClockVerified") is True,
                     "observedAt": _mapping(_mapping(signal.get("inputFeatures")).get("familyInputFeatures")).get("latestObservedAt") or "",

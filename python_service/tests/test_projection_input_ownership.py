@@ -156,25 +156,29 @@ class ProjectionInputOwnershipTests(unittest.TestCase):
 
     def test_projection_input_execution_and_progress_match_policy_fact_contract(self):
         expected = json.loads(
-            (ROOT / "tests/fixtures/projection_input_execution_v13.json").read_text()
+            (ROOT / "tests/fixtures/projection_input_execution_v14.json").read_text()
         )["scenarios"]
         self.assertEqual(expected, contract_scenarios(api))
-        from digital_twin.modules.reasoning.domain import ontology_projection_input as source_contract
-        from research_knowledge_fixture import pre_research_knowledge_catalog
-        from relationship_recovery_checks import legacy_observation_quality
-        with patch.object(source_contract, "ONTOLOGY_PROJECTION_INPUT_VERSION", "ontology-projection-input-v6"), \
-                patch.object(source_contract, "ONTOLOGY_REASONING_SNAPSHOT_INPUT_VERSION", "ontology-reasoning-snapshot-input-v6"), \
-                legacy_observation_quality():
-            previous = json.loads((ROOT / "tests/fixtures/projection_input_execution_v12.json").read_text())["scenarios"]
+        from composition_catalog_fixture import pre_composition_catalog
+        with pre_composition_catalog():
+            previous = json.loads((ROOT / "tests/fixtures/projection_input_execution_v13.json").read_text())["scenarios"]
             self.assertEqual(previous, contract_scenarios(api))
-        with patch.object(source_contract, "ONTOLOGY_PROJECTION_INPUT_VERSION", "ontology-projection-input-v5"), \
-                patch.object(source_contract, "ONTOLOGY_REASONING_SNAPSHOT_INPUT_VERSION", "ontology-reasoning-snapshot-input-v5"), \
-                legacy_observation_quality():
-            previous = json.loads((ROOT / "tests/fixtures/projection_input_execution_v11.json").read_text())["scenarios"]
-            self.assertEqual(previous, contract_scenarios(api))
-            previous = json.loads((ROOT / "tests/fixtures/projection_input_execution_v10.json").read_text())["scenarios"]
-            with pre_research_knowledge_catalog():
+            from digital_twin.modules.reasoning.domain import ontology_projection_input as source_contract
+            from research_knowledge_fixture import pre_research_knowledge_catalog
+            from relationship_recovery_checks import legacy_observation_quality
+            with patch.object(source_contract, "ONTOLOGY_PROJECTION_INPUT_VERSION", "ontology-projection-input-v6"), \
+                    patch.object(source_contract, "ONTOLOGY_REASONING_SNAPSHOT_INPUT_VERSION", "ontology-reasoning-snapshot-input-v6"), \
+                    legacy_observation_quality():
+                previous = json.loads((ROOT / "tests/fixtures/projection_input_execution_v12.json").read_text())["scenarios"]
                 self.assertEqual(previous, contract_scenarios(api))
+            with patch.object(source_contract, "ONTOLOGY_PROJECTION_INPUT_VERSION", "ontology-projection-input-v5"), \
+                    patch.object(source_contract, "ONTOLOGY_REASONING_SNAPSHOT_INPUT_VERSION", "ontology-reasoning-snapshot-input-v5"), \
+                    legacy_observation_quality():
+                previous = json.loads((ROOT / "tests/fixtures/projection_input_execution_v11.json").read_text())["scenarios"]
+                self.assertEqual(previous, contract_scenarios(api))
+                previous = json.loads((ROOT / "tests/fixtures/projection_input_execution_v10.json").read_text())["scenarios"]
+                with pre_research_knowledge_catalog():
+                    self.assertEqual(previous, contract_scenarios(api))
 
     def test_projection_input_packages_import_without_runtime_or_drivers(self):
         script = """

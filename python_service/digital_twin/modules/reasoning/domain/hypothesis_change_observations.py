@@ -30,6 +30,6 @@ def attach_model_observations(result, graph, symbols):
         rows[symbol][rule] = {key: deepcopy(props[key]) for key in (
             "hypothesisContractId", "signalType", "releaseId", "score", "strengthBand", "contractMatched",
             "freshnessCompatible", "eligibilityStatus", "observedAt", "sourceFeatureSnapshotId",
-            "sourceObservation", "modelInputWindows",
+            "sourceObservation", "modelInputWindows", "sourceMeasurements",
         ) if key in props}
     inference["modelEvidenceObservations"] = rows

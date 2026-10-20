@@ -273,11 +273,14 @@ class GraphRuleDerivation:
     # Non-predictive policy response. It is selected by the native rule match,
     # never by a message renderer or by market-hypothesis qualification.
     management_response: Dict[str, object] = dataclass_field(default_factory=dict)
+    composition_response: Dict[str, object] = dataclass_field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, object]:
         payload = asdict(self)
         if not self.management_response:
             payload.pop("management_response", None)
+        if not self.composition_response:
+            payload.pop("composition_response", None)
         return payload
 
     @staticmethod
@@ -315,6 +318,7 @@ class GraphRuleDerivation:
             notification_category=str(payload.get("notification_category") or payload.get("notificationCategory") or ""),
             notification_severity=str(payload.get("notification_severity") or payload.get("notificationSeverity") or ""),
             management_response=dict(payload.get("management_response") or payload.get("managementResponse") or {}),
+            composition_response=dict(payload.get("composition_response") or payload.get("compositionResponse") or {}),
         )
 
 
@@ -422,6 +426,8 @@ class GraphInferenceRule:
         for derivation in payload["derivations"]:
             if not derivation.get("management_response"):
                 derivation.pop("management_response", None)
+            if not derivation.get("composition_response"):
+                derivation.pop("composition_response", None)
         return payload
 
     @staticmethod

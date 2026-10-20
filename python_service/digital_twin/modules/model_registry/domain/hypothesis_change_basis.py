@@ -10,7 +10,7 @@ VERSION = "hypothesis-change-basis-v2"
 MODEL_FIELDS = (
     "hypothesisContractId", "signalType", "releaseId", "score", "strengthBand",
     "contractMatched", "freshnessCompatible", "eligibilityStatus", "observedAt",
-    "sourceFeatureSnapshotId", "sourceObservation", "modelInputWindows", "status",
+    "sourceFeatureSnapshotId", "sourceObservation", "modelInputWindows", "sourceMeasurements", "status",
     "requiredStrengthBand", "minimumScore", "failedConditionIds", "unknownConditionIds",
 )
 

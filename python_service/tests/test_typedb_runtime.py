@@ -75,11 +75,12 @@ class TypeDBRuntimeTests(unittest.TestCase):
         return api.TypeDBOntologyGraphRepository("runtime-contract.invalid:1729", database="synthetic", **options)
 
     def test_runtime_matches_versioned_promoted_policy_schema_contract(self):
-        golden = json.loads((ROOT / "tests/fixtures/typedb_runtime_v15.json").read_text())
+        golden = json.loads((ROOT / "tests/fixtures/typedb_runtime_v16.json").read_text())
         self.assertEqual(api.TYPEDB_NATIVE_RULE_ENGINE_VERSION, golden["engineVersion"])
         actual = contract_fingerprints(api)
         previous = json.loads((ROOT / 'tests/fixtures/typedb_runtime_v10.json').read_text())
-        self.assertEqual(previous['scenarios'], actual, 'the response reader fix cannot change schema plans')
+        for scenario in set(actual) - set(golden['changedCases']):
+            self.assertEqual(previous['scenarios'][scenario], actual[scenario])
         self.assertEqual(set(golden["scenarios"]), set(actual))
         for scenario, expected in golden["scenarios"].items():
             with self.subTest(scenario=scenario, original=golden["sourceRevision"]):

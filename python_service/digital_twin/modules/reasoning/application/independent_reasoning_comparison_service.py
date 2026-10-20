@@ -278,14 +278,18 @@ class IndependentReasoningComparisonService:
                 "sourceMode": "historical-point-in-time" if replay else "live",
                 "sourceInput": source_input_comparison,
             })
-            if input_contract["eligible"] and comparison.get("decisionDifferences"):
+            if input_contract["eligible"] and (comparison.get("decisionDifferences") or comparison.get("status") == "reasoning-parity-gap"):
                 artifact_reader = getattr(self.registry, "release_artifact", None)
                 if callable(artifact_reader):
                     from digital_twin.modules.reasoning.domain.management_upgrade_review import review_management_upgrade
+                    from digital_twin.modules.reasoning.domain.composition_upgrade_review import review_composition_upgrade
                     try:
+                        baseline_record, candidate_record = dict(artifact_reader(baseline_id) or {}), dict(artifact_reader(candidate_id) or {})
+                        comparison["compositionUpgradeReview"] = review_composition_upgrade(
+                            baseline_job, candidate_job, comparison, baseline_record, candidate_record)
                         comparison["managementUpgradeReview"] = review_management_upgrade(
                             baseline_job, candidate_job, comparison,
-                            dict(artifact_reader(baseline_id) or {}), dict(artifact_reader(candidate_id) or {}),
+                            baseline_record, candidate_record,
                         )
                     except Exception as error:  # Unavailable review never clears the original parity failure.
                         comparison["managementUpgradeReview"] = {"status": "unavailable", "reasonCode": str(error)[:160]}

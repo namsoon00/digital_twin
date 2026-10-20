@@ -15,7 +15,7 @@ from typeql_contract_fixture import WORLD, contract_fingerprints, enabled_rules,
 ROOT = Path(__file__).resolve().parents[1] / "digital_twin"
 PACKAGE = "digital_twin.modules.reasoning.infrastructure.typeql"
 COMPILER = ROOT / "modules/reasoning/infrastructure/typeql"
-GOLDEN = Path(__file__).parent / "fixtures/typeql_compiler_v15.json"
+GOLDEN = Path(__file__).parent / "fixtures/typeql_compiler_v16.json"
 
 
 class TypeQLCompilerTests(unittest.TestCase):
@@ -26,7 +26,7 @@ class TypeQLCompilerTests(unittest.TestCase):
         dynamic = [(rule.rule_id, condition) for rule in enabled_rules()
                    for condition in rule.to_dict()["conditions"]
                    if isinstance(condition.get("value"), dict) and condition["value"].get("field")]
-        self.assertEqual(9, len(dynamic))
+        self.assertEqual(10, len(dynamic))
         for rule_id, condition in dynamic:
             expected = condition["value"]
             with self.subTest(rule=rule_id):
@@ -44,7 +44,7 @@ class TypeQLCompilerTests(unittest.TestCase):
             typedb_value_match("$s", "ontology-profit-loss-rate", {"field": "typo", "default": -8}, "<=", "$v")
 
     def test_compiler_matches_versioned_account_policy_contract(self):
-        # Earlier releases stay frozen; V15 retains their exact predicate bytes.
+        # Earlier releases stay frozen; V16 adds native composition predicates.
         expected = json.loads(GOLDEN.read_text())
         actual = contract_fingerprints(typeql)
         self.assertEqual(expected["engineVersion"], typeql.TYPEDB_NATIVE_RULE_ENGINE_VERSION)
@@ -52,9 +52,16 @@ class TypeQLCompilerTests(unittest.TestCase):
         for group, fingerprint in expected["groups"].items():
             with self.subTest(group=group, original=expected["sourceRevision"]):
                 self.assertEqual(fingerprint, actual[group])
-        previous = json.loads((GOLDEN.parent / 'typeql_compiler_v10.json').read_text())
-        for group in set(actual) - {'profiles'}:
-            self.assertEqual(previous['groups'][group], actual[group], group)
+        # Recompile the pre-existing catalog independently. Adding composition
+        # rules must not change the individual investment predicates.
+        from unittest.mock import patch
+        import typeql_contract_fixture as fixture
+        previous = json.loads((GOLDEN.parent / 'typeql_compiler_v15.json').read_text())
+        legacy_rules = [r for r in enabled_rules() if not r.rule_id.startswith('graph.composition.')]
+        with patch.object(fixture, 'enabled_rules', return_value=legacy_rules):
+            legacy = contract_fingerprints(typeql)
+        for group in ('match', 'condition', 'indexed', 'any-group', 'governed', 'bridge', 'literals'):
+            self.assertEqual(previous['groups'][group], legacy[group], group)
 
     def test_typeql_exports_compile_without_loading_runtime_or_database_implementations(self):
         result = subprocess.run(

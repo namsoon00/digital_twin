@@ -792,3 +792,53 @@ TRIM/HOLD 판단이나 주문 허가를 대신하지는 않는다.
 배포의 정적 artifact를 제자리에서 수정하지 않는다. 과거 artifact에는 대응
 필드를 주입하지 않는다. 검증: `NativeManagementResponseTests`와 기존
 RuleBox·독립 TypeDB·알림 목적 회귀, 네이티브 후보 실행 및 배포 게이트.
+
+## Native composition and exact source receipts (2026-10-20)
+
+`rule-source-measurements-v1` preserves each market contract's own matched
+predicates, numeric values, thresholds, comparison asset/period and source
+clock. A family signal's union of evidence IDs must not be attributed to every
+contract. Receipts use the model packet's canonical numeric precision (eight
+decimal places), retain day-only macro dates without inventing a time, and do
+not borrow quote clocks for stock-level flow fields. Legacy missing receipts
+stay missing; notification rendering must not fetch current data to fill them.
+
+The V16 catalog adds three non-predictive `RuleEvidenceComposition` rules:
+confirmed support and risk conditions together, support with the account-weight
+ceiling, and support with the averaging-down restriction. They execute native
+TypeQL predicates and persist `compositionResponse` in InferenceBox. The two
+policy combinations require the original policy's independent native response.
+These rules neither qualify predictions nor authorize actions. Unapproved flow
+models remain disabled; showing an investor-flow number is distinct from using
+it in an approved predictive rule.
+
+`native-response-plan-v2` saves the scoped `native-evidence-composition-v1`
+read model with exact model receipts, native combinations, shared observation
+links and differing horizons. Duplicate/reordered rules do not create more
+independent evidence. Unknown independence remains unknown. Existing individual
+investment predicates, account targets and execution qualification are retained.
+
+`compact-rulebox-v4` shows actual source measurements before unrelated account
+reference values. It keeps market conditions and policy restrictions visible
+together, names the comparison asset and period, and uses only compatible
+previous receipts for before/after numbers. A new combination is released in a
+separate immutable candidate database and must pass paired-input promotion
+checks; updating Python alone does not deploy new RuleBox predicates.
+
+Validation: `test_rule_evidence_composition` covers original scorer-to-ABox
+receipts, altered/future/wrong-scope proof, duplicate and horizon treatment,
+native composition authority, exact thresholds/benchmarks and missing history.
+V16 compiler fixtures retain the pre-existing rule predicate hashes separately.
+Newly authored catalogs use TBox v15. Versioned projection/static-seed fixtures
+replay the prior vocabulary separately, including restoration of frozen artifacts.
+Release preflight checks every permitted model release in a composition predicate.
+
+The additive release builder copies the active release artifact, appends only
+the composition class and rules, and preserves every original rule and static
+node. `native-composition-migration-review-v1` retains the raw paired replay
+comparison. It explains only references to these three declared context rules,
+after verifying immutable artifacts, identical source inputs, 100% fact/rule
+coverage, zero shadow delivery and unchanged investment actions, policy targets
+and qualification. It rejects edits to existing rules, static ontology or
+undeclared actions. Such a review is not an exception to freshness or empirical
+qualification and cannot approve an investment action.

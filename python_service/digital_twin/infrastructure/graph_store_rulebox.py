@@ -481,6 +481,8 @@ def derivation_payload_from_row(row: Dict[str, object]) -> Dict[str, object]:
         "next_checks": list_of_strings(row.get("nextChecks") or row.get("derivationNextChecks") or derivation.get("next_checks") or derivation.get("nextChecks")),
         **({"management_response": dict(derivation.get("management_response") or derivation.get("managementResponse") or row.get("derivationManagementResponse") or {})}
            if (derivation.get("management_response") or derivation.get("managementResponse") or row.get("derivationManagementResponse")) else {}),
+        **({"composition_response": dict(derivation.get("composition_response") or derivation.get("compositionResponse") or row.get("derivationCompositionResponse") or {})}
+           if (derivation.get("composition_response") or derivation.get("compositionResponse") or row.get("derivationCompositionResponse")) else {}),
         "notification_category": str(row.get("notificationCategory") or row.get("derivationNotificationCategory") or derivation.get("notification_category") or derivation.get("notificationCategory") or ""),
         "notification_severity": str(row.get("notificationSeverity") or row.get("derivationNotificationSeverity") or derivation.get("notification_severity") or derivation.get("notificationSeverity") or ""),
     }

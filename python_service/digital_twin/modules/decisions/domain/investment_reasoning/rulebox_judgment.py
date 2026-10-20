@@ -4,6 +4,8 @@ This read model never selects a market action. Policy responses are authored
 by RuleBox; a sole market candidate remains a review, not a recommendation.
 """
 
+from digital_twin.modules.decisions.domain.investment_reasoning.evidence_composition import native_evidence_composition
+
 from copy import deepcopy
 import hashlib
 import json
@@ -73,8 +75,13 @@ def _assemble(identity, management, candidates, restrictions, relation, checks, 
                      if (r.get('actionApplicability') or {}).get('version') == 'native-action-applicability-v1']
     not_applicable = sorted({a for row in applicability for a in row.get('notApplicableActions') or []})
     available_groups = [g for g in groups if g['action'] not in set(blocked) | set(not_applicable)]
+    composition = native_evidence_composition(identity, relation)
+    result["evidenceComposition"] = composition
+    result["sourceRuleIds"] = sorted(set(result["sourceRuleIds"]) |
+        {r["ruleId"] for r in composition["evidenceGroups"]} |
+        {r["ruleId"] for r in composition["compositions"]})
     result['responsePlan'] = {
-        'version': 'native-response-plan-v1', 'authority': AUTHORITY, **identity,
+        'version': 'native-response-plan-v2', 'evidenceComposition': deepcopy(composition), 'authority': AUTHORITY, **identity,
         'primaryKind': ('management-response' if management.get('responses') else 'management-resolution' if management.get('resolutions')
                         else 'restriction' if restrictions else 'candidate-review' if any(g['executionEligible'] for g in available_groups)
                         else 'qualification-pending' if available_groups else 'evidence-review'),
@@ -93,6 +100,8 @@ def _assemble(identity, management, candidates, restrictions, relation, checks, 
     # Values and proof identities remain in the record, but repeated polling
     # of the same conclusion is not a new decision.
     semantics = {"status": status, "blockedActions": blocked,
+        "compositions": [{k: r.get(k) for k in ("code", "policyRuleId", "sourceContractIds")}
+                         for r in composition["compositions"]],
         "candidates": [{k: r[k] for k in ("action", "hypothesisIds", "executionEligible")} for r in groups],
         'notApplicableActions': result['responsePlan']['notApplicableActions'],
         "responses": [{k: r.get(k) for k in ("code", "objective", "targetValue", "releaseCondition")}

@@ -887,7 +887,7 @@ def reasoning_comparison_summary(
     candidate_stage_values: Dict[str, list] = {}
     unexplained = nonempty_decisions = nonempty_native = decision_subjects = 0
     shadow_deliveries = sum(int(row.get("shadowDeliveryCount") or 0) for row in all_items)
-    reviewed_policy_upgrades = unreviewed_differences = unreviewed_evidence_gaps = 0
+    reviewed_policy_upgrades = reviewed_compositions = unreviewed_differences = unreviewed_evidence_gaps = 0
     for row in items:
         status = str(row.get("status") or "unknown")
         status_counts[status] = status_counts.get(status, 0) + 1
@@ -896,12 +896,16 @@ def reasoning_comparison_summary(
         unexplained += int(row.get("unexplainedDecisionDifferenceCount") or 0)
         payload = _mapping(row.get("payload"))
         from digital_twin.modules.reasoning.domain.management_upgrade_review import management_upgrade_review_valid
-        review_valid = management_upgrade_review_valid(payload) and all(
+        from digital_twin.modules.reasoning.domain.composition_upgrade_review import composition_upgrade_review_valid
+        policy_review = management_upgrade_review_valid(payload)
+        composition_review = composition_upgrade_review_valid(payload)
+        review_valid = (policy_review or composition_review) and all(
             row.get(key) == payload.get(key) for key in (
                 "status", "factParityPct", "ruleSlotCoveragePct", "unexplainedDecisionDifferenceCount", "shadowDeliveryCount",
             )
         )
-        reviewed_policy_upgrades += int(review_valid)
+        reviewed_policy_upgrades += int(review_valid and policy_review)
+        reviewed_compositions += int(review_valid and composition_review)
         unreviewed_differences += 0 if review_valid else int(row.get("unexplainedDecisionDifferenceCount") or 0)
         unreviewed_evidence_gaps += int(status == "reasoning-parity-gap" and not review_valid)
         row_symbols = _strings(payload.get("symbols") or [])
@@ -951,6 +955,7 @@ def reasoning_comparison_summary(
         "unreviewedDecisionDifferenceCount": unreviewed_differences,
         "unreviewedReasoningParityGapCount": unreviewed_evidence_gaps,
         "reviewedPolicyUpgradeSampleCount": reviewed_policy_upgrades,
+        "reviewedCompositionSampleCount": reviewed_compositions,
         "shadowDeliveryCount": shadow_deliveries,
         "distinctSymbolCount": len(symbols),
         "symbols": sorted(symbols),

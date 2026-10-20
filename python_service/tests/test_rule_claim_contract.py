@@ -54,8 +54,8 @@ class RuleClaimContractTests(unittest.TestCase):
 
         coverage = rule_claim_coverage(rules)
 
-        self.assertEqual(122, coverage["ruleCount"])
-        self.assertEqual(122, coverage["claimCount"])
+        self.assertEqual(125, coverage["ruleCount"])
+        self.assertEqual(125, coverage["claimCount"])
         self.assertEqual(0, coverage["orphanRuleCount"])
         self.assertEqual(0, coverage["duplicateClaimCount"])
         self.assertEqual(0, coverage["violationCount"])
@@ -136,10 +136,10 @@ class RuleClaimContractTests(unittest.TestCase):
         outcomes = [item for item in graph.entities if item.kind == "hypothesis-outcome-contract"]
         criteria = [item for item in graph.entities if item.kind == "hypothesis-outcome-criterion"]
         relation_types = [item.relation_type for item in graph.relations]
-        self.assertEqual(122, len(claims))
+        self.assertEqual(125, len(claims))
         self.assertEqual(71, len(outcomes))
         self.assertGreater(len(criteria), 144)
-        self.assertEqual(122, relation_types.count("GOVERNED_BY_CLAIM"))
+        self.assertEqual(125, relation_types.count("GOVERNED_BY_CLAIM"))
         self.assertEqual(71, relation_types.count("USES_HYPOTHESIS_OUTCOME_CONTRACT"))
         self.assertEqual(len(criteria), relation_types.count("HAS_OUTCOME_CRITERION"))
 

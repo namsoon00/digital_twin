@@ -19,6 +19,7 @@ from digital_twin.modules.market_data.contracts import TemporalFeatureSnapshot
 from digital_twin.modules.model_registry.domain.statistical_signals.contracts import ModelHypothesisAssessment, ModelSignal, ModelSignalSnapshot, SignalEligibility
 from digital_twin.modules.model_registry.domain.statistical_signals.registry import DEFAULT_FLOW_SIGNAL_RELEASE_ID, DEFAULT_PRICE_SIGNAL_RELEASE_ID, default_statistical_model_registry, model_release, signal_hypothesis_family
 from digital_twin.modules.model_registry.domain.statistical_signals.rule_contracts import rule_statistical_signal_contract
+from digital_twin.modules.model_registry.domain.statistical_signals.measurements import condition_measurements, measurement_packet
 
 
 MODEL_HYPOTHESIS_EVIDENCE_FIELDS = (
@@ -29,7 +30,7 @@ MODEL_HYPOTHESIS_EVIDENCE_FIELDS = (
     "volumeRatioEnd", "tradeStrengthEnd", "bidAskImbalanceEnd", "riskEventCount",
     "supportEventCount", "currency", "provider",
 )
-MODEL_HYPOTHESIS_SCORER_VERSION = "abox-hypothesis-contract-scorer-v6-source-readiness"
+MODEL_HYPOTHESIS_SCORER_VERSION = "abox-hypothesis-contract-scorer-v7-exact-measurements"
 
 
 def _number(value: object):
@@ -150,7 +151,8 @@ def _relation_matches(
         return None, []
     direction = str(condition.direction or "out").lower()
     unknown = False
-    for relation in relation_index.get((subject.entity_id, direction, relation_type), ()):
+    for relation in sorted(relation_index.get((subject.entity_id, direction, relation_type), ()),
+                           key=lambda row: (row.source, row.relation_type, row.target)):
         if direction == "in":
             target_id = relation.source
         else:
@@ -238,6 +240,7 @@ def evaluate_market_hypothesis_contract(
     unknown_ids: List[str] = []
     required_failures: List[str] = []
     any_matches: Dict[str, Tuple[str, List[str]]] = {}
+    measurements_by_condition = {}
 
     def verdict(condition: GraphRuleCondition):
         if condition.kind == "subject_property":
@@ -257,6 +260,9 @@ def evaluate_market_hypothesis_contract(
         role = str(condition.role or "required").strip().lower()
         outcome, evidence = verdict(condition)
         condition_id = str(condition.condition_id or "condition")
+        if outcome is True:
+            measurements_by_condition[condition_id] = condition_measurements(
+                subject, condition, evidence, index, _filter_parts)
         if role in {"any", "optional"}:
             if outcome is True:
                 group = str(condition.evidence_group_key or condition_id)
@@ -306,6 +312,8 @@ def evaluate_market_hypothesis_contract(
         "unknownConditionIds": sorted(set(unknown_ids)),
         "failedConditionIds": sorted(set(required_failures)),
         "evidenceIds": sorted(set(evidence_ids))[:64],
+        "sourceMeasurements": [row for cid in sorted(set(matched_ids))
+                               for row in measurements_by_condition.get(cid, [])],
         "coverageRatio": round(coverage, 8),
         "scorerVersion": MODEL_HYPOTHESIS_SCORER_VERSION,
     }
@@ -503,6 +511,9 @@ def score_graph_hypothesis_contracts(
                     "matchedConditionIds": list(item.get("matchedConditionIds") or [])[:24],
                     "evidenceIds": list(item.get("evidenceIds") or [])[:24],
                     "coverageRatio": item.get("coverageRatio"),
+                    "sourceMeasurements": measurement_packet(
+                        item["ruleId"], symbol, release_id, feature_snapshot.snapshot_id,
+                        feature_snapshot.as_of, item.get("sourceMeasurements") or []),
                 }
                 for item in rows[:24]
             ],

@@ -24,11 +24,10 @@ def v2_model_signal_release_contract(rulebox_snapshot, settings=None):
                 or condition.get("targetPropertyFilters")
                 or {}
             )
-            release_id = str(
-                filters.get("releaseId") or filters.get("release_id") or ""
-            ).strip()
-            if release_id:
-                required.add(release_id)
+            release_ids = filters.get("releaseId") or filters.get("release_id") or ""
+            if not isinstance(release_ids, (list, tuple)):
+                release_ids = [release_ids]
+            required.update(str(value).strip() for value in release_ids if str(value).strip())
     configured = dict(settings or {})
     available = {
         str(

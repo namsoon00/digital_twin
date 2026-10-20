@@ -1,5 +1,6 @@
 {
   "tests": [
+    {"file": "test_rule_evidence_composition.py", "tier": "contract", "core": true},
     {"file": "test_crypto_context_delivery.py", "tier": "contract", "core": true},
     {"file": "test_bounded_evidence_readiness.py", "tier": "integration", "core": true},
     {"file": "test_question_evidence_flow.py", "tier": "contract", "core": true},

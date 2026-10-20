@@ -26,7 +26,7 @@ def capture_model_proof(properties, symbol):
         "sourceFeatureSnapshotId", "knowledgeCutoffAt", "releaseId",
     ) if isinstance(properties.get(key), str)}
     proof.update({key: deepcopy(properties[key]) for key in (
-        "score", "strengthBand", "sourceObservation", "modelInputWindows",
+        "score", "strengthBand", "sourceObservation", "modelInputWindows", "sourceMeasurements",
     ) if key in properties})
     proof["modelEvidenceIds"] = ids
     proof["measuredFactIds"] = [value.split("#", 1)[1] for value in ids if value.startswith("stock:" + symbol + "#")]

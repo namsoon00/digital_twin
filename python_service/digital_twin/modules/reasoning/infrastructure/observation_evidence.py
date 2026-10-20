@@ -3,7 +3,7 @@ import json
 from contextlib import nullcontext, contextmanager, ExitStack
 from contextvars import ContextVar
 
-from digital_twin.modules.reasoning.domain.observation_evidence import EvidenceContractError, MACRO_KINDS
+from digital_twin.modules.reasoning.domain.observation_evidence import EvidenceContractError, MACRO_KINDS, OBSERVATION_QUOTE_KINDS
 from digital_twin.modules.reasoning.domain.ontology_scopes import SCOPED_ABOX_MANIFEST_VERSION
 from digital_twin.modules.reasoning.application.observation_evidence.reads import read_evidence_stage
 from digital_twin.modules.reasoning.infrastructure.typeql.literals import typedb_string, typedb_value_match
@@ -137,7 +137,7 @@ class TypeDBObservationEvidenceSource:
                 raise EvidenceContractError("observation inventory exceeds bounded read contract")
         # Include direct evidence endpoints without ontology-symbol, in both
         # relation directions. Never traverse through another stock.
-        stock_ids = [row["id"] for row in rows.values() if row.get("kind") == "stock"]
+        stock_ids = [row["id"] for row in rows.values() if row.get("kind") in OBSERVATION_QUOTE_KINDS]
         if not stock_ids:
             return list(rows.values())
         stock_scope = read_evidence_stage("stock-membership", lambda: repository.active_abox_members_clause(
@@ -157,7 +157,7 @@ class TypeDBObservationEvidenceSource:
         anchor = typedb_value_match("$s", "ontology-storage-id", [row["storageId"] for row in stock_rows], "==", "observationStockStorageId")
         linked_ids = set()
         for direction, ends in (("outgoing", "source: $s, target: $n"), ("incoming", "source: $n, target: $s")):
-            query = ("match " + scope + " $s isa ontology-node, has ontology-kind \"stock\"; " + anchor
+            query = ("match " + scope + " $s isa ontology-node; " + anchor
                 + " $r isa ontology-assertion, links (" + ends + "); "
                 "$n isa ontology-node, has ontology-storage-id $storageId;")
             linked = read_evidence_stage("linked-" + direction, lambda: repository.read_rows(

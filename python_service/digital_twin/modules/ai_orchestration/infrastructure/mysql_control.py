@@ -1,4 +1,6 @@
 """Central work ledger; completion and successor scheduling share one transaction."""
+from digital_twin.modules.reasoning.contracts import OBSERVATION_QUOTE_KINDS
+
 import json
 import gzip
 from copy import deepcopy
@@ -329,7 +331,7 @@ class MySQLAIControlStore(DiagnosticProgressPersistence, AITaskDispatchPersisten
             # Retain the required quote/macro baseline before optional detailed
             # reads, which can otherwise displace every dated macro comparison.
             facts = sorted(previous.get("facts", []), key=lambda fact:
-                0 if fact.get("kind") == "stock" else 1 if fact.get("evidenceCategory") == "macro" else 2)
+                0 if fact.get("kind") in OBSERVATION_QUOTE_KINDS else 1 if fact.get("evidenceCategory") == "macro" else 2)
             saved["previousFacts"] = [{key: fact[key] for key in keys if key in fact} for fact in facts[:20]]
             saved.update({key: previous[key] for key in ("accountId", "symbol", "worldId") if key in previous})
             result.append({**saved, "completedAt": row["updated_at"]})

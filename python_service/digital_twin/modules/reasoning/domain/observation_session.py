@@ -3,7 +3,7 @@ from copy import deepcopy
 
 from .observation_evidence import (
     CATEGORIES, MACRO_KINDS, PROMPT_STORAGE_METADATA, EvidenceContractError, canonical_json,
-    content_hash, source_clock, validate_evidence_packet, quote_clock_assessment, EVIDENCE_PROFILE,
+    content_hash, source_clock, validate_evidence_packet, quote_clock_assessment, EVIDENCE_PROFILE, CRYPTO_EVIDENCE_PROFILE, OBSERVATION_QUOTE_KINDS,
 )
 
 
@@ -153,8 +153,8 @@ class ObservationEvidenceSession:
 
     def select(self, fact_ids, views=None):
         """Keep quote and the v2 bounded macro baseline alongside requested facts."""
-        selected = set(fact_ids) | {row["id"] for row in self._packet["facts"] if row["kind"] == "stock"
-            or (self._packet["profile"] == EVIDENCE_PROFILE and row["evidenceCategory"] == "macro")}
+        selected = set(fact_ids) | {row["id"] for row in self._packet["facts"] if row["kind"] in OBSERVATION_QUOTE_KINDS
+            or (self._packet["profile"] in {EVIDENCE_PROFILE, CRYPTO_EVIDENCE_PROFILE} and row["evidenceCategory"] == "macro")}
         if selected - self._facts.keys():
             raise EvidenceContractError("unknown selected evidence")
         packet = self.packet()

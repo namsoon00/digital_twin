@@ -14,6 +14,8 @@ EVIDENCE_PROTOCOL = "observation-evidence-v1"
 LEGACY_EVIDENCE_PROFILE = "independent-observation-v1"
 MACRO_EVIDENCE_PROFILE = "independent-observation-v2-macro-prints"
 EVIDENCE_PROFILE = "independent-observation-v3-business-research"
+CRYPTO_EVIDENCE_PROFILE = "independent-observation-v4-crypto"
+OBSERVATION_QUOTE_KINDS = ("stock", "crypto-asset")
 EVIDENCE_PACKET_MAX_BYTES = 96000
 
 
@@ -61,7 +63,7 @@ def quote_clock_assessment(facts, checked_at):
         raise EvidenceContractError("quote assessment clock invalid")
     rows = []
     for fact in facts:
-        if fact.get("kind") != "stock":
+        if fact.get("kind") not in OBSERVATION_QUOTE_KINDS:
             continue
         source = fact.get("sourceAsOf") or fact.get("asOf") or ""
         observed = instant(source)
@@ -92,7 +94,7 @@ class EvidenceCategory:
 
 
 CATEGORIES = (
-    EvidenceCategory("quote", ("stock",), 9000, True),
+    EvidenceCategory("quote", OBSERVATION_QUOTE_KINDS, 9000, True),
     EvidenceCategory("valuation", ("earnings-scenario-observation", "valuation-assessment", "valuation-input-bundle",
         "multiple-band-observation", "valuation-calculation-trace", "valuation-assumption", "valuation-metric",
         "valuation-input-observation", "fair-value-estimate", "relative-valuation", "margin-of-safety", "valuation-review"), 28000),
@@ -100,7 +102,7 @@ CATEGORIES = (
         "revenue-exposure", "customer-exposure", "supply-chain-exposure", "company-relationship", "fundamental-event", "earnings-calendar-event", "analyst-revision", "company-governance-state"), 10000),
     EvidenceCategory("research", ("research-evidence", "news-article", "article-ai-analysis", "evidence:news"), 10000),
     EvidenceCategory("macro", ("macro-print", "interest-rate", "yield-curve", "fx-rate", "benchmark-index", "market-proxy-observation"), 8000),
-    EvidenceCategory("technical", ("temporal-window", "trend-observation", "technical-metric", "price-bar", "price-metric"), 6000),
+    EvidenceCategory("technical", ("temporal-window", "trend-observation", "technical-metric", "price-bar", "price-metric", "price-path"), 6000),
     EvidenceCategory("flow", ("flow-metric", "liquidity-profile", "volume-profile", "exit-capacity"), 6000),
     EvidenceCategory("quality", ("data-quality", "data-availability-assessment", "coverage-gap", "missing-data",
         "data-latency", "temporal-coverage-gap", "data-quality-status"), 4000),
@@ -132,7 +134,7 @@ def material_fact(fact):
     # Deliberately top-level only: dates, revisions and eligibility inside a
     # financial bundle are part of its semantic contract, never stripped.
     ignored = INERT_METADATA
-    if fact.get("kind") == "stock":
+    if fact.get("kind") in OBSERVATION_QUOTE_KINDS:
         # A new quote observation time alone is polling activity. Freshness,
         # source-clock availability and every observed value still participate.
         ignored = ignored | {"sourceAsOf", "asOf", "valuationFxAsOf"}
@@ -221,7 +223,7 @@ def select_evidence(candidates):
 
 
 def validate_evidence_packet(packet):
-    if packet.get("protocolVersion") != EVIDENCE_PROTOCOL or packet.get("profile") not in {EVIDENCE_PROFILE, MACRO_EVIDENCE_PROFILE, LEGACY_EVIDENCE_PROFILE}:
+    if packet.get("protocolVersion") != EVIDENCE_PROTOCOL or packet.get("profile") not in {EVIDENCE_PROFILE, MACRO_EVIDENCE_PROFILE, LEGACY_EVIDENCE_PROFILE, CRYPTO_EVIDENCE_PROFILE}:
         raise EvidenceContractError("unsupported observation evidence contract")
     if not all(packet.get(key) for key in ("accountId", "symbol", "worldId", "sourceSnapshotId", "capturedAt")):
         raise EvidenceContractError("observation evidence ownership missing")
@@ -235,6 +237,8 @@ def validate_evidence_packet(packet):
     if len({row.get("id") for row in facts}) != len(facts):
         raise EvidenceContractError("duplicate evidence identity")
     for fact in facts:
+        if fact.get("kind") == "crypto-asset" and packet["profile"] != CRYPTO_EVIDENCE_PROFILE:
+            raise EvidenceContractError("crypto quote requires v4 observation profile")
         if packet["profile"] == LEGACY_EVIDENCE_PROFILE and fact.get("kind") == "macro-print":
             raise EvidenceContractError("macro print requires v2 observation profile")
         if snapshots.get(fact.get("sourceWorldId")) != fact.get("sourceSnapshotId"):
@@ -251,6 +255,14 @@ def validate_evidence_packet(packet):
         if sum(kind["available"] for kind in row["kinds"].values()) != row["available"] or sum(
                 kind["included"] for kind in row["kinds"].values()) != row["included"]:
             raise EvidenceContractError("evidence kind coverage mismatch")
+    if packet["profile"] == CRYPTO_EVIDENCE_PROFILE:
+        quotes = [fact for fact in facts if fact.get("kind") == "crypto-asset" and fact.get("symbol") == packet["symbol"]]
+        try:
+            valid_quote = len(quotes) == 1 and bool(quotes[0].get("currency")) and not isinstance(quotes[0].get("currentPrice"), bool) and math.isfinite(float(quotes[0]["currentPrice"])) and float(quotes[0]["currentPrice"]) > 0
+        except (KeyError, ValueError, TypeError):
+            valid_quote = False
+        if not valid_quote:
+            raise EvidenceContractError("crypto source quote fields unavailable")
     if not coverage["quote"]["included"]:
         raise EvidenceContractError("required quote evidence missing")
     if "quoteAssessment" in packet and packet["quoteAssessment"] != quote_clock_assessment(facts, packet["capturedAt"]):

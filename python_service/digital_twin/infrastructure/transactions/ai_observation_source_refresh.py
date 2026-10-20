@@ -26,6 +26,10 @@ class AIObservationSourceRefresh:
         receipt = {**requirement, "requested": False, "pipeline": "monitor-snapshot-typedb-observation",
                    "checkedAt": stamp(now), "taskId": job["taskId"],
                    "collectionMode": "account-queue" if self.account_queue_enabled else "periodic-monitor"}
+        from digital_twin.modules.reasoning.contracts import CRYPTO_EVIDENCE_PROFILE
+        if packet.get("profile") == CRYPTO_EVIDENCE_PROFILE:
+            return {**receipt, "pipeline": "external-data-facts-typedb-observation",
+                    "collectionMode": "external-data", "status": "awaiting-external-collection"}
         if not self.account_queue_enabled:
             # The ordinary monitor collects every configured account on its
             # periodic cycle. Its runner deliberately does not consume this

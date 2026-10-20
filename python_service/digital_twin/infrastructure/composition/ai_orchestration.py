@@ -27,6 +27,11 @@ def ai_control_subjects(configured):
             continue
         world = world_from_snapshot(snapshot, configured)
         watchlist = [position for position in snapshot.watchlist if position.symbol in accounts[account_id].watchlist_symbols]
+        from digital_twin.modules.ai_orchestration.domain.crypto_observation import configured_crypto_assets
+        for symbol, name in configured_crypto_assets(configured):
+            result[(account_id, symbol)] = {"accountId": account_id, "symbol": symbol,
+                "name": name, "worldId": world.world_id,
+                "marketWorldId": market_world(world.market_id, configured.get("ontologySharedMarketTenantId") or "shared").world_id}
         for position in snapshot.positions + watchlist:
             symbol = str(position.symbol or "").upper().strip()
             if symbol:

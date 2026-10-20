@@ -24,7 +24,8 @@ def knowledge_prompt(packet, history, research):
     from .execution_lanes import instructions as lane_instructions, market
     knowledge = ("연구 방법과 과거 설명은 현재 사실이 아닙니다. knowledgeResearch는 claims=[]와 coverageNote만 반환하세요.\n"
                  if market(packet) else INSTRUCTIONS) if packet.get("researchKnowledge") else ""
-    return lane_instructions(packet) + (memory_instructions if packet.get("memoryReadPolicy") == VERSION else "") + instructions(packet) + knowledge + resolution_prompt(packet, history, research)
+    from .crypto_observation import instructions as crypto_instructions
+    return crypto_instructions(packet) + lane_instructions(packet) + (memory_instructions if packet.get("memoryReadPolicy") == VERSION else "") + instructions(packet) + knowledge + resolution_prompt(packet, history, research)
 
 
 def knowledge_schema(packet, research):
@@ -43,7 +44,8 @@ def knowledge_schema(packet, research):
         schema["properties"]["questionResolutions"]["maxItems"] = min(5, sum(row.get("kind") == "brain-case" and row.get("capability") == "develop-hypothesis" for row in research))
         if "knowledgeResearch" in schema["properties"]:
             schema["properties"]["knowledgeResearch"]["properties"]["claims"]["maxItems"] = 0
-    return schema
+    from .crypto_observation import restrict_schema
+    return restrict_schema(schema, packet)
 
 
 def validate_research(value, packet, business_theses=()):
@@ -81,4 +83,5 @@ def knowledge_review_prompt(packet, draft):
     from .question_resolution import resolution_review_prompt
     from .scoped_research import instructions
     extra = "knowledgeResearch의 연결 과정·적용 범위·반론·철회 이유를 hypothesis 항목에서 함께 검토하세요. 방법론·과거 설명을 현재 사실이나 검증된 예측으로 승격하면 거부하세요.\n"
-    return instructions(packet) + (extra if packet.get("researchKnowledge") else "") + resolution_review_prompt(packet, draft)
+    from .crypto_observation import instructions as crypto_instructions
+    return crypto_instructions(packet) + instructions(packet) + (extra if packet.get("researchKnowledge") else "") + resolution_review_prompt(packet, draft)

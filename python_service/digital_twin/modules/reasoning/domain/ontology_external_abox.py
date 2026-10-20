@@ -673,6 +673,11 @@ def add_portfolio_macro_and_cross_asset_concepts(
             "tboxClasses": ["Instrument", "CryptoAsset"],
             "symbol": symbol,
             "coinId": str(coin_id),
+            "market": "CRYPTO",
+            "currency": "USD",  # CoinGecko coins/markets uses vs_currency=usd.
+            "currentPrice": round(price, 4),
+            **{key: round(number(item[key]), 4) for key in ("change24h", "change7d", "volume24h", "marketCap")
+               if item.get(key) not in (None, "")},
             "provider": str(item.get("provider") or "CoinGecko"),
             **crypto_profile,
         })

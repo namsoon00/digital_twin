@@ -379,9 +379,11 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # projection use, subject-only retirement and real MySQL cutoff reads.
         # Two clock regressions cover the observed BTC queue-boundary divergence
         # and rejection of future/stale evidence in frozen native evaluation.
+        # Six crypto observation regressions cover source facts, scope, frozen
+        # follow-ups, delivery, research continuity and external renewal.
         # Three graph-routing regressions cover separate native snapshots,
         # pre-model readiness deferral and persistent wait/failure budgets.
-        self.assertLessEqual(total, 2443)
+        self.assertLessEqual(total, 2449)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

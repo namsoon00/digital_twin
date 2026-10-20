@@ -1,6 +1,7 @@
 from digital_twin.modules._exports import resolve_export
 
 _EXPORTS = {
+    "QUOTE_SELECTION_VERSIONS": ("digital_twin.modules.ai_orchestration.domain.publication", "QUOTE_SELECTION_VERSIONS"),
     "observation_subject_quote": ("digital_twin.modules.ai_orchestration.domain.publication", "quote_from"),
     "QUOTE_SELECTION_VERSION": ("digital_twin.modules.ai_orchestration.domain.publication", "QUOTE_SELECTION_VERSION"),
     "resolve_observation_ref": ("digital_twin.modules.ai_orchestration.domain.insight_contract", "resolve_ref"),

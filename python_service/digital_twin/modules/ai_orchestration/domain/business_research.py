@@ -91,6 +91,9 @@ def validate_business(value, packet, research):
         return {}  # Historical contracts remain replayable.
     if not isinstance(value, dict) or set(value) != {"theses", "reviews", "coverageNote"}:
         raise ValueError("invalid business research contract")
+    from digital_twin.modules.reasoning.contracts import CRYPTO_EVIDENCE_PROFILE
+    if packet.get("profile") == CRYPTO_EVIDENCE_PROFILE and (value.get("theses") or value.get("reviews")):
+        raise ValueError("crypto observation cannot author corporate financial theses")
     facts = {row["id"]: row for row in packet.get("facts", [])}
     metrics = {(row["factId"], row["metric"]): row for row in financial_metrics(packet)}
     memories = {row["caseId"]: row for row in research if row.get("kind") == "business-thesis"}

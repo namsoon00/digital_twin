@@ -1,4 +1,6 @@
 """Bounded discovery is independent of the final, explicitly selected evidence."""
+from digital_twin.modules.reasoning.contracts import OBSERVATION_QUOTE_KINDS
+
 from copy import deepcopy
 import json
 from digital_twin.modules.reasoning.contracts import EvidenceContractError, content_hash, validate_evidence_packet, EVIDENCE_PACKET_MAX_BYTES, source_packet_bytes
@@ -191,7 +193,7 @@ def retrieve_working_evidence(session, packet, history, research, decide, save_i
         if decision["action"] != "read":
             status = "ready" if decision["action"] == "finish" else "assessment-ready" if decision["action"] == "assess" else "research-ready" if decision["action"] == "research" else "deferred"
             if status == "ready" and (bounded_retrieval.price_only_finish(decision, seen)
-                    if contract is bounded_retrieval else not any(seen[key]["kind"] != "stock" for key in selected)):
+                    if contract is bounded_retrieval else not any(seen[key]["kind"] not in OBSERVATION_QUOTE_KINDS for key in selected)):
                 status = "deferred"
             record(step)
             break

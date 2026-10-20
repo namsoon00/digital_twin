@@ -4,6 +4,8 @@ from digital_twin.modules._exports import resolve_export
 
 
 _EXPORTS = {}
+_EXPORTS["OBSERVATION_QUOTE_KINDS"] = ("digital_twin.modules.reasoning.domain.observation_evidence", "OBSERVATION_QUOTE_KINDS")
+_EXPORTS["CRYPTO_EVIDENCE_PROFILE"] = ("digital_twin.modules.reasoning.domain.observation_evidence", "CRYPTO_EVIDENCE_PROFILE")
 _EXPORTS['source_packet_bytes'] = ('digital_twin.modules.reasoning.domain.observation_evidence', 'source_packet_bytes')
 _EXPORTS['OBSERVATION_EVIDENCE_READY'] = ('digital_twin.modules.reasoning.domain.observation_handoff', 'OBSERVATION_EVIDENCE_READY')
 _EXPORTS['completed_observation_evidence_event'] = ('digital_twin.modules.reasoning.domain.observation_handoff', 'completed_observation_evidence_event')

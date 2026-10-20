@@ -3,6 +3,8 @@
 Numbers are rendered from named facts. Free prose describes meaning and is
 separately reviewed against those exact facts before customer publication.
 """
+from digital_twin.modules.reasoning.contracts import OBSERVATION_QUOTE_KINDS
+
 from datetime import datetime, timezone
 import math
 import re
@@ -16,6 +18,8 @@ INSIGHT_VERSION = "observation-insight-v1"
 CAUSAL_GUARD_VERSION = "observation-causality-v3"
 SECTIONS = ("summary", "comparison", "hypothesis", "portfolioImpact", "counterEvidence", "notificationReason")
 METRICS = {
+    "change24h": ("24시간 변동률", "%"), "change7d": ("7일 변동률", "%"),
+    "volume24h": ("24시간 거래대금", "money"), "marketCap": ("시가총액", "money"),
     "currentPrice": ("현재가", "money"), "averagePrice": ("평균 매입가", "money"),
     "changeRate": ("전일 대비", "%"), "profitLossRate": ("평가 손익률", "%"),
     "positionWeight": ("계정 내 비중", "%"), "ma5": ("5일 평균 가격", "money"),
@@ -95,6 +99,8 @@ def comparable_refs(packet, left, right):
         raise ValueError("quote assessment is not a market comparison")
     first, _ = resolve_ref(packet, left)
     second, _ = resolve_ref(packet, right)
+    if any(fact.get("kind") == "crypto-asset" for fact in (first, second)) and left["field"] != right["field"]:
+        raise ValueError("crypto comparison requires the same metric and horizon")
     first_unit = METRICS.get(left["field"], ("", left["field"]))[1]
     second_unit = METRICS.get(right["field"], ("", right["field"]))[1]
     if first_unit != second_unit or first_unit == "money" and (not first.get("currency") or first.get("currency") != second.get("currency")):
@@ -268,7 +274,7 @@ def insight_fingerprint(result, packet):
             pair.append((fact.get("kind"), fact.get("symbol"), ref["field"], ref["period"]))
         relations.append((pair, row["operator"]))
     documents = [material_fact(fact) for fact in packet.get("facts", [])
-                 if fact.get("id") in result.get("evidenceIds", []) and fact.get("kind") != "stock"]
+                 if fact.get("id") in result.get("evidenceIds", []) and fact.get("kind") not in OBSERVATION_QUOTE_KINDS]
     transitions = [row["conditionId"] for row in packet.get("followUpEvaluations", []) if row.get("transitionVerified")]
     return content_hash({"version": INSIGHT_VERSION, "relations": sorted(relations, key=str),
                          "documents": sorted(documents, key=content_hash), "transitions": sorted(transitions)})

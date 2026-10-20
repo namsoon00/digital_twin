@@ -5,7 +5,7 @@ from typing import Protocol
 
 from digital_twin.modules.reasoning.domain.observation_evidence import (
     EvidenceContractError, EvidenceNotReady, EVIDENCE_PROFILE, EVIDENCE_PROTOCOL, MACRO_KINDS, select_evidence, validate_evidence_packet,
-    quote_clock_assessment,
+    quote_clock_assessment, CRYPTO_EVIDENCE_PROFILE,
 )
 from .reads import read_evidence_stage
 from digital_twin.modules.reasoning.domain.observation_session import ObservationEvidenceSession
@@ -97,7 +97,8 @@ class ObservationEvidenceReader:
             raise EvidenceContractError("graph changed during capture")
         facts, coverage = select_evidence(candidates)
         packet = {**{key: request[key] for key in ("accountId", "symbol", "name", "worldId")},
-            "protocolVersion": EVIDENCE_PROTOCOL, "profile": EVIDENCE_PROFILE,
+            "protocolVersion": EVIDENCE_PROTOCOL, "profile": CRYPTO_EVIDENCE_PROFILE if any(
+                row.get("kind") == "crypto-asset" and row.get("symbol") == request["symbol"] for row in facts) else EVIDENCE_PROFILE,
             "sourceSnapshotId": versions[world], "sourceSnapshots": versions,
             "capturedAt": self.clock().isoformat().replace("+00:00", "Z"),
             "facts": facts, "coverage": coverage, "availableFactCount": sum(row["available"] for row in coverage.values()),

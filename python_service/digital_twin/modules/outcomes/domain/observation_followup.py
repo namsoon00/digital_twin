@@ -2,9 +2,10 @@
 from datetime import timedelta
 
 from digital_twin.modules.ai_orchestration.contracts import resolve_observation_ref, compare_observation_values, observation_instant, comparable_observation_refs
-from digital_twin.modules.reasoning.contracts import content_hash
+from digital_twin.modules.reasoning.contracts import content_hash, CRYPTO_EVIDENCE_PROFILE
 
 
+CRYPTO_FIELDS = {"currentPrice", "change24h", "change7d", "volume24h", "marketCap"}
 FIELDS = {"currentPrice", "ma5", "ma20", "ma60", "ma20Slope", "ma60Slope", "volumeRatio",
           "tradeStrength", "bidAskImbalance", "foreignNetVolume", "institutionNetVolume", "positionWeight"}
 
@@ -35,11 +36,15 @@ def prepare_observation_conditions(conditions, packet):
             raise ObservationConditionError("condition-meaning", "output", "follow-up meaning missing")
         if type(row["horizonMinutes"]) is not int or not 60 <= row["horizonMinutes"] <= 10080:
             raise ObservationConditionError("condition-horizon", "output", "follow-up horizon invalid")
+        crypto = packet.get("profile") == CRYPTO_EVIDENCE_PROFILE
+        if crypto and row["left"] != row["right"]:
+            raise ObservationConditionError("crypto-baseline-mismatch", "condition", "crypto follow-up requires one frozen source metric")
         selected, clocks = {}, []
         for side in ("left", "right"):
             ref = row[side]
             fact, value = resolve_observation_ref(packet, ref)
-            if ref["period"] != "current" or ref["field"] not in FIELDS or fact.get("kind") != "stock":
+            if (ref["period"] != "current" or ref["field"] not in (CRYPTO_FIELDS if crypto else FIELDS)
+                    or fact.get("kind") != ("crypto-asset" if crypto else "stock")):
                 raise ObservationConditionError("condition-field-unsupported", "condition", "unsupported automatic follow-up")
             clock = observation_instant(fact.get("sourceAsOf") or fact.get("asOf"))
             if clock is None or not usable(fact, "currentPrice"):
@@ -49,11 +54,13 @@ def prepare_observation_conditions(conditions, packet):
             selected[side] = {"field": ref["field"], "kind": fact["kind"], "symbol": fact.get("symbol") or packet["symbol"],
                               "currency": fact.get("currency", ""), "baselineValue": value}
             clocks.append(clock)
+        if crypto:
+            selected["right"]["valueMode"] = "frozen-baseline"
         comparable_observation_refs(packet, row["left"], row["right"])
         matched = compare_observation_values(selected["left"]["baselineValue"], row["operator"], selected["right"]["baselineValue"])
         created = observation_instant(packet["capturedAt"])
         key = content_hash({"sides": selected, "operator": row["operator"], "effect": row["effect"], "createdAt": packet["capturedAt"]})
-        result.append({**row, **selected, "conditionId": key, "createdAt": packet["capturedAt"],
+        result.append({**row, **selected, **({"conditionVersion": "crypto-observation-followup-v1"} if crypto else {}), "conditionId": key, "createdAt": packet["capturedAt"],
                        "expiresAt": (created + timedelta(minutes=row["horizonMinutes"])).isoformat(),
                        "baselineObservedAt": min(clocks).isoformat(), "lastObservedAt": min(clocks).isoformat(),
                        "previousMatched": matched, "armed": not matched, "status": "pending", "transitionVerified": False})
@@ -64,6 +71,8 @@ def evaluate_observation_conditions(packet, baseline, previous=()):
     baseline = baseline or {}
     if any(baseline.get(key) and baseline[key] != packet.get(key) for key in ("accountId", "symbol")):
         raise ValueError("follow-up baseline ownership mismatch")
+    if packet.get("profile") == CRYPTO_EVIDENCE_PROFILE and baseline.get("worldId") and baseline["worldId"] != packet.get("worldId"):
+        raise ValueError("crypto follow-up baseline world mismatch")
     prior = {row["conditionId"]: row for row in previous if row.get("baselineJobId") == baseline.get("jobId")}
     result = []
     now = observation_instant(packet.get("capturedAt"))
@@ -84,11 +93,22 @@ def evaluate_observation_conditions(packet, baseline, previous=()):
         try:
             for side in ("left", "right"):
                 target = condition[side]
+                if side == "right" and condition.get("conditionVersion") == "crypto-observation-followup-v1" and target.get("valueMode") == "frozen-baseline":
+                    observations[side] = target["baselineValue"]
+                    continue
                 fact = next(row for row in packet.get("facts", []) if row.get("kind") == target["kind"]
                             and (row.get("symbol") or packet["symbol"]) == target["symbol"])
                 clock = observation_instant(fact.get("sourceAsOf") or fact.get("asOf"))
                 if clock is None or clock > now or not usable(fact, target["field"]) or fact.get("currency", "") != target.get("currency", ""):
                     raise ValueError("unusable follow-up observation")
+                if condition.get("conditionVersion") == "crypto-observation-followup-v1":
+                    try:
+                        maximum = float(fact["maxAgeMinutes"])
+                        age = (now - clock).total_seconds() / 60
+                        if not 0 <= age <= maximum or maximum <= 0:
+                            raise ValueError("stale crypto follow-up observation")
+                    except (KeyError, TypeError):
+                        raise ValueError("crypto follow-up freshness budget unavailable")
                 observations[side] = fact[target["field"]]
                 clocks.append(clock)
             observed = min(clocks)

@@ -3,7 +3,7 @@
 import json
 
 from digital_twin.modules.reasoning.application.observation_evidence.reads import read_evidence_stage
-from digital_twin.modules.reasoning.domain.observation_evidence import EvidenceContractError, MACRO_KINDS
+from digital_twin.modules.reasoning.domain.observation_evidence import EvidenceContractError, MACRO_KINDS, OBSERVATION_QUOTE_KINDS
 from digital_twin.modules.reasoning.infrastructure.typeql.literals import typedb_string, typedb_value_match
 from digital_twin.modules.reasoning.infrastructure.typeql.scope_clauses import typedb_active_scoped_abox_member_clause
 
@@ -34,14 +34,14 @@ def scoped_candidates(repository, world_id, symbol, metadata):
         if len(inventory) > 2000:
             raise EvidenceContractError("observation inventory exceeds bounded read contract")
 
-    stocks = sorted(key for key, row in inventory.items() if row["kind"] == "stock")
+    stocks = sorted(key for key, row in inventory.items() if row["kind"] in OBSERVATION_QUOTE_KINDS)
     linked_ids = set()
     if stocks:
         links = typedb_active_scoped_abox_member_clause("$r", "observationLink", world_id=world_id)
         anchor = typedb_value_match("$s", "ontology-storage-id", stocks, "==", "observationStockStorageId")
         for direction, ends in (("outgoing", "source: $s, target: $n"), ("incoming", "source: $n, target: $s")):
             rows = read_evidence_stage("linked-" + direction, lambda: repository.read_rows(
-                "match " + links + ' $s isa ontology-node, has ontology-kind "stock"; ' + anchor
+                "match " + links + ' $s isa ontology-node; ' + anchor
                 + " $r isa ontology-assertion, links (" + ends + "); "
                 "$n isa ontology-node, has ontology-storage-id $storageId; limit 2001;",
                 ["storageId"], label="observation-evidence.linked." + direction))

@@ -2,8 +2,8 @@
 from datetime import datetime, timezone
 import math
 from digital_twin.modules.ai_orchestration.contracts import OBSERVATION_METRICS, OBSERVATION_WORDING_VERSION, resolve_observation_ref
-from digital_twin.modules.ai_orchestration.contracts import observation_subject_quote, QUOTE_SELECTION_VERSION
-from digital_twin.modules.reasoning.contracts import quote_clock_assessment
+from digital_twin.modules.ai_orchestration.contracts import observation_subject_quote, QUOTE_SELECTION_VERSIONS
+from digital_twin.modules.reasoning.contracts import quote_clock_assessment, OBSERVATION_QUOTE_KINDS
 from digital_twin.modules.notifications.domain.observation_price_basis import PRICE_PRESENTATION_VERSION, observation_price_basis
 from zoneinfo import ZoneInfo
 
@@ -40,13 +40,13 @@ def metric(fact, field):
     label, unit = OBSERVATION_METRICS[field]
     if unit == "money":
         unit = {"KRW": "원", "USD": "달러"}.get(fact.get("currency"), str(fact.get("currency") or ""))
-    return label + ": " + figure(fact.get(field), unit, field in {"changeRate", "profitLossRate", "foreignNetVolume", "institutionNetVolume", "ma5Slope", "ma20Slope", "ma60Slope"})
+    return label + ": " + figure(fact.get(field), unit, field in {"change24h", "change7d", "changeRate", "profitLossRate", "foreignNetVolume", "institutionNetVolume", "ma5Slope", "ma20Slope", "ma60Slope"})
 
 
 def render_ai_observation(result, *, sent_at="", debug_number=""):
     packet = result["input"]
     # Persisted jobs without this version retain their original rendered bytes.
-    quote = (observation_subject_quote(packet) if result.get("quoteSelectionVersion") == QUOTE_SELECTION_VERSION
+    quote = (observation_subject_quote(packet) if result.get("quoteSelectionVersion") in QUOTE_SELECTION_VERSIONS
              else next((row for row in packet["facts"] if figure(row.get("currentPrice")) and float(row["currentPrice"]) > 0), {}))
     assessment = {}
     if "quoteAssessment" in packet or result.get("pricePresentationVersion") == PRICE_PRESENTATION_VERSION:
@@ -73,7 +73,7 @@ def render_ai_observation(result, *, sent_at="", debug_number=""):
         lines.append("• " + label + " → " + metric(current, field).split(": ", 1)[1])
         compared.add(field)
     lines += ["", "확인한 데이터" if assessment else "확인한 현재 데이터"]
-    fields = ["currentPrice", "changeRate", "averagePrice", "profitLossRate", "positionWeight", "ma5", "ma20", "ma60", "volume", "volumeRatio"]
+    fields = ["currentPrice", "change24h", "change7d", "volume24h", "marketCap", "changeRate", "averagePrice", "profitLossRate", "positionWeight", "ma5", "ma20", "ma60", "volume", "volumeRatio"]
     cited_fields = {ref["field"] for refs in result.get("claimEvidence", {}).values() for ref in refs if ref["period"] == "current" and ref["factId"] == quote.get("id")}
     if result.get("businessResearch", {}).get("theses") or result.get("businessResearch", {}).get("reviews"):
         fields = ["currentPrice", "profitLossRate", "positionWeight"]
@@ -128,7 +128,7 @@ def render_ai_observation(result, *, sent_at="", debug_number=""):
         refs = evidence[section]
         for ref in refs:
             fact, value = resolve_observation_ref(packet, ref)
-            if ref["period"] != "current" or fact.get("kind") == "stock" or fact["id"] in seen:
+            if ref["period"] != "current" or fact.get("kind") in OBSERVATION_QUOTE_KINDS or fact["id"] in seen:
                 continue
             seen.add(fact["id"])
             title = str(fact.get("label") or fact.get("title") or "추가 근거")[:80]
@@ -152,6 +152,11 @@ def render_ai_observation(result, *, sent_at="", debug_number=""):
         for row in checks:
             left = OBSERVATION_METRICS[row["left"]["field"]][0]
             right = OBSERVATION_METRICS[row["right"]["field"]][0]
+            if row.get("conditionVersion") == "crypto-observation-followup-v1":
+                unit = OBSERVATION_METRICS[row["right"]["field"]][1]
+                if unit == "money":
+                    unit = {"USD": "달러", "KRW": "원"}.get(row["right"].get("currency"), row["right"].get("currency", ""))
+                right = "분석 시점 기준 " + figure(row["right"]["baselineValue"], unit)
             operator = {"gt": "초과로", "gte": "이상으로", "lt": "미만으로", "lte": "이하로"}[row["operator"]]
             effect = {"supports": "설명을 뒷받침", "weakens": "설명 약화", "invalidates": "설명 재검토"}[row["effect"]]
             if result.get("wordingVersion") == OBSERVATION_WORDING_VERSION:

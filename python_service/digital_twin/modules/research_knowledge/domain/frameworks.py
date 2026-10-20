@@ -59,6 +59,24 @@ FRAMEWORKS = (
         "limits": ["상관관계를 인과관계로 해석하지 않습니다.", "회사 전망을 개인 계좌의 추가 투자 적합성으로 자동 변환하지 않습니다."],
         "references": [{"title": "SEC: Asset Allocation, Diversification, and Rebalancing", "url": "https://www.sec.gov/about/reports-publications/investorpubsassetallocationhtm", "role": "methodology"}],
     },
+    {
+        "id": "crypto-observation-continuity-v1", "version": 1, "purpose": "opportunity",
+        "assetClasses": ["crypto"], "origin": "project-authored-observation-contract",
+        "label": "크립토 가격 경로와 유동성의 지속 관찰",
+        "mechanism": "기간별 가격 변화와 거래대금을 같은 출처·시점 기준으로 추적하고 이전 설명의 지지·약화·반증을 구분합니다.",
+        "applicability": "원본 시세가 있는 크립토 시장 참고 대상. 실제 계정 보유·비중·매수 가격은 별도 근거가 필요합니다.",
+        "questions": ["같은 기간의 가격 경로가 다음 관측에서 유지되는가?", "거래대금 자료와 반대 근거가 이전 설명을 바꾸는가?"],
+        "requirements": [
+            {"key": "source-quote", "category": "quote", "fields": ["currentPrice", "currency", "sourceAsOf"], "label": "출처·통화·원천 시점이 있는 가격"},
+            {"key": "price-horizons", "category": "quote", "fields": ["change24h", "change7d"], "label": "서로 구분된 관측 기간의 변동률"},
+            {"key": "liquidity", "category": "quote", "fields": ["volume24h", "marketCap"], "label": "달러 기준 거래대금과 시가총액"},
+            {"key": "independent-cause", "category": "research", "fields": [], "label": "가격 변화의 원인을 확인할 독립 원문; 시세만으로 대체할 수 없음"},
+        ],
+        "alternatives": ["일시적인 가격 변동", "시장 전체 움직임", "자산별 사건 또는 자료 시점 차이"],
+        "limits": ["거래대금은 순자금 유입이 아닙니다.", "온체인·펀딩·청산 자료의 부재를 사실이나 반증으로 바꾸지 않습니다.",
+                   "관측 조건의 전환은 인과성·수익률 예측의 검증이 아닙니다."],
+        "references": [],
+    },
 )
 
 

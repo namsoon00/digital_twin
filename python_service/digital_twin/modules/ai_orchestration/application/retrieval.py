@@ -1,4 +1,6 @@
 """Read/reconsider with one local correction and durable, bounded response audit."""
+from digital_twin.modules.reasoning.contracts import OBSERVATION_QUOTE_KINDS
+
 from copy import deepcopy
 import json
 
@@ -67,7 +69,7 @@ def retrieve_evidence(session, packet, history, research, decide, save_input, pr
                           for row in research if required_case_memory(row)], "roundLimit": rounds, "trace": []}
     tools = ObservationReadTools(session, history, research)
     tools.admit(current)
-    trace, seen, selected, recalled = [], set(), {row["id"] for row in current["facts"] if row["kind"] != "stock"}, {"analyses": [], "memories": []}
+    trace, seen, selected, recalled = [], set(), {row["id"] for row in current["facts"] if row["kind"] not in OBSERVATION_QUOTE_KINDS}, {"analyses": [], "memories": []}
     used, corrections, status = 0, 0, "round-limit"
 
     def record(step):

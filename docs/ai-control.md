@@ -127,18 +127,21 @@ with no checkpoints. At the deadline the thesis leaves active memory and trackin
 the original contract and first observed metric outcomes remain immutable. Expiry
 is not a negative market judgment. A new tracking period needs a new thesis contract.
 
-Publication selects a positive finite `stock` quote whose symbol matches the
-frozen observation subject. A `currentPrice` on relative valuation, a market
+Publication selects a positive finite source quote whose symbol matches the
+frozen observation subject: `stock` for stock profiles, `crypto-asset` for the
+`independent-observation-v4-crypto` profile. A `currentPrice` on relative valuation, a market
 proxy, or another subject is not that quote. Citation and source-clock gates
-still apply to the selected stock; selection cannot substitute an uncited or
+still apply to the selected quote; selection cannot substitute an uncited or
 stale quote to pass those gates. New publications persist
-`quoteSelectionVersion=subject-stock-quote-v1`, shared by admission, rendered
-price, diagnostics and delivery price-basis metadata. Existing unversioned
-queued messages retain their original rendering contract. Historical rejected
+`quoteSelectionVersion=subject-source-quote-v2`, shared by admission, rendered
+price, diagnostics and delivery price-basis metadata. Previous stock-v1 and
+unversioned queued messages retain their original rendering contract. Historical rejected
 observations are not automatically replayed or sent.
 
 The managed `ai-control watch` worker discovers live portfolio/watchlist subjects
-from persisted monitoring snapshots. It seeds one durable observation chain per
+from persisted monitoring snapshots, plus configured BTC/ETH market references
+for each live account. See [crypto observation and research](crypto-ai-observation.md)
+for source units, research scope and frozen follow-up baselines. It seeds one durable observation chain per
 account and symbol. A matching RuleBox rule or a decision candidate is **not** a
 prerequisite. Each observation reads bounded facts from the portfolio ABox and
 its shared premise ABox, recording both snapshot identities and source clocks.

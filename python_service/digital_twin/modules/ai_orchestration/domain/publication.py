@@ -1,6 +1,7 @@
 """Publication policy for independent, actionless AI observations."""
 from datetime import datetime, timezone
 import math
+from digital_twin.modules.reasoning.contracts import CRYPTO_EVIDENCE_PROFILE
 
 
 MESSAGE_TYPE = "aiObservation"
@@ -8,7 +9,8 @@ RETIRED_REASON = "기존 규칙 기반 투자 알림 경로가 종료되었습�
 COOLDOWN_MINUTES = 180
 DAILY_SUBJECT_LIMIT = 2
 DAILY_ACCOUNT_LIMIT = 8
-QUOTE_SELECTION_VERSION = "subject-stock-quote-v1"
+QUOTE_SELECTION_VERSION = "subject-source-quote-v2"
+QUOTE_SELECTION_VERSIONS = {QUOTE_SELECTION_VERSION, "subject-stock-quote-v1"}
 
 
 def legacy_route_retired(settings):
@@ -34,8 +36,9 @@ def quote_from(packet):
     symbol = packet.get("symbol")
     if not symbol:
         return {}
+    expected_kind = "crypto-asset" if packet.get("profile") == CRYPTO_EVIDENCE_PROFILE else "stock"
     for fact in packet.get("facts", []):
-        if fact.get("kind") != "stock" or fact.get("symbol") != symbol:
+        if fact.get("kind") != expected_kind or fact.get("symbol") != symbol:
             continue
         try:
             price = fact.get("currentPrice")

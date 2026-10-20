@@ -1,4 +1,6 @@
 """Successful-delivery memory retains exactly the fields cited by explanations."""
+from digital_twin.modules.reasoning.contracts import OBSERVATION_QUOTE_KINDS
+
 import copy
 
 from digital_twin.modules.ai_orchestration.domain.insight_contract import resolve_ref, instant
@@ -42,7 +44,7 @@ def restore_legacy_receipt(receipt, original):
 def receipt_facts(result):
     packet, selected = result["input"], {}
     for fact in packet.get("facts", []):
-        if fact.get("kind") == "stock" and fact["id"] in result["evidenceIds"]:
+        if fact.get("kind") in OBSERVATION_QUOTE_KINDS and fact["id"] in result["evidenceIds"]:
             selected[fact["id"]] = copy.deepcopy(fact)
     refs = [ref for values in result.get("claimEvidence", {}).values() for ref in values]
     refs += [row[side] for row in result.get("observations", []) for side in ("left", "right")]

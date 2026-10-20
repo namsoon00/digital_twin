@@ -1,4 +1,6 @@
 """V8 issues exact read arguments and conservatively parks contradictory finishes."""
+from digital_twin.modules.reasoning.contracts import OBSERVATION_QUOTE_KINDS
+
 from copy import deepcopy
 import hashlib
 import json
@@ -71,7 +73,7 @@ def validate_decision(raw):
 def price_only_finish(decision, known):
     """The existing source-selection floor also owns the persisted receipt."""
     return decision.get("action") == "finish" and not any(
-        known[key]["kind"] != "stock" for key in decision["selectedFactIds"])
+        known[key]["kind"] not in OBSERVATION_QUOTE_KINDS for key in decision["selectedFactIds"])
 
 
 def validate_trace(trace):

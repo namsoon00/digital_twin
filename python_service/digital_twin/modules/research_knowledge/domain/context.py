@@ -21,7 +21,10 @@ def build_context(packet, frameworks, records, max_bytes=32000, usable_ids=(), p
             continue
         if source["id"] not in latest_methods or source["version"] > latest_methods[source["id"]]["version"]:
             latest_methods[source["id"]] = source
+    crypto = any(row.get("kind") == "crypto-asset" and row.get("symbol") == packet["symbol"] for row in packet.get("facts", []))
     for source in latest_methods.values():
+        if crypto != ("crypto" in source.get("assetClasses", [])):
+            continue
         method = deepcopy(source)
         coverage = []
         for required in method["requirements"]:

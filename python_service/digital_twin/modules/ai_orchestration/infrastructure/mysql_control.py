@@ -234,7 +234,8 @@ class MySQLAIControlStore(DiagnosticProgressPersistence, AITaskDispatchPersisten
         capacity_wait = error_kind == "LocalAICapacityUnavailable" and not terminal
         capacity_deferrals = int(job.get("capacityDeferrals", 0))
         failures = (job["attempts"] - int(job.get("budgetDeferrals", 0)) - capacity_deferrals
-                    - int(job.get("executionDeferrals", 0)) - int(job.get("researchDeferrals", 0)))
+                    - int(job.get("executionDeferrals", 0)) - int(job.get("researchDeferrals", 0))
+                    - int(job.get("evidenceDeferrals", 0)))
         terminal = terminal or (not capacity_wait and failures >= 3)
         status = "failed" if terminal else "pending"
         delay, recovery_delay = retry_delays(job["capability"], error_kind,
@@ -255,6 +256,30 @@ class MySQLAIControlStore(DiagnosticProgressPersistence, AITaskDispatchPersisten
                 self.insert(connection, {**{k: job[k] for k in ("accountId", "symbol", "name", "worldId")},
                     "capability": job["capability"], "taskId": identity(job["taskId"], "recovery"), "availableAt": next_due})
         return {"status": status if changed else "lease-lost"}
+
+    def defer_evidence(self, job, wait):
+        # Keep the same task and first wait clock. Attempts remain monotonic for
+        # frozen input identities, but unavailable graphs cannot exhaust retries.
+        if job.get("capability") not in OBSERVATIONS:
+            raise ValueError("only observations can wait for a graph generation")
+        now = datetime.now(timezone.utc)
+        count = int(job.get("evidenceDeferrals", 0)) + 1
+        retry_at = (now + timedelta(seconds=min(900, 60 * 2 ** min(count - 1, 4)))).isoformat().replace("+00:00", "Z")
+        started_at = job.get("evidenceWaitStartedAt") or now.isoformat().replace("+00:00", "Z")
+        result = {"status": "awaiting-evidence", "processingOutcome": {
+            "status": "data-wait", "stage": "evidence-capture", "reasonCode": wait.code,
+            "conditions": wait.conditions, "metadataStatus": wait.metadata_status,
+            "startedAt": started_at, "retryAt": retry_at, "deferrals": count}}
+        with self.transaction() as connection:
+            changed = connection.execute("UPDATE ai_control_tasks SET status='pending',last_error=%s,available_at=%s,"
+                "result_json=%s,payload_json=JSON_SET(payload_json,'$.evidenceDeferrals',%s,'$.evidenceWaitStartedAt',%s),"
+                "updated_at=%s,lease_token='',lease_until='' "
+                "WHERE task_id=%s AND status='processing' AND lease_token=%s AND lease_until>=%s",
+                (wait.code, retry_at, json.dumps(result, ensure_ascii=False), count, started_at, stamp(),
+                 job["taskId"], job["leaseToken"], stamp())).rowcount
+            if changed:
+                self.record_observation_progress(connection, job, result, stamp())
+            return bool(changed)
 
     def defer_research(self, job, wait):
         if job.get("capability") != "research":

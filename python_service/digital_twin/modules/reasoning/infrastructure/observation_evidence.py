@@ -1,6 +1,6 @@
 """Bounded ABox reads; planner source indexes are not evidence inventories."""
 import json
-from contextlib import nullcontext, contextmanager
+from contextlib import nullcontext, contextmanager, ExitStack
 from contextvars import ContextVar
 
 from digital_twin.modules.reasoning.domain.observation_evidence import EvidenceContractError, MACRO_KINDS
@@ -11,6 +11,41 @@ from .observation_inventory import scoped_candidates
 
 
 _CAPTURE_METADATA = ContextVar("observation_capture_metadata", default=())
+
+
+class WorldRoutedObservationEvidenceSource:
+    """Freeze each owning store; never search another DB when a world is absent.
+
+    Portfolio facts follow the active deployment. Public macro facts follow the
+    shared-world writer. Separate native snapshots are not a cross-DB atomic
+    snapshot; the packet records both versions and the caller fences both routes.
+    """
+    def __init__(self, portfolio_source, macro_source, macro_world_id):
+        self.portfolio, self.macro = portfolio_source, macro_source
+        self.macro_world_id = macro_world_id
+
+    @contextmanager
+    def capture(self):
+        with ExitStack() as stack:
+            stack.enter_context(self.portfolio.capture())
+            if self.macro is not self.portfolio:
+                stack.enter_context(self.macro.capture())
+            yield
+
+    def source(self, world_id):
+        return self.macro if world_id == self.macro_world_id else self.portfolio
+
+    def metadata(self, world_id):
+        return self.source(world_id).metadata(world_id)
+
+    def snapshot_id(self, world_id):
+        return self.source(world_id).snapshot_id(world_id)
+
+    def candidates(self, world_id, symbol):
+        return self.source(world_id).candidates(world_id, symbol)
+
+    def monthly_macro_candidates(self, world_id):
+        return self.source(world_id).monthly_macro_candidates(world_id)
 
 
 class TypeDBObservationEvidenceSource:

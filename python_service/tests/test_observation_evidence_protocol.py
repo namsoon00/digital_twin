@@ -14,6 +14,71 @@ import test_ai_control as control_helpers
 
 
 class ObservationEvidenceProtocolTests(unittest.TestCase):
+    def test_public_macro_uses_its_own_store_and_closes_both_snapshots(self):
+        from contextlib import contextmanager
+        from digital_twin.modules.reasoning.public import ObservationEvidenceReader, WorldRoutedObservationEvidenceSource
+        from digital_twin.modules.reasoning.contracts import EvidenceContractError, EvidenceNotReady
+        macro_world = "market:shared:global"
+        active = []
+        class Source:
+            def __init__(self, world, rows):
+                self.world, self.rows = world, rows
+                self.status, self.world_type = "ok", "market" if world == macro_world else "portfolio"
+            @contextmanager
+            def capture(self):
+                active.append(self.world)
+                try: yield
+                finally: active.remove(self.world)
+            def metadata(self, world):
+                assert world == self.world and world in active
+                return {"status": self.status, "worldId": world, "worldType": self.world_type,
+                        "aboxSnapshotId": world + "-snapshot" if self.status == "ok" else ""}
+            def snapshot_id(self, world):
+                assert world == self.world and len(active) == 2
+                return world + "-snapshot"
+            def candidates(self, world, symbol):
+                assert world == self.world and len(active) == 2
+                return copy.deepcopy(self.rows)
+            def monthly_macro_candidates(self, world):
+                return self.candidates(world, "")
+        portfolio = Source(SUBJECT["worldId"], [{"id": "quote", "kind": "stock", "symbol": "TEST", "currentPrice": 100}])
+        macro = Source(macro_world, [{"id": "monthly", "kind": "macro-print", "value": 118.7, "unit": "index"}])
+        reader = ObservationEvidenceReader(WorldRoutedObservationEvidenceSource(portfolio, macro, macro_world),
+                                           macro_world_id=macro_world)
+        packet = reader.capture_session(SUBJECT).packet()
+        self.assertEqual([], active)
+        self.assertEqual({SUBJECT["worldId"], macro_world}, set(packet["sourceSnapshots"]))
+        fact = next(row for row in packet["facts"] if row["kind"] == "macro-print")
+        self.assertEqual(macro_world, fact["sourceWorldId"])
+        self.assertEqual(macro_world + "-snapshot", fact["sourceSnapshotId"])
+        macro.status = "empty"
+        with self.assertRaises(EvidenceNotReady) as failure:
+            reader.capture_session(SUBJECT)
+        self.assertEqual(["metadata-not-ready", "snapshot-missing"], failure.exception.conditions)
+        self.assertEqual([], active)
+        macro.status, macro.world_type = "ok", "portfolio"
+        with self.assertRaisesRegex(EvidenceContractError, "type mismatch"):
+            reader.capture_session(SUBJECT)
+        self.assertEqual([], active)
+        macro.world_type = "market"
+        macro.rows[0]["accountId"] = "unrelated-account"
+        with self.assertRaisesRegex(EvidenceContractError, "account ownership"):
+            reader.capture_session(SUBJECT)
+        self.assertEqual([], active)
+
+    def test_missing_graph_defers_without_model_completion_or_failure(self):
+        from digital_twin.modules.reasoning.contracts import EvidenceNotReady
+        service, store, planner = control_helpers.AIControlTests().runner()
+        service.evidence.side_effect = EvidenceNotReady("public macro", {"status": "empty"})
+        store.defer_evidence.return_value = True
+        self.assertEqual("awaiting-evidence", service.run_once()["status"])
+        store.defer_evidence.assert_called_once()
+        planner.assert_not_called()
+        store.complete.assert_not_called()
+        store.fail.assert_not_called()
+        store.defer_evidence.return_value = False
+        self.assertEqual("lease-lost", service.run_once()["status"])
+
     def test_subject_inventory_delivers_financial_and_shared_evidence_without_rules(self):
         repository = Mock()
         repository.active_abox_metadata.return_value = {"status": "ok", "aboxSnapshotId": "snapshot-1", "accountId": SUBJECT["accountId"]}

@@ -31,6 +31,18 @@ class EvidenceReadError(RuntimeError):
         super().__init__(self.code)
 
 
+class EvidenceNotReady(EvidenceContractError):
+    """A required published generation is absent; no model failure occurred."""
+    def __init__(self, world_role, metadata):
+        super().__init__(world_role + " graph not ready")
+        self.conditions = []
+        if metadata.get("status") != "ok":
+            self.conditions.append("metadata-not-ready")
+        if not metadata.get("aboxSnapshotId"):
+            self.conditions.append("snapshot-missing")
+        self.metadata_status = metadata.get("status") if metadata.get("status") in {"ok", "empty", "incomplete"} else "unknown"
+
+
 def quote_clock_assessment(facts, checked_at):
     """Assess source age without changing frozen ABox facts or delivery policy.
 

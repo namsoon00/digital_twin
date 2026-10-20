@@ -2,7 +2,7 @@
 from datetime import datetime, timedelta, timezone
 from digital_twin.modules.ai_orchestration.domain.continuity import judgment_continuity
 from ..domain.memory_reference import historical_facts
-from digital_twin.modules.reasoning.contracts import EvidenceContractError, EvidenceReadError, ObservationEvidenceSession
+from digital_twin.modules.reasoning.contracts import EvidenceContractError, EvidenceNotReady, EvidenceReadError, ObservationEvidenceSession
 from digital_twin.modules.ai_orchestration.application.retrieval import RetrievalLeaseLost, RetrievalContractFailure
 from .working_retrieval import retrieve_working_evidence
 from ..domain.observation_wait import retry_key, disposition, unchanged_wait
@@ -337,6 +337,10 @@ class AIControlService:
         except AIExecutionDeferred as wait:
             saved = self.store.defer_execution(job, wait)
             return {**wait.result(), "taskId": job["taskId"], **({} if saved else {"status": "lease-lost"})}
+        except EvidenceNotReady as wait:
+            saved = self.store.defer_evidence(job, wait)
+            return {"status": "awaiting-evidence" if saved else "lease-lost",
+                    "taskId": job["taskId"], "reason": wait.code}
         except Exception as error:
             # Persist a safe category, never raw provider/credential-bearing errors.
             reason, diagnostic = task_failure(stage, error)

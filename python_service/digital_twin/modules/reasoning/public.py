@@ -57,6 +57,7 @@ _EXPORTS['append_rule_to_release_artifact'] = ('digital_twin.modules.reasoning.i
 _EXPORTS['ObservationEvidenceReader'] = ('digital_twin.modules.reasoning.application.observation_evidence', 'ObservationEvidenceReader')
 _EXPORTS['DeploymentObservationEvidenceReader'] = ('digital_twin.modules.reasoning.application.observation_evidence.deployment', 'DeploymentObservationEvidenceReader')
 _EXPORTS['TypeDBObservationEvidenceSource'] = ('digital_twin.modules.reasoning.infrastructure.observation_evidence', 'TypeDBObservationEvidenceSource')
+_EXPORTS['WorldRoutedObservationEvidenceSource'] = ('digital_twin.modules.reasoning.infrastructure.observation_evidence', 'WorldRoutedObservationEvidenceSource')
 
 __all__ = list(_EXPORTS)
 

@@ -287,6 +287,36 @@ class AIControlTests(unittest.TestCase):
 
 @unittest.skipUnless(os.environ.get("MYSQL_DATABASE") == "orbit_alpha_test", "isolated MySQL required")
 class AIControlStorageTests(unittest.TestCase):
+    def test_graph_wait_preserves_task_age_and_does_not_exhaust_failure_retries(self):
+        from digital_twin.modules.reasoning.contracts import EvidenceNotReady
+        from datetime import datetime, timedelta, timezone
+        with self.store.transaction() as connection:
+            self.store.insert(connection, {**SUBJECT, "taskId": "graph-wait", "capability": "observe"})
+        first_wait = None
+        for attempt in range(4):
+            with self.store.transaction() as connection:
+                connection.execute("UPDATE ai_control_tasks SET available_at=%s WHERE task_id='graph-wait'",
+                                   ((datetime.now(timezone.utc) - timedelta(seconds=1)).isoformat(),))
+            job = self.store.claim()
+            self.assertEqual("graph-wait", job["taskId"])
+            self.assertTrue(self.store.defer_evidence(job, EvidenceNotReady("public macro", {"status": "empty"})))
+            with self.store.connect() as connection:
+                row = connection.execute("SELECT status,result_json,payload_json,attempts FROM ai_control_tasks WHERE task_id='graph-wait'").fetchone()
+                count = connection.execute("SELECT COUNT(*) AS n FROM ai_control_tasks").fetchone()["n"]
+            outcome = json.loads(row["result_json"])["processingOutcome"]
+            first_wait = first_wait or outcome["startedAt"]
+            self.assertEqual(first_wait, outcome["startedAt"])
+            self.assertEqual(attempt + 1, outcome["deferrals"])
+            self.assertEqual("pending", row["status"])
+            self.assertEqual(1, count)
+            self.assertFalse(self.store.defer_evidence(job, EvidenceNotReady("public macro", {"status": "empty"})))
+        with self.store.transaction() as connection:
+            connection.execute("UPDATE ai_control_tasks SET available_at=%s WHERE task_id='graph-wait'",
+                               ((datetime.now(timezone.utc) - timedelta(seconds=1)).isoformat(),))
+        job = self.store.claim()
+        self.assertEqual(4, job["evidenceDeferrals"])
+        self.assertEqual("pending", self.store.fail(job, "RealExecutionFailure")["status"])
+
     def setUp(self):
         from digital_twin.infrastructure.settings import runtime_settings
         from digital_twin.modules.ai_orchestration.infrastructure.mysql_control import MySQLAIControlStore

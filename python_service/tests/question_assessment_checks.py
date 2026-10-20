@@ -179,13 +179,14 @@ def check_active_binding(test):
     from digital_twin.modules.reasoning.infrastructure.observation_binding import active_observation_binding
     from digital_twin.modules.reasoning.application.observation_evidence.deployment import DeploymentObservationEvidenceReader
     row = {"active_deployment_id": "current", "delivery_deployment_id": "current", "version": 4,
-           "graph_store_binding": "current-graph", "deployment_status": "active", "engine_version": "v2"}
+           "graph_store_binding": "current-graph", "shared_graph_store_binding": "shared-graph",
+           "deployment_status": "active", "engine_version": "v2"}
     binding = observation_binding(row)
     connection = Mock();connection.execute.return_value.fetchone.return_value = row
     test.assertEqual(binding, active_observation_binding(connection))
     test.assertTrue(connection.execute.call_args.args[0].startswith("SELECT"))
     for changed in ({}, {**row, "delivery_deployment_id": "old"}, {**row, "graph_store_binding": ""},
-                    {**row, "deployment_status": "candidate"}):
+                    {**row, "deployment_status": "candidate"}, {**row, "shared_graph_store_binding": ""}):
         with test.assertRaises(ValueError):observation_binding(changed)
     p, session, _, _ = fixture()
     promoted = {**binding, "deploymentId": "promoted", "graphStoreBinding": "promoted-graph", "controlVersion": 5}
@@ -197,6 +198,9 @@ def check_active_binding(test):
     test.assertEqual([binding, promoted], [call.args[0] for call in factory.call_args_list])
     test.assertNotIn("reasoningBinding", session.packet())
     reader.binding_reader = Mock(side_effect=[binding, promoted])
+    with test.assertRaisesRegex(ValueError, "deployment changed"):
+        reader.capture_session(p)
+    reader.binding_reader = Mock(side_effect=[binding, {**binding, "sharedGraphStoreBinding": "new-shared"}])
     with test.assertRaisesRegex(ValueError, "deployment changed"):
         reader.capture_session(p)
     from digital_twin.modules.reasoning.contracts import EvidenceReadError

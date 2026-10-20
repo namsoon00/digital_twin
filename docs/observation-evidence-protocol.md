@@ -80,7 +80,7 @@
 포함하고, 제외된 상세 사실은 내부 조회로 추가할 수 있다. v1 입력은 당시 프로필로
 재현하며 과거 저장 내용을 새 프로필로 수정하지 않는다.
 월별 지표는 감시 계좌의 서버 설정에서 결정한 공용 MarketWorld에서도 읽는다. 계좌와
-공용 시장의 스냅샷을 같은 native 읽기 경계에서 고정하며, 공용 조회는 계좌 소유 정보가
+공용 시장의 스냅샷을 각 저장소의 native READ 경계에서 고정하며, 공용 조회는 계좌 소유 정보가
 없는 `macro-print`만 추가한다. 설정된 시장 스냅샷이 없으면 명시적으로 보류한다.
 
 종목 속성과 거시 종류의 목록 조회는 같은 활성 범위 조건을 적용한 두 쿼리로
@@ -93,7 +93,7 @@
 
 ### 일관된 캡처와 연결 근거 조회
 
-운영 TypeDB 어댑터는 메타데이터, 종목·거시 목록, 양방향 연결 근거와 마지막
+운영 TypeDB 어댑터는 같은 DB의 메타데이터, 종목·거시 목록, 양방향 연결 근거와 마지막
 세대 확인을 하나의 native READ transaction에서 수행한다. TypeDB의
 [snapshot isolation](https://typedb.com/docs/core-concepts/typedb/transactions/)으로
 캡처 중 writer가 다음 세대를 활성화해도 처음 읽은 세대가 유지된다. 전용 연결은
@@ -244,10 +244,25 @@ TypeDB 원본의 `sourceAsOf`, `freshnessStatus`, `judgementEvidenceUsable`과 �
 
 ## 운영 그래프와 질문 원문 연결
 
-중앙 AI의 새 캡처는 현재 active/delivery 배포에 연결된 DB를 읽는다. 캡처 전후
-제어 버전과 배포·DB 연결을 비교하고, 전환이 겹치면 혼합 입력을 만들지 않는다.
-예전 기본 DB로 되돌아가지 않으며 `reasoningBinding`과 각 world의 불변 스냅샷을
-함께 저장한다. 이 조회는 배포·규칙·그래프를 변경하지 않는다.
+중앙 AI의 계좌 근거는 현재 active/delivery 배포에 연결된 DB를 읽는다. 공용
+MarketWorld의 월별 거시 근거는 공용 projection 작업자가 사용하는 `typedbDatabase`
+설정의 DB를 읽는다. 계좌 DB에서 공용 world를 찾거나, 계좌 그래프가 없다고 공용
+DB의 과거 계좌 그래프로 대체하지 않는다.
+
+`active-observation-binding-v2-world-routes`는 계좌 `graphStoreBinding`과 공용
+`sharedGraphStoreBinding`을 함께 고정한다. 캡처 전후 제어 버전·배포·두 DB 연결을
+비교하고 하나라도 바뀌면 입력을 폐기한다. 같은 저장소이면 한 native READ를 쓰고,
+서로 다른 저장소이면 각각의 native READ에서 불변 스냅샷을 보존한다. DB 사이의
+원자적 동일 시점 트랜잭션을 보장한다는 뜻은 아니다. `reasoningBinding`과 world별
+`sourceSnapshots`으로 실제 읽은 두 세대를 기록하며 오류 시 두 트랜잭션을 모두 닫는다.
+이 조회는 배포·규칙·그래프를 변경하지 않는다. 이전 저장 입력의 연결은 재작성하지 않는다.
+
+필수 그래프의 준비 상태나 스냅샷이 없으면 모델 호출 전에 같은 작업을
+`awaiting-evidence`/`data-wait`로 보류한다. 큐 상태는 `pending`을 유지하고 최초
+대기 시각·조건·재검사 시각·대기 횟수를 기록한다. 재검사 간격은 1분부터 최대
+15분까지 증가하며, 대기 횟수는 모델 실패 횟수에서 제외한다. 기존 근거 갱신
+이벤트의 재개 경로도 유지한다. world·계정·유형 불일치와 실제 조회 예외는 이 준비
+대기로 바꾸지 않는다. 대기 결과는 분석 완료·독립 검토·발행·전달 성공이 아니다.
 
 조회 V6의 `exact-question-document-v1`은 검증된 원문 전체 발췌 또는 구조화된
 보고 수치·기간·단위·계보를 온전히 보존하고 중복 분석 필드를 제외한다. 원래 사실

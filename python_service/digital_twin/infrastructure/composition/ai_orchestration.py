@@ -63,8 +63,11 @@ def build_ai_control_service(settings=None):
 
     def evidence_reader(binding, job):
         from digital_twin.modules.ai_orchestration.infrastructure.observation_reader import GraphObservationReader
-        return GraphObservationReader(typedb_repository_from_settings({**configured, "typedbDatabase": binding["graphStoreBinding"]}),
-            macro_world_id=job.get("marketWorldId", ""))
+        repository = typedb_repository_from_settings({**configured, "typedbDatabase": binding["graphStoreBinding"]})
+        macro_repository = (repository if binding["sharedGraphStoreBinding"] == binding["graphStoreBinding"] else
+            typedb_repository_from_settings({**configured, "typedbDatabase": binding["sharedGraphStoreBinding"]}))
+        return GraphObservationReader(repository, macro_world_id=job.get("marketWorldId", ""),
+                                      macro_repository=macro_repository)
 
     from digital_twin.modules.reasoning.public import DeploymentObservationEvidenceReader
     evidence = DeploymentObservationEvidenceReader(evidence_binding, evidence_reader).capture_session

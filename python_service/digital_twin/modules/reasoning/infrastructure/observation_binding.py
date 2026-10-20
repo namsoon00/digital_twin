@@ -4,7 +4,8 @@ from ..domain.observation_binding import observation_binding
 
 def active_observation_binding(connection):
     row = connection.execute("SELECT c.active_deployment_id,c.delivery_deployment_id,c.version,"
-        "d.graph_store_binding,d.engine_version,d.deployment_status FROM reasoning_engine_control c "
+        "d.graph_store_binding,d.engine_version,d.deployment_status,s.value AS shared_graph_store_binding FROM reasoning_engine_control c "
         "LEFT JOIN reasoning_engine_deployments d ON d.deployment_id=c.active_deployment_id "
+        "LEFT JOIN runtime_settings s ON s.`key`='typedbDatabase' "
         "WHERE c.control_id='global'").fetchone()
     return observation_binding(row)

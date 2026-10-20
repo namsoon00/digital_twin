@@ -4,7 +4,7 @@ from contextlib import nullcontext
 from typing import Protocol
 
 from digital_twin.modules.reasoning.domain.observation_evidence import (
-    EvidenceContractError, EVIDENCE_PROFILE, EVIDENCE_PROTOCOL, MACRO_KINDS, select_evidence, validate_evidence_packet,
+    EvidenceContractError, EvidenceNotReady, EVIDENCE_PROFILE, EVIDENCE_PROTOCOL, MACRO_KINDS, select_evidence, validate_evidence_packet,
     quote_clock_assessment,
 )
 from .reads import read_evidence_stage
@@ -37,10 +37,14 @@ class ObservationEvidenceReader:
     def _capture(self, request):
         world = request["worldId"]
         metadata = read_evidence_stage("metadata", lambda: self.source.metadata(world))
-        if metadata.get("status") != "ok" or not metadata.get("aboxSnapshotId"):
-            raise EvidenceContractError("portfolio graph not ready")
         if metadata.get("accountId") and metadata["accountId"] != request["accountId"]:
             raise EvidenceContractError("graph account mismatch")
+        if metadata.get("worldId", world) != world:
+            raise EvidenceContractError("portfolio graph world mismatch")
+        if metadata.get("status") not in {"ok", "empty", "incomplete"}:
+            raise EvidenceContractError("portfolio graph metadata invalid")
+        if metadata.get("status") != "ok" or not metadata.get("aboxSnapshotId"):
+            raise EvidenceNotReady("portfolio", metadata)
         worlds = [world]
         shared = metadata.get("sharedPremiseWorldId")
         if shared:
@@ -54,14 +58,20 @@ class ObservationEvidenceReader:
             # A shared manifest can record the account that produced its
             # projection. Ownership is the configured world plus each fact,
             # not that projection provenance field.
-            if (macro_metadata.get("status") != "ok" or not macro_metadata.get("aboxSnapshotId")
-                    or macro_metadata.get("worldId", self.macro_world_id) != self.macro_world_id
-                    or macro_metadata.get("worldType", "market") != "market"):
-                raise EvidenceContractError("public macro graph not ready")
+            if macro_metadata.get("worldId", self.macro_world_id) != self.macro_world_id:
+                raise EvidenceContractError("public macro graph world mismatch")
+            if macro_metadata.get("worldType", "market") != "market":
+                raise EvidenceContractError("public macro graph type mismatch")
+            if macro_metadata.get("status") not in {"ok", "empty", "incomplete"}:
+                raise EvidenceContractError("public macro graph metadata invalid")
+            if macro_metadata.get("status") != "ok" or not macro_metadata.get("aboxSnapshotId"):
+                raise EvidenceNotReady("public macro", macro_metadata)
             worlds.append(self.macro_world_id)
         versions = {key: read_evidence_stage("snapshot-before", lambda: self.source.snapshot_id(key)) for key in worlds}
         if not all(versions.values()) or versions[world] != metadata["aboxSnapshotId"]:
             raise EvidenceContractError("graph changed before capture")
+        if self.macro_world_id and versions[self.macro_world_id] != macro_metadata["aboxSnapshotId"]:
+            raise EvidenceContractError("public macro graph changed before capture")
         candidates = []
         for key in worlds:
             public_macro = key == self.macro_world_id

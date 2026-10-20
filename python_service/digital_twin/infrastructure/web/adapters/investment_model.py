@@ -26,7 +26,10 @@ INVESTMENT_MODEL_READ_MODEL = StaleReadModelCache(
 
 
 MODEL_COMPONENT_EXECUTOR = ThreadPoolExecutor(max_workers=7, thread_name_prefix="investment-model-read")
-MODEL_COMPONENT_BUDGET_SECONDS = 8
+# This is background work, not the HTTP response budget. Cold operational
+# diagnostics can take 20+ seconds; an 8-second budget repeatedly discarded
+# completed work before all components arrived under real worker load.
+MODEL_COMPONENT_BUDGET_SECONDS = 30
 
 
 def _current_control():
@@ -137,7 +140,9 @@ def investment_model_api_payload(force: bool = False) -> Dict[str, object]:
             "일부 검증 자료가 갱신되지 않아 다시 확인합니다." if partial else ""
         ),
         "controlVerified": control is not None,
-        "retryAfterSeconds": current.get("retryAfterSeconds", 0),
+        "retryAfterSeconds": current.get("retryAfterSeconds", 0) or (
+            max(0, 10 - int(current.get("ageSeconds") or 0)) if partial and not refreshing else 0
+        ),
     }
     if stale:
         payload["status"] = "warming" if refreshing or partial else "unavailable"

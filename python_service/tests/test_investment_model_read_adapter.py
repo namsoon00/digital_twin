@@ -121,6 +121,7 @@ class InvestmentModelReadAdapterTests(unittest.TestCase):
             result = investment_model.investment_model_api_payload()
         self.assertTrue(result["cache"]["stale"])
         self.assertFalse(result["validation"]["promotionReady"])
+        self.assertGreater(result["cache"]["retryAfterSeconds"], 0)
 
     def test_component_deadline_returns_partial_instead_of_waiting_for_a_stuck_query(self):
         release = threading.Event()

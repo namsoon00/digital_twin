@@ -163,7 +163,7 @@ switching a running web process to this schema.
 Investment-model requests check the small live engine-control row (including
 its version) and return without waiting for the seven diagnostics components.
 Cold, expired, and forced refreshes are single-flight background work with an
-8-second component wait budget and a fixed seven-thread executor. A failure
+30-second background component wait budget and a fixed seven-thread executor. A failure
 retains same-release details with an explicit stale notice. Unavailable or
 changed control identity, partial diagnostics, expiration, and active refresh
 cannot certify validation or promotion. No engine control or release identity

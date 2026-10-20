@@ -69,6 +69,8 @@ test("model refresh retries after a cold dependency timeout and stops once curre
   assert.equal(state.investmentModelPollCount, 1);
   assert.equal(timers.length, 2);
   assert.equal(modelRefreshPending({status: "unavailable", cache: {stale: true, retryAfterSeconds: 0}}), false);
+  assert.equal(modelRefreshDelay({status: "warming", cache: {refreshing: true}}), 5000);
+  assert.equal(modelRefreshDelay({cache: {retryAfterSeconds: 10}}), 10000);
 });
 
 test("capital flow labels a cached portfolio calculation with its actual snapshot clock", () => {

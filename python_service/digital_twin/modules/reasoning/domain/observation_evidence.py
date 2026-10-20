@@ -45,6 +45,14 @@ class EvidenceNotReady(EvidenceContractError):
         self.metadata_status = metadata.get("status") if metadata.get("status") in {"ok", "empty", "incomplete"} else "unknown"
 
 
+class CryptoQuoteNotReady(EvidenceNotReady):
+    """An older native crypto generation lacks the newly required quote fields."""
+    def __init__(self):
+        EvidenceContractError.__init__(self, "crypto quote projection not ready")
+        self.conditions = ["crypto-quote-fields-missing"]
+        self.metadata_status = "incomplete"
+
+
 def quote_clock_assessment(facts, checked_at):
     """Assess source age without changing frozen ABox facts or delivery policy.
 

@@ -87,6 +87,24 @@ class CryptoAIObservationTests(unittest.TestCase):
         partial = next(row for row in source_graph({"change7d": None, "volume24h": None}).entities if row.kind == "crypto-asset")
         self.assertNotIn("change7d", partial.properties)
         self.assertNotIn("volume24h", partial.properties)
+        class OldProjection(Source):
+            def candidates(self, world, symbol):
+                rows = super().candidates(world, symbol)
+                for row in rows:
+                    if row.get("kind") == "crypto-asset":
+                        row.pop("currentPrice", None)
+                return rows
+        from digital_twin.modules.reasoning.domain.observation_evidence import CryptoQuoteNotReady
+        reader = ObservationEvidenceReader(OldProjection(), clock=lambda: NOW)
+        with self.assertRaises(CryptoQuoteNotReady):
+            reader.capture_session(SUBJECT)
+        from test_ai_control import AIControlTests
+        service, store, planner = AIControlTests().runner()
+        service.evidence.side_effect = lambda _: reader.capture_session(SUBJECT)
+        store.defer_evidence.return_value = True
+        self.assertEqual("awaiting-evidence", service.run_once()["status"])
+        store.defer_evidence.assert_called_once()
+        store.fail.assert_not_called(); planner.assert_not_called()
         missing = deepcopy(packet); quote_from(missing).pop("currentPrice")
         with self.assertRaises(EvidenceContractError):
             validate_evidence_packet(missing)

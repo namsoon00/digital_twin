@@ -6,6 +6,7 @@ from typing import Dict
 import gzip
 import json
 import time
+from digital_twin.infrastructure.api_performance import route_template
 
 
 MAX_BODY_BYTES = 1024 * 1024
@@ -41,6 +42,7 @@ def send_payload(
     )
     raw_length = len(body)
     compressed = False
+    outcome = "completed"
     if not no_body and len(body) >= 1024 and self.accepts_gzip() and (content_type.startswith("application/json") or content_type.startswith("text/")):
         body = gzip.compress(body, compresslevel=6)
         compressed = True
@@ -71,6 +73,7 @@ def send_payload(
         if not no_body:
             self.wfile.write(body)
     except (BrokenPipeError, ConnectionAbortedError, ConnectionResetError):
+        outcome = "client-disconnected"
         return
     finally:
         started_at = getattr(self, "_request_started_at", None)
@@ -83,13 +86,20 @@ def send_payload(
             raw_length,
             len(body),
             compressed,
+            outcome=outcome,
         )
+        if outcome != "completed" or duration_ms >= 2000:
+            print(json.dumps({
+                "event": "web.request_slow_or_interrupted", "requestId": getattr(self, "_request_id", ""),
+                "route": route_template(self.path_name()), "status": status,
+                "outcome": outcome, "durationMs": round(duration_ms), "rawBytes": raw_length,
+            }), flush=True)
 
 
 def add_cors_headers(self):
     self.send_header("Access-Control-Allow-Origin", "*")
     self.send_header("Access-Control-Allow-Methods", "GET, OPTIONS")
-    self.send_header("Access-Control-Allow-Headers", "Accept, Authorization, Content-Type, Cache-Control, Pragma, X-Requested-With")
+    self.send_header("Access-Control-Allow-Headers", "Accept, Authorization, Content-Type, Cache-Control, Pragma, X-Requested-With, X-Request-ID")
     self.send_header("Access-Control-Allow-Private-Network", "true")
     self.send_header("Access-Control-Max-Age", "600")
     self.send_header("Vary", "Origin, Access-Control-Request-Headers, Access-Control-Request-Private-Network")

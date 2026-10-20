@@ -116,6 +116,7 @@ class WebRequestHandler(BaseHTTPRequestHandler):
             if (
                 path.startswith("/api/")
                 and self.command in {"POST", "PUT", "PATCH", "DELETE"}
+                and not (path == "/api/operations/client-performance" and self.command == "POST")
                 and not self.share_access().writable
             ):
                 return self.send_payload(403, {"error": "조회 전용 링크에서는 데이터를 변경할 수 없습니다."})

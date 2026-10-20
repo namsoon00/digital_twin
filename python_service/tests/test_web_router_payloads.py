@@ -1,6 +1,12 @@
 """Read-side and payload parity contracts for the extracted web adapters."""
 
 import unittest
+import json
+import tempfile
+import threading
+import time
+from pathlib import Path
+from digital_twin.infrastructure.stale_read_model import StaleReadModelCache
 from copy import deepcopy
 from dataclasses import replace
 from types import SimpleNamespace
@@ -104,6 +110,50 @@ class WebRouterPayloadTests(unittest.TestCase):
         self.assertEqual(1, result["investmentAnalysis"]["reasoningCardsCount"])
         self.assertEqual("/api/flow-lens?detail=full", result["fullDetailPath"])
 
+    def test_large_external_packets_are_only_returned_by_full_detail(self):
+        original = {"toss": {"externalSignals": {"source": "test", "asOf": "source-clock",
+                    "arbitraryPacket": {"nested": "x" * 3000000}, "researchEvidence": ["x" * 10000]}}}
+        result = flow_lens.compact_flow_lens_payload(original)
+        self.assertLess(len(json.dumps(result)), 2000)
+        self.assertEqual("source-clock", result["toss"]["externalSignals"]["asOf"])
+        self.assertEqual(1, result["toss"]["externalSignals"]["arbitraryPacketCount"])
+        self.assertEqual(3000000, len(original["toss"]["externalSignals"]["arbitraryPacket"]["nested"]))
+
+    def test_slow_capital_analytics_do_not_block_portfolio_or_claim_current_snapshot(self):
+        snapshot = {"generatedAt": "current-clock", "toss": {"externalSignals": {"raw": ["detail"]}}}
+        model = SimpleNamespace(read=Mock(return_value=FlowLensReadResult(snapshot, "ready", True, "test", "clock")))
+        release = threading.Event()
+        entered = threading.Event()
+        def slow_loader(*args, **kwargs):
+            entered.set()
+            release.wait(2)
+            return {"status": "ok", "subjects": [], "dataFreshness": "fresh"}
+        with tempfile.TemporaryDirectory() as temporary:
+            cache = StaleReadModelCache("capital-test", root=Path(temporary))
+            cache.store_success("{}", {"sourceSnapshotAt": "old-clock", "subjects": [], "dataFreshness": "fresh"})
+            with patch.object(flow_lens, "FLOW_LENS_CAPITAL_CACHE", cache), patch.object(flow_lens, "flow_lens_read_model", return_value=model), patch.object(flow_lens, "operational_read_settings", return_value={}), patch.object(flow_lens, "capital_flow_api_payload", side_effect=slow_loader) as loader:
+                try:
+                    started = time.monotonic()
+                    result = flow_lens.flow_lens_read_payload({"detail": ["summary"]})
+                    self.assertLess(time.monotonic() - started, 0.5)
+                    self.assertTrue(entered.wait(1))
+                    full = flow_lens.flow_lens_read_payload({"detail": ["full"]})
+                    self.assertEqual(1, loader.call_count)
+                    self.assertEqual({"raw": ["detail"]}, full["toss"]["externalSignals"])
+                    self.assertEqual("current-clock", result["generatedAt"])
+                    self.assertEqual("old-clock", result["capitalFlow"]["sourceSnapshotAt"])
+                    self.assertTrue(result["capitalFlow"]["readCache"]["stale"])
+                    self.assertEqual("stale", result["capitalFlow"]["effectiveFreshness"]["status"])
+                finally:
+                    release.set()
+                    deadline = time.monotonic() + 2
+                    while cache.snapshot("{}")["refreshing"] and time.monotonic() < deadline:
+                        time.sleep(0.005)
+                    self.assertFalse(cache.snapshot("{}")["refreshing"])
+                latest = flow_lens.flow_lens_read_payload({"detail": ["summary"]})
+                self.assertEqual("current-clock", latest["capitalFlow"]["sourceSnapshotAt"])
+                self.assertFalse(latest["capitalFlow"]["readCache"]["stale"])
+
     def test_freshness_boundary_stays_strictly_greater_than_max_age(self):
         for age, expected in [(None, "unknown"), (30, "fresh"), (30.01, "stale")]:
             with patch.object(flow_lens, "age_minutes", return_value=age):
@@ -117,7 +167,7 @@ class WebRouterPayloadTests(unittest.TestCase):
         original = deepcopy(snapshot)
         result = FlowLensReadResult(snapshot, "ready", True, "monitor-snapshot", "refresh-clock")
         model = SimpleNamespace(read=Mock(return_value=result))
-        with patch.object(flow_lens, "flow_lens_read_model", return_value=model), patch.object(flow_lens, "runtime_settings", return_value={}), patch.object(flow_lens, "age_minutes", return_value=61), patch.object(flow_lens, "capital_flow_api_payload") as capital:
+        with patch.object(flow_lens, "flow_lens_read_model", return_value=model), patch.object(flow_lens, "operational_read_settings", return_value={}), patch.object(flow_lens, "age_minutes", return_value=61), patch.object(flow_lens, "capital_flow_api_payload") as capital:
             payload = flow_lens.flow_lens_read_payload({"detail": ["freshness"], "refresh": ["1"], "watchlistSymbols": ["AAPL"]})
         self.assertEqual(original, snapshot)
         self.assertEqual({"generatedAt", "dataMode", "readModel", "dataFreshness"}, set(payload))

@@ -157,6 +157,15 @@ class WebRouterBoundaryTests(unittest.TestCase):
                     self.assertEqual(0, request.body_reads)
         route.assert_not_called()
 
+    def test_client_diagnostics_allow_viewers_but_still_require_authentication(self):
+        body = json.dumps({"path": "/api/notification-jobs?account=private", "outcome": "timeout",
+                           "durationMs": 12000, "requestId": "web-test"}).encode()
+        with patch("builtins.print"):
+            self.assertEqual(204, self.request("/api/operations/client-performance", "POST", body, role=SHARE_ROLE_VIEWER).response[0])
+            self.assertEqual(401, self.request("/api/operations/client-performance", "POST", body, role=None).response[0])
+            self.assertEqual(400, self.request("/api/operations/client-performance", "POST", b"{}", role=SHARE_ROLE_VIEWER).response[0])
+            self.assertEqual(403, self.request("/api/operations/client-performance", "DELETE", body, role=SHARE_ROLE_VIEWER).response[0])
+
     def test_shared_owner_can_write_but_cannot_invoke_local_ai(self):
         save = Mock(return_value={"accounts": []})
         chat = Mock(side_effect=AssertionError("shared local AI execution"))

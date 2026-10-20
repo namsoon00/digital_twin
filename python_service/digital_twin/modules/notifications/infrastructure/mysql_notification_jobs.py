@@ -33,18 +33,7 @@ from .notification_payload import article_history_summary, compact_payload, expa
 NOTIFICATION_CLAIM_PAYLOAD_BYTES = 8 * 1024 * 1024
 
 
-NOTIFICATION_LIST_PRESENTATION_PATHS = (
-    "notificationContent.kind", "notificationContent.subject", "notificationSubject",
-    "symbolDisplayName", "displayTarget", "target", "rawSymbol",
-    "notificationDecisionMode", "notificationWriterProvenance.aiAuthored",
-    "notificationWriterProvenance.writerRole", "notificationAiValidatedResponse.action",
-    "validatedDecisionResponse.action", "notificationInferenceResponse.action",
-    "decisionPublication.outcomeKind", "ontologyRelationContext.decision.selectedRuleId",
-    "ontologyRelationContext.engine", "reasoningDeliveryTrigger.facts.cryptoTransitions",
-    "reasoningDeliveryTrigger.facts.confirmedSignalTransitions",
-    "customerInvestmentDocument.headline", "customerInvestmentDocument.lead",
-    "notificationContent.summary",
-)
+from .list_projection import PRESENTATION_PATHS as NOTIFICATION_LIST_PRESENTATION_PATHS, presentation_json
 
 
 def notification_list_presentation_column() -> str:
@@ -546,7 +535,7 @@ class MySQLNotificationJobStore(DiagnosticThreadStore, InvestmentConversationSto
             "data_quality", "is_mock", "status", "attempts", "created_at", "updated_at", "last_error", "text",
         )
         columns = ", ".join("notification_jobs." + name + " AS " + name for name in column_names)
-        columns += ", " + notification_list_presentation_column()
+        columns += ", notification_jobs.list_presentation_json AS presentation_json"
         if safe_recipient:
             columns += (
                 ", receipt.read_at AS receipt_read_at"
@@ -563,7 +552,7 @@ class MySQLNotificationJobStore(DiagnosticThreadStore, InvestmentConversationSto
                 params,
             ).fetchone()
             rows = connection.execute(
-                "SELECT " + columns + " FROM notification_jobs" + join + notification_list_presentation_join() + page_where
+                "SELECT " + columns + " FROM notification_jobs" + join + page_where
                 + " ORDER BY notification_jobs.updated_at DESC, notification_jobs.job_id DESC LIMIT %s OFFSET %s",
                 page_params + [page_size, 0 if cursor_updated_at else page_offset],
             ).fetchall()
@@ -1083,7 +1072,7 @@ class MySQLNotificationJobStore(DiagnosticThreadStore, InvestmentConversationSto
     def list_job_from_row(row) -> NotificationJob:
         """Build the small read model used by the outbox list.
 
-        Only SQL-projected classification leaves are included. The complete
+        Only persisted classification leaves are included. The complete
         immutable context is still loaded exclusively for a selected detail.
         """
         context = {
@@ -1167,7 +1156,8 @@ class MySQLNotificationJobStore(DiagnosticThreadStore, InvestmentConversationSto
                 updated_at = %s,
                 last_error = %s,
                 text = %s,
-                payload_json = %s
+                payload_json = %s,
+                list_presentation_json = %s
             WHERE job_id = %s
             """,
             (
@@ -1190,6 +1180,7 @@ class MySQLNotificationJobStore(DiagnosticThreadStore, InvestmentConversationSto
                 job.last_error,
                 job.text,
                 json_dumps(payload),
+                presentation_json(job.context),
                 job.job_id,
             ),
         )
@@ -1199,9 +1190,9 @@ class MySQLNotificationJobStore(DiagnosticThreadStore, InvestmentConversationSto
                 INSERT INTO notification_jobs (
                     job_id, account_id, account_label, message_type, source_event_id, source_event_name,
                     symbol, decision_episode_id, decision_key, api_source, data_quality, is_mock, dedupe_key, status, attempts,
-                    created_at, updated_at, last_error, text, payload_json
+                    created_at, updated_at, last_error, text, payload_json, list_presentation_json
                 )
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 """,
                 (
                     job.job_id,
@@ -1224,6 +1215,7 @@ class MySQLNotificationJobStore(DiagnosticThreadStore, InvestmentConversationSto
                     job.last_error,
                     job.text,
                     json_dumps(payload),
+                    presentation_json(job.context),
                 ),
             )
         decision_episode_id = str(linkage.get("decisionEpisodeId") or "").strip()[:191]

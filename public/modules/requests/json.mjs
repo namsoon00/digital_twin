@@ -1,7 +1,9 @@
 import { requestsAreSilent } from "./activity-scope.mjs";
 import { createJsonClient } from "./client.mjs";
+import { createRequestReporter } from "./telemetry.mjs";
 import { beginNetworkActivity, endNetworkActivity } from "../shell/network-activity.mjs";
 
+const reportRequest = createRequestReporter({ fetch: (path, options) => fetch(path, options) });
 const client = createJsonClient({
   fetch: (path, options) => fetch(path, options),
   AbortController: typeof window.AbortController === "function" ? window.AbortController : null,
@@ -16,6 +18,7 @@ const client = createJsonClient({
   end(token, result) {
     if (token.activity) endNetworkActivity(token.activity);
     if (token.metric) token.runtime.end(token.metric, result);
+    reportRequest(result);
   },
   record(event, fields) { window.OrbitWebRuntime?.record(event, 0, fields); }
 });

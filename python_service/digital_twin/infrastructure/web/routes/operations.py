@@ -13,6 +13,7 @@ from digital_twin.infrastructure.web.router import Query
 from digital_twin.infrastructure.web.telemetry import API_PERFORMANCE
 from digital_twin.infrastructure.web.telemetry import WEB_PROCESS_STARTED_AT
 from typing import Callable
+import json
 
 
 @dataclass(frozen=True)
@@ -34,6 +35,10 @@ class OperationsRoutes:
 
         if path == "/api/operations/performance" and request.command == "GET":
             return request.send_payload(200, API_PERFORMANCE.snapshot(), cache_control="no-store")
+        if path == "/api/operations/client-performance" and request.command == "POST":
+            sample = API_PERFORMANCE.record_client(request.read_json_body())
+            print(json.dumps({"event": "web.client_request", **sample}), flush=True)
+            return request.send_payload(204, None)
         return NOT_HANDLED
 
     def route_time_series_platform_status(self, request, path: str, query: Query):

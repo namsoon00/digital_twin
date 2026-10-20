@@ -118,3 +118,42 @@ test("summary and status snapshot reads use one stable cache key", () => {
   assert.equal(flowLensPath({detail: "summary", refresh: true}, ["AAPL"], ""), "/api/flow-lens?detail=summary&refresh=1");
   assert.equal(flowLensPath({detail: "full"}, ["AAPL", "TSLA"], ""), "/api/flow-lens?detail=full&watchlistSymbols=AAPL%2CTSLA");
 });
+
+test("request IDs correlate server and timeout logs without query data", async () => {
+  let clock = 1000;
+  const f = fixture({ now: () => clock });
+  const promise = f.client.request("/api/list?account=private");
+  await f.flush(); clock += 2500;
+  f.resolve(0, {}); await promise;
+  assert.equal(f.completed[0].requestId, f.pending[0].init.headers["X-Request-ID"]);
+  assert.equal(f.completed[0].path, "/api/list");
+  assert.equal(f.completed[0].durationMs, 2500);
+});
+
+test("disposed requests are cancellations rather than timeout reports", async () => {
+  const f = fixture({ AbortController });
+  const promise = f.client.request("/api/list");
+  await f.flush(); f.client.dispose();
+  f.pending[0].reject(Object.assign(new Error("aborted"), { name: "AbortError" }));
+  await assert.rejects(promise, /aborted/);
+  assert.equal(f.completed[0].outcome, "cancelled");
+});
+
+test("telemetry is bounded, never sends contents, and cannot delay the page", async () => {
+  const { createRequestReporter } = await import("../../public/modules/requests/telemetry.mjs");
+  const sent = [];
+  let clock = 100000;
+  const report = createRequestReporter({ fetch: (path, init) => {
+    sent.push({path, init}); return new Promise(() => {});
+  }, now: () => clock });
+  const sample = { path: "/api/list?account=private", outcome: "timeout", durationMs: 12000, requestId: "web-id", body: "secret" };
+  report({...sample, outcome: "ok", durationMs: 20});
+  report({...sample, outcome: "cancelled"});
+  assert.equal(sent.length, 0);
+  for (let i = 0; i < 20; i++) assert.equal(report(sample), undefined);
+  assert.equal(sent.length, 12);
+  assert.deepEqual(JSON.parse(sent[0].init.body), { path: "/api/list", outcome: "timeout", durationMs: 12000, requestId: "web-id" });
+  clock += 60000; report(sample); assert.equal(sent.length, 13);
+  createRequestReporter({fetch: () => { throw new Error("offline"); }})(sample);
+  createRequestReporter({fetch: () => Promise.reject(new Error("offline"))})(sample);
+});

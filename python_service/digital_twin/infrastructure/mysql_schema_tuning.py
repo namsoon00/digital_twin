@@ -779,6 +779,7 @@ MYSQL_OPERATIONAL_COLUMNS: Dict[str, Sequence[MySQLColumnDefinition]] = {
         ),
     ),
     "notification_jobs": (
+        MySQLColumnDefinition("notification_jobs", "list_presentation_json", "LONGTEXT DEFAULT NULL"),
         MySQLColumnDefinition("notification_jobs", "symbol", "VARCHAR(64) NOT NULL DEFAULT ''"),
         MySQLColumnDefinition("notification_jobs", "decision_episode_id", "VARCHAR(191) NOT NULL DEFAULT ''"),
         MySQLColumnDefinition("notification_jobs", "decision_key", "VARCHAR(191) NOT NULL DEFAULT ''"),
@@ -1586,6 +1587,8 @@ def backfill_external_fact_revision_identities(connection, batch_size: int = 500
 
 def ensure_mysql_operational_schema_tuning(connection, settings: Mapping[str, object] = None) -> Dict[str, object]:
     columns = ensure_mysql_columns(connection, MYSQL_OPERATIONAL_COLUMNS)
+    from digital_twin.modules.notifications.infrastructure.list_projection import backfill_list_presentations
+    notification_list_backfill_count = backfill_list_presentations(connection)
     comparison_identity_backfill_count = backfill_reasoning_comparison_identity(connection)
     primary_keys = ensure_reasoning_rule_slot_namespace_primary_key(connection)
     indexes = ensure_mysql_indexes(connection, MYSQL_OPERATIONAL_INDEXES)
@@ -1594,6 +1597,7 @@ def ensure_mysql_operational_schema_tuning(connection, settings: Mapping[str, ob
     return {
         "columns": columns,
         "comparisonIdentityBackfillCount": comparison_identity_backfill_count,
+        "notificationListBackfillCount": notification_list_backfill_count,
         "primaryKeys": primary_keys,
         "compatibleColumns": ensure_mysql_column_compatibility(connection, MYSQL_OPERATIONAL_COLUMN_COMPATIBILITY),
         "widenedColumns": ensure_mysql_column_widths(connection, MYSQL_OPERATIONAL_COLUMN_WIDTHS),

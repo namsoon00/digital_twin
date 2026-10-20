@@ -1,6 +1,7 @@
 """Connection-bound writes; the caller owns commit, rollback and ordering."""
 
 from __future__ import annotations
+from .list_projection import presentation_json
 from digital_twin.infrastructure.transaction_port import BoundWriteConnection
 from typing import Any, Callable, Dict, Iterable
 from digital_twin.infrastructure.operational_common import json_dumps
@@ -53,7 +54,7 @@ def set_ai_delivery_status(
         """
             UPDATE notification_jobs
             SET status = %s, attempts = %s, updated_at = %s, last_error = %s,
-                processing_started_at = '', retry_at = '', payload_json = %s
+                processing_started_at = '', retry_at = '', payload_json = %s, list_presentation_json = %s
             WHERE job_id = %s
             """,
         (
@@ -62,6 +63,7 @@ def set_ai_delivery_status(
             job.updated_at,
             job.last_error,
             json_dumps(_bound__compact_notification_payload(job)),
+            presentation_json(job.context),
             job.job_id,
         ),
     )

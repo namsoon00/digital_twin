@@ -26,7 +26,7 @@ def route_template(path: object) -> str:
     stable = {
         "access", "account", "accounts", "activity", "ai-review", "analysis",
         "approve", "baseline", "bootstrap", "candidates", "catalog", "classes",
-        "comparisons", "dashboard", "decisions", "delete", "delivery", "detail",
+        "comparisons", "client-performance", "dashboard", "decisions", "delete", "delivery", "detail",
         "diagnostics", "discover", "episodes", "events", "evidence", "experiments",
         "external-data", "flow-lens", "health", "history", "hypotheses", "inferences",
         "instruments", "investment-analysis", "investment-brain", "investment-calendar",
@@ -74,6 +74,7 @@ class ApiPerformanceRegistry:
         self._samples: Dict[str, Deque[Dict[str, object]]] = defaultdict(
             lambda: deque(maxlen=self.sample_limit)
         )
+        self._client_samples = deque(maxlen=self.sample_limit)
 
     def record(
         self,
@@ -84,6 +85,7 @@ class ApiPerformanceRegistry:
         raw_bytes: int,
         wire_bytes: int,
         compressed: bool,
+        outcome: str = "completed",
     ) -> None:
         route = route_template(path)
         key = str(method or "GET").upper() + " " + route
@@ -94,26 +96,56 @@ class ApiPerformanceRegistry:
             "rawBytes": max(0, int(raw_bytes or 0)),
             "wireBytes": max(0, int(wire_bytes or 0)),
             "compressed": bool(compressed),
+            "outcome": outcome,
         }
         with self._lock:
+            if key not in self._samples and len(self._samples) >= 128:
+                del self._samples[next(iter(self._samples))]
             self._samples[key].append(sample)
+
+    def record_client(self, payload):
+        """Accept bounded same-origin transport metadata, never response contents."""
+        value = payload if isinstance(payload, dict) else {}
+        path = str(value.get("path") or "").split("?", 1)[0][:256]
+        outcome = value.get("outcome")
+        if not path.startswith("/api/") or outcome not in {"timeout", "error", "ok", "cancelled"}:
+            raise ValueError("Invalid client performance sample")
+        try:
+            duration = float(value.get("durationMs") or 0)
+        except (TypeError, ValueError):
+            raise ValueError("Invalid client duration") from None
+        if not math.isfinite(duration) or not 0 <= duration <= 3600000:
+            raise ValueError("Invalid client duration")
+        request_id = str(value.get("requestId") or "")
+        if not re.fullmatch(r"[A-Za-z0-9._:-]{1,80}", request_id):
+            request_id = ""
+        sample = {
+            "occurredAt": _utc_now_iso(), "route": route_template(path),
+            "outcome": outcome, "durationMs": round(duration, 2),
+            "requestId": request_id,
+        }
+        with self._lock:
+            self._client_samples.append(sample)
+        return sample
 
     def snapshot(self) -> Dict[str, object]:
         with self._lock:
             copied = {key: list(values) for key, values in self._samples.items()}
+            client_samples = list(self._client_samples)
         routes: List[Dict[str, object]] = []
         for key, rows in copied.items():
             method, route = key.split(" ", 1)
             durations = [float(row.get("durationMs") or 0.0) for row in rows]
             raw_sizes = [int(row.get("rawBytes") or 0) for row in rows]
             wire_sizes = [int(row.get("wireBytes") or 0) for row in rows]
-            errors = sum(int(row.get("status") or 0) >= 400 for row in rows)
+            errors = sum(int(row.get("status") or 0) >= 400 or row.get("outcome") != "completed" for row in rows)
             latest = rows[-1] if rows else {}
             routes.append({
                 "method": method,
                 "route": route,
                 "sampleCount": len(rows),
                 "errorCount": errors,
+                "disconnectCount": sum(row.get("outcome") == "client-disconnected" for row in rows),
                 "p50Ms": _percentile(durations, 50),
                 "p95Ms": _percentile(durations, 95),
                 "maxMs": round(max(durations, default=0.0), 2),
@@ -137,8 +169,15 @@ class ApiPerformanceRegistry:
                 "listMaximumRawBytes": 100000,
             },
             "routes": routes,
+            "client": {
+                "sampleCount": len(client_samples),
+                "timeoutCount": sum(row["outcome"] == "timeout" for row in client_samples),
+                "errorCount": sum(row["outcome"] == "error" for row in client_samples),
+                "samples": client_samples,
+            },
         }
 
     def clear(self) -> None:
         with self._lock:
             self._samples.clear()
+            self._client_samples.clear()

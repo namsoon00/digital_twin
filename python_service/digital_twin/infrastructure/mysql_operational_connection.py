@@ -1308,6 +1308,7 @@ MYSQL_SCHEMA = [
         processing_started_at VARCHAR(40) NOT NULL DEFAULT '',
         retry_at VARCHAR(40) NOT NULL DEFAULT '',
         payload_json LONGTEXT NOT NULL,
+        list_presentation_json LONGTEXT DEFAULT NULL,
         UNIQUE KEY idx_notification_jobs_dedupe (dedupe_key),
         KEY idx_notification_jobs_status_created (status, created_at, job_id),
         KEY idx_notification_jobs_message_time_status (message_type, created_at, status),

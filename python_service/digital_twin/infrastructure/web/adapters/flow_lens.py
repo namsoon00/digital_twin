@@ -4,6 +4,9 @@ from digital_twin.infrastructure import operational_store as stores
 from digital_twin.infrastructure.service_factory import build_flow_lens_service
 from digital_twin.infrastructure.service_factory import flow_lens_snapshot
 from digital_twin.infrastructure.settings import runtime_settings
+from digital_twin.infrastructure.stale_read_model import StaleReadModelCache
+from digital_twin.infrastructure.web.cache import cached_api_payload
+import json
 from digital_twin.infrastructure.web.adapters.capital_flow import capital_flow_api_payload
 from digital_twin.infrastructure.web.common import configured
 from digital_twin.infrastructure.web.common import first_query
@@ -16,6 +19,9 @@ from digital_twin.modules.read_models.infrastructure.flow_lens_read_model import
 from typing import Dict
 from typing import List
 import threading
+
+
+FLOW_LENS_CAPITAL_CACHE = StaleReadModelCache("flow-lens-capital", ttl_seconds=30, retry_cooldown_seconds=10)
 
 
 FLOW_LENS_READ_MODEL = None
@@ -60,9 +66,7 @@ def compact_flow_lens_payload(payload: Dict[str, object]) -> Dict[str, object]:
         return payload
     compact = dict(payload)
     decision = compact.get("tossDecision")
-    if not isinstance(decision, dict):
-        return compact
-    decision = dict(decision)
+    decision = dict(decision) if isinstance(decision, dict) else {}
     compact["tossDecision"] = decision
 
     market_item_keys = {
@@ -96,24 +100,19 @@ def compact_flow_lens_payload(payload: Dict[str, object]) -> Dict[str, object]:
             toss[key] = compact_rows(toss.get(key), market_item_keys)
         external = toss.get("externalSignals")
         if isinstance(external, dict):
-            external = dict(external)
+            # This initial view has no consumers of raw external packets.
+            # Keep source/status scalars and counts; all evidence stays in full detail.
+            summarized = {}
             omitted = []
-            for key in [
-                "yfinanceData",
-                "researchEvidence",
-                "companyOverviews",
-                "earningsReports",
-                "secFilings",
-                "dartDisclosures",
-                "companyKnowledge",
-            ]:
-                value = external.pop(key, None)
-                if value not in (None, [], {}, ""):
+            for key, value in external.items():
+                if isinstance(value, (list, dict)):
+                    summarized[key + "Count"] = len(value)
                     omitted.append(key)
-                    if isinstance(value, (list, dict)):
-                        external[key + "Count"] = len(value)
-            external["detailLevel"] = "summary"
-            external["heavyFieldsOmitted"] = omitted
+                elif value is None or isinstance(value, (bool, int, float)):
+                    summarized[key] = value
+                elif isinstance(value, str):
+                    summarized[key] = value[:512]
+            external = {**summarized, "detailLevel": "summary", "heavyFieldsOmitted": omitted}
             toss["externalSignals"] = external
         metadata = toss.get("metadata")
         if isinstance(metadata, dict):
@@ -284,7 +283,7 @@ def flow_lens_read_payload(query: Dict[str, List[str]]) -> Dict[str, object]:
         return pending_payload
     payload = dict(result.snapshot)
     payload["readModel"] = result.metadata()
-    payload["dataFreshness"] = flow_lens_data_freshness(payload.get("generatedAt"), runtime_settings())
+    payload["dataFreshness"] = flow_lens_data_freshness(payload.get("generatedAt"), operational_read_settings())
     if detail in {"status", "freshness"}:
         return {
             "generatedAt": payload.get("generatedAt"),
@@ -293,7 +292,26 @@ def flow_lens_read_payload(query: Dict[str, List[str]]) -> Dict[str, object]:
             "dataFreshness": payload.get("dataFreshness"),
         }
     try:
-        payload["capitalFlow"] = capital_flow_api_payload(query, snapshot=payload)
+        # Even a cached portfolio must not synchronously wait on analytics I/O.
+        capital_key = json.dumps({key: query[key] for key in (
+            "symbols", "symbol", "market", "windowDays", "window", "observedAfter", "asOf", "limit",
+            "mock", "mode", "watchlistSymbols",
+        ) if key in query}, sort_keys=True)
+        cached_capital = FLOW_LENS_CAPITAL_CACHE.snapshot(capital_key)
+        source_clock = str(payload.get("generatedAt") or "")
+        changed = (cached_capital.get("payload") or {}).get("sourceSnapshotAt") != source_clock
+        source_snapshot = dict(payload)
+        def load_capital():
+            return {**capital_flow_api_payload(query, snapshot=source_snapshot), "sourceSnapshotAt": source_clock}
+        payload["capitalFlow"] = cached_api_payload(
+            FLOW_LENS_CAPITAL_CACHE, capital_key, load_capital,
+            force=changed, blocking_first_load=False,
+        )
+        if payload["capitalFlow"].get("sourceSnapshotAt") != source_clock:
+            payload["capitalFlow"]["readCache"]["stale"] = True
+            payload["capitalFlow"]["effectiveFreshness"] = {
+                "status": "stale", "reason": "현재 보유 스냅샷에 맞춰 자금 흐름을 갱신하고 있습니다.",
+            }
     except Exception as error:  # noqa: BLE001 - portfolio snapshot remains available when the analytical store is down.
         payload["capitalFlow"] = {
             "contract": "capital-flow-summary-v1",

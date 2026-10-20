@@ -386,7 +386,10 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # Ten purpose-scoped regressions cover dated/current publication, frozen
         # replay and DB proof, quote-wait resumption, quiet follow-ups, news-only
         # discovery, publisher/revision/date admission and public macro context.
-        self.assertLessEqual(total, 2459)
+        # Fourteen web-read regressions cover atomic inbox projections and
+        # concurrent backfill, bounded diagnostics with current release fences,
+        # summary/detail parity, transport disconnects and authorized telemetry.
+        self.assertLessEqual(total, 2473)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

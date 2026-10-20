@@ -147,3 +147,40 @@ imports, dependency qualification, and structural placement changed.
 
 Full-suite testing, existing-test adaptation, manifest registration, commit,
 push, managed-runtime restart, and handoff notification remain parent-owned.
+
+
+## Bounded web reads (2026-10-21)
+
+Notification lists now read `notification_jobs.list_presentation_json`, a small
+persisted projection owned by notifications infrastructure. Normal upserts and
+AI publication update it in the same transaction as the evidence payload.
+Startup schema tuning fills missing projections in bounded, resumable batches;
+its source-version/null guards preserve concurrent writes. Existing message
+text, evidence, receipt state, and timestamps are unchanged. Detail requests
+still read the full immutable evidence packet. Complete the backfill before
+switching a running web process to this schema.
+
+Investment-model requests check the small live engine-control row (including
+its version) and return without waiting for the seven diagnostics components.
+Cold, expired, and forced refreshes are single-flight background work with an
+8-second component wait budget and a fixed seven-thread executor. A failure
+retains same-release details with an explicit stale notice. Unavailable or
+changed control identity, partial diagnostics, expiration, and active refresh
+cannot certify validation or promotion. No engine control or release identity
+is written by this read path. A fast HTTP 200 warming response is not proof
+that diagnostics loaded: inspect `cache`, `diagnostics`, and the returned
+release after refresh.
+
+Flow Lens keeps portfolio data available while capital-flow analytics refresh
+asynchronously. The analytics carry `sourceSnapshotAt`; a mismatch is explicitly
+stale. Summary reads return external source/status scalars and packet counts;
+`detail=full` retains original source packets. Status-only reads skip analytics.
+
+JSON requests attach a correlation ID. Slow requests (2 seconds or more),
+errors, and timeouts send bounded same-origin transport telemetry (12 per minute
+per client, 240 retained samples). Query strings and response bodies are not
+recorded. Authenticated viewers may send only this diagnostic POST, with all
+other write restrictions retained. `/api/operations/performance` distinguishes
+client timeouts from server disconnects; structured slow/disconnect entries also
+remain in the managed web log across process restarts. These are transport
+observations, not proof of market-data freshness or delivery success.

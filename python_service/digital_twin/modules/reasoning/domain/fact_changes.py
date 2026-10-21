@@ -59,7 +59,7 @@ MARKET_FACT_FIELDS = (
 # Collection adapters use provider/domain class names while ABox persistence
 # is routed by stable factual families. Keep that translation in one domain
 # contract so a new transport name cannot silently reopen every ABox scope.
-FACT_CHANGE_CONTRACT_VERSION = "fact-change-contract-v10-disclosure-filing-routing"
+FACT_CHANGE_CONTRACT_VERSION = "fact-change-contract-v11-crypto-source-routing"
 
 FACT_TYPE_SCOPE_FAMILIES = {
     "marketquote": {"market"},
@@ -145,6 +145,7 @@ FIELD_ROUTED_FACT_TYPES = {
     "executionflow",
     "investorflow",
     "orderbook",
+    "cryptomarket",
 }
 
 FOLLOW_UP_FIELD_FACT_TYPES = {
@@ -196,8 +197,14 @@ FIELD_DEPENDENCY_ALIASES = {
 # makes a valid shared-market change impossible to match in the ABox.
 FIELD_DOMAIN_DEPENDENCY_KEYS = {
     "cryptomarkets": {
+        "kind:crypto-asset",
         "kind:crypto-market-signal",
         "kind:crypto-exposure",
+        "kind:price-bar",
+        "kind:price-path",
+        "kind:volume-profile",
+        "kind:liquidity-profile",
+        "kind:data-quality",
         "kind:market-event",
         "relation:has-observation",
     },

@@ -56,6 +56,11 @@ def build_ai_control_service(settings=None):
     from digital_twin.modules.ai_orchestration.domain.evidence_readiness import VERSION as read_policy
     configured["aiEvidenceReadPolicy"] = read_policy
     store = MySQLAIControlStore(configured)
+    def projection_status(job):
+        from digital_twin.modules.reasoning.public import observation_projection_status
+        with store.connect() as connection:
+            return observation_projection_status(connection, job)
+    store.projection_status = projection_status
     research_store = investment_research_store(configured)
 
     def subjects():

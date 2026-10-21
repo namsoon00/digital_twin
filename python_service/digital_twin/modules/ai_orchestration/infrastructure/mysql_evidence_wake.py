@@ -53,7 +53,10 @@ class MySQLEvidenceWakeStore(MySQLOperationalConnection):
             scope = (subject["accountId"], subject["symbol"], subject["worldId"], capability)
             tasks = connection.execute("SELECT task_id,available_at FROM ai_control_tasks WHERE account_id=%s AND symbol=%s "
                 "AND JSON_UNQUOTE(JSON_EXTRACT(payload_json,'$.worldId'))=%s AND capability=%s "
-                "AND status='pending' AND attempts=0 FOR UPDATE", scope).fetchall()
+                "AND status='pending' AND (attempts=0 OR ("
+                "JSON_UNQUOTE(JSON_EXTRACT(result_json,'$.processingOutcome.stage'))='evidence-capture' "
+                "AND JSON_UNQUOTE(JSON_EXTRACT(result_json,'$.processingOutcome.status')) IN ('data-wait','projection-blocked'))) "
+                "FOR UPDATE", scope).fetchall()
             if not tasks:
                 continue  # A processing/retrying task leaves this wake for its successor.
             failed = connection.execute("SELECT task_id FROM ai_control_tasks WHERE account_id=%s AND symbol=%s "

@@ -40,6 +40,11 @@ def progress_state(task, delivery=None, receipt=None):
                 "reasons": [publication.get("reason") or "후속 분석의 알림을 발송 대기열에 등록하지 못했습니다."]}
     if task["status"] == "processing":
         return {**base, "stage": "reviewing", "reasons": ["원본 초안에 이어 자료를 다시 확인하고 있습니다. 아직 검증 결과는 확정되지 않았습니다."]}
+    if outcome.get("status") == "projection-blocked":
+        return {**base, "stage": "waiting", "reasonCode": "source-projection-failed",
+                "producer": outcome.get("producer", {}),
+                "resumeCondition": "새 원천 자료의 지식 그래프 반영 완료",
+                "reasons": ["원천 자료를 지식 그래프에 반영하는 작업이 최종 실패했습니다. 새 반영 작업이 완료되면 분석을 재개합니다."]}
     if task["status"] in {"pending", "failed"}:
         if not task.get("lastError"):
             return None

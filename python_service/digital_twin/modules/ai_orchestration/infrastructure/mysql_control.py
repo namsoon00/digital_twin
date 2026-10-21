@@ -268,9 +268,20 @@ class MySQLAIControlStore(DiagnosticProgressPersistence, AITaskDispatchPersisten
         count = int(job.get("evidenceDeferrals", 0)) + 1
         retry_at = (now + timedelta(seconds=min(900, 60 * 2 ** min(count - 1, 4)))).isoformat().replace("+00:00", "Z")
         started_at = job.get("evidenceWaitStartedAt") or now.isoformat().replace("+00:00", "Z")
+        producer = {}
+        reader = getattr(self, "projection_status", None)
+        if reader is not None and wait.code == "evidence-contract:crypto-quote-projection-not-ready":
+            try:
+                producer = reader(job)
+            except Exception:
+                producer = {"status": "unknown", "reasonCode": "projection-status-unavailable"}
+        blocked = producer.get("status") == "blocked"
+        if blocked:
+            retry_at = (now + timedelta(hours=6)).isoformat().replace("+00:00", "Z")
         result = {"status": "awaiting-evidence", "processingOutcome": {
-            "status": "data-wait", "stage": "evidence-capture", "reasonCode": wait.code,
+            "status": "projection-blocked" if blocked else "data-wait", "stage": "evidence-capture", "reasonCode": wait.code,
             "conditions": wait.conditions, "metadataStatus": wait.metadata_status,
+            "producer": producer, "resumeOn": ["committed-typedb-evidence"],
             "startedAt": started_at, "retryAt": retry_at, "deferrals": count}}
         with self.transaction() as connection:
             changed = connection.execute("UPDATE ai_control_tasks SET status='pending',last_error=%s,available_at=%s,"

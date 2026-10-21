@@ -22,7 +22,7 @@ from digital_twin.shared_kernel.events import DomainEvent
 from digital_twin.modules.market_data.contracts import snapshot_collected_event
 from digital_twin.modules.news_intelligence.contracts import evidence_inference_signature, inference_eligible
 from digital_twin.modules.reasoning.domain.fact_changes import changed_fields, fact_revision_id, fact_signature
-from digital_twin.modules.market_data.contracts import CRYPTO_TRANSITION_BASELINE_METADATA_KEY, crypto_market_transitions, crypto_transition_materiality_assessment, crypto_transition_targets
+from digital_twin.modules.market_data.contracts import CRYPTO_TRANSITION_BASELINE_METADATA_KEY, crypto_market_transitions, crypto_transition_materiality_assessment, crypto_transition_targets, crypto_markets_by_symbol
 from digital_twin.modules.news_intelligence.contracts import research_evidence_from_payload
 from digital_twin.modules.news_intelligence.contracts import market_change_materiality
 from digital_twin.modules.market_data.contracts import MARKET_SIGNAL_TRANSITION_RESULTS_KEY
@@ -34,7 +34,7 @@ from digital_twin.modules.reasoning.domain.reasoning_source_facts import reasoni
 
 VERIFIED_MONITOR_SNAPSHOT_TRIGGER = "verified-monitor-snapshot"
 VERIFIED_MONITOR_SNAPSHOT_SLOT_FAMILY = "VerifiedMonitorSnapshot"
-VERIFIED_MONITOR_SNAPSHOT_VERSION = "verified-monitor-snapshot-v7-stable-valuation-audit"
+VERIFIED_MONITOR_SNAPSHOT_VERSION = "verified-monitor-snapshot-v8-crypto-source-refresh"
 
 
 # Deliberately keep the source contract close to the Position domain object.
@@ -774,7 +774,7 @@ def _verified_monitor_source_facts(
                     for field in sorted(SOURCE_FACT_IDENTITY_FIELDS | POSITION_CONTEXT_FIELDS)
                     if previous_position.get(field) not in (None, "")
                 }
-            if str(fact_type or "") == "MarketQuote" and "cryptoMarkets" in groups:
+            if str(fact_type or "") in {"MarketQuote", "CryptoMarket"} and "cryptoMarkets" in groups:
                 payload["cryptoMarkets"] = current_external.get("cryptoMarkets") or {}
                 payload["cryptoTransitions"] = symbol_transitions
             quality_state = "verified-source-boundary"
@@ -838,7 +838,12 @@ def verified_monitor_snapshot_reasoning_event(
         snapshot.external_signals,
         settings=settings,
     )
-    if not subjects and not crypto_transitions:
+    current_crypto = crypto_markets_by_symbol(snapshot.external_signals)
+    previous_crypto = crypto_markets_by_symbol(previous.get("externalSignals") or {})
+    crypto_changes = [symbol for symbol in sorted(set(current_crypto) | set(previous_crypto))
+                      if fact_signature(current_crypto.get(symbol, {}), EXTERNAL_REFRESH_FIELDS)
+                      != fact_signature(previous_crypto.get(symbol, {}), EXTERNAL_REFRESH_FIELDS)]
+    if not subjects and not crypto_transitions and not crypto_changes:
         return None
     current_external = compact_external_signals_for_ontology(
         snapshot.external_signals,
@@ -960,6 +965,19 @@ def verified_monitor_snapshot_reasoning_event(
             EXTERNAL_REFRESH_FIELDS,
         )
 
+    # Source refreshes are independent of threshold crossings and never carry
+    # transition materiality. One persisted revision updates only its source
+    # subjects; unchanged polling clocks cannot manufacture another revision.
+    for symbol in crypto_changes:
+        if symbol not in changed_symbols:
+            changed_symbols.append(symbol)
+        changed_fields_by_symbol.setdefault(symbol, []).append("external.cryptoMarkets")
+        changed_external_groups_by_symbol.setdefault(symbol, []).append("cryptoMarkets")
+        fact_types_by_symbol[symbol] = sorted(set(fact_types_by_symbol.get(symbol, [])) | {"CryptoMarket"})
+        all_fact_types.add("CryptoMarket")
+        revisions[symbol] = fact_revision_id("CryptoMarket", symbol,
+            current_crypto.get(symbol, {"removed": True}), EXTERNAL_REFRESH_FIELDS)
+
     # BTC/ETH are independent market subjects.  The same transition may also
     # affect an actually held or watched crypto-sensitive stock, but it must
     # never fan out through unrelated account symbols.
@@ -988,7 +1006,7 @@ def verified_monitor_snapshot_reasoning_event(
         if symbol not in changed_symbols:
             changed_symbols.append(symbol)
         all_fact_types.add("MarketQuote")
-        fact_types_by_symbol[symbol] = ["MarketQuote"]
+        fact_types_by_symbol[symbol] = sorted(set(fact_types_by_symbol.get(symbol, [])) | {"MarketQuote"})
         materiality_assessments[symbol + ":crypto-transition"] = (
             crypto_transition_materiality_assessment(symbol, applicable).to_dict()
         )

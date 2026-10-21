@@ -183,6 +183,28 @@ class EvidenceWakeStorageTests(unittest.TestCase):
         self.assertEqual(0, self.waker.run_once([SUBJECT])["tasksWoken"])
         self.assertEqual(recovery_due, self.row(recovery_id)["available_at"])
 
+    def test_terminal_projection_wait_records_producer_and_wakes_once_on_commit(self):
+        from digital_twin.modules.reasoning.domain.observation_evidence import CryptoQuoteNotReady
+        self.task(availableAt="2020-01-01T00:00:00Z")
+        claimed = self.control.claim()
+        self.control.projection_status = lambda job: {"status": "blocked", "jobId": "projection-failed",
+            "reasonCode": "target-scope-repair-exhausted", "sourceSnapshotId": "old-source"}
+        self.assertTrue(self.control.defer_evidence(claimed, CryptoQuoteNotReady()))
+        row = self.row()
+        outcome = json.loads(row["result_json"])["processingOutcome"]
+        self.assertEqual("projection-blocked", outcome["status"])
+        self.assertEqual("projection-failed", outcome["producer"]["jobId"])
+        from digital_twin.modules.ai_orchestration.domain.diagnostic_progress import progress_state
+        state = progress_state({"taskId": claimed["taskId"], "status": "pending", "updatedAt": stamp(),
+            "result": json.loads(row["result_json"]), "lastError": row["last_error"], "availableAt": row["available_at"]})
+        self.assertEqual("source-projection-failed", state["reasonCode"])
+        self.assertGreater(datetime.fromisoformat(row["available_at"].replace("Z", "+00:00")), datetime.now(timezone.utc)+timedelta(hours=5))
+        self.event(snapshot="repaired-graph")
+        self.assertEqual(1, self.waker.run_once([SUBJECT])["tasksWoken"])
+        self.assertEqual(0, self.waker.run_once([SUBJECT])["tasksWoken"])
+        self.assertEqual(row["attempts"], self.row()["attempts"])
+        self.assertEqual("repaired-graph", json.loads(self.row()["payload_json"])["evidenceWake"]["sourceSnapshotId"])
+
     def test_receipt_and_queue_timing_rollback_together_then_retry_once(self):
         self.task(); self.event()
         with patch.object(self.waker.store, "wake_pending", side_effect=ValueError("injected failure")):
@@ -207,6 +229,25 @@ class V2EvidenceHandoffStorageTests(db_helpers.StabilizationDatabaseCase):
     def completion_events(self, job):
         return list(self.sql("SELECT * FROM domain_events WHERE name=%s AND JSON_UNQUOTE(JSON_EXTRACT(payload_json,'$.reasoningJobId'))=%s",
                             (OBSERVATION_EVIDENCE_READY, job["jobId"]), all_rows=True))
+
+    def test_projection_health_uses_current_source_job_and_ignores_other_subjects(self):
+        from digital_twin.modules.reasoning.infrastructure.observation_projection_status import observation_projection_status
+        job = self.claimed_job()
+        request = {"request": {"account_ids": [self.subject["accountId"]], "symbols": ["ETH"],
+            "context": {"validationOnly": False, "changedFieldsBySymbol": {"ETH": ["external.cryptoMarkets"]}}}}
+        self.sql("UPDATE reasoning_engine_jobs SET request_json=%s,job_status='failed',terminal_reason_code='target-scope-repair-exhausted' WHERE job_id=%s",
+                 (json.dumps(request), job["jobId"]))
+        with self.jobs.connect() as connection, patch(
+                "digital_twin.modules.reasoning.infrastructure.observation_projection_status.active_observation_binding",
+                return_value={"deploymentId": self.deployment}):
+            eth = {**self.subject, "symbol": "ETH"}
+            self.assertEqual("blocked", observation_projection_status(connection, eth)["status"])
+            self.assertEqual("unknown", observation_projection_status(connection, self.subject)["status"])
+            self.sql("UPDATE reasoning_engine_jobs SET job_status='queued',terminal_reason_code='' WHERE job_id=%s", (job["jobId"],))
+            self.assertEqual("pending", observation_projection_status(connection, eth)["status"])
+            request["request"]["context"]["validationOnly"] = True
+            self.sql("UPDATE reasoning_engine_jobs SET job_status='failed',terminal_reason_code='failed',request_json=%s WHERE job_id=%s", (json.dumps(request), job["jobId"],))
+            self.assertEqual("unknown", observation_projection_status(connection, eth)["status"])
 
     def complete(self, job, result):
         return self.jobs.complete(job["jobId"], result, worker_id="fixture-worker", claimed_at=job["claimedAt"])

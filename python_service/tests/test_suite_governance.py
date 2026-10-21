@@ -389,7 +389,8 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # Fourteen web-read regressions cover atomic inbox projections and
         # concurrent backfill, bounded diagnostics with current release fences,
         # summary/detail parity, transport disconnects and authorized telemetry.
-        self.assertLessEqual(total, 2473)
+        # Four crypto ingress/native-scope and projection wait/wake regressions.
+        self.assertLessEqual(total, 2477)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

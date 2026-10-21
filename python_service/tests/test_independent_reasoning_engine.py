@@ -1120,9 +1120,15 @@ class IndependentReasoningEngineTests(unittest.TestCase):
         self.assertTrue(request.context["eventDependencyBoundaryAuthoritative"])
         self.assertEqual(
             [
+                "kind:crypto-asset",
                 "kind:crypto-exposure",
                 "kind:crypto-market-signal",
+                "kind:data-quality",
+                "kind:liquidity-profile",
                 "kind:market-event",
+                "kind:price-bar",
+                "kind:price-path",
+                "kind:volume-profile",
                 "relation:has-observation",
             ],
             request.context["requestedDependencyKeysBySymbol"]["BTC"],

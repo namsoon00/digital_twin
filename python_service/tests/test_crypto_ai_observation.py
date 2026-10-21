@@ -59,6 +59,60 @@ def condition(packet):
 
 
 class CryptoAIObservationTests(unittest.TestCase):
+    def test_changed_quote_refreshes_without_transition_and_ignores_poll_clocks(self):
+        from test_verified_snapshot_reasoning import snapshot
+        from digital_twin.modules.reasoning.domain.verified_snapshot_reasoning import verified_monitor_snapshot_reasoning_event
+        before = snapshot(external_signals={"cryptoMarkets": {
+            "ethereum": {"symbol": "ETH", "price": 2400, "change24h": 0.1}}})
+        after = deepcopy(before)
+        after.external_signals["cryptoMarkets"]["ethereum"].update(price=2401, fetchedAt=NOW.isoformat())
+        event = verified_monitor_snapshot_reasoning_event(after, before.to_monitor_state())
+        self.assertEqual(["ETH"], event.payload["symbols"])
+        self.assertEqual(["CryptoMarket"], event.payload["factTypesBySymbol"]["ETH"])
+        self.assertEqual([], event.payload["verifiedSourceSnapshot"]["cryptoTransitions"])
+        self.assertEqual(["external.cryptoMarkets"], event.payload["changedFieldsBySymbol"]["ETH"])
+        self.assertTrue(event.payload["factChangeContract"]["dependencyKeysComplete"])
+        later = deepcopy(after)
+        later.external_signals["cryptoMarkets"]["ethereum"]["fetchedAt"] = (NOW+timedelta(minutes=5)).isoformat()
+        self.assertIsNone(verified_monitor_snapshot_reasoning_event(later, after.to_monitor_state()))
+        # A quote does not require a synthetic account holding.
+        before.positions = before.watchlist = []
+        after.positions = after.watchlist = []
+        self.assertEqual(["ETH"], verified_monitor_snapshot_reasoning_event(after, before.to_monitor_state()).payload["symbols"])
+
+    def test_real_abox_source_scopes_match_versioned_crypto_contract(self):
+        from digital_twin.modules.reasoning.domain.fact_changes import fact_change_contract
+        from digital_twin.modules.reasoning.domain.ontology_scopes import apply_scoped_abox_identity
+        from digital_twin.modules.reasoning.domain.ontology_fact_slots import build_fact_slot_projection_plan, select_fact_slot_scope_ids
+        from digital_twin.modules.reasoning.domain.projection_facts import graph_for_graph_store_persistence
+        from digital_twin.modules.model_registry.domain.ontology_rulebox_catalog import governed_graph_inference_rules
+        graph = source_graph({"change7d": 0.1})
+        graph.entities.extend([
+            OntologyEntity("crypto-asset:BTC", "Bitcoin", "crypto-asset", {"symbol": "BTC", "currentPrice": 90000}),
+            OntologyEntity("stock:AAPL", "Apple", "stock", {"symbol": "AAPL", "currentPrice": 200}),
+        ])
+        rules = [r.to_dict() for r in governed_graph_inference_rules() if r.rule_id.startswith("graph.crypto.market.")]
+        graph = graph_for_graph_store_persistence(graph, {"rules": rules,
+            "inputRelationTypes": ["HAS_OBSERVATION", "HAS_EXTERNAL_SIGNAL"]})
+        scopes = {r["scopeId"]: r for r in apply_scoped_abox_identity(graph, account_id=SUBJECT["accountId"])["scopePlan"]}
+        fields = {"ETH": ["external.cryptoMarkets"]}
+        contract = fact_change_contract(["CryptoMarket"], {"ETH": ["CryptoMarket"]}, fields)
+        plan = build_fact_slot_projection_plan(["ETH"], contract["scopeFamilies"],
+            requested_fact_families_by_symbol=contract["scopeFamiliesBySymbol"], changed_fields_by_symbol=fields,
+            event_boundary_authoritative=True, requested_dependency_keys=contract["dependencyKeys"],
+            requested_dependency_keys_by_symbol=contract["dependencyKeysBySymbol"], dependency_boundary_authoritative=True)
+        selected = select_fact_slot_scope_ids(scopes, scopes.keys(), plan)
+        self.assertTrue(selected["enabled"])
+        self.assertTrue({"macro:crypto", "symbol:ETH:market", "symbol:ETH:flow"} <= set(selected["selectedScopeIds"]))
+        self.assertFalse(any("AAPL" in key for key in selected["selectedScopeIds"]))
+        self.assertEqual(["BTC", "ETH"], scopes["macro:crypto"]["nativeSourceSymbols"])
+        old_keys = ["kind:crypto-market-signal", "kind:crypto-exposure", "kind:market-event", "relation:has-observation"]
+        old_plan = {**plan, "requestedDependencyKeys": old_keys, "requestedDependencyKeysBySymbol": {"ETH": old_keys}}
+        self.assertEqual("blocked-dependency-key-no-scope-match", select_fact_slot_scope_ids(scopes, scopes.keys(), old_plan)["status"])
+        # Exact dependency mismatches must still fail closed.
+        plan.update(requestedDependencyKeys=["kind:missing"], requestedDependencyKeysBySymbol={"ETH": ["kind:missing"]})
+        self.assertEqual("blocked-dependency-key-no-scope-match", select_fact_slot_scope_ids(scopes, scopes.keys(), plan)["status"])
+
     def test_crypto_subject_discovery_respects_enabled_accounts_and_collection_scope(self):
         self.assertEqual([("BTC", "비트코인"), ("ETH", "이더리움")], configured_crypto_assets({}))
         self.assertEqual([], configured_crypto_assets({"externalCoinGeckoEnabled": "0"}))

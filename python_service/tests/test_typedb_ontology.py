@@ -2992,6 +2992,22 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertEqual(30, result["recommendedRetryAfterSeconds"])
         self.assertIn("graph.price.reclaim.thesis_support.v1", result["reason"])
 
+        # Unsupported RuleBox profiles require a release/compiler correction,
+        # but must retain exactly the same rollback and stale-read protection.
+        permanent_repository = FakeRepository()
+        execution = permanent_repository.run_rulebox({})
+        execution["nativeMatchResult"]["blockingRule"]["status"] = "unsupported-native-rule"
+        execution["nativeMatchResult"]["reasonCode"] = "typedbNativeRuleQueryFailure"
+        execution["nativeMatchResult"]["reason"] = "Unsupported native rule condition."
+        with patch.object(permanent_repository, "run_rulebox", return_value=execution):
+            permanent = PortfolioOntologyProjectionRecorder(permanent_repository).record_snapshot(snapshot)
+        self.assertFalse(permanent_repository.snapshot_read_called)
+        self.assertEqual(["abox:previous"], permanent_repository.restored_snapshot_ids)
+        self.assertFalse(permanent["saved"])
+        self.assertTrue(permanent["preservedActiveGeneration"])
+        self.assertFalse(permanent["nativeRuleFailure"]["retryable"])
+        self.assertEqual("unsupported-native-rule", permanent["nativeRuleFailure"]["reasonCode"])
+
     def test_projection_recorder_rejects_demo_snapshot_and_defers_regular_typedb_writer(self):
         class FakeRepository:
             store_key = "typedb"

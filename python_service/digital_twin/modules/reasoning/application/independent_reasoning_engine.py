@@ -128,6 +128,14 @@ def projection_retry_policy(projection: object) -> Dict[str, object]:
         or status.startswith("deferred-")
         or failure_status.startswith("deferred-")
     )
+    # Rolling back protects the last verified graph; it does not make an
+    # unsupported immutable RuleBox executable on another identical attempt.
+    permanent_failure = (
+        failure_status == "unsupported-native-rule"
+        or values.get("failureReasonCode") == "unsupported-native-rule"
+    )
+    if permanent_failure:
+        retryable = False
     retry_after = int(
         values.get("recommendedRetryAfterSeconds")
         or failure.get("recommendedRetryAfterSeconds")
@@ -143,7 +151,8 @@ def projection_retry_policy(projection: object) -> Dict[str, object]:
         "retryAfterSeconds": max(1, retry_after) if retryable else 0,
         "reason": reason,
         "reasonCode": str(
-            values.get("reasonCode")
+            (failure.get("reasonCode") if permanent_failure else "")
+            or values.get("reasonCode")
             or values.get("failureReasonCode")
             or failure.get("reasonCode")
             or (status if retryable else "")

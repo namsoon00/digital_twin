@@ -8,6 +8,7 @@ def observation_projection_status(connection, subject):
     binding = active_observation_binding(connection)
     row = connection.execute(
         "SELECT /*+ MAX_EXECUTION_TIME(5000) */ job_id,job_status,terminal_reason_code,"
+        "JSON_UNQUOTE(JSON_EXTRACT(result_json,'$.reason_code')) AS result_reason_code,"
         "source_snapshot_id,source_snapshot_at FROM reasoning_engine_jobs "
         "WHERE deployment_id=%s AND source_snapshot_id<>'' "
         "AND JSON_CONTAINS(request_json,%s,'$.request.account_ids') "
@@ -20,9 +21,12 @@ def observation_projection_status(connection, subject):
     ).fetchone()
     if not row:
         return {"status": "unknown", "deploymentId": binding["deploymentId"]}
-    status = ("blocked" if row["job_status"] == "failed" and row["terminal_reason_code"]
+    reason_code = row["terminal_reason_code"] or row.get("result_reason_code") or ""
+    if row["job_status"] == "failed" and not reason_code:
+        reason_code = "source-projection-failed"
+    status = ("blocked" if row["job_status"] == "failed"
               else "ready" if row["job_status"] == "completed" else "pending")
     return {"status": status,
             "deploymentId": binding["deploymentId"], "jobId": row["job_id"],
-            "jobStatus": row["job_status"], "reasonCode": row["terminal_reason_code"],
+            "jobStatus": row["job_status"], "reasonCode": reason_code,
             "sourceSnapshotId": row["source_snapshot_id"], "sourceObservedAt": row["source_snapshot_at"]}

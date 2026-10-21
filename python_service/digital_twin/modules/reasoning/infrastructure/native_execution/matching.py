@@ -319,7 +319,8 @@ def match_typedb_native_rules(
                 skipped_rules.append(
                     {
                         "ruleId": str(rule.rule_id or ""),
-                        "status": str(profile.get("status") or "partial"),
+                        "status": "unsupported-native-rule",
+                        "nativeProfileStatus": str(profile.get("status") or "partial"),
                         "reason": "Rule has JSON-bound or unsupported conditions for direct TypeQL execution.",
                         **typedb_rule_execution_profile_fields(planned),
                     }

@@ -3475,6 +3475,49 @@ class IndependentReasoningEngineTests(unittest.TestCase):
         self.assertEqual("typedbCandidateVerificationError", queue.failed[0][3])
         self.assertEqual("blocked", registry.health["status"])
 
+        # A permanent native profile failure must survive result compaction,
+        # preserve the previous graph, and use the audited terminal path.
+        from digital_twin.modules.reasoning.domain.ontology_runtime_operations import native_rule_failure_diagnostic
+        failure = native_rule_failure_diagnostic({
+            "status": "error",
+            "nativeMatchResult": {
+                "status": "partial",
+                "blockingRule": {
+                    "ruleId": "graph.composition.opposing_market.v1",
+                    "status": "unsupported-native-rule",
+                    "reason": "Unsupported condition for direct TypeQL execution.",
+                },
+            },
+        }, ["AAPL"])
+        self.assertFalse(failure["retryable"])
+        self.assertEqual(0, failure["recommendedRetryAfterSeconds"])
+
+        class UnsupportedExecutor:
+            def execute(self, request, snapshots):
+                return {"acct": {
+                    "saved": False,
+                    "status": "inference-failed-rolled-back",
+                    "retryable": True,  # generic rollback hint cannot override
+                    "preservedActiveGeneration": True,
+                    "nativeRuleFailure": failure,
+                    "inferenceBox": {"status": "native-rule-failed"},
+                }}
+
+        engine = V2ReasoningEngine(
+            descriptor(), FakeAssembler(), UnsupportedExecutor(),
+            FakeCandidateBuilder(), delivery_authorized_provider=lambda: False,
+        )
+        queue = Queue()
+        outcome = IndependentReasoningJobRunner(queue, engine, Registry()).run_once()
+        self.assertEqual("failed", outcome["status"])
+        self.assertEqual("unsupported-native-rule", queue.failed[0][3])
+        compact = queue.failed[0][1]["projection_results"]["acct"]
+        self.assertFalse(compact["retryable"])
+        self.assertEqual("graph.composition.opposing_market.v1", compact["blockingRuleId"])
+        # Partial execution by itself is still transient (e.g. subject fanout).
+        transient = native_rule_failure_diagnostic({"status": "partial"}, ["BTC"])
+        self.assertTrue(transient["retryable"])
+
 
 if __name__ == "__main__":
     unittest.main()

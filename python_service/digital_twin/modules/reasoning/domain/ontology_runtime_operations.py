@@ -16,7 +16,7 @@ ONTOLOGY_RUNTIME_OBSERVATION_VERSION = "ontology-runtime-observation-v1"
 NATIVE_RULE_TIMING_PROFILE_VERSION = "typedb-native-rule-timing-v1"
 NATIVE_RULE_ADAPTIVE_TARGET_SHARDING_PROFILE_VERSION = "typedb-native-rule-adaptive-target-sharding-v1"
 NATIVE_REPLAY_VALIDATION_VERSION = "typedb-native-replay-validation-v1"
-NATIVE_RULE_FAILURE_DIAGNOSTIC_VERSION = "typedb-native-rule-failure-v1"
+NATIVE_RULE_FAILURE_DIAGNOSTIC_VERSION = "typedb-native-rule-failure-v2-permanent-profile-failure"
 SCOPED_ABOX_MAINTENANCE_POLICY_VERSION = "typedb-scoped-abox-maintenance-policy-v4"
 BACKGROUND_WORK_FAIRNESS_POLICY_VERSION = "ontology-background-work-fairness-v1"
 SCOPED_ABOX_MAINTENANCE_YIELD_POLICY_VERSION = "typedb-scoped-abox-maintenance-yield-v1"
@@ -973,8 +973,13 @@ def native_rule_failure_diagnostic(
         or native_status == "deferred-by-runtime-budget"
         or "budget" in reason_code.lower()
     )
+    unsupported_rule = blocking_status == "unsupported-native-rule"
+    if unsupported_rule:
+        reason_code = "unsupported-native-rule"
     diagnostic_status = (
-        "query-timeout"
+        "unsupported-native-rule"
+        if unsupported_rule
+        else "query-timeout"
         if timeout
         else "runtime-budget-exhausted"
         if budget_exhausted
@@ -1019,7 +1024,7 @@ def native_rule_failure_diagnostic(
             "native-rule-incomplete",
             "native-rule-failed",
         },
-        "recommendedRetryAfterSeconds": 30 if timeout or budget_exhausted else 15,
+        "recommendedRetryAfterSeconds": 0 if unsupported_rule else 30 if timeout or budget_exhausted else 15,
     }
 
 

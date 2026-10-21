@@ -242,6 +242,15 @@ class V2EvidenceHandoffStorageTests(db_helpers.StabilizationDatabaseCase):
                 return_value={"deploymentId": self.deployment}):
             eth = {**self.subject, "symbol": "ETH"}
             self.assertEqual("blocked", observation_projection_status(connection, eth)["status"])
+            # Generic fail() historically persisted the terminal code in its
+            # result envelope, while the dedicated column stayed empty.
+            self.sql("UPDATE reasoning_engine_jobs SET terminal_reason_code='',result_json=%s WHERE job_id=%s",
+                     (json.dumps({"reason_code": "unsupported-native-rule"}), job["jobId"]))
+            failed = observation_projection_status(connection, eth)
+            self.assertEqual("blocked", failed["status"])
+            self.assertEqual("unsupported-native-rule", failed["reasonCode"])
+            self.sql("UPDATE reasoning_engine_jobs SET result_json='{}' WHERE job_id=%s", (job["jobId"],))
+            self.assertEqual("source-projection-failed", observation_projection_status(connection, eth)["reasonCode"])
             self.assertEqual("unknown", observation_projection_status(connection, self.subject)["status"])
             self.sql("UPDATE reasoning_engine_jobs SET job_status='queued',terminal_reason_code='' WHERE job_id=%s", (job["jobId"],))
             self.assertEqual("pending", observation_projection_status(connection, eth)["status"])

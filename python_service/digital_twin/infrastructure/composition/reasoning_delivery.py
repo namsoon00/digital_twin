@@ -21,6 +21,19 @@ class ReasoningDelivery:
     insight_dispatch_service: InvestmentInsightDispatchService
 
 
+def request_source_recheck(settings, account_id, delivery_authorized):
+    """Use the configured collector mode without enabling a second scheduler."""
+    if not delivery_authorized():
+        return {"requested": False, "reason": "non-delivery-deployment"}
+    from digital_twin.infrastructure.composition.market_data import monitor_account_job_store_from_settings
+    store = monitor_account_job_store_from_settings(settings)
+    if store is not None:
+        return store.request_refresh(account_id, priority=5)
+    return {"requested": True, "scheduleMode": "next-monitor-cycle",
+            "maxDelaySeconds": max(30, int(settings.get("monitorAccountIntervalSeconds") or 30)),
+            "reason": "수집 큐를 사용하지 않는 설정이므로 다음 정기 수집과 TypeDB 추론에서 재확인합니다."}
+
+
 def wire_v2_decision_services(
     registry_store,
     descriptor,
@@ -114,13 +127,6 @@ def wire_v2_decision_services(
         account_repository=account_repository,
     )
     from digital_twin.modules.ai_orchestration.contracts import legacy_route_retired
-    from digital_twin.infrastructure.composition.market_data import monitor_account_job_store_from_settings
-
-    def request_source_recheck(account_id):
-        if not delivery_authorized():
-            return {"requested": False, "reason": "non-delivery-deployment"}
-        return monitor_account_job_store_from_settings(store_settings).request_refresh(account_id, priority=5)
-
     insight_dispatch_service = InvestmentInsightDispatchService(
         insight_notification_ingress,
         insight_notification_queue,
@@ -128,7 +134,7 @@ def wire_v2_decision_services(
         subject_decision_orchestrator,
         account_repository=account_repository,
         legacy_ai_handoff_enabled=not legacy_route_retired(candidate_settings),
-        source_recheck_requester=request_source_recheck,
+        source_recheck_requester=lambda account_id: request_source_recheck(store_settings, account_id, delivery_authorized),
     )
     return ReasoningDelivery(
         delivery_authorized,

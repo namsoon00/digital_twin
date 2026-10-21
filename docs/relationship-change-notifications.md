@@ -902,7 +902,9 @@ processing later crossed the lifetime. Missing, future or contradictory clocks
 remain an operational audit requiring recheck, never a claimed feed outage.
 
 Publication archives these uncertain issues and requests a fresh account
-collection through the existing monitor queue; only the active delivery
+collection through the existing monitor queue when enabled. In periodic
+collection mode it records `next-monitor-cycle` and relies on that existing
+collector without enabling a second scheduler. Only the active delivery
 release may request this refresh. Pending legacy notifications apply the same
 check before transport and record the refresh result, deduplicated per job.
 A failed refresh request remains visible in audit and does not authorize the

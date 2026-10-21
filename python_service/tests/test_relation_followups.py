@@ -139,6 +139,20 @@ class RelationFollowUpTests(unittest.TestCase):
         dispatch._request_source_recheck(audit, job)
         self.assertFalse(audit["sourceRecheck"]["requested"])
         self.assertEqual("RuntimeError", audit["sourceRecheck"]["error"])
+        from unittest.mock import patch
+        from digital_twin.infrastructure.composition.reasoning_delivery import request_source_recheck
+        with patch('digital_twin.infrastructure.composition.market_data.monitor_account_job_store_from_settings') as factory:
+            self.assertFalse(request_source_recheck({}, 'main', lambda: False)['requested'])
+            factory.assert_not_called()
+            factory.return_value = None
+            direct = request_source_recheck({'monitorAccountIntervalSeconds': 45}, 'main', lambda: True)
+            self.assertTrue(direct['requested'])
+            self.assertEqual('next-monitor-cycle', direct['scheduleMode'])
+            self.assertEqual(45, direct['maxDelaySeconds'])
+            store = factory.return_value = Mock()
+            store.request_refresh.return_value = {'requested': True, 'scheduledAt': 'fixture'}
+            self.assertEqual('fixture', request_source_recheck({}, 'main', lambda: True)['scheduledAt'])
+            store.request_refresh.assert_called_once_with('main', priority=5)
 
     def test_frozen_rule_issue_explains_its_own_interruption_not_unrelated_live_profiles(self):
         from digital_twin.modules.model_registry.domain.hypothesis_data_readiness import issue, VERSION

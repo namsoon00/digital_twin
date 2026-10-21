@@ -1,7 +1,7 @@
 """Compose the first smart quote-alert policy with the legacy cumulative lane."""
 from copy import deepcopy
 
-from digital_twin.modules.notifications.contracts import price_movement_lines
+from digital_twin.modules.notifications.contracts import price_movement_lines, position_price_lines
 from digital_twin.modules.portfolio.contracts import AlertEvent
 from .price_observation_episodes import enabled, policy, advance_episodes, VERSION
 from .price_observation_windows import finite, positions
@@ -12,10 +12,15 @@ def position_effect(item, role, portfolio, start_price):
     if role != "holding" or not quantity or quantity <= 0:
         return {}
     price = finite(item.get("current_price"))
-    if price is None:
+    if price is None or price <= 0:
         return {}
     effect = {"nativeAmount": quantity * (price - start_price), "quantity": quantity,
               "basis": "current-quantity-and-fx-fixed", "startPrice": start_price}
+    average = finite(item.get("average_price"))
+    if average is not None and average > 0:
+        effect.update(averagePrice=average, unrealizedNativeAmount=quantity * (price - average),
+                      unrealizedReturnPct=(price / average - 1) * 100,
+                      unrealizedBasis="current-quote-minus-average-cost-before-fees-and-tax")
     total = finite(portfolio.get("total"))
     fx = 1 if item.get("currency") == "KRW" else finite(item.get("exchange_rate"))
     if item.get("currency") != "KRW" and item.get("valuation_fx_state") not in {"fresh", "available", "verified", "usable"}:
@@ -57,7 +62,7 @@ def smart_market_observations(snapshot, previous, legacy_events, settings):
         effect = position_effect(item, role, current.get("portfolio") or {}, observation.get("baselinePrice", 0))
         if effect:
             event.metadata["positionPriceEffect"] = effect
-            event.lines.append("보유분 가격 효과: " + format(effect["nativeAmount"], "+,.2f") + " " + str(item.get("currency") or "") + " (현재 수량 고정)")
+            event.lines.extend(position_price_lines(effect, str(item.get("currency") or ""), "알림 기준가 대비"))
         result.append(event)
     if mode in {"disabled", "typedb-first"}:
         return result

@@ -868,7 +868,7 @@ class RealtimeMonitor(MonitoringSampleDataMixin, MonitoringPositionContextMixin,
                 "직전 저장값: " + price_money(previous_price, currency),
                 "관측 기준: " + comparison_label,
                 "판단 상태: 가격 변동 사실만 알림 · 매수·매도 판단 없음",
-                "후속 처리: TypeDB 추론이 최신 ABox에서 완료되면 관계 분석 결과를 별도 인사이트로 발송",
+                "후속 확인: 규칙 재평가에서 성립·해제 등 의미 있는 변화가 확인되면 별도로 알립니다.",
             ]
             if source:
                 lines.insert(3, "시세 출처: " + source)

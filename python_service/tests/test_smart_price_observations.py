@@ -212,6 +212,45 @@ class SmartPriceObservationTests(unittest.TestCase):
         self.assertEqual(-20, effect["nativeAmount"])
         self.assertNotIn("accountImpactPct", effect)
 
+    def test_total_unrealized_loss_is_not_the_positive_quote_effect(self):
+        from digital_twin.modules.market_data.domain.smart_price_observations import position_effect
+        from digital_twin.modules.notifications.contracts import position_price_lines
+        item = snapshot(5, 22650, quantity=17, average_price=30000).positions[0].to_dict()
+        effect = position_effect(item, "holding", {}, 21950)
+        self.assertEqual(11900, effect["nativeAmount"])
+        self.assertEqual(-124950, effect["unrealizedNativeAmount"])
+        text = "\n".join(position_price_lines(effect, "KRW", "알림 기준가 대비"))
+        self.assertIn("매입가 대비 평가손익: -124,950원", text)
+        self.assertIn("이번 가격 변동분: +11,900원", text)
+        self.assertIn("수수료·세금 제외", text)
+        self.assertNotIn(".00", text)
+        self.assertNotIn("보유분 가격 효과", text)
+        legacy = market_event(21950, 22650)
+        legacy.symbol = "TEST"
+        event = smart_market_observations(snapshot(5, 22650, quantity=17, average_price=30000), {}, [legacy], SETTINGS)[0]
+        self.assertIn("매입가 대비 평가손익: -124,950원", "\n".join(event.lines))
+        for average in (None, 0, -1, float("nan")):
+            with self.subTest(average=average):
+                missing = position_effect({**item, "average_price": average}, "holding", {}, 21950)
+                self.assertNotIn("unrealizedNativeAmount", missing)
+                self.assertIn("평균매입가 미확인", "\n".join(position_price_lines(missing, "KRW", "기준가 대비")))
+        flat = position_effect({**item, "average_price": 22650}, "holding", {}, 22650)
+        self.assertIn("평가손익: 0원", "\n".join(position_price_lines(flat, "KRW", "기준가 대비")))
+        foreign = position_effect({**item, "quantity": .5, "currency": "USD", "current_price": 101.5,
+                                   "average_price": 110}, "holding", {}, 100)
+        usd = "\n".join(position_price_lines(foreign, "USD", "기준가 대비"))
+        self.assertIn("-4.25 USD", usd)
+        self.assertIn("+0.75 USD", usd)
+        self.assertEqual({}, position_effect(item, "watchlist", {}, 21950))
+        previous = {}
+        for minute, price in [(0, 100), (1, 100), (2, 99.5), (3, 98)]:
+            previous, events = cycle(previous, minute, price, average_price=110)
+        text = "\n".join(events[0].lines)
+        self.assertIn("평가손익: -120원", text)
+        self.assertIn("이번 가격 변동분: -20원", text)
+        self.assertIn("현재가: 98원", text)
+        self.assertTrue(events[0].metadata["reasoningFollowupRequired"])
+
     def test_rapid_opposite_move_is_not_hidden_by_an_open_episode(self):
         state = {}
         for minute, price in ((0, 100), (1, 100), (2, 100), (3, 101.5)):

@@ -392,7 +392,8 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # Three source-status regressions distinguish processing expiry from
         # real outages, enforce one display clock, and verify durable rechecks.
         # Four crypto ingress/native-scope and projection wait/wake regressions.
-        self.assertLessEqual(total, 2480)
+        # One quote-delta versus total unrealized P&L regression, both alert paths and missing cost.
+        self.assertLessEqual(total, 2481)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

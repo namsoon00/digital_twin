@@ -890,3 +890,27 @@ This makes replay deterministic; it does not make delayed alerts current.
 The receipt-locked dispatch check still evaluates premise expiry against the
 actual sending time and suppresses an expired job. Preserve R10's failed
 comparison and validate a fresh immutable candidate after the fix.
+
+## Source-status clock correction (2026-10-21)
+
+A source interruption is not established by an old analysis completing late.
+For each frozen source-status issue, retain the actual quality-check clock and
+compute the displayed age from that same clock. Separately compare the source
+clock to the lifecycle event cutoff. A source that was within its authored
+lifetime at that cutoff cannot produce a customer interruption merely because
+processing later crossed the lifetime. Missing, future or contradictory clocks
+remain an operational audit requiring recheck, never a claimed feed outage.
+
+Publication archives these uncertain issues and requests a fresh account
+collection through the existing monitor queue; only the active delivery
+release may request this refresh. Pending legacy notifications apply the same
+check before transport and record the refresh result, deduplicated per job.
+A failed refresh request remains visible in audit and does not authorize the
+false interruption. Collection and subsequent TypeDB inference own the new
+judgment; notification code never substitutes current prices into frozen facts.
+
+A proven source delay in a mixed packet can still reply to its delivered parent;
+uncertain issues are excluded independently. Closed-session waiting remains
+quiet. A suppressed interruption does not create a receipt and therefore cannot
+authorize a recovery reply. Native rule thresholds, engine releases and market
+judgments are unchanged by this notification policy correction.

@@ -44,6 +44,102 @@ class RelationFollowUpTests(unittest.TestCase):
         self.context = context_fixture()
         self.original = receipt(relation_change_evidence(self.context))
 
+    def test_processing_expiry_is_a_refresh_request_not_a_source_interruption(self):
+        from digital_twin.modules.model_registry.domain.hypothesis_data_readiness import issue, VERSION
+        from digital_twin.modules.notifications.domain.context_observation_notifications import context_observation_delivery_decision
+        change(self.context)
+        relation = self.context["ontologyRelationContext"]
+        row = relation["hypothesisLifecycle"]["transitions"][0]
+        profile = {**relation["observationProfiles"]["flow"], "sourceAsOf": "2026-10-13T01:39:29Z",
+                   "maxAgeMinutes": 10, "marketSessionLocalTime": "2026-10-13T10:50:23+09:00"}
+        problem = issue("rule:linked", "flow", "source-stale", "원천 기준시각이 허용 시간 10분을 초과했습니다.", profile)
+        row["record"]["snapshot"]["dataAvailability"] = {"version": VERSION, "issues": [problem]}
+        frozen = deepcopy(self.context)
+        packet = relation_change_evidence(self.context, self.original)
+        self.assertFalse(packet["eligible"])
+        suppressed = packet["suppressedTransitions"][0]
+        self.assertTrue(suppressed["sourceRecheckRequired"])
+        detail = suppressed["dataIssues"][0]
+        self.assertEqual("processing-expiry", detail["notificationSourceState"])
+        self.assertAlmostEqual(31 / 60, detail["sourceAgeAtEventMinutes"])
+        self.assertAlmostEqual(10.9, detail["ageMinutes"])
+        self.assertEqual(frozen, self.context, "notification policy must not rewrite frozen inference facts")
+        self.assertTrue(context_observation_delivery_decision(self.context)["sourceRecheckRequired"])
+        # An unrelated processing delay must not hide a proven source outage.
+        real = {**problem, "sourceAsOf": "2026-10-13T01:20:00Z"}
+        row["record"]["snapshot"]["dataAvailability"]["issues"].append(real)
+        mixed = relation_change_evidence(self.context, self.original)
+        self.assertTrue(mixed["eligible"])
+        self.assertEqual(1, len(mixed["transitions"][0]["dataIssues"]))
+        row["record"]["snapshot"]["dataAvailability"]["issues"].pop()
+        problem["marketSessionStatus"] = "closed_exception"
+        closed = relation_change_evidence(self.context, self.original)
+        self.assertFalse(any(s.get("sourceRecheckRequired") for s in closed["suppressedTransitions"]))
+        problem["marketSessionStatus"] = "open"
+        # Legacy jobs without the evaluation clock also cannot claim a stale
+        # source at an event cutoff only 31 seconds after that source.
+        problem.pop("checkedAt")
+        self.assertFalse(relation_change_evidence(self.context, self.original)["eligible"])
+        # A suppressed interruption must not authorize a later recovery reply.
+        change(self.context, "data-restored")
+        self.assertFalse(relation_change_evidence(self.context, self.original)["eligible"])
+
+    def test_real_source_delay_uses_one_clock_and_preserves_receipt_policy(self):
+        from digital_twin.modules.model_registry.domain.hypothesis_data_readiness import issue, VERSION
+        change(self.context)
+        relation = self.context["ontologyRelationContext"]
+        row = relation["hypothesisLifecycle"]["transitions"][0]
+        profile = {**relation["observationProfiles"]["flow"], "marketSessionLocalTime": "2026-10-13T10:45:00+09:00"}
+        problem = issue("rule:linked", "flow", "source-stale", "자료가 허용 시간 5분을 초과했습니다.", profile)
+        row["record"]["snapshot"]["dataAvailability"] = {"version": VERSION, "issues": [problem]}
+        packet = relation_change_evidence(self.context, self.original)
+        self.assertTrue(packet["eligible"])
+        self.context["relationChangeEvidence"] = packet
+        text = typedb_observation_telegram_message(self.context)
+        self.assertIn("유효성 검사 10/13 10:45 KST", text)
+        self.assertIn("25분", text)
+        self.assertNotIn("20분 전 기준", text)
+        self.assertFalse(relation_change_evidence(self.context, receipt(packet))["eligible"])
+        problem["marketSessionStatus"] = "closed"
+        self.assertFalse(relation_change_evidence(self.context, self.original)["eligible"])
+
+    def test_delayed_queued_notice_requests_refresh_once_without_delivery(self):
+        from unittest.mock import Mock
+        from digital_twin.modules.notifications.application.notification.eligibility import NotificationDispatchEligibilityService
+        change(self.context)
+        relation = self.context["ontologyRelationContext"]
+        relation["observationProfiles"]["flow"].update(sourceAsOf="2026-10-13T01:39:00Z")
+        self.context["relationChangeEvidence"] = {"previous": self.original}
+        job = NotificationJob.create("old queued notice", account_id="main", message_type="investmentInsight", context=self.context)
+        queue, request = Mock(), Mock(return_value={"requested": True})
+        service = NotificationDispatchEligibilityService(queue, fresh_data_recheck_requester=request)
+        self.assertFalse(service.apply_dispatch_freshness_gate(job, "발송 직전"))
+        self.assertTrue(job.context["freshDataRecheck"]["requested"])
+        self.assertEqual("source_status_recheck_required", job.context["deliverySuppressionReason"])
+        service.apply_dispatch_freshness_gate(job, "발송 재시도")
+        request.assert_called_once()
+        queue.mark_suppressed.assert_called()
+        from test_investment_insight_dispatch_service import (
+            subject_case, alert, FakeOrchestrator, FakeIngress, FakeNotificationQueue,
+        )
+        from digital_twin.modules.decisions.application.investment_insight_dispatch_service import InvestmentInsightDispatchService
+        case = subject_case("subject:readable")
+        outbound = FakeNotificationQueue()
+        publication_request = Mock(return_value={"requested": True})
+        publisher = InvestmentInsightDispatchService(FakeIngress(), outbound, None, FakeOrchestrator([case]),
+                                                     source_recheck_requester=publication_request)
+        publisher.dispatch([alert(case, self.context, "processing-delay")])
+        publication_request.assert_called_once_with("main")
+        self.assertFalse(outbound.jobs, "publication must archive the false interruption before queueing")
+        dispatch = InvestmentInsightDispatchService(None, None, None, None, source_recheck_requester=request)
+        audit = {"sourceRecheckRequired": True}
+        dispatch._request_source_recheck(audit, job)
+        self.assertTrue(audit["sourceRecheck"]["requested"])
+        request.side_effect = RuntimeError("fixture")
+        dispatch._request_source_recheck(audit, job)
+        self.assertFalse(audit["sourceRecheck"]["requested"])
+        self.assertEqual("RuntimeError", audit["sourceRecheck"]["error"])
+
     def test_frozen_rule_issue_explains_its_own_interruption_not_unrelated_live_profiles(self):
         from digital_twin.modules.model_registry.domain.hypothesis_data_readiness import issue, VERSION
         change(self.context)
@@ -200,8 +296,8 @@ class RelationFollowUpTests(unittest.TestCase):
         self.context["relationChangeEvidence"] = relation_change_evidence(self.context, self.original)
         job = NotificationJob.create("preview", account_id="main", message_type="investmentInsight", context=self.context)
         text = NotificationRenderingService().render(job)
-        for value in ("체결·수급 확인 중단", "N-A1234567", "지금도 유지되는지 확인할 수 없습니다",
-                      "10/13 10:20 KST", "이번 확인 10/13 10:40 KST", "20분", "5분"):
+        for value in ("체결·수급 자료 지연", "N-A1234567", "지금도 유지되는지 확인할 수 없습니다",
+                      "10/13 10:20 KST", "유효성 검사 10/13 10:40 KST", "20분", "5분"):
             self.assertIn(value, text)
         for omitted in ("현재 전체 데이터", "평가 수익률", "재무 참고", "자료 상태", "model-signal"):
             self.assertNotIn(omitted, text)
@@ -274,4 +370,5 @@ class RelationFollowUpTests(unittest.TestCase):
         self.assertEqual(20, packet["transitions"][0]["dataIssues"][0]["ageMinutes"])
         profile["sourceAsOf"] = "2026-10-14T01:20:00Z"
         packet = relation_change_evidence(self.context, self.original)
-        self.assertIsNone(packet["transitions"][0]["dataIssues"][0]["ageMinutes"])
+        self.assertFalse(packet["eligible"], "future source clocks cannot establish a source interruption")
+        self.assertIsNone(packet["suppressedTransitions"][0]["dataIssues"][0]["ageMinutes"])

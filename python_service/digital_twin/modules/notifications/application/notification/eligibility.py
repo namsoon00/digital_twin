@@ -230,6 +230,16 @@ class NotificationDispatchEligibilityService:
             saved = context.get("relationChangeEvidence") or {}
             comparison = rule_delivery_comparison(context, saved.get("previous"), stage=stage)
             context.update(comparison)
+            packet = comparison["relationChangeEvidence"]
+            pending = [row for row in packet["suppressedTransitions"] if row.get("sourceRecheckRequired")]
+            if pending:
+                job.context = context
+                self.request_fresh_data_recheck(job, stage, pending[0]["reason"])
+                context = dict(job.context)
+                if not packet["eligible"]:
+                    job.context["deliverySuppressionReason"] = "source_status_recheck_required"
+                    self.suppress(job, pending[0]["reason"])
+                    return False
             validity = rule_dispatch_validity(comparison["relationChangeEvidence"], self.settings, now)
             context["ruleDispatchValidity"] = validity
             job.context = context

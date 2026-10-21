@@ -35,6 +35,7 @@ class InvestmentInsightDispatchService:
         reasoning_orchestrator,
         account_repository=None,
         legacy_ai_handoff_enabled=True,
+        source_recheck_requester=None,
     ):
         self.notification_ingress = notification_ingress
         self.notification_queue = notification_queue
@@ -42,6 +43,7 @@ class InvestmentInsightDispatchService:
         self.reasoning_orchestrator = reasoning_orchestrator
         self.account_repository = account_repository
         self.legacy_ai_handoff_enabled = bool(legacy_ai_handoff_enabled)
+        self.source_recheck_requester = source_recheck_requester
 
     def enqueue(self, events: Iterable[AlertEvent]) -> Dict[str, object]:
         """Compatibility entry point used by the versioned reasoning engine."""
@@ -121,6 +123,7 @@ class InvestmentInsightDispatchService:
                 source_event_id=source_event.event_id,
             )
             route_counts[decision.route] += 1
+            self._request_source_recheck(decision.details.get("semanticDeliveryDecision"), event)
             metadata["inferenceDispatchDecision"] = decision.to_dict()
             event.metadata = metadata
 
@@ -157,6 +160,7 @@ class InvestmentInsightDispatchService:
                         archived = InferenceDispatchDecision.create(
                             subject_case, ARCHIVE, outcome["reasonCode"], outcome["reason"],
                             source_event_id=source_event.event_id,
+                            details={"semanticDeliveryDecision": outcome.get("semanticDeliveryDecision") or {}},
                         )
                         self.reasoning_orchestrator.record_inference_dispatch(
                             subject_case_id, archived, delivery_state="archived",
@@ -350,6 +354,7 @@ class InvestmentInsightDispatchService:
             "fingerprint": str(getattr(candidate, "fingerprint", "") or ""),
         }
         semantic_delivery = context_observation_delivery_decision(context)
+        self._request_source_recheck(semantic_delivery, event)
         if str(semantic_delivery.get("decision") or "").strip().lower() != "send":
             return self._typedb_companion_suppression(
                 event,
@@ -391,6 +396,18 @@ class InvestmentInsightDispatchService:
         if not independent:
             outcome["companionOfRoute"] = HANDOFF_AI
         return outcome, companion_event
+
+    def _request_source_recheck(self, delivery, event):
+        """Refresh through monitoring; never replace a frozen inference input."""
+        if not isinstance(delivery, dict) or not delivery.get("sourceRecheckRequired"):
+            return
+        audit = {"requested": False, "scheduleMode": "next-monitor-cycle"}
+        if callable(self.source_recheck_requester):
+            try:
+                audit.update(self.source_recheck_requester(event.account_id) or {})
+            except Exception as error:
+                audit["error"] = type(error).__name__
+        delivery["sourceRecheck"] = audit
 
     @staticmethod
     def _typedb_companion_suppression(

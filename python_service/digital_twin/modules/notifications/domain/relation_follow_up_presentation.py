@@ -10,6 +10,9 @@ from digital_twin.modules.notifications.domain.notifications import notification
 def data_follow_up_label(transitions):
     labels = list(dict.fromkeys(issue["label"] for row in transitions for issue in row.get("dataIssues") or []))
     restored = all(row.get("changeKind") == "data-restored" for row in transitions)
+    issues = [issue for row in transitions for issue in row.get("dataIssues") or []]
+    if not restored and issues and all(issue.get("freshnessStatus") in {"stale", "expired"} for issue in issues):
+        return "·".join(labels[:2]) + " 자료 지연"
     return "·".join(labels[:2] or ["자료"]) + (" 확인 재개" if restored else " 확인 중단")
 
 
@@ -78,7 +81,7 @@ def data_follow_up_summary(packet):
                 effects.append(cause + subject + "의 근거가 지금도 유지되는지 확인할 수 없습니다.")
                 if issue.get("ruleLabel") and issue["ruleLabel"] != issue.get("ruleId") and issue.get("reason"):
                     effects.append("해당 규칙: " + issue["ruleLabel"] + " — " + issue["reason"])
-            parts = [label + " 원천 기준 " + clock(issue.get("sourceAsOf")), "이번 확인 " + clock(row.get("occurredAt"))]
+            parts = [label + " 원천 기준 " + clock(issue.get("sourceAsOf")), "유효성 검사 " + clock(issue.get("checkedAt") or row.get("occurredAt"))]
             if age is not None and age >= 0:
                 parts.append("원천 관측 후 " + decimal(age) + "분 경과")
             if maximum is not None and maximum > 0:

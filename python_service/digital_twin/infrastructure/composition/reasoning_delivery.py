@@ -114,6 +114,13 @@ def wire_v2_decision_services(
         account_repository=account_repository,
     )
     from digital_twin.modules.ai_orchestration.contracts import legacy_route_retired
+    from digital_twin.infrastructure.composition.market_data import monitor_account_job_store_from_settings
+
+    def request_source_recheck(account_id):
+        if not delivery_authorized():
+            return {"requested": False, "reason": "non-delivery-deployment"}
+        return monitor_account_job_store_from_settings(store_settings).request_refresh(account_id, priority=5)
+
     insight_dispatch_service = InvestmentInsightDispatchService(
         insight_notification_ingress,
         insight_notification_queue,
@@ -121,6 +128,7 @@ def wire_v2_decision_services(
         subject_decision_orchestrator,
         account_repository=account_repository,
         legacy_ai_handoff_enabled=not legacy_route_retired(candidate_settings),
+        source_recheck_requester=request_source_recheck,
     )
     return ReasoningDelivery(
         delivery_authorized,

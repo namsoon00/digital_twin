@@ -158,7 +158,7 @@ class IndependentTypeDBTests(unittest.TestCase):
         self.assertFalse(job.context.get("investmentNotificationTransition"))
         runner.queue.mark_suppressed.assert_not_called()
         text = typedb_observation_telegram_message(job.context)
-        self.assertIn("체결·매수·매도 흐름 확인 중단", text)
+        self.assertIn("체결·매수·매도 흐름 자료 지연", text)
         self.assertIn("허용 경과 시간 5분", text)
         self.assertIn("원천 확인 후 20분", text)
         self.assertNotIn("현재 전체 데이터", text)

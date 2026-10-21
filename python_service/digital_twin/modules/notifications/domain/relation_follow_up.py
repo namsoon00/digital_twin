@@ -2,6 +2,7 @@
 
 from copy import deepcopy
 from datetime import datetime
+import math
 
 
 VERSION = "relation-follow-up-v1"
@@ -43,9 +44,8 @@ def source_issues(relation, transition):
     if availability.get("version") == "hypothesis-data-readiness-v1" and not restored:
         # New packets preserve the actual failing input. A fresh quote beside
         # missing model proof is not a quote interruption, nor a flow outage.
-        return [{**deepcopy(row), "label": SOURCE_LABELS[row["domain"]],
-                 "ageMinutes": source_age(row.get("sourceAsOf"), transition.get("occurredAt")),
-                 "source": str(row.get("source") or "").split(" /api/")[0]}
+        return [source_issue_clock({**deepcopy(row), "label": SOURCE_LABELS[row["domain"]],
+                 "source": str(row.get("source") or "").split(" /api/")[0]}, transition, restored=False)
                 for row in availability.get("issues") or []
                 if isinstance(row, dict) and row.get("sourceProblem") is True
                 and row.get("domain") in SOURCE_LABELS
@@ -63,13 +63,39 @@ def source_issues(relation, transition):
         if restored and (unavailable or profile.get("judgementEvidenceUsable") is not True):
             continue
         source_at = profile.get("sourceAsOf") or check.get("sourceAsOf") or ""
-        result.append({"domain": domain, "label": SOURCE_LABELS[domain],
+        result.append(source_issue_clock({"domain": domain, "label": SOURCE_LABELS[domain],
                        "sourceAsOf": source_at,
                        "source": str(profile.get("observationSource") or "").split(" /api/")[0],
                        "freshnessStatus": profile.get("freshnessStatus") or "unavailable",
-                       "ageMinutes": source_age(source_at, transition.get("occurredAt")), "maxAgeMinutes": profile.get("maxAgeMinutes"),
-                       "marketSessionStatus": profile.get("marketSessionStatus") or check.get("marketSessionStatus") or "unknown"})
+                       "checkedAt": profile.get("checkedAt") or profile.get("marketSessionLocalTime"),
+                       "maxAgeMinutes": profile.get("maxAgeMinutes"),
+                       "marketSessionStatus": profile.get("marketSessionStatus") or check.get("marketSessionStatus") or "unknown"}, transition, restored=restored))
     return result
+
+
+def source_issue_clock(issue, transition, *, restored=False):
+    """Separate late processing from a source already stale at the frozen cutoff.
+
+    Never renew the original evidence or turn this transport check into a new
+    market judgment. Legacy packets without an evaluation clock stay auditable.
+    """
+    row = deepcopy(issue)
+    cutoff = transition.get("occurredAt")
+    age_at_cutoff = source_age(row.get("sourceAsOf"), cutoff)
+    checked = row.get("checkedAt") or cutoff
+    age = source_age(row.get("sourceAsOf"), checked)
+    row.update(checkedAt=checked, ageMinutes=age, sourceAgeAtEventMinutes=age_at_cutoff)
+    stale = row.get("reasonCode") == "source-stale" or row.get("freshnessStatus") in {"stale", "expired"}
+    try:
+        maximum = float(row.get("maxAgeMinutes"))
+    except (TypeError, ValueError):
+        maximum = 0
+    if not restored and stale:
+        if age_at_cutoff is not None and math.isfinite(maximum) and 0 < maximum and age_at_cutoff <= maximum:
+            row["notificationSourceState"] = "processing-expiry"
+        elif age is None or age_at_cutoff is None or not math.isfinite(maximum) or maximum <= 0 or age <= maximum:
+            row["notificationSourceState"] = "clock-unverified"
+    return row
 
 
 def delivered_continuity(previous):
@@ -117,13 +143,23 @@ def follow_up_policy(transitions, previous, *, require_receipt):
             reason = "새 근거 변화 없이 확인 기간만 지나 웹 이력에 저장합니다."
         elif data:
             issues = row.get("dataIssues") or []
-            if not issues:
+            uncertain = [issue for issue in issues if issue.get("notificationSourceState")]
+            if issues and all(issue.get("marketSessionStatus") in {"closed", "closed_exception"} for issue in issues):
+                reason = "휴장에 따른 자료 갱신 대기는 알리지 않습니다."
+            elif uncertain:
+                reason = "원본 자료 시점의 시세 중단을 입증하지 못했습니다. 처리 지연 또는 시간 기준 불일치는 운영 이력에 남기고 새 자료로 다시 확인합니다."
+                excluded.append({"transitionId": row.get("transitionId"), "reason": reason,
+                    "reasonCode": "source_status_recheck_required", "sourceRecheckRequired": True,
+                    "dataIssues": deepcopy(uncertain)})
+                issues = row["dataIssues"] = [issue for issue in issues if not issue.get("notificationSourceState")]
+                if not issues:
+                    continue
+                reason = ""
+            if not reason and not issues:
                 detail = mapping(row.get("judgementReadiness")).get("reason")
                 reason = ("판단 보류: " + detail + " 웹 이력에 저장합니다." if detail else
                           "어떤 원천 자료를 확인하지 못했는지 특정할 수 없어 웹 이력에 저장합니다.")
-            elif all(issue.get("marketSessionStatus") == "closed" for issue in issues):
-                reason = "휴장에 따른 자료 갱신 대기는 알리지 않습니다."
-            elif require_receipt:
+            elif not reason and require_receipt:
                 if not anchor.get("rootJobId"):
                     reason = "이 가설을 실제 전달한 원본 알림이 없어 자료 안내를 보내지 않습니다."
                 elif row.get("changeKind") == "data-restored" and not anchor.get("unavailabilityNotified"):

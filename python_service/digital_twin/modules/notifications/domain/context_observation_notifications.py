@@ -789,6 +789,7 @@ def context_observation_delivery_decision(value: object) -> Dict[str, object]:
         "notificationPurposes": sorted({item["purpose"] for item in relation_change["customerEvents"]}),
         "comparisonVersion": comparison["ruleNotificationComparison"]["version"],
         "baselineSource": comparison["ruleNotificationComparison"]["baselineSource"],
+        "sourceRecheckRequired": any(row.get("sourceRecheckRequired") for row in relation_change["suppressedTransitions"]),
     }
     if decision["stageObservation"]:
         decision.pop("selectedRuleId", None)

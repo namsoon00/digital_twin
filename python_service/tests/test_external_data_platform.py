@@ -1082,6 +1082,7 @@ class ExternalDataPlatformTest(unittest.TestCase):
         self._assert_source_observation_keeps_zero_separate_from_missing_and_unsupported()
         self._assert_transition_detects_correction_beyond_display_field_limit()
         self._assert_official_ir_registry_parser_and_coverage_contract()
+        self._assert_ir_network_fallback_and_feed_contract()
 
     def _assert_registered_dataset_catalog_exposes_owned_semantics(self):
         catalog = external_dataset_catalog()
@@ -1122,6 +1123,63 @@ class ExternalDataPlatformTest(unittest.TestCase):
         )
         self.assertTrue(all(row["categoryIds"] for row in registry.descriptors({})))
 
+    def _assert_ir_network_fallback_and_feed_contract(self):
+        import socket
+        import urllib.error
+        adapter = IssuerIrDocumentsAdapter()
+        job = CollectionJob("issuer.ir_documents", "AAPL", "issuer-ir", 72,
+                            ExternalSubject("AAPL", symbol="AAPL", market="US"))
+        atom = """<?xml version="1.0"?><feed xmlns="http://www.w3.org/2005/Atom">
+          <entry><title>Apple quarterly results</title><updated>2026-10-22T12:00:00Z</updated>
+          <link rel="self" href="https://www.apple.com/feed-entry"/>
+          <link rel="alternate" href="https://www.apple.com/newsroom/results"/></entry>
+          <entry><title>New music release</title><link href="https://www.apple.com/music"/></entry>
+          <entry><title>Apple quarterly results</title><link href="https://www.apple.com/newsroom/results"/></entry>
+        </feed>"""
+        docs = parse_ir_documents(atom, "https://www.apple.com/newsroom/rss-feed.rss")
+        self.assertEqual(1, len(docs))
+        self.assertEqual("https://www.apple.com/newsroom/results", docs[0]["url"])
+        self.assertEqual("", docs[0]["publishedAt"])
+        self.assertEqual("2026-10-22T12:00:00Z", docs[0]["sourceUpdatedAt"])
+        self.assertEqual("reference-only", docs[0]["bodyState"])
+        rss = """<rss><channel><item><title>Quarterly financial results</title>
+          <link>https://www.apple.com/results</link><pubDate>Thu, 22 Oct 2026 12:00:00 GMT</pubDate>
+          </item></channel></rss>"""
+        self.assertEqual("2026-10-22", parse_ir_documents(rss, "https://www.apple.com/")[0]["publishedAt"])
+        with self.assertRaisesRegex(ValueError, "Malformed official issuer XML"):
+            parse_ir_documents('<feed xmlns="http://www.w3.org/2005/Atom">', "https://www.apple.com/")
+        dns = urllib.error.URLError(socket.gaierror(8, "nodename nor servname provided, or not known"))
+        target = "digital_twin.infrastructure.external_api.adapters.issuer_ir._fetch"
+        with patch(target, side_effect=[dns, (atom, "https://www.apple.com/newsroom/rss-feed.rss", "application/rss+xml")]) as fetch:
+            result = adapter.fetch(job, {"externalIssuerIrMaxVerifiedBodies": -1})
+        self.assertEqual(2, fetch.call_count)
+        value = result.payload["issuerIrDocuments"]["AAPL"]
+        self.assertEqual(1, value["documentCount"])
+        self.assertEqual(0, value["bodyVerifiedCount"])
+        self.assertEqual("dns-lookup-failed", value["unavailableAttempts"][0]["reasonCode"])
+        self.assertTrue(result.quality["dataUsable"])
+        self.assertEqual("reference-only", result.quality["decisionUse"])
+        with patch(target, side_effect=[urllib.error.HTTPError("https://investor.apple.com/", 403, "Forbidden", {}, None), dns]):
+            with self.assertRaisesRegex(RuntimeError, "AAPL.*www.apple.com: dns-lookup-failed") as caught:
+                adapter.fetch(job, {})
+            self.assertIs(dns, caught.exception.__cause__)
+        with patch(target, side_effect=[dns, ("<html>Empty</html>", "https://www.apple.com/", "text/html")]):
+            with self.assertRaises(RuntimeError):
+                adapter.fetch(job, {})  # partial reachability is not proof of an empty index
+        store = MemoryCollectionStore()
+        store.list_subjects = lambda: [job.subject]
+        previous = {"payload": {"issuerIrDocuments": {"AAPL": {"documentCount": 2}}},
+                    "quality": {"dataUsable": True}, "sourceAsOf": "2026-10-21"}
+        store.current = previous
+        service = ExternalDataCollectionService({}, ExternalDatasetRegistry([adapter]), store,
+                                                now_provider=lambda: NOW)
+        with patch(target, side_effect=dns):
+            outcome = service.run_once()
+        self.assertEqual("error", outcome["results"][0]["status"])
+        self.assertTrue(outcome["results"][0]["hasUsablePreviousFact"])
+        self.assertEqual(previous, store.current)
+        self.assertEqual([], store.completed)
+        self.assertEqual([], store.empty_completed)
     def _assert_official_ir_registry_parser_and_coverage_contract(self):
         sources = issuer_ir_sources()
         self.assertEqual(

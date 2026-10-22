@@ -1,9 +1,12 @@
 import hashlib
 import json
 import re
+import socket
 import urllib.error
 import urllib.parse
 import urllib.request
+from html import escape
+from email.utils import parsedate_to_datetime
 from html.parser import HTMLParser
 from datetime import datetime, timezone
 from typing import Dict, Iterable, List
@@ -181,7 +184,51 @@ def verified_ir_document(item: Dict[str, object], markup: str, resolved_url: str
     return result
 
 
+def _feed_documents(root, page_url: str, limit: int) -> List[Dict[str, object]]:
+    """Read official RSS/Atom indexes without promoting summaries or update clocks."""
+    atom = root.tag == "{http://www.w3.org/2005/Atom}feed"
+    prefix = "{http://www.w3.org/2005/Atom}" if atom else ""
+    entries = root.findall(prefix + "entry") if atom else root.findall("./channel/item")
+    results, seen = [], set()
+    for entry in entries:
+        title = _clean(entry.findtext(prefix + "title"))
+        if atom:
+            href = next((link.get("href", "") for link in entry.findall(prefix + "link")
+                         if link.get("rel", "alternate") == "alternate"), "")
+        else:
+            href = _clean(entry.findtext("link"))
+        docs = parse_ir_documents('<a href="' + escape(href, quote=True) + '">' + escape(title) + '</a>', page_url)
+        if not docs or docs[0]["url"] in seen:
+            continue
+        document = docs[0]
+        published = _clean(entry.findtext(prefix + "published" if atom else "pubDate"))
+        if published:
+            day = _date(published)
+            if not day:
+                try:
+                    day = parsedate_to_datetime(published).date().isoformat()
+                except (ValueError, TypeError, OverflowError):
+                    day = ""
+            document["publishedAt"] = day
+        # Atom updated is a revision clock, not proof of original publication.
+        document["sourceUpdatedAt"] = _clean(entry.findtext(prefix + "updated")) if atom else ""
+        seen.add(document["url"])
+        results.append(document)
+        if len(results) >= max(1, min(200, int(limit or 80))):
+            break
+    results.sort(key=lambda item: (item["publishedAt"], item["title"]), reverse=True)
+    return results
+
+
 def parse_ir_documents(markup: str, page_url: str, limit: int = 80) -> List[Dict[str, object]]:
+    stripped = str(markup or "").lstrip("\ufeff \t\r\n")
+    if stripped.startswith("<?xml") or re.match(r"<(?:feed|rss)(?:\s|>)", stripped):
+        try:
+            root = ElementTree.fromstring(stripped)
+        except ElementTree.ParseError as error:
+            raise ValueError("Malformed official issuer XML index") from error
+        if root.tag in {"{http://www.w3.org/2005/Atom}feed", "rss"}:
+            return _feed_documents(root, page_url, limit)
     parser = _LinkParser()
     parser.feed(str(markup or ""))
     results = []
@@ -326,6 +373,8 @@ class IssuerIrDocumentsAdapter:
         except (TypeError, ValueError):
             body_limit = 3
         blocked = []
+        unavailable = []
+        last_error = None
         reachable = []
         for url in source.source_urls:
             try:
@@ -334,7 +383,15 @@ class IssuerIrDocumentsAdapter:
                 if int(getattr(error, "code", 0) or 0) in {401, 403, 404, 410, 429}:
                     blocked.append({"url": url, "statusCode": int(error.code)})
                     continue
-                raise
+                last_error = error
+                unavailable.append({"url": url, "reasonCode": "http-error", "statusCode": int(error.code)})
+                continue
+            except (urllib.error.URLError, OSError) as error:
+                last_error = error
+                cause = getattr(error, "reason", error)
+                code = "dns-lookup-failed" if isinstance(cause, socket.gaierror) else "network-error"
+                unavailable.append({"url": url, "reasonCode": code, "errorType": type(cause).__name__})
+                continue
             stripped = str(markup or "").lstrip("\ufeff \t\r\n")
             if "json" in content_type.casefold() or stripped.startswith(("{", "[")):
                 documents = parse_ir_json(markup, resolved_url, source.primary_url, limit=limit)
@@ -409,6 +466,7 @@ class IssuerIrDocumentsAdapter:
                         "fallbackDatasets": list(source.fallback_datasets),
                         "documentUsePolicy": "reference-only-until-body-verified",
                         "blockedAttempts": blocked,
+                        "unavailableAttempts": unavailable,
                     }
                 }
             }
@@ -429,6 +487,12 @@ class IssuerIrDocumentsAdapter:
                     "decisionUse": "verified-body-reference" if verified_count else "reference-only",
                 },
             )
+        if unavailable:
+            # An unreachable source is not an empty index. Preserve the last
+            # usable fact and the collector's retry/circuit policy on failure.
+            failures = "; ".join(urllib.parse.urlparse(row["url"]).hostname + ": " + row["reasonCode"]
+                                 for row in unavailable)
+            raise RuntimeError("Official issuer IR collection unavailable for " + source.symbol + " (" + failures + ")") from last_error
         access_state = "reachable" if reachable else "blocked"
         use_policy = "official-page-empty-use-filing-fallback" if reachable else "official-page-blocked-use-filing-fallback"
         fragment = {

@@ -229,3 +229,21 @@ python3 scripts/verify-runtime-data-flow.py --revision REVISION
 이는 데이터 보존 성공과 별개의 실패이며 전체 경로 성공으로 보고하지 않는다.
 검증 도구는 이 경우에도 네이티브 추론·그래프 대조 결과를 출력하고,
 `failed-ai-publication` 상태 및 종료 코드 1을 반환한다.
+
+
+### Issuer IR transport and feed recovery (2026-10-23)
+
+`issuer.ir_documents` tries the registered official alternatives after a DNS,
+transport, or transient HTTP failure. A usable fallback retains bounded failed
+attempt metadata. If no usable index is obtained and any endpoint was unreachable,
+collection fails with the issuer, host and failure category; it preserves the last
+fact and uses the existing retry/circuit policy. A reachable empty alternative does
+not turn a failed primary request into proof that no documents exist.
+
+Apple's registered Newsroom fallback is an Atom feed. RSS/Atom indexes now use the
+same IR title filter and URL deduplication as HTML indexes. Feed summaries are not
+verified bodies, and Atom `updated` is retained separately from original publication
+time. Date/body verification and the SEC filing fallback remain required for
+investment evidence. DNS settings and fixed IP overrides are not part of this repair.
+Regression: `test_external_data_platform` covers failover, total/partial outages,
+prior-fact preservation, Atom/RSS filtering and publication-clock provenance.

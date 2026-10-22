@@ -58,6 +58,7 @@ def build_monitor_runner(
     from digital_twin.modules.notifications.infrastructure.notification.ingress import send_events
     from digital_twin.modules.outcomes.infrastructure.mysql_outcome_evidence import MySQLOutcomeEvidenceSource
     from digital_twin.modules.outcomes.public import InvestmentOutcomeObservationService
+    from digital_twin.infrastructure.composition.outcomes import build_notification_timing_service
     from digital_twin.modules.portfolio.public import InvestmentDomainService, PortfolioAccountingService
 
     configured_settings = dict(settings or runtime_settings())
@@ -145,6 +146,7 @@ def build_monitor_runner(
                 settings=configured_settings,
                 investment_domain_store=investment_domain_store,
                 outcome_evidence_source=MySQLOutcomeEvidenceSource(configured_settings),
+                notification_timing_observer=build_notification_timing_service(configured_settings, market_time_series_store),
             )
         ),
     )

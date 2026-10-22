@@ -1354,6 +1354,22 @@ MYSQL_SCHEMA = [
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     """,
     """
+    CREATE TABLE IF NOT EXISTS investment_notification_timing (
+        receipt_id VARCHAR(191) PRIMARY KEY,
+        job_id VARCHAR(191) NOT NULL,
+        account_id VARCHAR(191) NOT NULL,
+        symbol VARCHAR(64) NOT NULL,
+        delivered_at VARCHAR(40) NOT NULL,
+        state VARCHAR(40) NOT NULL,
+        next_check_at VARCHAR(40) NOT NULL DEFAULT '',
+        payload_json LONGTEXT NOT NULL,
+        updated_at VARCHAR(40) NOT NULL,
+        KEY idx_notification_timing_cursor (account_id, delivered_at, receipt_id),
+        KEY idx_notification_timing_pending (account_id, state, next_check_at),
+        KEY idx_notification_timing_job (job_id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
+    """
     CREATE TABLE IF NOT EXISTS notification_delivery_attempts (
         attempt_id VARCHAR(191) PRIMARY KEY,
         job_id VARCHAR(191) NOT NULL,

@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass
 from digital_twin.infrastructure.composition.outcomes import build_hypothesis_performance_report_service
+from digital_twin.infrastructure.composition.outcomes import build_notification_timing_service
 from digital_twin.infrastructure.service_factory import build_historical_replay_job_service
 from digital_twin.infrastructure.service_factory import build_investment_brain_service
 from digital_twin.infrastructure.web.common import configured
@@ -24,8 +25,12 @@ class OutcomesRoutes:
     build_investment_brain_service: Callable[..., object] = build_investment_brain_service
     operational_read_settings: Callable[..., object] = operational_read_settings
     build_hypothesis_performance_report_service: Callable[..., object] = build_hypothesis_performance_report_service
+    build_notification_timing_service: Callable[..., object] = build_notification_timing_service
 
     def route_investment_brain_performance(self, request, path: str, query: Query):
+        if path == "/api/investment-brain/notification-timing" and request.command == "GET":
+            return request.send_payload(200, self.build_notification_timing_service(self.operational_read_settings()).performance(
+                account_id=first_query(query, "accountId"), symbol=first_query(query, "symbol")))
         if path == "/api/investment-brain/performance" and request.command == "GET":
             try:
                 limit = int(first_query(query, "limit") or 500)

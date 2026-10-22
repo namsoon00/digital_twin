@@ -10,6 +10,20 @@ ACTION_LABELS = {"BUY": "신규 매수", "ADD": "추가매수", "HOLD": "보유 
                  "TRIM": "일부 축소", "SELL": "전량 매도", "AVOID": "매수 회피"}
 
 
+def qualification_notice(event):
+    if event.get("purpose") != "hypothesis-evidence" or event.get("outcome") or event.get("contextState"):
+        return ""
+    state = ((event.get("hypothesis") or {}).get("qualification") or {}).get("status") or "unknown"
+    if state == "quarantined":
+        topic, claim = hypothesis_words(event.get("hypothesis") or {})
+        return "성과 재검증 중: ‘" + (topic if topic != "관찰 가설" else claim) + "’은 과거 검증 결과가 기준에 미달해 매매 판단 근거에서 제외됐습니다."
+    if state in {"shadow", "observed", "limited-active"}:
+        return "검증 중인 관찰: 아직 매수·매도 시점을 판단할 만큼 검증되지 않았습니다."
+    if state == "active":
+        return "가설 검증 기준 충족: 알림 수신 후의 매매 타이밍과 수익성은 별도 검증이 필요합니다."
+    return "검증 상태 미확인: 이 알림으로 매수·매도 시점을 판단할 수 없습니다."
+
+
 def event_conclusion(event):
     if event.get('contextState'):
         return '시장 관측: ' + str(event.get('ruleLabel') or '새 시장 문맥') + '. 투자 행동 판단은 포함하지 않습니다.'
@@ -47,7 +61,8 @@ def event_conclusion(event):
         roles = {c.get("kind", "").split("-", 1)[0] for c in event.get("evidenceChanges") or []}
         if len(roles) == 1:
             meanings["mixed-evidence"] = "의 " + ("지지" if "support" in roles else "반대") + " 근거 구성이 달라져 기존 가설을 다시 점검합니다."
-    return "‘" + name + "’" + meanings.get(event.get("changeKind"), "의 근거를 다시 점검합니다.")
+    return " ".join(filter(None, [qualification_notice(event),
+        "‘" + name + "’" + meanings.get(event.get("changeKind"), "의 근거를 다시 점검합니다.")]))
 
 
 def event_impact(event, brief=None):

@@ -331,6 +331,13 @@ MYSQL_OPERATIONAL_INDEXES: Dict[str, Sequence[MySQLIndexDefinition]] = {
             "`account_id`, `symbol`, `decision_episode_id`, `updated_at`, `job_id`",
         ),
     ),
+    "notification_delivery_attempts": (
+        MySQLIndexDefinition(
+            "notification_delivery_attempts",
+            "idx_notification_delivery_completed",
+            "`status`, `completed_at`, `attempt_id`",
+        ),
+    ),
     "notification_inbox_receipts": (
         MySQLIndexDefinition(
             "notification_inbox_receipts",

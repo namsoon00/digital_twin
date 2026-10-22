@@ -273,6 +273,47 @@ class DeliveryReliabilityTests(unittest.TestCase):
 
 
 class DeliveryHistoryDatabaseTests(StabilizationDatabaseCase):
+    def test_notification_timing_uses_success_receipts_and_preserves_first_observation(self):
+        from digital_twin.modules.notifications.infrastructure.timing_receipts import NotificationTimingReceiptSource
+        from digital_twin.modules.outcomes.infrastructure.mysql_notification_timing import MySQLNotificationTimingStore
+        from digital_twin.modules.outcomes.domain.notification_timing import VERSION
+        from test_rule_notification_intent import registered_context, packet_for
+        source, timing = NotificationTimingReceiptSource(self.settings), MySQLNotificationTimingStore(self.settings)
+        delivered_ids = []
+        for delivered in [False, True]:
+            context = registered_context()
+            packet_for(context)
+            job = NotificationJob.create("timing fixture", account_id="main", message_type="investmentInsight", context=context)
+            self.notifications.upsert_job(job)
+            transport = Mock()
+            transport.send.return_value = receipt() if delivered else NotificationResult(False, "fixture", reason="fixture unavailable")
+            dispatcher = NotificationDispatchService(self.notifications, lambda _: transport)
+            if delivered:
+                dispatcher.deliver(job, {"main": object()}, "frozen fixture message")
+                delivered_ids.append(job.context["deliveryAttemptId"])
+            else:
+                with self.assertRaisesRegex(RuntimeError, "fixture unavailable"):
+                    dispatcher.deliver(job, {"main": object()}, "frozen fixture message")
+        receipts = source.after("main", ("", ""))
+        self.assertEqual(delivered_ids, [row["receiptId"] for row in receipts])
+        self.assertEqual(VERSION, receipts[0]["contract"]["version"])
+        self.assertFalse(receipts[0]["contract"]["tradeTimingQualified"])
+        self.assertEqual([], source.after("other-account", ("", "")))
+        stamp = receipts[0]["deliveredAt"]
+        timing.register(receipts[0], stamp)
+        timing.register(receipts[0], stamp)
+        self.assertEqual([], source.after("main", timing.cursor("main")))
+        first = timing.pending("main", stamp)[0]
+        stale = deepcopy(first)
+        first.update(state="complete", entry={"price": 100}, outcomes={"60": {"state": "observed", "price": 101}})
+        timing.save(first, stamp)
+        stale.update(state="unmeasurable", entry={"price": 999})
+        timing.save(stale, stamp)
+        saved = timing.report_rows("main")
+        self.assertEqual(1, len(saved))
+        self.assertEqual(100, saved[0]["entry"]["price"])
+        self.assertEqual([], timing.pending("main", stamp))
+
     def test_nested_delivery_locks_leave_pool_capacity_and_release_after_failure(self):
         from digital_twin.infrastructure.mysql_connection_pool import MySQLConnectionPool
         from digital_twin.infrastructure.mysql_operational_connection import MySQLConnectionProxy

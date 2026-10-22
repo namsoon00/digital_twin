@@ -7,7 +7,7 @@ from digital_twin.modules.notifications.domain.relation_change_presentation impo
 )
 from digital_twin.modules.notifications.domain.relation_observation_language import hypothesis_words, next_check_words
 from digital_twin.modules.notifications.domain.relation_observation_proof import window_limitation, window_name, source_time
-from digital_twin.modules.notifications.domain.rule_event_presentation import ACTION_LABELS, event_conclusion
+from digital_twin.modules.notifications.domain.rule_event_presentation import ACTION_LABELS, event_conclusion, qualification_notice
 from digital_twin.modules.notifications.domain.rule_policy_lifecycle import release_conclusion
 
 
@@ -16,7 +16,7 @@ from digital_twin.modules.notifications.domain.composed_rule_presentation import
 )
 
 
-VERSION = "compact-rulebox-v4"
+VERSION = "compact-rulebox-v5"
 
 
 def _unique(values):
@@ -293,7 +293,11 @@ def compact_rulebox_summary(packet):
     impact = ((packet.get('policyLifecycle') or {}).get('decisionImpact') or {}) if judgment else {}
     hypothesis_change = bool(events) and all(e.get('purpose') in {'hypothesis-evidence', 'context-evidence'} for e in events)
     if hypothesis_change:
-        lead = " ".join(_unique(event_conclusion(e) for e in events)[:2])
+        conclusions = []
+        for event in events:
+            conclusion, notice = event_conclusion(event), qualification_notice(event)
+            conclusions.append(conclusion[len(notice):].strip() if notice and conclusion.startswith(notice) else conclusion)
+        lead = " ".join(_unique(conclusions)[:2])
     elif impact.get('changedResponses') and not released_lead:
         lead = ' · '.join(_unique(r.get('label') for r in impact['changedResponses'])) + '.'
     prior_judgment = (previous.get("decisionBrief") or {}).get("judgment") or {}
@@ -332,6 +336,19 @@ def compact_rulebox_summary(packet):
         # Keep policy and market facts visible; a first-event hypothesis must
         # not silently replace the persisted multi-rule conclusion.
         lead = _conclusion(judgment, events) if (judgment.get("managementDecision") or {}).get("responses") else native_rows[0]["label"]
+    # Native multi-rule composition must retain empirical use limits too.
+    # This changes the scope of the explanation, never the graph's action.
+    notices = _unique(qualification_notice(event) for event in events)
+    if notices:
+        notices.sort(key=lambda value: 0 if value.startswith("성과 재검증 중") else 1)
+        notice = notices[0]
+        if notice not in lead:
+            if any(e.get("purpose") in {"management-policy", "execution-constraint"} for e in events):
+                together = notice + " " + together
+            else:
+                lead = notice + " " + lead
+    if any(e.get("purpose") in {"management-policy", "execution-constraint"} for e in events):
+        together += " 관리 조건의 적용 안내이며 매수·매도 시점이 검증됐다는 뜻은 아닙니다."
     next_text = composition_next(judgment, events, currency) or _next(judgment, events, currency)
     measurements = _measurements(current, previous, judgment, events, currency, packet.get("transitions") or [])
     # Separate rows survive the shared customer-language normalizer, which

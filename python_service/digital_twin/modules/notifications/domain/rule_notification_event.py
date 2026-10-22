@@ -133,6 +133,8 @@ def _event(current, previous, transition, hypothesis, intent):
             **scope, "inferenceGenerationId": current.get("inferenceGenerationId"),
             "sourceAboxSnapshotId": current.get("sourceAboxSnapshotId"),
             "hypothesis": deepcopy(hypothesis), "transitionId": transition.get("transitionId"),
+            "evidenceUse": {"qualification": (hypothesis.get("qualification") or {}).get("status") or "unknown",
+                            "source": "frozen-hypothesis-qualification", "tradeTimingValidated": False},
             "lifecycleKey": transition.get("lifecycleKey"), "observedAt": transition.get("occurredAt"),
             "previousState": transition.get("previousState"), "currentState": transition.get("currentState"),
             "evidenceChanges": changes, "ruleComparisons": comparisons,

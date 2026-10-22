@@ -5,6 +5,15 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 
+def build_notification_timing_service(settings, market_series=None):
+    from digital_twin.modules.outcomes.public import NotificationTimingService
+    from digital_twin.modules.outcomes.infrastructure.mysql_notification_timing import MySQLNotificationTimingStore
+    from digital_twin.modules.notifications.infrastructure.timing_receipts import NotificationTimingReceiptSource
+
+    return NotificationTimingService(MySQLNotificationTimingStore(settings),
+        NotificationTimingReceiptSource(settings) if market_series else None, market_series)
+
+
 def build_hypothesis_performance_report_service(settings):
     from digital_twin.infrastructure.operational_store import investment_decision_episode_store
     from digital_twin.modules.outcomes.public import HypothesisPerformanceReportService

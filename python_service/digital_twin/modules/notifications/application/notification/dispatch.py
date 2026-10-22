@@ -10,6 +10,7 @@ from digital_twin.modules.notifications.domain.notifications import Notification
 from digital_twin.modules.notifications.domain.relation_follow_up import delivery_snapshot
 from digital_twin.modules.notifications.domain.delivery_suppression import NotificationDeliverySuppressed
 from digital_twin.modules.notifications.domain.investment_conversation import relation_parent_job_id
+from digital_twin.modules.outcomes.contracts import notification_timing_contract
 
 
 class NotificationDispatchService:
@@ -117,6 +118,10 @@ class NotificationDispatchService:
             # last-delivered facts for the next customer comparison.
             rendered_audit["relationChangeSnapshot"] = delivery_snapshot(relation_change, job.job_id, job.account_id)
             rendered_audit["relationChangeSubjectKey"] = context.get("deliverySubjectGroupKey") or ""
+            if not context.get("notificationReplayPreserveOriginal"):
+                timing = notification_timing_contract(relation_change)
+                if timing:
+                    rendered_audit["notificationTiming"] = timing
         if hasattr(self.queue, "start_delivery_attempt"):
             attempt_id = self.queue.start_delivery_attempt(
                 job,

@@ -393,7 +393,9 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # real outages, enforce one display clock, and verify durable rechecks.
         # Four crypto ingress/native-scope and projection wait/wake regressions.
         # One quote-delta versus total unrealized P&L regression, both alert paths and missing cost.
-        self.assertLessEqual(total, 2481)
+        # Six receipt-clock/qualification/trend contract regressions.
+        # One isolated-DB receipt/import/idempotency regression.
+        self.assertLessEqual(total, 2488)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

@@ -519,8 +519,8 @@
       "reason": "HYP-01–07: exact original anchors, revision/horizon qualification, immutable valuation observations and comparison receipts. Verified by test_hypothesis_evaluation_v2, test_hypothesis_research_pipeline and test_investment_brain; original decisions and frozen experiment policies are retained."
     },
     "modules/outcomes/domain/hypothesis_outcome_contract.py::observation_domain_status": {
-      "hash": "4c683709bee6f752260bcc58cd879d971d000a2e8bbfec66437d58c2ba5113ae",
-      "reason": "HYP-01–07: exact original anchors, revision/horizon qualification, immutable valuation observations and comparison receipts. Verified by test_hypothesis_evaluation_v2, test_hypothesis_research_pipeline and test_investment_brain; original decisions and frozen experiment policies are retained."
+      "hash": "fa4edb64e5bdeed600430b60b83df7a50740495f37d469869ba529c687106698",
+      "reason": "Accept the finite trend metric explicitly required by the frozen criterion, including derived distance/change metrics. Reject absent, nonfinite and zero raw averages; preserve original contracts and thresholds. Verified by test_rule_timing_validation and test_hypothesis_closed_loop; see docs/rule-notification-timing-validation.md."
     },
     "modules/outcomes/domain/hypothesis_outcome_facts.py::freeze_outcome_baseline": {
       "hash": "9c9c825de2fbeb1ba197e93aa3a635addc710535312a49ed4deeeaab4627ba99",

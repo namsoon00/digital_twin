@@ -33,12 +33,14 @@ class InvestmentOutcomeObservationService:
         settings: Dict[str, object] = None,
         investment_domain_store=None,
         outcome_evidence_source=None,
+        notification_timing_observer=None,
     ):
         self.decision_episode_store = decision_episode_store
         self.market_time_series_store = market_time_series_store
         self.settings = dict(settings or {})
         self.investment_domain_store = investment_domain_store
         self.outcome_evidence_source = outcome_evidence_source
+        self.notification_timing_observer = notification_timing_observer
 
     def enabled(self) -> bool:
         return bool(
@@ -86,6 +88,13 @@ class InvestmentOutcomeObservationService:
             if symbol and financial_observations:
                 snapshot_observations.setdefault(symbol, {})["annualFinancialObservations"] = financial_observations
         follow_up = self.observe_follow_ups(snapshot.account_id, snapshot_observations, observed_at)
+        if self.notification_timing_observer:
+            try:
+                follow_up["notificationTiming"] = self.notification_timing_observer.observe(snapshot.account_id, observed_at)
+            except Exception as error:
+                # Receipt and price work remains durable for the next cycle;
+                # its failure must not stop independent hypothesis outcomes.
+                follow_up["notificationTiming"] = {"status": "retry-required", "errorType": type(error).__name__}
         if not self.enabled():
             return {
                 "status": "follow-up-observed" if follow_up.get("transitionCount") else "outcome-store-unavailable",
@@ -501,11 +510,12 @@ class InvestmentOutcomeObservationService:
             pace = position_volume_pace_snapshot(position)
             observations[symbol] = {
                 "currentPrice": current_price,
+                **{key: value for key, value in (("ma5", ma5), ("ma20", ma20), ("ma60", ma60)) if value > 0},
                 "profitLossRate": getattr(position, "profit_loss_rate", 0),
                 "priceChangeRate": getattr(position, "change_rate", 0),
-                "ma5Distance": ma5_distance,
-                "ma20Distance": ma20_distance,
-                "ma60Distance": ma60_distance,
+                **{key: value for key, value, average in (("ma5Distance", ma5_distance, ma5),
+                    ("ma20Distance", ma20_distance, ma20), ("ma60Distance", ma60_distance, ma60))
+                   if average > 0 or value not in (None, 0)},
                 "volume": getattr(position, "volume", 0),
                 "volumeRatio": getattr(position, "volume_ratio", 0),
                 "timeAdjustedVolumeRatio": pace.get("timeAdjustedVolumeRatio"),

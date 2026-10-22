@@ -7,6 +7,7 @@ investment action or changes an active inference result.
 
 import hashlib
 import json
+import math
 from dataclasses import dataclass, field
 from typing import Dict, Iterable, List, Mapping
 
@@ -538,9 +539,27 @@ def observation_domain_status(
     def has_value(*keys: str) -> bool:
         return any(key in source and source.get(key) not in (None, "") for key in keys)
 
+    def finite_value(key, positive=False):
+        try:
+            value = float(source[key])
+            return math.isfinite(value) and (not positive or value > 0)
+        except (KeyError, TypeError, ValueError, OverflowError):
+            return False
+
+    # A frozen criterion can explicitly require a derived trend measurement.
+    # Do not demand raw moving averages when that exact measurement was saved;
+    # nor treat an unrelated/default distance as evidence for a generic trend.
+    trend_fields = {"ma5Distance", "ma20Distance", "ma60Distance", "ma20DistanceChangePp",
+                    "ma20Slope", "ma60Slope"}
+    trend_metrics = [row.get("metric") for row in resolved.get("criteria") or []
+                     if row.get("required") and "trend" in (row.get("requiredObservationDomains") or [])]
+    criterion_trend = bool(trend_metrics) and all(
+        metric in trend_fields and finite_value(metric) for metric in trend_metrics
+    )
     availability = {
         "quote": bool(number(source.get("currentPrice")) > 0),
-        "trend": has_value("ma5", "ma20", "ma60", "ma20Slope", "ma60Slope"),
+        "trend": criterion_trend or any(finite_value(key, positive=True) for key in ("ma5", "ma20", "ma60"))
+                 or any(finite_value(key) for key in ("ma20Slope", "ma60Slope")),
         "flow": has_value("volume", "tradeStrength", "foreignNetVolume", "institutionNetVolume", "individualNetVolume"),
         "research": has_value("researchEvidence", "verifiedClaims", "disclosureIds"),
         "portfolio": has_value("profitLossRate", "quantity", "averagePrice"),

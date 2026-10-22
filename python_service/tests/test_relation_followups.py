@@ -361,7 +361,9 @@ class RelationFollowUpTests(unittest.TestCase):
         self.assertIn("판정 기준 체결강도 110 이상", text)
         self.assertIn("10/13 10:25 KST", text)
         self.assertLess(text.index("체결강도: 이전"), text.index("현재 전체 데이터"))
-        self.assertTrue(self.context["customerInvestmentDetailDocument"]["lead"].startswith("‘"))
+        lead = self.context["customerInvestmentDetailDocument"]["lead"]
+        self.assertTrue(lead.startswith("검증 중인 관찰:"))
+        self.assertIn("규칙 조건이 더 이상 성립하지 않습니다", lead)
         self.assertNotIn('120 →', body, 'a missing previous rule condition cannot become a native condition comparison')
 
     def test_model_input_deltas_explain_score_changes_without_invented_thresholds(self):

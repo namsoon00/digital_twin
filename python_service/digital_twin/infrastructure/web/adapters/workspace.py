@@ -325,7 +325,7 @@ def run_local_codex(message: str) -> str:
     with tempfile.NamedTemporaryFile("w+", delete=False, encoding="utf-8") as output:
         output_path = output.name
     try:
-        from digital_twin.modules.ai_orchestration.public import ai_execution
+        from digital_twin.modules.ai_orchestration.public import ai_execution, record_execution_usage
         with ai_execution("interactive-chat", prompt):
             result = subprocess.run(
                 [
@@ -338,6 +338,7 @@ def run_local_codex(message: str) -> str:
                     "--cd",
                     str(ROOT_DIR),
                     "exec",
+                    "--json",
                     "--skip-git-repo-check",
                     "--ephemeral",
                     "--output-last-message",
@@ -351,6 +352,7 @@ def run_local_codex(message: str) -> str:
                 timeout=int(os.environ.get("CODEX_TIMEOUT_MS") or "90000") / 1000,
                 capture_output=True,
             )
+            record_execution_usage(result.stdout)
         if result.returncode != 0:
             return ""
         return Path(output_path).read_text(encoding="utf-8").strip()

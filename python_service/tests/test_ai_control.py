@@ -180,6 +180,9 @@ class AIControlTests(unittest.TestCase):
         planner.assert_not_called(); store.fail.assert_not_called()
 
     def test_execution_audit_records_failure_without_prompt_or_error_contents(self):
+        from ai_token_budget_checks import check_usage_and_budget, check_quota_backoff
+        check_usage_and_budget(self)
+        check_quota_backoff(self)
         from ai_observation_resume_checks import ResumeChecks
         ResumeChecks().workflow()
         ResumeChecks().coverage()
@@ -222,6 +225,9 @@ class AIControlTests(unittest.TestCase):
         service, store, planner = self.runner(brain_memory=lambda *_: [memory])
         store.memory.return_value = [{"observationRepeatKey": original_key, "observedAt": "2026-01-01T00:00:00Z",
                                      "executionPromptVersion": PROMPT_VERSION, "quality": {"status": "observation-only"}}]
+        self.assertEqual("unchanged", service.run_once()["status"])
+        planner.assert_not_called()
+        memory.update(reviewDue=True, nextCheckAt="2000-01-01T00:00:00Z")
         self.assertEqual("unchanged", service.run_once()["status"])
         planner.assert_not_called()
         memory["latestSourceAnswer"] = {"status": "answered", "sources": [{"materialFingerprint": "new-body"}]}
@@ -277,7 +283,7 @@ class AIControlTests(unittest.TestCase):
         OperationsRoutes().route_operations_health(request, "/api/ai-control/status", {})
         self.assertEqual(403, request.send_payload.call_args.args[0])
         with patch("digital_twin.infrastructure.settings.save_runtime_settings") as save:
-            for payload in ({"aiControlDailyTaskBudget": -1}, {"command": "anything"}, {"aiControlEnabled": "maybe"}, {"aiControlBudgetEnabled": "maybe"}, {"aiObservationPromptMaxBytes": 1}, {"aiObservationPromptMaxBytes": 524289}):
+            for payload in ({"aiDailyTokenBudget": -1}, {"aiDailyTokenBudget": 100000001}, {"aiTokenBudgetEnabled": "maybe"}, {"aiControlDailyTaskBudget": -1}, {"command": "anything"}, {"aiControlEnabled": "maybe"}, {"aiControlBudgetEnabled": "maybe"}, {"aiObservationPromptMaxBytes": 1}, {"aiObservationPromptMaxBytes": 524289}):
                 with self.assertRaises(ValueError):
                     save_ai_control_settings(payload)
             save.assert_not_called()
@@ -482,6 +488,8 @@ class AIControlStorageTests(unittest.TestCase):
         self.assertFalse(self.store.status()["executionHealth"]["lastJudgmentAt"])
 
     def test_budgets_survive_new_store_and_failed_calls_consume_admission(self):
+        from ai_token_budget_checks import check_persistence
+        check_persistence(self)
         from datetime import datetime, timezone
         reset = budget_state({}, 0, 24, datetime(2026, 10, 1, 23, 59, tzinfo=timezone.utc))["budgetResetAt"]
         self.assertEqual("2026-10-02T00:00:00Z", reset)
@@ -491,7 +499,7 @@ class AIControlStorageTests(unittest.TestCase):
         with self.store.connect() as connection:
             import json
             metrics = json.loads(connection.execute("SELECT metrics_json FROM ai_control_call_metrics WHERE call_id=%s", (call,)).fetchone()["metrics_json"])
-        self.assertEqual({"modelProcessMs": 240001, "terminationReason": "timeout"}, metrics)
+        self.assertEqual({"modelProcessMs": 240001, "terminationReason": "timeout", "usage": None, "usageStatus": "unknown"}, metrics)
         # One call remains, but a draft must leave room for its critique. The
         # wait must not claim work, use task budget or exhaust failure retries.
         for _ in range(3):

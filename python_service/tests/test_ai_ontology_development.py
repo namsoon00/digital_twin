@@ -163,7 +163,7 @@ class ObservationDevelopmentStorageTests(unittest.TestCase):
         from digital_twin.infrastructure.settings import runtime_settings
         from digital_twin.modules.ai_orchestration.infrastructure.mysql_control import MySQLAIControlStore
         from digital_twin.modules.news_intelligence.infrastructure.mysql_observation_development import MySQLObservationDevelopmentStore
-        settings = {**runtime_settings(), "aiControlBudgetEnabled": "false"}
+        settings = {**runtime_settings(), "aiControlBudgetEnabled": "false", "aiTokenBudgetEnabled": "false"}
         self.control = MySQLAIControlStore(settings)
         self.research = MySQLObservationDevelopmentStore(settings)
         self.bridge = AIControlDevelopment(self.research, lambda _: None)
@@ -172,7 +172,7 @@ class ObservationDevelopmentStorageTests(unittest.TestCase):
 
     def clean(self):
         with self.control.transaction() as connection:
-            for table in ("ai_control_input_calls", "ai_control_inputs", "ai_control_tasks", "ai_control_budget", "ai_control_calls"):
+            for table in ("ai_control_input_calls", "ai_control_inputs", "ai_control_tasks", "ai_control_budget", "ai_control_calls", "ai_control_call_metrics", "ai_control_execution_state"):
                 connection.execute("DELETE FROM " + table)
             connection.execute("DELETE FROM investment_hypothesis_proposal_requests WHERE account_id='control-test'")
 

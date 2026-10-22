@@ -174,7 +174,7 @@ class CommandNotificationAIReviewer(NotificationAIReviewer):
             if lease is None:
                 from contextlib import nullcontext
                 lease = nullcontext()
-            from digital_twin.modules.ai_orchestration.public import ai_execution
+            from digital_twin.modules.ai_orchestration.public import ai_execution, record_execution_usage
             with lease, ai_execution("investment-judgement", prompt, self.settings):
                 capacity_wait_ms = int((time.monotonic() - capacity_started) * 1000)
                 if self.cancel_event.is_set():
@@ -204,6 +204,8 @@ class CommandNotificationAIReviewer(NotificationAIReviewer):
                         self.terminate_process(process, force=True)
                         stdout, stderr = process.communicate(timeout=2)
                     raise TimeoutError("notification AI command exceeded " + str(timeout_seconds) + " seconds") from error
+                finally:
+                    record_execution_usage(stdout)
         except BaseException:
             if process is not None and process.poll() is None:
                 self.terminate_process(process, force=False)

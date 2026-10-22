@@ -26,6 +26,8 @@ from ..domain.execution_lanes import MARKET, OBSERVATIONS, enabled as lanes_enab
 from ..domain.task_dispatch import SCOPE as DISPATCH_SCOPE, dispatched
 from .mysql_task_dispatch import AITaskDispatchPersistence
 from .mysql_diagnostic_progress import DiagnosticProgressPersistence, SCHEMA as DIAGNOSTIC_SCHEMA
+from .mysql_token_usage import AITokenUsagePersistence
+from ..domain.token_budget import usage_counts, RESERVATION
 
 
 STATUS_INDEXES = (
@@ -79,7 +81,7 @@ SCHEMA = (
 )
 
 
-class MySQLAIControlStore(DiagnosticProgressPersistence, AITaskDispatchPersistence, AIRuntimePersistence, AIExecutionPersistence, MySQLOperationalConnection):
+class MySQLAIControlStore(AITokenUsagePersistence, DiagnosticProgressPersistence, AITaskDispatchPersistence, AIRuntimePersistence, AIExecutionPersistence, MySQLOperationalConnection):
     def __init__(self, settings=None):
         super().__init__(settings)
         with self.connect() as connection:
@@ -118,6 +120,9 @@ class MySQLAIControlStore(DiagnosticProgressPersistence, AITaskDispatchPersisten
         clock = datetime.fromisoformat(now.replace("Z", "+00:00"))
         day = now[:10]
         with self.transaction() as connection:
+            tokens = self.token_usage(connection, clock)
+            if tokens["exhausted"]:
+                raise AIControlBudgetWait("token", tokens["resetAt"])
             cursor = self._locked_execution_state(connection, DISPATCH_SCOPE, clock)
             connection.execute("INSERT INTO ai_control_budget (day_key,used_count) VALUES (%s,0) "
                                "ON DUPLICATE KEY UPDATE day_key=VALUES(day_key)", (day,))
@@ -407,6 +412,7 @@ class MySQLAIControlStore(DiagnosticProgressPersistence, AITaskDispatchPersisten
     def begin_call(self, workload, prompt_hash, task_id="", input_id=""):
         call_id = uuid.uuid4().hex
         now = stamp()
+        workload = workload[:64]
         with self.transaction() as connection:
             if workload == "independent-observation":
                 frozen = connection.execute("SELECT i.task_id,i.prompt_hash FROM ai_control_inputs i "
@@ -423,7 +429,10 @@ class MySQLAIControlStore(DiagnosticProgressPersistence, AITaskDispatchPersisten
                     reset = budget_state(self.runtime_settings, 0, row["used_count"], datetime.fromisoformat(now.replace("Z", "+00:00")))["budgetResetAt"]
                     raise AIControlBudgetWait("call", reset)
                 connection.execute("UPDATE ai_control_budget SET used_count=used_count+1 WHERE day_key=%s", (day,))
-            connection.execute("INSERT INTO ai_control_calls (call_id,workload,status,task_id,prompt_hash,started_at) VALUES (%s,%s,'running',%s,%s,%s)", (call_id, workload[:64], task_id[:64], prompt_hash, now))
+            self.reserve_tokens(connection, workload, now)
+            connection.execute("INSERT INTO ai_control_calls (call_id,workload,status,task_id,prompt_hash,started_at) VALUES (%s,%s,'running',%s,%s,%s)", (call_id, workload, task_id[:64], prompt_hash, now))
+            connection.execute("INSERT INTO ai_control_call_metrics (call_id,metrics_json) VALUES (%s,%s)",
+                               (call_id, json.dumps({"tokenReservation": RESERVATION})))
             if input_id:
                 connection.execute("INSERT INTO ai_control_input_calls (call_id,input_id) VALUES (%s,%s)", (call_id, input_id))
         return call_id
@@ -439,9 +448,19 @@ class MySQLAIControlStore(DiagnosticProgressPersistence, AITaskDispatchPersisten
 
     def finish_call(self, call_id, error_kind="", metrics=None):
         with self.transaction() as connection:
+            call = connection.execute("SELECT workload,started_at,status FROM ai_control_calls WHERE call_id=%s FOR UPDATE", (call_id,)).fetchone()
+            if not call or call["status"] != "running":
+                return
+            saved = connection.execute("SELECT metrics_json FROM ai_control_call_metrics WHERE call_id=%s", (call_id,)).fetchone()
+            reserved = json.loads(saved["metrics_json"]).get("tokenReservation") if saved else None
+            usage = usage_counts((metrics or {}).get("usage"))
+            not_started = (metrics or {}).get("processNotStarted") is True
+            if reserved == RESERVATION:
+                self.settle_tokens(connection, call, usage, stamp(), not_started)
+            metrics = {**(metrics or {}), "usage": usage, "usageStatus": "not-started" if not_started else "reported" if usage is not None else "unknown"}
             if metrics:
                 safe = {key: metrics[key] for key in ("stage", "configuredTimeoutSeconds", "promptBytes",
-                    "capacityWaitMs", "modelProcessMs", "totalMs", "returnCode", "terminationReason", "failure") if key in metrics}
+                    "capacityWaitMs", "modelProcessMs", "totalMs", "returnCode", "terminationReason", "failure", "usage", "usageStatus") if key in metrics}
                 if "failure" in safe:
                     safe["failure"] = safe_diagnostic(safe["failure"])
                 connection.execute("INSERT INTO ai_control_call_metrics (call_id,metrics_json) VALUES (%s,%s) "
@@ -499,14 +518,17 @@ class MySQLAIControlStore(DiagnosticProgressPersistence, AITaskDispatchPersisten
             scheduling = self.task_scheduling(connection, now, account_id)
             from .mysql_lane_status import lane_status
             lanes = lane_status(connection, now, account_id) if lanes_enabled(self.runtime_settings) else None
+            tokens = self.token_usage(connection, now)
         state = budget_state(self.runtime_settings, (budget or {}).get("used_count", 0), (call_budget or {}).get("used_count", 0), now)
         wait = admission_wait(state)
+        if tokens["exhausted"]:
+            wait = AIControlBudgetWait("token", tokens["resetAt"])
         return {"tasks": [{"taskId": row["task_id"], "accountId": row["account_id"], "symbol": row["symbol"],
                            "name": row["name"] if row["name"] is not None else row["symbol"],
                            "capability": row["capability"], "status": row["status"], "nextCheckAt": row["available_at"],
                            "attempts": row["attempts"], "lastError": row["last_error"], "updatedAt": row["updated_at"],
                            "result": json.loads(row["result_json"])} for row in rows],
-                "callsToday": list(calls), **state,
+                "callsToday": list(calls), "tokenUsageToday": tokens, **state,
                 "observationScheduling": wait.result() if wait else {"status": "ready"},
                 "activeTaskCount": int(active["count"]), "executionHealth": health, "taskScheduling": scheduling,
                 "executionLanes": lanes}

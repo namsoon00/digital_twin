@@ -627,8 +627,9 @@ records cannot be retrospectively classified from their exit code alone.
 `ai_control_execution_state` holds two bounded records: shared local model
 recovery and observation progress. Three consecutive execution failures pause
 model calls; quota/authentication errors pause immediately. Recovery probes use
-60-second exponential delays capped at 15 minutes (quota/authentication start
-at 15 minutes). Row locking and a fenced, 15-minute probe lease allow one worker
+60-second exponential delays capped at 15 minutes. Authentication starts at
+15 minutes. Quota failures wait 1, 2, 4, then 6 hours; subsequent failed probes
+remain at 6 hours until a fenced successful call resets the quota streak. Row locking and a fenced, 15-minute probe lease allow one worker
 to check recovery. Cancellation releases the probe without declaring success.
 A late success cannot erase a newer failure or a replacement worker's probe.
 Invalid requests, local capacity waits and application validation errors do not
@@ -780,6 +781,44 @@ shorten that wait. A `LocalAICapacityUnavailable` result preserves the leased
 task as pending, with 30-second increments capped at five minutes. Its separate
 `capacityDeferrals` counter keeps capacity contention out of the three-error
 failure allowance while preserving attempt IDs, call accounting and lease fences.
+
+### Shared token accounting and admission
+
+All calls through `ai_execution` (news, observation/retrieval/review, background
+research, legacy judgment and app chat) share a separate UTC-day token budget.
+`aiTokenBudgetEnabled=true` and `aiDailyTokenBudget=1000000` are the defaults;
+the owner page can change them independently of task/call-count limits. Zero
+permits no new calls. Disabling the token limit retains all accounting.
+
+Only numeric `turn.completed.usage` from [Codex JSONL output](https://learn.chatgpt.com/docs/non-interactive-mode)
+is recorded. Input plus output is the budget basis; cached input and reasoning
+output are subsets, never extra additions. Multiple completed turns in one
+process are summed. Missing/invalid usage stays unknown, not zero. Failed calls
+with reported usage still consume it. No prompt, model prose or provider error
+body is copied into token metrics.
+
+Before each invocation, a transaction reserves 100,000 tokens in a shared daily
+row in `ai_control_execution_state`; another worker cannot reserve the same
+remaining allowance. Completion replaces that reservation with reported usage,
+or retains a clearly labeled 100,000-token unknown-usage allowance. A crashed
+call retains its reservation for that day. A local capacity rejection before
+process launch releases the reservation without inventing reported usage.
+Completion is idempotent and attributed
+to the admission date even across midnight. These are operational allowances,
+not estimated billing. Actual in-flight usage may exceed the reservation and
+thus the daily budget: this is an admission limit, not provider-side cancellation
+or a strict spend cap. The next call waits when less than one reservation remains.
+
+`tokenUsageToday` shows reported totals, reserved/unknown allowances, counts and
+numeric usage per workload, reset time and `trackedSince`. History before this
+feature, unrelated Codex tasks and this development conversation are excluded.
+There is no retrospective reconstruction from prompt byte lengths. The status
+view separates these measured tokens from call completions and customer analysis
+success. A raised limit permits pending token-budget tasks to resume early;
+budget waits never consume failure retries. Source capture precedes unchanged
+input suppression: a brain-case review timer alone no longer bypasses that gate.
+Changed source facts, questions/answers, policies and verified follow-up transitions
+still trigger evaluation; independent publication review remains required.
 
 Independent work defaults to **48 task starts and 24 model calls per UTC day**.
 The owner can set `aiControlBudgetEnabled=false` to remove both daily limits.

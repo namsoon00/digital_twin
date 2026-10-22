@@ -80,7 +80,7 @@ class BrainManagementContractTests(unittest.TestCase):
             old["outputSchema"] = planning_schema(p)
             validate_execution_input(old)
 
-    def test_due_agenda_is_reviewed_without_new_market_data_and_http_review_is_owner_only(self):
+    def test_due_agenda_waits_for_changed_input_and_http_review_is_owner_only(self):
         from test_ai_control import AIControlTests, PACKET, PLAN
         memory = {**{key: PACKET[key] for key in ("accountId", "symbol", "worldId")}, "kind": "brain-case", "caseId": "case",
                   "capability": "research", "revision": 1, "reviewDue": True}
@@ -91,9 +91,13 @@ class BrainManagementContractTests(unittest.TestCase):
         planner.return_value = {**PLAN, "caseReviews": [review_case(memory)], "serviceFeedback": [],
             "questionResolutions": [{"caseId": "case", "disposition": "defer", "targetIndex": -1,
                 "reason": "공식 자료가 부족하여 원래 질문의 가설화를 보류합니다.", "evidenceIds": ["quote-1"]}]}
+        self.assertEqual("unchanged", service.run_once()["status"])
+        planner.assert_not_called()
+        service.brain_waker.assert_called_once()
+        # An actual change to the original question still requires review.
+        memory["question"] = "새 공시의 부채 만기 변화는 무엇인가?"
         self.assertEqual("completed", service.run_once()["status"])
         planner.assert_called_once()
-        service.brain_waker.assert_called_once()
         self.assertEqual("case", store.complete.call_args.args[1]["caseReviews"][0]["caseId"])
         from test_web_router_boundaries import WebRouterBoundaryTests, SHARE_ROLE_VIEWER
         http = WebRouterBoundaryTests(); http.setUp()
@@ -114,7 +118,7 @@ class BrainAgendaStorageTests(unittest.TestCase):
         from mysql_fixtures import mysql_test_settings
         from digital_twin.modules.ai_orchestration.infrastructure.mysql_control import MySQLAIControlStore
         from digital_twin.modules.ai_orchestration.infrastructure.mysql_brain_agenda import MySQLBrainAgendaStore
-        settings = {**runtime_settings(), **mysql_test_settings(), "aiControlBudgetEnabled": "false"}
+        settings = {**runtime_settings(), **mysql_test_settings(), "aiControlBudgetEnabled": "false", "aiTokenBudgetEnabled": "false"}
         self.control, self.brain = MySQLAIControlStore(settings), MySQLBrainAgendaStore(settings)
         self.control.agenda_writer, self.control.agenda_failure = self.brain.record, self.brain.failed
         self.subject = {key: packet()[key] for key in ("accountId", "symbol", "worldId", "name")}
@@ -122,7 +126,7 @@ class BrainAgendaStorageTests(unittest.TestCase):
 
     def clean(self):
         with self.control.transaction() as c:
-            for table in ("ai_brain_case_events", "ai_brain_cases", "ai_control_input_calls", "ai_control_inputs", "ai_control_tasks", "ai_control_calls", "ai_control_budget"):
+            for table in ("ai_brain_case_events", "ai_brain_cases", "ai_control_input_calls", "ai_control_inputs", "ai_control_tasks", "ai_control_calls", "ai_control_budget", "ai_control_call_metrics", "ai_control_execution_state"):
                 c.execute("DELETE FROM " + table)
 
     def tearDown(self):

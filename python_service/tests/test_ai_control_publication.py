@@ -187,6 +187,8 @@ class CentralPublicationStorageTests(unittest.TestCase):
             connection.execute("DELETE FROM notification_jobs WHERE account_id=%s", (SUBJECT["accountId"],))
             connection.execute("DELETE FROM ai_control_tasks")
             connection.execute("DELETE FROM ai_control_budget")
+            connection.execute("DELETE FROM ai_control_execution_state")
+            connection.execute("DELETE FROM ai_control_call_metrics")
 
     def tearDown(self):
         self.clean()

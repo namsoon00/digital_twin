@@ -145,8 +145,9 @@ class AIControlService:
                         state = disposition(packet, retry_identity, "data-wait", ["새 원문 또는 아직 평가하지 않은 원래 연구 질문을 기다립니다."])
                         return self.complete_wait(job, packet, state, [], "unchanged-wait")
                     previous = history[0] if history else {}
-                    from digital_twin.modules.ai_orchestration.domain.brain_management import due_memory
-                    if (not due_memory(research) and not any(row.get("reviewDue") for row in research if row.get("kind") == "business-thesis")
+                    # A case timer requests a fresh source check (already done),
+                    # not another paid review of the same question and evidence.
+                    if (not any(row.get("reviewDue") for row in research if row.get("kind") == "business-thesis")
                             and (previous.get("inputFingerprint") == fingerprint or previous.get("observationRepeatKey") == repeat_key) and previous.get("observedAt")
                             and previous.get("executionPromptVersion") == (evidence_purpose.PROMPT_VERSION if evidence_purpose.enabled(packet) else evidence_readiness.PROMPT_VERSION if evidence_readiness.enabled(packet) else LANE_PROMPT_VERSION if lanes.identified(packet) else PROMPT_VERSION)
                             and previous.get("quality", {}).get("status") in {"accepted", "observation-only"}

@@ -1,5 +1,6 @@
 """One audited entry point for model execution, including existing domain workflows."""
 import hashlib
+import json
 from contextlib import contextmanager, nullcontext
 from contextvars import ContextVar
 from functools import lru_cache
@@ -16,6 +17,31 @@ CURRENT_CALL_METRICS = ContextVar("ai_control_call_metrics", default=None)
 
 def current_execution_metrics():
     return CURRENT_CALL_METRICS.get()
+
+
+def record_execution_usage(stdout):
+    """Read only numeric terminal usage; never persist prompt/model output."""
+    from ..domain.token_budget import usage_counts
+    metrics = current_execution_metrics()
+    if metrics is None:
+        return
+    text = stdout.decode("utf-8", errors="replace") if isinstance(stdout, bytes) else str(stdout or "")
+    totals, turns, complete = {}, 0, True
+    for line in text.splitlines():
+        try:
+            event = json.loads(line)
+        except (ValueError, TypeError):
+            continue
+        if not isinstance(event, dict) or event.get("type") != "turn.completed":
+            continue
+        turns += 1
+        counts = usage_counts(event.get("usage"))
+        if counts is None:
+            complete = False
+        else:
+            for key, value in counts.items():
+                totals[key] = totals.get(key, 0) + value
+    metrics["usage"] = totals if turns and complete else None
 
 
 @lru_cache(maxsize=4)
@@ -59,6 +85,9 @@ def ai_execution(workload, prompt="", settings=None, store=None):
         with capacity:
             yield call_id
     except BaseException as error:
+        from digital_twin.infrastructure.local_ai_process_guard import LocalAICapacityUnavailable
+        if isinstance(error, LocalAICapacityUnavailable):
+            metrics["processNotStarted"] = True
         diagnostic = exception_diagnostic(error)
         if diagnostic:
             metrics["failure"] = diagnostic
@@ -79,6 +108,7 @@ def ai_execution(workload, prompt="", settings=None, store=None):
 def execute_ai_work(workload, prompt, invoke, settings=None):
     with ai_execution(workload, prompt, settings):
         result = invoke()
+        record_execution_usage(getattr(result, "stdout", ""))
         diagnostic = process_diagnostic(result)
         if diagnostic:
             raise AIExecutionError(diagnostic)

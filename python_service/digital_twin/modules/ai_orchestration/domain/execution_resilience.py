@@ -158,17 +158,21 @@ def finish_execution(state, ticket, now, outcome, diagnostic=None):
         # A slow success admitted before a newer failure cannot erase that failure.
         if not probe and ticket["failures"] != int(state.get("failures", 0)):
             return state
-        state.update(failures=0, blockedUntil="", probeToken="", probeUntil="", lastSuccessAt=stamp(now))
+        state.update(failures=0, quotaFailures=0, blockedUntil="", probeToken="", probeUntil="", lastSuccessAt=stamp(now))
         if probe:
             state["generation"] = int(state.get("generation", 0)) + 1
         return state
     if diagnostic and diagnostic["category"] != "invalid-request":
         failures = int(state.get("failures", 0)) + 1
         category = diagnostic["category"]
+        if category == "quota":
+            state["quotaFailures"] = int(state.get("quotaFailures", 0)) + 1
         state.update(failures=failures, lastFailureAt=stamp(now), lastFailureCategory=category,
                      lastFailure=diagnostic)
         if failures >= 3 or category in {"quota", "authentication"} or probe:
             delay = 900 if category in {"quota", "authentication"} else min(900, 60 * 2 ** min(4, max(0, failures - 3)))
+            if category == "quota":
+                delay = min(21600, 3600 * 2 ** min(3, state["quotaFailures"] - 1))
             state.update(blockedUntil=stamp(now + timedelta(seconds=delay)), probeToken="", probeUntil="",
                          generation=int(state.get("generation", 0)) + 1)
     elif probe:

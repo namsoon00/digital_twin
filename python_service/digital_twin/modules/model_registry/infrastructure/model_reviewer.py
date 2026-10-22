@@ -181,6 +181,13 @@ def run_background_ai_prompt(
     settings: Dict[str, object] = None,
 ):
     configured = settings or runtime_settings()
+    # Keep existing callers' final-text contract, while the shared gateway
+    # receives Codex's JSONL usage before that output is decoded.
+    decode_events = (isinstance(command, (list, tuple)) and "exec" in command
+                     and "--skip-git-repo-check" in command and "--json" not in command)
+    if decode_events:
+        command = list(command)
+        command.insert(command.index("exec") + 1, "--json")
     maximum = _bounded_int(
         configured.get("localAiMaxConcurrentProcesses") or os.environ.get("ORBIT_LOCAL_AI_MAX_CONCURRENT") or 2,
         2,
@@ -200,7 +207,7 @@ def run_background_ai_prompt(
         900,
     )
     from digital_twin.modules.ai_orchestration.public import execute_ai_work, current_execution_metrics
-    return execute_ai_work(str(configured.get("aiWorkload") or "background"), prompt, lambda: run_ai_prompt_command(
+    completed = execute_ai_work(str(configured.get("aiWorkload") or "background"), prompt, lambda: run_ai_prompt_command(
         command,
         prompt,
         lock_dir=data_dir() / "local-ai-capacity",
@@ -213,6 +220,13 @@ def run_background_ai_prompt(
         env=dict(os.environ),
         execution_metrics=current_execution_metrics(),
     ), configured)
+    if decode_events:
+        from digital_twin.infrastructure.codex_execution_output import codex_execution_output
+        output, diagnostics = codex_execution_output(completed.stdout)
+        if not diagnostics["turnCompleted"] or not output:
+            raise ValueError("background AI returned no completed message")
+        completed.stdout = output
+    return completed
 
 
 def codex_command(_requested_model: str = "", reasoning_effort: str = "") -> str:

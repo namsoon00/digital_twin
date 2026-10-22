@@ -204,7 +204,7 @@ class RetrievalAuditStorageTests(unittest.TestCase):
         from digital_twin.modules.ai_orchestration.infrastructure.mysql_control import MySQLAIControlStore
         load_local_env()
         isolated = mysql_test_settings()
-        self.settings = {**runtime_settings(), **isolated, "aiControlBudgetEnabled": "false"}
+        self.settings = {**runtime_settings(), **isolated, "aiControlBudgetEnabled": "false", "aiTokenBudgetEnabled": "false"}
         self.store = MySQLAIControlStore(self.settings)
         self.clean()
         self.store.seed(SUBJECT)
@@ -212,7 +212,7 @@ class RetrievalAuditStorageTests(unittest.TestCase):
 
     def clean(self):
         with self.store.transaction() as c:
-            for table in ("ai_control_input_calls", "ai_control_inputs", "ai_control_tasks", "ai_control_budget", "ai_control_calls"):
+            for table in ("ai_control_input_calls", "ai_control_inputs", "ai_control_tasks", "ai_control_budget", "ai_control_calls", "ai_control_call_metrics", "ai_control_execution_state"):
                 c.execute("DELETE FROM " + table)
 
     def tearDown(self):

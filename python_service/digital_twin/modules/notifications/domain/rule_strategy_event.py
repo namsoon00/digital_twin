@@ -13,6 +13,7 @@ def strategy_phase_events(current, previous):
     if not current.get("proofIdentityVerified") or not all(scope.values()):
         return []
     groups = {}
+    native_rules = {r.get("id"): r for r in rows(current.get("rules")) if r.get("nativeProof")}
     for rule in rows(current.get("rules")):
         claim = rule.get("claimContract") or {}
         contract = claim.get("strategyContract") or {}
@@ -24,15 +25,33 @@ def strategy_phase_events(current, previous):
                 or not intent or intent.get("ruleId") != rule.get("id") or intent.get("purpose") != "context-evidence"):
             continue
         conditions = rows(rule.get("conditions"))
+        proof_rules = {rule["id"]: rule}
         required = {"strategy-market", *["strategy-model-" + str(i + 1) for i in range(len(contract["phases"][phase]))]}
         proved = {c.get("conditionId") for c in conditions if c.get("matchedByTypeDB") is True
                   and c.get("judgementEvidenceUsable") is True
                   and c.get("freshnessStatus") in {"fresh", "live", "current", "available", "not-applicable"}}
+        # PortfolioWorld evaluates public predicates through exact shared
+        # premise references. Resolve only the linked native trace, never an
+        # unrelated matching rule or the disappearance of a prior condition.
+        for condition in conditions:
+            lineage = condition.get("premiseLineage") or {}
+            shared = native_rules.get("shared.premise." + rule["id"]) or {}
+            if (condition.get("conditionId") not in proved
+                    or condition.get("conditionId") != "shared-market-premise:" + rule["id"]
+                    or lineage.get("originalRuleId") != rule["id"]
+                    or lineage.get("status") != "available" or not lineage.get("premiseProofId")
+                    or shared.get("traceId") != lineage["premiseProofId"] or shared.get("matched") is False):
+                continue
+            proof_rules[shared["id"]] = shared
+            proved.update(c.get("conditionId") for c in rows(shared.get("conditions"))
+                          if c.get("matchedByTypeDB") is True and c.get("judgementEvidenceUsable") is True
+                          and c.get("freshnessStatus") in {"fresh", "live", "current", "available", "not-applicable"})
         if not required.issubset(proved):
             continue
         key = fingerprint({**scope, "strategyId": contract["strategyId"], "contract": contract["contractFingerprint"]})
-        group = groups.setdefault(key, {"contract": contract, "rules": {}, "intent": intent})
+        group = groups.setdefault(key, {"contract": contract, "rules": {}, "proofRules": {}, "intent": intent})
         group["rules"][phase] = rule
+        group["proofRules"].update(proof_rules)
     history = (previous.get("notificationIntentContinuity") or {}) if (
         previous.get("receiptJobId") and previous.get("deliveredAt")
         and all(previous.get(k) == v for k, v in scope.items())) else {}
@@ -49,7 +68,7 @@ def strategy_phase_events(current, previous):
             continue
         signature = fingerprint({"contract": contract["contractFingerprint"], "phases": phases})
         conditions = [{**deepcopy(c), "ruleId": rule["id"]}
-                      for rule in phase_rules.values() for c in rule["conditions"]]
+                      for rule in group["proofRules"].values() for c in rule["conditions"]]
         next_checks = list(dict.fromkeys(text for rule in phase_rules.values() for text in rule.get("nextChecks") or []))
         result.append({"version": VERSION, **scope,
             "eventId": "rule-strategy:" + fingerprint([key, signature])[:24], "intentKey": key,
@@ -61,7 +80,7 @@ def strategy_phase_events(current, previous):
                                     for rid in contract["phases"][p]] for p in phases},
             "inferenceGenerationId": current.get("inferenceGenerationId"), "sourceAboxSnapshotId": current.get("sourceAboxSnapshotId"),
             "transitionId": "", "lifecycleKey": "", "observedAt": current.get("observedAt"), "hypothesis": {},
-            "sourceRuleIds": [r["id"] for r in phase_rules.values()], "conditions": conditions,
+            "sourceRuleIds": list(group["proofRules"]), "conditions": conditions,
             "signalValiditySeconds": contract["signalValiditySeconds"],
             "tradeTimingQualified": False, "orderAuthorized": False,
             "conflictingConditions": "entry" in phases and bool(set(phases) & {"invalidation", "exit"}),

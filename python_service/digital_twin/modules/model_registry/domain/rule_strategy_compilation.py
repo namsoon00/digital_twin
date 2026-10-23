@@ -91,7 +91,12 @@ def strategy_rule_violations(rule):
     if rule.rule_id != phase_rule_id(contract, phase):
         errors.append("strategy rule identity does not match the frozen contract")
     def predicate(c):
-        return {k: v for k, v in c.to_dict().items() if k not in {"description", "hypothesis_scope", "evidence_group_key"}}
+        values = {k: v for k, v in c.to_dict().items() if k not in {"description", "hypothesis_scope", "evidence_group_key"}}
+        # TypeDB's legacy reader omits these optional routing flags. Absence
+        # means true by the condition contract; an explicit false still differs.
+        values.setdefault("change_trigger", True)
+        values.setdefault("invalidation_trigger", True)
+        return values
     if [predicate(c) for c in rule.conditions] != [predicate(c) for c in phase_conditions(contract, phase)]:
         errors.append("strategy predicates differ from the frozen model bindings")
     expected = compile_strategy_rules(contract)[list(PHASES).index(phase)]

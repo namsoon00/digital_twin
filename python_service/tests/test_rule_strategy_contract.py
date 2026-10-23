@@ -107,6 +107,11 @@ class RuleStrategyContractTests(TestCase):
                 'json': json.dumps(entity.properties)}, 'RuleBox'))
         restored = build_rulebox_rules_from_rows(rows['rule'], rows['rule-condition'], rows['relation-template'])
         self.assertEqual(4, len(restored))
+        self.assertEqual([], rulebox_semantic_violations(restored))
+        from digital_twin.modules.model_registry.domain.rule_strategy_compilation import strategy_rule_violations
+        altered = replace(restored[0], conditions=[restored[0].conditions[0],
+            replace(restored[0].conditions[1], change_trigger=False)])
+        self.assertIn('strategy predicates differ from the frozen model bindings', strategy_rule_violations(altered))
         for rule in restored:
             self.assertEqual('ready', typedb_native_rule_profile(rule.to_dict())['status'])
             original = next(r for r in rules if r.rule_id == rule.rule_id)
@@ -239,6 +244,21 @@ class RuleStrategyContractTests(TestCase):
         wrong = live_phase_snapshot(['entry'])
         wrong['market'] = 'US'
         self.assertEqual([], strategy_phase_events(wrong, {}))
+        partitioned = live_phase_snapshot(['entry'])
+        phase = partitioned['rules'][0]
+        shared_conditions = phase['conditions']
+        phase['conditions'] = [{**shared_conditions[0], 'conditionId': 'shared-market-premise:' + phase['id'],
+            'premiseLineage': {'originalRuleId': phase['id'], 'premiseProofId': 'shared-proof', 'status': 'available'}}]
+        partitioned['rules'].append({'id': 'shared.premise.' + phase['id'], 'nativeProof': True,
+            'traceId': 'shared-proof', 'matched': True, 'conditions': shared_conditions})
+        shared_events = strategy_phase_events(partitioned, {})
+        self.assertEqual(['entry'], shared_events[0]['strategyPhases'])
+        self.assertEqual(2, len(shared_events[0]['sourceRuleIds']))
+        packet = {'current': partitioned, 'customerEvents': shared_events}
+        self.assertTrue(rule_dispatch_validity(packet, now=datetime(2026, 10, 23, 1, 5, tzinfo=timezone.utc))['allowed'])
+        self.assertFalse(rule_dispatch_validity(packet, now=datetime(2026, 10, 23, 1, 20, tzinfo=timezone.utc))['allowed'])
+        partitioned['rules'][-1]['traceId'] = 'unrelated-proof'
+        self.assertEqual([], strategy_phase_events(partitioned, {}))
 
     def test_operational_strategy_context_can_publish_without_ai_or_predictive_hypothesis(self):
         from digital_twin.modules.notifications.domain.rule_context_event import native_context_rule_ids
@@ -274,8 +294,13 @@ class RuleStrategyContractTests(TestCase):
                 'evidenceId': evidence_id, 'symbol': symbol, 'sourceFeatureSnapshotId': 'features',
                 'knowledgeCutoffAt': '2026-10-23T01:00:00Z', 'windowKey': '3D',
                 'hasSufficientHistory': True, 'priceChangePct': -2.34}]}
+        shared = {**deepcopy(proof), 'ruleId': 'shared.premise.' + rule.rule_id,
+                  'inferenceTraceId': 'shared-proof'}
+        proof['matchedConditions'] = [{**current['rules'][0]['conditions'][0],
+            'conditionId': 'shared-market-premise:' + rule.rule_id,
+            'premiseLineage': {'originalRuleId': rule.rule_id, 'premiseProofId': 'shared-proof', 'status': 'available'}}]
         live['matchedRules'], live['activeRules'], live['referenceRules'] = [proof], [proof], []
-        live['graphStoreInference']['traces'] = [proof]
+        live['graphStoreInference']['traces'] = [proof, shared]
         live['graphStoreInference']['relations'] = []
         context['relationChangeEvidence'] = relation_change_evidence(context)
         self.assertTrue(context['relationChangeEvidence']['eligible'])

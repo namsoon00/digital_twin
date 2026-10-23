@@ -133,7 +133,7 @@ def relation_change_snapshot(context):
                 "label", "field", "operator", "observedValue", "matched", "evidenceIds", "ruleConditionShape",
                 "matchedByTypeDB", "observedAt", "source", "freshnessStatus", "judgementEvidenceUsable",
                 "sourceFetchedAt", "freshnessRequired", "maxAgeMinutes", "validUntil", "marketSessionStatus",
-                "resolutionMatchedByTypeDB", "resolutionOperator",
+                "resolutionMatchedByTypeDB", "resolutionOperator", "premiseLineage",
             ) if isinstance(condition.get(key), (str, int, float, bool, list, dict))}
             captured["expectedValue"] = deepcopy(condition.get("expectedValue", condition.get("value")))
             captured["resolvedThreshold"] = resolved_rule_threshold(captured, facts)

@@ -302,6 +302,8 @@ def narrative_digest(result):
         content["businessResearch"] = result["businessResearch"]
     if "companyValue" in result:
         content["companyValue"] = result["companyValue"]
+    if "companyValuePresentationVersion" in result:
+        content["companyValuePresentationVersion"] = result["companyValuePresentationVersion"]
     if "questionResolutions" in result:
         content["questionResolutions"] = result["questionResolutions"]
     return content_hash(content)

@@ -125,8 +125,10 @@ def validate_plan(value, packet, research=(), require_research=False, require_re
     from .company_value import enabled as value_enabled, validate as validate_value
     if value_enabled(packet):
         from copy import deepcopy
+        from digital_twin.modules.notifications.contracts import COMPANY_VALUE_PRESENTATION_VERSION
         validate_value(packet)
         result["companyValue"] = deepcopy(packet["companyValueContext"])
+        result["companyValuePresentationVersion"] = COMPANY_VALUE_PRESENTATION_VERSION
     from .scoped_research import validate_plan as validate_scope
     validate_scope(result, packet)
     return result

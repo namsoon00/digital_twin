@@ -3,7 +3,7 @@ from copy import deepcopy
 import unittest
 from unittest.mock import Mock
 
-from ai_insight_fixtures import plan, ref
+from ai_insight_fixtures import plan, ref, review
 from test_bounded_evidence_readiness import packet
 from test_scoped_knowledge_research import scoped_decision
 import test_valuation_snapshot as valuation_fixture
@@ -16,9 +16,12 @@ from digital_twin.modules.ai_orchestration.domain import company_value, evidence
 from digital_twin.modules.ai_orchestration.application.working_retrieval import retrieve_working_evidence
 from digital_twin.modules.ai_orchestration.domain.execution_input import freeze_execution_input, freeze_repair_input, freeze_review_input, validate_execution_input
 from digital_twin.modules.ai_orchestration.domain.planning import validate_plan
-from digital_twin.modules.ai_orchestration.domain.insight_quality import local_quality
-from digital_twin.modules.ai_orchestration.domain.insight_contract import insight_fingerprint
+from digital_twin.modules.ai_orchestration.domain.insight_quality import local_quality, accept_review, quality_block
+from digital_twin.modules.ai_orchestration.domain.insight_contract import insight_fingerprint, narrative_digest
 from digital_twin.modules.notifications.application.ai_observation_message import render_ai_observation
+from digital_twin.modules.notifications.application.company_value_message import value_lines
+from digital_twin.modules.notifications.contracts import COMPANY_VALUE_PRESENTATION_VERSION
+from digital_twin.modules.notifications.application.ai_observation_message import clock_label, figure
 
 
 def valuation_packet(eligible=True):
@@ -93,6 +96,10 @@ class CompanyValueObservationTests(unittest.TestCase):
         self.assertTrue(local_quality(old)['errors'])
 
     def test_unreviewed_future_currency_and_non_per_share_values_fail_closed(self):
+        self.assert_completed_shadow_calculation_and_missing_estimate_are_distinct()
+        self.assert_missing_estimate_does_not_invent_model_validation_failure()
+        self.assert_insufficient_inputs_do_not_claim_calculation_completed()
+        self.assert_completion_requires_the_matching_frozen_assessment()
         for mutation, reason in (
             (lambda f: f.update(valuationDecisionEligible=False), 'valuation-not-admitted'),
             (lambda f: f.update(valuationCurrency='KRW'), 'per-share-currency-unconfirmed'),
@@ -111,7 +118,8 @@ class CompanyValueObservationTests(unittest.TestCase):
         raw = plan(); raw['notification']['send'] = False
         result = {**validate_plan(raw, value), 'input': value, 'observedAt': value['capturedAt']}
         message = render_ai_observation(result)
-        self.assertIn('평가 보류', message); self.assertNotIn('기준 40달러', message)
+        self.assertIn('계산 완료 · 평가·자료 기준 시점 확인 필요', message)
+        self.assertNotIn('기준 40달러', message)
         value = valuation_packet()
         value['facts'] = [f for f in value['facts'] if f['kind'] != 'fair-value-estimate']
         reasons = company_value_context(value)['models'][0]['blockedReasons']
@@ -151,6 +159,8 @@ class CompanyValueObservationTests(unittest.TestCase):
         self.assertNotEqual(original['models'][0]['basisFingerprint'], value['companyValueContext']['models'][0]['basisFingerprint'])
 
     def test_exact_view_budget_is_audited_and_cannot_change_a_value(self):
+        self.assert_budget_exclusion_is_unread_and_later_selection_removes_warning()
+        self.assert_blocked_and_unread_models_remain_visible_alongside_available_values()
         value = valuation_packet(); session = ObservationEvidenceSession(value, value['facts'])
         baseline = session.company_value_baseline()
         self.assertLessEqual(baseline['bytes'], 32000)
@@ -170,11 +180,122 @@ class CompanyValueObservationTests(unittest.TestCase):
         self.assertEqual('available', company_value_context({**value, 'facts': list(compact['views'].values())})['status'])
 
     def test_predecessor_input_remains_replayable_and_crypto_is_not_valued(self):
+        self.assert_new_presentation_is_review_bound_without_changing_legacy_or_novelty()
+        self.assert_reviewed_presentation_cannot_be_changed_before_delivery()
         old = evidence_purpose.annotate(packet()); frozen = freeze_execution_input(old, [], [])
         self.assertEqual(evidence_purpose.PROMPT_VERSION, frozen['promptVersion'])
         validate_execution_input(frozen)
         crypto = deepcopy(old); crypto['facts'][0]['kind'] = 'crypto-asset'
         self.assertNotIn('companyValuePolicy', company_value.annotate(crypto))
+
+    def status_message(self, packet):
+        packet = company_value.refresh(packet)
+        return '\n'.join(value_lines(packet['companyValueContext'], clock_label, figure,
+            packet=packet, presentation_version=COMPANY_VALUE_PRESENTATION_VERSION))
+
+    def assert_completed_shadow_calculation_and_missing_estimate_are_distinct(self):
+        value = valuation_packet()
+        assessment = next(f for f in value['facts'] if f['kind'] == 'valuation-assessment')
+        assessment['payload'].update(modelApprovalState='shadow', valuationDecisionEligible=False)
+        assessment['valuationDecisionEligible'] = False
+        # A different assessment's price cannot fill this model's missing link.
+        next(f for f in value['facts'] if f['kind'] == 'fair-value-estimate')['valuationAssessmentId'] = 'other-assessment'
+        original = deepcopy(value)
+        message = self.status_message(value)
+        self.assertIn('계산 완료 · 모델 검증 필요 / 주당 가치 연결 필요', message)
+        self.assertIn('모델 검증을 마친 뒤 같은 계산의 주당 가치 결과가 연결되는지 확인해야 합니다.', message)
+        for absent in ('자료가 없습니다', '주당 기준·통화 확인 필요', '기준 40달러', 'shadow'):
+            self.assertNotIn(absent, message)
+        self.assertEqual(original, value)
+
+    def assert_missing_estimate_does_not_invent_model_validation_failure(self):
+        value = valuation_packet()
+        value['facts'] = [f for f in value['facts'] if f['kind'] != 'fair-value-estimate']
+        message = self.status_message(value)
+        self.assertIn('계산 완료 · 주당 가치 연결 필요', message)
+        self.assertNotIn('모델 검증 필요', message)
+        next(f for f in value['facts'] if f['kind'] == 'valuation-assessment')['valuationDecisionEligible'] = False
+        self.assertIn('평가 사용 조건 확인 필요', self.status_message(value))
+
+    def assert_insufficient_inputs_do_not_claim_calculation_completed(self):
+        value = valuation_packet()
+        assessment = next(f for f in value['facts'] if f['kind'] == 'valuation-assessment')
+        assessment['payload'].update(calculationStatus='blocked', inputEligibility='partial', valuationDecisionEligible=False)
+        message = self.status_message(value)
+        self.assertIn('계산 미완료 · 계산 자료 보완 필요', message)
+        self.assertNotIn('계산 완료', message)
+        self.assertNotIn('기준 40달러', message)
+        assessment['payload']['modelApprovalState'] = 'shadow'
+        message = self.status_message(value)
+        self.assertIn('모델 검증 필요 / 계산 자료 보완 필요', message)
+
+    def assert_budget_exclusion_is_unread_and_later_selection_removes_warning(self):
+        value = valuation_packet()
+        model = value['companyValueContext']['models'][0]
+        value['companyValueEvidence'] = {'availableAssessments': 1, 'omitted': [
+            {'factId': model['assessmentFactId'], 'reason': 'company-value-budget'}]}
+        no_read = deepcopy(value)
+        no_read['facts'] = [f for f in value['facts'] if f['kind'] == 'stock']
+        message = self.status_message(no_read)
+        self.assertIn('가치평가 자료 미조회', message)
+        self.assertIn('조회 용량 제한으로 평가 1건', message)
+        self.assertNotIn('평가 보류', message)
+        self.assertNotIn('계산 기록을 찾지 못했습니다', message)
+        self.assertNotIn('미조회', self.status_message(value))
+        no_read['companyValueEvidence'] = {'availableAssessments': 0, 'omitted': []}
+        self.assertIn('조회한 자료 범위에서 계산 기록을 찾지 못했습니다', self.status_message(no_read))
+        no_read.pop('companyValueEvidence')
+        self.assertIn('가치평가 확인 전', self.status_message(no_read))
+
+    def assert_blocked_and_unread_models_remain_visible_alongside_available_values(self):
+        value = valuation_packet()
+        assessment = deepcopy(next(f for f in value['facts'] if f['kind'] == 'valuation-assessment'))
+        assessment.update(id='second-assessment', valuationAssessmentId='second')
+        assessment['payload'].update(modelId='driver-fcff-dcf', modelApprovalState='shadow', valuationDecisionEligible=False)
+        value['facts'].append(assessment)
+        value['companyValueEvidence'] = {'availableAssessments': 3, 'omitted': [
+            {'factId': 'third-assessment', 'reason': 'company-value-budget'}]}
+        message = self.status_message(value)
+        self.assertIn('기준 40달러', message)
+        self.assertIn('미래 현금흐름 기준', message)
+        self.assertIn('계산 완료 · 모델 검증 필요 / 주당 가치 연결 필요', message)
+        self.assertIn('자료 일부 미조회', message)
+
+    def assert_completion_requires_the_matching_frozen_assessment(self):
+        value = valuation_packet()
+        value['facts'] = [f for f in value['facts'] if f['kind'] != 'fair-value-estimate']
+        value = company_value.refresh(value)
+        model = value['companyValueContext']['models'][0]
+        from digital_twin.modules.notifications.domain.company_value_status import hold_details
+        for field, other in (('symbol', 'OTHER'), ('id', 'unrelated')):
+            changed = deepcopy(value)
+            next(f for f in changed['facts'] if f['kind'] == 'valuation-assessment')[field] = other
+            self.assertEqual('계산 상태 확인 필요', hold_details(model, changed)['stage'])
+
+    def assert_new_presentation_is_review_bound_without_changing_legacy_or_novelty(self):
+        value = valuation_packet()
+        value['facts'] = [f for f in value['facts'] if f['kind'] != 'fair-value-estimate']
+        value['facts'], value['coverage'] = select_evidence(value['facts'])
+        value = company_value.refresh(value)
+        raw = plan(); raw['notification']['send'] = False
+        result = {**validate_plan(raw, value), 'input': value, 'observedAt': value['capturedAt']}
+        self.assertEqual(COMPANY_VALUE_PRESENTATION_VERSION, result['companyValuePresentationVersion'])
+        legacy = deepcopy(result); legacy.pop('companyValuePresentationVersion')
+        self.assertIn('평가 보류 ·', render_ai_observation(legacy))
+        self.assertIn('계산 완료 · 주당 가치 연결 필요', render_ai_observation(result))
+        self.assertNotEqual(narrative_digest(result), narrative_digest(legacy))
+        self.assertEqual(insight_fingerprint(result, value), insight_fingerprint(legacy, value))
+        validate_execution_input(freeze_review_input(result))
+        result['companyValuePresentationVersion'] = 'unknown'
+        self.assertIn('지원하지 않는 기업 가치 상태 표시 계약입니다.', company_value.quality_errors(result))
+
+    def assert_reviewed_presentation_cannot_be_changed_before_delivery(self):
+        value = valuation_packet()
+        result = {**validate_plan(value_plan(value), value), 'input': value, 'observedAt': value['capturedAt']}
+        result['quality'] = accept_review(result, review(), 'synthetic-review')
+        self.assertEqual('', quality_block(result))
+        result.pop('companyValuePresentationVersion')
+        self.assertIn('검증 이후 분석 근거나 문장이 달라져', quality_block(result))
 
 
 if __name__ == '__main__':

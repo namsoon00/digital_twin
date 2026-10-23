@@ -63,7 +63,8 @@ def render_ai_observation(result, *, sent_at="", debug_number=""):
         lines += [basis["label"] + " 기준 · " + clock_label(basis.get("sourceAsOf")), basis["reason"], ""]
     lines.append(result["summary"])
     from .company_value_message import value_lines
-    lines += value_lines(result.get("companyValue"), clock_label, figure)
+    lines += value_lines(result.get("companyValue"), clock_label, figure, packet=packet,
+                         presentation_version=result.get("companyValuePresentationVersion"))
     lines += ["", "이전 알림과 비교", result["comparison"]]
     compared = set()
     for row in result.get("observations", []):

@@ -77,6 +77,9 @@ def quality_errors(result):
     packet = result["input"]
     if not enabled(packet):
         return []
+    from digital_twin.modules.notifications.contracts import COMPANY_VALUE_PRESENTATION_VERSION
+    if result.get("companyValuePresentationVersion") not in {None, COMPANY_VALUE_PRESENTATION_VERSION}:
+        return ["지원하지 않는 기업 가치 상태 표시 계약입니다."]
     try:
         validate(packet)
     except EvidenceContractError:

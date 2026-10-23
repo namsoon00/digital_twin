@@ -1,4 +1,5 @@
 """Render frozen calculation values, never a model-authored target price."""
+from ..domain.company_value_status import COMPANY_VALUE_PRESENTATION_VERSION, hold_details, unread_value_lines
 
 LABELS = {
     "non-positive-equity-value": "계산된 주주가치가 양수가 아닙니다",
@@ -26,7 +27,25 @@ MODEL_LABELS = {
 }
 
 
-def value_lines(value, clock_label, figure):
+def value_lines(value, clock_label, figure, *, packet=None, presentation_version=None):
+    if not value or presentation_version != COMPANY_VALUE_PRESENTATION_VERSION:
+        return legacy_value_lines(value, clock_label, figure)
+    packet = packet or {}
+    available = [m for m in value.get("models", []) if m.get("status") == "available"]
+    lines = legacy_value_lines({**value, "models": available}, clock_label, figure) if available else ["", "기업의 주당 가치"]
+    for index, model in enumerate(value.get("models", []), 1):
+        if model.get("status") == "available":
+            continue
+        details = hold_details(model, packet)
+        lines.append(MODEL_LABELS.get(model.get("modelId"), "평가 방법 " + str(index)))
+        lines.append(details["stage"] + " · " + " / ".join(label for label, _ in details["checks"][:3]))
+        lines.extend("• " + description for _, description in details["checks"][:3])
+        if len(details["checks"]) > 3:
+            lines.append("• 추가 확인: " + " / ".join(label for label, _ in details["checks"][3:]))
+    return lines + unread_value_lines(value, packet)
+
+
+def legacy_value_lines(value, clock_label, figure):
     if not value:
         return []
     lines = ["", "기업의 주당 가치"]

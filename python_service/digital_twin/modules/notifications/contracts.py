@@ -17,6 +17,7 @@ _EXPORTS = {'DeliveryPolicyContext': ('digital_twin.modules.notifications.domain
                            'presentation_metadata')}
 
 _EXPORTS['independent_typedb_publication'] = ('digital_twin.modules.notifications.domain.typedb_publication', 'independent_typedb_publication')
+_EXPORTS['COMPANY_VALUE_PRESENTATION_VERSION'] = ('digital_twin.modules.notifications.domain.company_value_status', 'COMPANY_VALUE_PRESENTATION_VERSION')
 _EXPORTS['management_observation_assessment'] = ('digital_twin.modules.notifications.domain.management_observation', 'management_observation_assessment')
 _EXPORTS['price_movement_lines'] = ('digital_twin.modules.notifications.domain.price_movement_presentation', 'price_movement_lines')
 _EXPORTS['position_price_lines'] = ('digital_twin.modules.notifications.domain.price_movement_presentation', 'position_price_lines')

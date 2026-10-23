@@ -6,7 +6,7 @@ from digital_twin.modules.reasoning.contracts import EvidenceContractError, Evid
 from digital_twin.modules.ai_orchestration.application.retrieval import RetrievalLeaseLost, RetrievalContractFailure
 from .working_retrieval import retrieve_working_evidence
 from ..domain.observation_wait import retry_key, disposition, unchanged_wait
-from ..domain import research_repeat as repeat, execution_lanes as lanes, evidence_readiness, evidence_purpose
+from ..domain import research_repeat as repeat, execution_lanes as lanes, evidence_readiness, evidence_purpose, company_value
 from digital_twin.modules.ai_orchestration.domain.planning import enabled, identity, stamp, validate_plan, observation_fingerprint
 from digital_twin.modules.ai_orchestration.domain.execution_input import LANE_PROMPT_VERSION, freeze_execution_input, freeze_review_input, freeze_repair_input, PROMPT_VERSION
 from digital_twin.modules.ai_orchestration.domain.insight_repair import correction_warranted
@@ -86,6 +86,7 @@ class AIControlService:
                                else self.store.memory(job["accountId"], job["symbol"]))
                     stage = "memory-and-followup"
                     history = [row for row in history if not row.get("worldId") or row["worldId"] == job["worldId"]]
+                    packet = company_value.annotate(packet, history)
                     brain_reader = (self.market_brain_memory or self.brain_memory) if lanes.market(packet) else self.brain_memory
                     research = list(brain_reader(job["accountId"], job["symbol"], job["worldId"]))
                     research.extend(self.research_memory(job["accountId"], job["symbol"]))
@@ -149,7 +150,7 @@ class AIControlService:
                     # not another paid review of the same question and evidence.
                     if (not any(row.get("reviewDue") for row in research if row.get("kind") == "business-thesis")
                             and (previous.get("inputFingerprint") == fingerprint or previous.get("observationRepeatKey") == repeat_key) and previous.get("observedAt")
-                            and previous.get("executionPromptVersion") == (evidence_purpose.PROMPT_VERSION if evidence_purpose.enabled(packet) else evidence_readiness.PROMPT_VERSION if evidence_readiness.enabled(packet) else LANE_PROMPT_VERSION if lanes.identified(packet) else PROMPT_VERSION)
+                            and previous.get("executionPromptVersion") == (evidence_purpose.author_version(packet) if evidence_purpose.enabled(packet) else evidence_readiness.PROMPT_VERSION if evidence_readiness.enabled(packet) else LANE_PROMPT_VERSION if lanes.identified(packet) else PROMPT_VERSION)
                             and previous.get("quality", {}).get("status") in {"accepted", "observation-only"}
                             and datetime.fromisoformat(previous["observedAt"].replace("Z", "+00:00")) <= datetime.now(timezone.utc)
                             and not any(row.get("transitionVerified") for row in packet["followUpEvaluations"])):
@@ -202,7 +203,7 @@ class AIControlService:
                     plan, raw, envelope, input_id, validation_repair = validate_author(raw, envelope, input_id,
                         self.planner, lambda value: self.store.save_execution_input(job, value))
                     result = {**plan, "input": packet, "inputFingerprint": fingerprint, "observationRepeatKey": repeat_key, "observedAt": stamp(),
-                              "executionInputId": input_id, "executionPromptVersion": evidence_purpose.PROMPT_VERSION if evidence_purpose.enabled(packet) else evidence_readiness.PROMPT_VERSION if evidence_readiness.enabled(packet) else LANE_PROMPT_VERSION if lanes.identified(packet) else PROMPT_VERSION,
+                              "executionInputId": input_id, "executionPromptVersion": evidence_purpose.author_version(packet) if evidence_purpose.enabled(packet) else evidence_readiness.PROMPT_VERSION if evidence_readiness.enabled(packet) else LANE_PROMPT_VERSION if lanes.identified(packet) else PROMPT_VERSION,
                               "wordingVersion": OBSERVATION_WORDING_VERSION,
                               "memoryCoverage": envelope["memoryCoverage"],
                               "judgmentContinuity": judgment_continuity(envelope),

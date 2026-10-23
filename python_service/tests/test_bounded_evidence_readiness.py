@@ -92,7 +92,7 @@ class BoundedEvidenceReadinessTests(unittest.TestCase):
         outcome = service.run_once()
         self.assertEqual('completed', outcome['status'], outcome)
         result = store.complete.call_args.args[1]
-        self.assertEqual(evidence_purpose.PROMPT_VERSION, result['executionPromptVersion'])
+        self.assertEqual(evidence_purpose.author_version(result['input']), result['executionPromptVersion'])
         self.assertNotEqual('data-wait', result['processingOutcome']['status'])
         self.assertEqual('requested', result['dataRecovery']['status'])
         self.assertEqual(purpose_retrieval.VERSION, result['input']['retrieval']['version'])
@@ -351,6 +351,37 @@ class DartQuestionOriginalTests(unittest.TestCase):
 
 @unittest.skipUnless(os.environ.get('MYSQL_DATABASE') == 'orbit_alpha_test', 'isolated MySQL required')
 class SourceRenewalStorageTests(unittest.TestCase):
+    def test_company_value_read_author_and_review_persist_completed_call_proof(self):
+        from test_company_value_observation import valuation_packet, value_plan
+        from digital_twin.modules.ai_orchestration.domain.planning import validate_plan
+        from digital_twin.modules.ai_orchestration.infrastructure.mysql_brain_agenda import MySQLBrainAgendaStore
+        from digital_twin.infrastructure.transactions.ai_control_research_knowledge import AIControlResearchKnowledge
+        from digital_twin.modules.ai_orchestration.domain import company_value
+        value = valuation_packet(); value.update(self.subject); value['taskId'] = self.job['taskId']
+        value['sourceSnapshots'] = {value['worldId']: value['sourceSnapshotId']}
+        for fact in value['facts']:
+            fact.update(sourceWorldId=value['worldId'], sourceSnapshotId=value['sourceSnapshotId'])
+            if fact.get('accountId'): fact['accountId'] = value['accountId']
+        value = company_value.refresh(value)
+        def save(env):
+            identifier = self.store.save_execution_input(self.job, env)
+            call = self.store.begin_call('independent-observation', env['promptHash'], self.job['taskId'], identifier)
+            self.store.finish_call(call)
+            return identifier
+        selected, history, memory, trace = retrieve_working_evidence(
+            ObservationEvidenceSession(value, value['facts']), value, [], [],
+            Mock(return_value={**scoped_decision('finish', ['quote-1']), 'purpose':'source-dated','blocker':'none'}),
+            save, 262144, record_round=lambda step: self.store.save_retrieval_round(self.job, step))
+        with self.store.connect() as connection:
+            self.assertEqual(trace, AIControlResearchKnowledge.read_proof(connection, self.job,
+                {'input':selected, 'retrievalInputIds':[step['inputId'] for step in trace]}))
+        env = freeze_execution_input(selected, history, memory, retrieval_trace=trace)
+        result = {**validate_plan(value_plan(selected), selected), 'input':selected, 'executionInputId':save(env)}
+        with self.store.connect() as connection:
+            self.assertEqual(env, MySQLBrainAgendaStore.proof(connection, self.job, result))
+        review = freeze_review_input(result)
+        self.assertEqual(self.job['taskId'], self.store.review_proof(save(review))['taskId'])
+
     def test_purpose_read_author_and_review_keep_completed_call_proof(self):
         from digital_twin.infrastructure.transactions.ai_control_research_knowledge import AIControlResearchKnowledge
         value = evidence_purpose.annotate(owned_packet(self.subject, self.job['taskId']))

@@ -93,6 +93,10 @@ class ObservationEvidenceSession:
                                    or self._facts[key].get("questionSourceReference")]} if document_views else {}),
                 "policy": "reported-business-history-before-discretionary-reads"}
 
+    def company_value_baseline(self):
+        from .observation_value import value_baseline
+        return value_baseline(list(self._facts.values()))
+
     def packet(self):
         return deepcopy(self._packet)
 
@@ -165,7 +169,10 @@ class ObservationEvidenceSession:
             for index, row in enumerate(packet["facts"]):
                 view = views.get(row["id"])
                 if view is not None and view != row:
-                    if view.get("evidenceView", {}).get("version") == document_version:
+                    from .observation_value import value_view, VERSION as value_version
+                    if view.get("evidenceView", {}).get("version") == value_version:
+                        exact = value_view(row)
+                    elif view.get("evidenceView", {}).get("version") == document_version:
                         exact = {**document_view(row), "evidenceCategory": row["evidenceCategory"]}
                     else:
                         exact = report_view(row, view.get("evidenceView", {}).get("metrics"))

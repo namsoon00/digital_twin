@@ -1,5 +1,5 @@
 """Purpose-scoped source clocks. Operational metadata never renews a fact."""
-from . import evidence_readiness, execution_lanes
+from . import evidence_readiness, execution_lanes, company_value
 from digital_twin.modules.reasoning.contracts import EvidenceContractError
 
 VERSION = "purpose-scoped-evidence-v1"
@@ -40,8 +40,20 @@ def validate(packet):
         raise EvidenceContractError("selected analysis purpose changed")
 
 
+def author_version(packet):
+    return company_value.PROMPT_VERSION if company_value.enabled(packet) else PROMPT_VERSION
+
+
+def repair_version(packet):
+    return company_value.REPAIR_VERSION if company_value.enabled(packet) else REPAIR_VERSION
+
+
+def review_version(packet):
+    return company_value.REVIEW_VERSION if company_value.enabled(packet) else REVIEW_VERSION
+
+
 def prompt(packet, history, research):
-    return INSTRUCTIONS + evidence_readiness.prompt(packet, history, research)
+    return (company_value.INSTRUCTIONS if company_value.enabled(packet) else "") + INSTRUCTIONS + evidence_readiness.prompt(packet, history, research)
 
 
 schema = evidence_readiness.schema
@@ -49,7 +61,7 @@ schema = evidence_readiness.schema
 
 def review_prompt(packet, draft):
     from .knowledge_research import knowledge_review_prompt
-    return INSTRUCTIONS + knowledge_review_prompt(packet, draft)
+    return (company_value.INSTRUCTIONS if company_value.enabled(packet) else "") + INSTRUCTIONS + knowledge_review_prompt(packet, draft)
 
 
 def authored_status(result):

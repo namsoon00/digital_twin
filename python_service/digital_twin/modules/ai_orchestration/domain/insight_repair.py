@@ -9,8 +9,9 @@ def correction_warranted(result):
         return False
     if result.get("conditionValidation", {}).get("reasonCode") == "condition-baseline-unusable":
         return False  # Rewriting the same frozen quote cannot make it observable.
+    from .company_value import explains_value
     business = result.get("businessResearch") or {}
-    if insight_errors(result, result["input"]) or (not result.get("followUpConditions") and not (business.get("theses") or business.get("reviews"))):
+    if insight_errors(result, result["input"]) or (not result.get("followUpConditions") and not (business.get("theses") or business.get("reviews") or explains_value(result))):
         return True
     if "확인 가능한 사업 자료를 설명·가설·한계에 연결하지 않았습니다." in result.get("quality", {}).get("errors", []):
         return True

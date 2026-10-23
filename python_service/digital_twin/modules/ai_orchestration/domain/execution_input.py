@@ -17,7 +17,7 @@ from .question_resolution import resolution_prompt, resolution_schema, resolutio
 from .knowledge_research import knowledge_prompt, knowledge_schema, knowledge_review_prompt
 from . import working_retrieval
 from . import scoped_retrieval
-from . import indexed_retrieval, memory_reference, question_retrieval, lane_retrieval, bounded_retrieval, purpose_retrieval, evidence_readiness, evidence_purpose
+from . import indexed_retrieval, memory_reference, question_retrieval, lane_retrieval, bounded_retrieval, purpose_retrieval, evidence_readiness, evidence_purpose, company_value
 from digital_twin.modules.ai_orchestration.domain.retrieval import (
     RETRIEVAL_PROMPT_VERSION, retrieval_prompt, retrieval_schema, directed_planning_prompt, trace_summary,
     LEGACY_RETRIEVAL_PROMPT_VERSION, legacy, validate_trace,
@@ -111,7 +111,7 @@ def freeze_execution_input(packet, history, research, max_prompt_bytes=DEFAULT_P
             else:
                 used += size
                 prompt = candidate
-    return {"protocolVersion": EXECUTION_INPUT_PROTOCOL, "promptVersion": evidence_purpose.PROMPT_VERSION if evidence_purpose.enabled(current) else evidence_readiness.PROMPT_VERSION if evidence_readiness.enabled(current) else LANE_PROMPT_VERSION if current.get("executionLanePolicy") else PROMPT_VERSION, "promptBudgetBytes": limit,
+    return {"protocolVersion": EXECUTION_INPUT_PROTOCOL, "promptVersion": evidence_purpose.author_version(current) if evidence_purpose.enabled(current) else evidence_readiness.PROMPT_VERSION if evidence_readiness.enabled(current) else LANE_PROMPT_VERSION if current.get("executionLanePolicy") else PROMPT_VERSION, "promptBudgetBytes": limit,
         "current": current, "previousAnalyses": previous, "researchResults": results,
         "retrievalTrace": copy.deepcopy(retrieval_trace or []),
         "memoryCoverage": {"analysesAvailable": memory_count(history), "analysesIncluded": memory_count(previous),
@@ -126,24 +126,31 @@ def freeze_execution_input(packet, history, research, max_prompt_bytes=DEFAULT_P
 
 
 def validate_execution_input(envelope):
-    if envelope.get("promptVersion") in {evidence_purpose.PROMPT_VERSION, evidence_purpose.REPAIR_VERSION, evidence_purpose.REVIEW_VERSION}:
+    if envelope.get("promptVersion") in {evidence_purpose.PROMPT_VERSION, evidence_purpose.REPAIR_VERSION, evidence_purpose.REVIEW_VERSION, company_value.PROMPT_VERSION, company_value.REPAIR_VERSION, company_value.REVIEW_VERSION}:
         from .insight_repair import repair_prompt
         packet, phase = envelope["current"], envelope["promptVersion"]
         evidence_purpose.validate(packet)
-        review = phase == evidence_purpose.REVIEW_VERSION
+        value_version = phase in {company_value.PROMPT_VERSION, company_value.REPAIR_VERSION, company_value.REVIEW_VERSION}
+        if value_version != company_value.enabled(packet):
+            raise EvidenceContractError("company value prompt policy mismatch")
+        if value_version:
+            company_value.validate(packet)
+        review = phase in {evidence_purpose.REVIEW_VERSION, company_value.REVIEW_VERSION}
         expected = (evidence_purpose.review_prompt(packet, envelope["draft"]) if review else
                     evidence_purpose.prompt(packet, envelope["previousAnalyses"], envelope["researchResults"]))
-        if phase == evidence_purpose.REPAIR_VERSION:
+        if phase in {evidence_purpose.REPAIR_VERSION, company_value.REPAIR_VERSION}:
             expected = repair_prompt(expected, envelope["repair"])
         if envelope["prompt"] != expected or envelope["promptHash"] != hashlib.sha256(expected.encode()).hexdigest():
             raise EvidenceContractError("frozen purpose scoped input mismatch")
         old = copy.deepcopy(envelope)
-        old["promptVersion"] = {evidence_purpose.PROMPT_VERSION: evidence_readiness.PROMPT_VERSION,
+        old["promptVersion"] = {company_value.PROMPT_VERSION: evidence_readiness.PROMPT_VERSION,
+            company_value.REPAIR_VERSION: evidence_readiness.REPAIR_VERSION, company_value.REVIEW_VERSION: evidence_readiness.REVIEW_VERSION,
+            evidence_purpose.PROMPT_VERSION: evidence_readiness.PROMPT_VERSION,
             evidence_purpose.REPAIR_VERSION: evidence_readiness.REPAIR_VERSION,
             evidence_purpose.REVIEW_VERSION: evidence_readiness.REVIEW_VERSION}[phase]
         old["prompt"] = (knowledge_review_prompt(packet, envelope["draft"]) if review else
                          evidence_readiness.prompt(packet, envelope["previousAnalyses"], envelope["researchResults"]))
-        if phase == evidence_purpose.REPAIR_VERSION:
+        if phase in {evidence_purpose.REPAIR_VERSION, company_value.REPAIR_VERSION}:
             old["prompt"] = repair_prompt(old["prompt"], envelope["repair"])
         old["promptHash"] = hashlib.sha256(old["prompt"].encode()).hexdigest()
         validate_execution_input(old)
@@ -197,12 +204,16 @@ def validate_execution_input(envelope):
     from . import research_work
     if envelope.get("promptVersion") == research_work.PROMPT_VERSION:
         return research_work.validate_input(envelope)
-    if envelope.get("promptVersion") in {working_retrieval.VERSION, scoped_retrieval.VERSION, indexed_retrieval.VERSION, question_retrieval.VERSION, lane_retrieval.VERSION, bounded_retrieval.VERSION, purpose_retrieval.VERSION}:
-        contract = purpose_retrieval if envelope["promptVersion"] == purpose_retrieval.VERSION else bounded_retrieval if envelope["promptVersion"] == bounded_retrieval.VERSION else lane_retrieval if envelope["promptVersion"] == lane_retrieval.VERSION else question_retrieval if envelope["promptVersion"] == question_retrieval.VERSION else indexed_retrieval if envelope["promptVersion"] == indexed_retrieval.VERSION else scoped_retrieval if envelope["promptVersion"] == scoped_retrieval.VERSION else working_retrieval
+    if envelope.get("promptVersion") in {working_retrieval.VERSION, scoped_retrieval.VERSION, indexed_retrieval.VERSION, question_retrieval.VERSION, lane_retrieval.VERSION, bounded_retrieval.VERSION, purpose_retrieval.VERSION, company_value.RETRIEVAL_VERSION}:
+        contract = purpose_retrieval if envelope["promptVersion"] in {purpose_retrieval.VERSION, company_value.RETRIEVAL_VERSION} else bounded_retrieval if envelope["promptVersion"] == bounded_retrieval.VERSION else lane_retrieval if envelope["promptVersion"] == lane_retrieval.VERSION else question_retrieval if envelope["promptVersion"] == question_retrieval.VERSION else indexed_retrieval if envelope["promptVersion"] == indexed_retrieval.VERSION else scoped_retrieval if envelope["promptVersion"] == scoped_retrieval.VERSION else working_retrieval
         if envelope.get("protocolVersion") != EXECUTION_INPUT_PROTOCOL:
             raise EvidenceContractError("unsupported AI execution input")
         validate_evidence_packet(envelope["current"])
         if contract is purpose_retrieval:
+            if (envelope["promptVersion"] == company_value.RETRIEVAL_VERSION) != company_value.enabled(envelope["current"]):
+                raise EvidenceContractError("company value retrieval policy mismatch")
+            if company_value.enabled(envelope["current"]):
+                company_value.validate(envelope["current"])
             evidence_purpose.validate(envelope["current"])
             if envelope["retrievalContext"].get("evidenceUses") != envelope["current"]["evidenceUses"]:
                 raise EvidenceContractError("retrieval purpose clocks changed")
@@ -285,7 +296,7 @@ def freeze_repair_input(envelope, draft, errors, parent_input_id, review=None):
     value["promptBudgetBytes"] = limit
     active = evidence_readiness.enabled(value["current"])
     builder = evidence_purpose.prompt if evidence_purpose.enabled(value["current"]) else evidence_readiness.prompt if active else knowledge_prompt
-    value["promptVersion"] = evidence_purpose.REPAIR_VERSION if evidence_purpose.enabled(value["current"]) else evidence_readiness.REPAIR_VERSION if active else LANE_REPAIR_PROMPT_VERSION if value["current"].get("executionLanePolicy") else REPAIR_PROMPT_VERSION
+    value["promptVersion"] = evidence_purpose.repair_version(value["current"]) if evidence_purpose.enabled(value["current"]) else evidence_readiness.REPAIR_VERSION if active else LANE_REPAIR_PROMPT_VERSION if value["current"].get("executionLanePolicy") else REPAIR_PROMPT_VERSION
     value["repair"] = {"parentInputId": parent_input_id, "rejectedDraft": copy.deepcopy(draft),
                        "errors": list(errors), "comparisons": comparison_diagnostics(draft, value["current"])}
     if review:
@@ -318,5 +329,5 @@ def freeze_review_input(result, max_prompt_bytes=DEFAULT_PROMPT_BYTES):
     limit = prompt_budget(max_prompt_bytes)
     if len(prompt.encode()) > limit:
         raise EvidenceContractError("observation review exceeds context budget")
-    return {"protocolVersion": EXECUTION_INPUT_PROTOCOL, "promptVersion": evidence_purpose.REVIEW_VERSION if evidence_purpose.enabled(packet) else evidence_readiness.REVIEW_VERSION if evidence_readiness.enabled(packet) else LANE_REVIEW_PROMPT_VERSION if packet.get("executionLanePolicy") else REVIEW_PROMPT_VERSION, "promptBudgetBytes": limit,
+    return {"protocolVersion": EXECUTION_INPUT_PROTOCOL, "promptVersion": evidence_purpose.review_version(packet) if evidence_purpose.enabled(packet) else evidence_readiness.REVIEW_VERSION if evidence_readiness.enabled(packet) else LANE_REVIEW_PROMPT_VERSION if packet.get("executionLanePolicy") else REVIEW_PROMPT_VERSION, "promptBudgetBytes": limit,
             "current": packet, "draft": draft, "prompt": prompt, "promptHash": hashlib.sha256(prompt.encode()).hexdigest(), "outputSchema": review_schema()}

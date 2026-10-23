@@ -54,6 +54,7 @@ def local_quality(result, *, causal_guard_version=CAUSAL_GUARD_VERSION):
     errors = insight_errors(result, result["input"], causal_guard_version=causal_guard_version)
     if result["input"].get("retrieval", {}).get("status") in {"deferred", "repeated-read", "context-budget"}:
         errors.append("내부 조회를 충분히 완료하지 못해 발송을 보류했습니다.")
+    from .company_value import explains_value
     business = result.get("businessResearch") or {}
     if "businessResearch" in result and result.get("notification", {}).get("send"):
         facts = {row["id"]: row for row in result["input"].get("facts", [])}
@@ -63,8 +64,10 @@ def local_quality(result, *, causal_guard_version=CAUSAL_GUARD_VERSION):
                  for ref in result.get("claimEvidence", {}).get(section, []) if ref.get("period") == "current"}
         if available and not available.intersection(cited):
             errors.append("확인 가능한 사업 자료를 설명·가설·한계에 연결하지 않았습니다.")
-    if not result.get("followUpConditions") and not (business.get("theses") or business.get("reviews")):
+    if not result.get("followUpConditions") and not (business.get("theses") or business.get("reviews") or explains_value(result)):
         errors.append("관찰 가능한 확인 조건과 기간이 없습니다.")
+    from .company_value import quality_errors
+    errors.extend(quality_errors(result))
     if errors:
         return {**version, "status": "rejected", "errors": errors, "diagnostics": quality_diagnostics(result, errors)}
     fingerprint = insight_fingerprint(result, result["input"])

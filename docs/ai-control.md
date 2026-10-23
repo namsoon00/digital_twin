@@ -1689,3 +1689,48 @@ passages remain reference-only. News cannot satisfy official-filing criteria.
 Stable article identities and source-owned content revisions distinguish real
 revisions from incidental transport/HTML changes. The two-search/three-read
 budget, persistent recovery budget and public-network safeguards are unchanged.
+
+## Company value explanations (2026-10-23)
+
+New managed equity market observations carry `company-value-observation-v1`.
+Author v23, repair v19, review v12 and retrieval v10 retain their exact frozen
+prompts. Original-question and crypto lanes keep their existing contracts.
+Retrieval v10 uses the unchanged v9 decision/trace grammar; it adds the company
+value read policy, not another execution lane or additional model calls.
+
+The reasoning owner reserves up to two existing ABox valuation calculation
+chains (assessment, input bundle, estimate) within a 32,000-byte allowance.
+Exact views retain scenario values, assumptions, source revisions, clocks,
+eligibility, sensitivity and implied-expectation evidence. Omitted payload
+fields, omitted model groups and source hashes remain explicit. Implied-value
+results retain their exact assumptions and admission limits; solver iterations
+and duplicate scenario input trees remain in the source artifact with explicit
+nested-field omissions. The final
+selected input cannot silently discard these reserved chains. No calculation,
+model approval, TBox/RuleBox release or source fact is invented by this read model.
+
+A usable per-share range requires matching subject, bundle and estimate lineage,
+known clocks, reproducible source inputs, explicit decision eligibility, matching
+currency/per-share basis and ordered finite downside/base/upside values. Blocked
+or incomplete calculations cannot be promoted by AI prose; their numbers do not
+appear in the customer value panel. Original quality and publication gates,
+independent review, actual delivery receipts and actionless authority still apply.
+AI explains business drivers, assumptions, alternatives and the concrete business
+conditions that would change the assessment. A value explanation cites the actual
+estimate in summary/hypothesis; it need not invent a short-term price condition.
+
+The result and delivery snapshot preserve the value context. Bounded memory keeps
+model/version, assumptions, calculation range, source clocks and a business-basis
+fingerprint. The fingerprint excludes the quote and capture identifiers. A quote
+change can update the deterministic price/range comparison without being called a
+business-value change. Identical business bases and the same below/within/above
+price range do not manufacture another value notification. Existing market-work
+budgets and admission remain in force; this does not claim that all market AI
+calls are skipped on every price tick.
+
+Notifications render the calculated range, valuation/data clocks and a separately
+dated price comparison; KRW valuation amounts use whole won. The AI cannot write
+a target price, automatically approve an assumption, or select a trading action.
+Missing calculations remain an explicit data/model gap. This release connects
+existing valuation capability to central AI; it does not guarantee every company
+has sufficient source material or an approved valuation model.

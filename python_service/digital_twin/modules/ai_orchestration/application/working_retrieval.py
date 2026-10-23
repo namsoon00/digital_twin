@@ -10,7 +10,7 @@ from ..domain.continuity import continuity_memory, merge_recalled
 from ..domain.business_research import evaluate_thesis
 from ..domain.execution_input import freeze_execution_input, prompt_budget
 from ..domain.knowledge_research import knowledge_prompt
-from ..domain import bounded_retrieval, purpose_retrieval, evidence_readiness, evidence_purpose
+from ..domain import bounded_retrieval, purpose_retrieval, evidence_readiness, evidence_purpose, company_value
 from .read_tools import ObservationReadTools
 from .retrieval import RetrievalLeaseLost, RetrievalContractFailure
 
@@ -22,7 +22,8 @@ def byte_size(value):
 def author_packet(session, packet, ids, seen, research, trace, status, reserve=0, contract=legacy_contract):
     views = {key: row for key, row in seen.items() if row.get("evidenceView")}
     protected = {key for key, row in seen.items() if row.get("evidenceCategory") == "quality"}
-    result = {**packet, **session.select(set(ids) | protected, views=views), "retrieval": contract.trace_summary(trace, status)}
+    value_protected = set(packet.get("companyValueEvidence", {}).get("factIds", [])) if company_value.enabled(packet) else set()
+    result = {**packet, **session.select(set(ids) | protected | value_protected, views=views), "retrieval": contract.trace_summary(trace, status)}
     if evidence_purpose.enabled(result):
         result = evidence_purpose.annotate(result)
         decision = next((row["decision"] for row in reversed(trace) if row.get("decision")), {})
@@ -41,6 +42,9 @@ def author_packet(session, packet, ids, seen, research, trace, status, reserve=0
         "excludedReadFacts": [{"id": key, "kind": value["kind"], "category": value["evidenceCategory"],
                                "hash": content_hash(value)} for key, value in seen.items()
                               if key not in {fact["id"] for fact in result["facts"]}]}
+    if company_value.enabled(result):
+        result["workingEvidence"]["requiredCompanyValueFactIds"] = sorted(value_protected)
+    result = company_value.refresh(result)
     if reserve:
         result["pendingTraceBudget"] = " " * reserve
     validate_evidence_packet(result)
@@ -80,7 +84,14 @@ def retrieve_working_evidence(session, packet, history, research, decide, save_i
         # The V3 answered-only gate remains solely in historical/disabled inputs.
         packet.pop("researchAssessmentScope", None)
     baseline_views = {key: session.read_document(key)["facts"][0] for key in baseline.get("viewFactIds", [])}
-    current = {**packet, **session.select(baseline["factIds"], views=baseline_views)}
+    value_ids = []
+    if company_value.enabled(packet):
+        value_baseline = session.company_value_baseline()
+        packet["companyValueEvidence"] = {k: v for k, v in value_baseline.items() if k != "views"}
+        baseline_views.update(value_baseline["views"])
+        value_ids = value_baseline["factIds"]
+    current = {**packet, **session.select(baseline["factIds"] + value_ids, views=baseline_views)}
+    current = company_value.refresh(current)
     if evidence_purpose.enabled(current):
         current = evidence_purpose.annotate(current)
     seen = {x["id"]: x for x in current["facts"]}
@@ -200,7 +211,7 @@ def retrieve_working_evidence(session, packet, history, research, decide, save_i
         step.update(status="valid", decision=decision)
         if decision["action"] != "read":
             status = "ready" if decision["action"] == "finish" else "assessment-ready" if decision["action"] == "assess" else "research-ready" if decision["action"] == "research" else "deferred"
-            if status == "ready" and (bounded_retrieval.price_only_finish(decision, seen)
+            if status == "ready" and not company_value.available(proposed) and (bounded_retrieval.price_only_finish(decision, seen)
                     if contract in {bounded_retrieval, purpose_retrieval} else not any(seen[key]["kind"] not in OBSERVATION_QUOTE_KINDS for key in selected)):
                 status = "deferred"
             record(step)

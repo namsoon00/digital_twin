@@ -115,10 +115,15 @@ class MySQLBrainAgendaStore(MySQLOperationalConnection):
             raise ValueError("brain memory requires completed frozen model input")
         envelope = json.loads(gzip.decompress(row["artifact_gzip"]))
         validate_execution_input(envelope)
-        if envelope["promptVersion"] not in {evidence_purpose.PROMPT_VERSION, evidence_purpose.REPAIR_VERSION, evidence_readiness.PROMPT_VERSION, evidence_readiness.REPAIR_VERSION, PROMPT_VERSION, REPAIR_PROMPT_VERSION, LANE_PROMPT_VERSION, LANE_REPAIR_PROMPT_VERSION} or envelope["current"] != result["input"]:
+        if envelope["promptVersion"] not in {evidence_purpose.author_version(envelope["current"]), evidence_purpose.repair_version(envelope["current"]), evidence_purpose.PROMPT_VERSION, evidence_purpose.REPAIR_VERSION, evidence_readiness.PROMPT_VERSION, evidence_readiness.REPAIR_VERSION, PROMPT_VERSION, REPAIR_PROMPT_VERSION, LANE_PROMPT_VERSION, LANE_REPAIR_PROMPT_VERSION} or envelope["current"] != result["input"]:
             raise ValueError("brain memory input mismatch")
         if any(envelope["current"].get(key) != job[key] for key in ("accountId", "symbol", "worldId", "taskId")):
             raise ValueError("brain memory subject mismatch")
+        from ..domain.company_value import enabled as value_enabled, validate as validate_value
+        if value_enabled(result["input"]):
+            validate_value(result["input"])
+            if result.get("companyValue") != result["input"]["companyValueContext"]:
+                raise ValueError("company value assessment changed after capture")
         if result.get("businessResearch"):
             from ..domain.business_research import raw_business, validate_business
             if validate_business(raw_business(result["businessResearch"]), result["input"], envelope["researchResults"]) != result["businessResearch"]:

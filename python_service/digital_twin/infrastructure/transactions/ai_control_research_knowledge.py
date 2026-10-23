@@ -102,14 +102,16 @@ class AIControlResearchKnowledge:
                 raise ValueError("research progress requires completed frozen read proof")
             envelope, step = json.loads(gzip.decompress(row["input_gzip"])), json.loads(gzip.decompress(row["round_gzip"]))
             validate_execution_input(envelope)
-            contract = purpose_retrieval if envelope["promptVersion"] == purpose_retrieval.VERSION else bounded_retrieval if envelope["promptVersion"] == bounded_retrieval.VERSION else lane_retrieval if envelope["promptVersion"] == lane_retrieval.VERSION else question_retrieval if envelope["promptVersion"] == question_retrieval.VERSION else indexed_retrieval if envelope["promptVersion"] == indexed_retrieval.VERSION else scoped_retrieval if envelope["promptVersion"] == scoped_retrieval.VERSION else working_retrieval
-            if (envelope["promptVersion"] != contract.VERSION or step["inputId"] != input_id or content_hash(step) != row["artifact_hash"]
+            contract = purpose_retrieval if envelope["promptVersion"] in purpose_retrieval.SUPPORTED_VERSIONS else bounded_retrieval if envelope["promptVersion"] == bounded_retrieval.VERSION else lane_retrieval if envelope["promptVersion"] == lane_retrieval.VERSION else question_retrieval if envelope["promptVersion"] == question_retrieval.VERSION else indexed_retrieval if envelope["promptVersion"] == indexed_retrieval.VERSION else scoped_retrieval if envelope["promptVersion"] == scoped_retrieval.VERSION else working_retrieval
+            if (envelope["promptVersion"] != (purpose_retrieval.version_for(envelope["current"]) if contract is purpose_retrieval else contract.VERSION) or step["inputId"] != input_id or content_hash(step) != row["artifact_hash"]
                     or envelope["retrievalContext"].get("trace", []) != trace
                     or any(envelope["current"].get(key) != packet.get(key) or packet.get(key) != job.get(key)
                            for key in ("accountId", "symbol", "worldId", "taskId"))
                     or envelope["current"]["sourceSnapshots"] != packet["sourceSnapshots"]
                     or envelope["current"]["capturedAt"] != packet["capturedAt"]
                     or envelope["current"].get("researchKnowledge") != packet.get("researchKnowledge")
+                    or any(envelope["current"].get(key) != packet.get(key)
+                           for key in ("companyValuePolicy", "companyValueEvidence", "previousCompanyValue"))
                     or envelope["retrievalContext"].get("questionEvidencePolicy") != packet.get("questionEvidencePolicy")
                     or (packet.get("questionEvidencePolicy") and captured_index(envelope["retrievalContext"].get("questionIndex", [])) != packet.get("questionEvidenceIndex"))
                     or step.get("authorScopePolicy") != envelope["retrievalContext"].get("authorScopePolicy")):
@@ -135,7 +137,10 @@ class AIControlResearchKnowledge:
             raise ValueError("research progress question scope changed")
         last = (trace[-1].get("decision") or {}).get("action")
         expected = {"finish": "ready", "research": "research-ready", "defer": "deferred", "assess": "assessment-ready"}.get(last)
-        if contract in {bounded_retrieval, purpose_retrieval} and bounded_retrieval.price_only_finish(trace[-1].get("decision") or {}, known):
+        from digital_twin.modules.ai_orchestration.domain import company_value
+        if company_value.enabled(packet):
+            company_value.validate(packet)
+        if contract in {bounded_retrieval, purpose_retrieval} and not company_value.available(packet) and bounded_retrieval.price_only_finish(trace[-1].get("decision") or {}, known):
             expected = "deferred"
         if (expected and packet["retrieval"]["status"] != expected
                 and not (contract in {lane_retrieval, bounded_retrieval, purpose_retrieval} and packet["retrieval"]["status"] == "context-budget")):

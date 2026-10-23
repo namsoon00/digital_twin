@@ -396,7 +396,9 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # Six receipt-clock/qualification/trend contract regressions.
         # One isolated-DB receipt/import/idempotency regression.
         # Two real stored-quote regressions cover 3m receipt/horizon reads and scoped recovery.
-        self.assertLessEqual(total, 2490)
+        # Eight value evidence/lineage/presentation regressions and one actual
+        # MySQL read/author/review proof regression preserve the new contract.
+        self.assertLessEqual(total, 2499)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

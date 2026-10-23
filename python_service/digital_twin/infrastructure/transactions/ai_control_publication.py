@@ -213,6 +213,8 @@ class AIControlPublication:
                 "taskId": task_id, "inputFingerprint": result["inputFingerprint"], "observedAt": result["observedAt"],
                 **{key: result[key] for key in ("summary", "hypothesis", "counterEvidence", "comparison", "portfolioImpact", "insightVersion", "followUpConditions", "observations")},
                 "insightFingerprint": result["quality"]["insightFingerprint"], "facts": receipt_facts(result)}
+            if "companyValue" in result:
+                job.context["aiControlDeliverySnapshot"]["companyValue"] = result["companyValue"]
             if "quoteAssessment" in packet:
                 job.context["aiControlDeliverySnapshot"].update(
                     captureQuoteAssessment=packet["quoteAssessment"],

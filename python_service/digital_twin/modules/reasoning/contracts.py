@@ -4,6 +4,7 @@ from digital_twin.modules._exports import resolve_export
 
 
 _EXPORTS = {}
+_EXPORTS["company_value_context"] = ("digital_twin.modules.reasoning.domain.observation_value", "company_value_context")
 _EXPORTS["OBSERVATION_QUOTE_KINDS"] = ("digital_twin.modules.reasoning.domain.observation_evidence", "OBSERVATION_QUOTE_KINDS")
 _EXPORTS["CRYPTO_EVIDENCE_PROFILE"] = ("digital_twin.modules.reasoning.domain.observation_evidence", "CRYPTO_EVIDENCE_PROFILE")
 _EXPORTS['source_packet_bytes'] = ('digital_twin.modules.reasoning.domain.observation_evidence', 'source_packet_bytes')

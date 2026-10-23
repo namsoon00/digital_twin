@@ -1,11 +1,18 @@
 """V9 captures the chosen purpose and a typed blocker without widening reads."""
 from copy import deepcopy
 import hashlib
-from . import bounded_retrieval as previous, evidence_purpose, execution_lanes
+from . import bounded_retrieval as previous, evidence_purpose, execution_lanes, company_value
 from .retrieval import ReadRequestError, issue
 from digital_twin.modules.reasoning.contracts import content_hash
 
 VERSION = "independent-observation-retrieval-v9-purpose-scoped"
+SUPPORTED_VERSIONS = {VERSION, company_value.RETRIEVAL_VERSION}
+
+
+def version_for(packet):
+    return company_value.RETRIEVAL_VERSION if company_value.enabled(packet) else VERSION
+
+
 POLICY = previous.POLICY
 AUTHOR_SCOPE_POLICY = previous.AUTHOR_SCOPE_POLICY
 question_index = previous.question_index
@@ -76,7 +83,7 @@ def trace_summary(trace, status):
 
 
 def prompt(current, context):
-    return (evidence_purpose.INSTRUCTIONS + "조회 응답에 purpose와 blocker를 기록하세요. 더 읽는 동안 blocker=none입니다. "
+    return ((company_value.INSTRUCTIONS if company_value.enabled(current) else "") + evidence_purpose.INSTRUCTIONS + "조회 응답에 purpose와 blocker를 기록하세요. 더 읽는 동안 blocker=none입니다. "
             "현재 시세만 필수로 부족하면 current-state/defer/current-quote, 다른 필수 근거가 부족하면 required-source입니다. "
             "source-dated 설명이 가능한지 먼저 확인하고, 아무 새 의미가 없으면 작성을 강제하지 마세요.\n"
             + previous.prompt(current, context))
@@ -90,5 +97,5 @@ def freeze(current, context, max_bytes):
     text = prompt(current, context)
     if len(text.encode()) > prompt_budget(max_bytes):
         raise EvidenceContractError("retrieval input exceeds context budget")
-    value.update(promptVersion=VERSION, prompt=text, promptHash=hashlib.sha256(text.encode()).hexdigest(), outputSchema=schema(context))
+    value.update(promptVersion=version_for(current), prompt=text, promptHash=hashlib.sha256(text.encode()).hexdigest(), outputSchema=schema(context))
     return value

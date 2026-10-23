@@ -391,9 +391,9 @@ class MySQLAIControlStore(AITokenUsagePersistence, DiagnosticProgressPersistence
                 raise ValueError("retrieval audit requires owned frozen input")
             envelope = json.loads(gzip.decompress(frozen["artifact_gzip"]))
             validate_execution_input(envelope)
-            if envelope["promptVersion"] not in {purpose_retrieval.VERSION, bounded_retrieval.VERSION, lane_retrieval.VERSION, RETRIEVAL_PROMPT_VERSION, working_retrieval.VERSION, scoped_retrieval.VERSION, indexed_retrieval.VERSION, question_retrieval.VERSION}:
+            if envelope["promptVersion"] not in {*purpose_retrieval.SUPPORTED_VERSIONS, bounded_retrieval.VERSION, lane_retrieval.VERSION, RETRIEVAL_PROMPT_VERSION, working_retrieval.VERSION, scoped_retrieval.VERSION, indexed_retrieval.VERSION, question_retrieval.VERSION}:
                 raise ValueError("retrieval audit requires retrieval input")
-            validator = (purpose_retrieval.validate_trace if envelope["promptVersion"] == purpose_retrieval.VERSION else
+            validator = (purpose_retrieval.validate_trace if envelope["promptVersion"] in purpose_retrieval.SUPPORTED_VERSIONS else
                          bounded_retrieval.validate_trace if envelope["promptVersion"] == bounded_retrieval.VERSION else
                          lane_retrieval.validate_trace if envelope["promptVersion"] == lane_retrieval.VERSION else
                          question_retrieval.validate_trace if envelope["promptVersion"] == question_retrieval.VERSION else
@@ -485,7 +485,7 @@ class MySQLAIControlStore(AITokenUsagePersistence, DiagnosticProgressPersistence
             return {}
         envelope = json.loads(gzip.decompress(row["artifact_gzip"]))
         validate_execution_input(envelope)
-        if envelope["promptVersion"] not in {evidence_purpose.REVIEW_VERSION, evidence_readiness.REVIEW_VERSION, LANE_REVIEW_PROMPT_VERSION, REVIEW_PROMPT_VERSION, CONTINUITY_REVIEW_PROMPT_VERSION, CITABLE_REVIEW_PROMPT_VERSION, LEGACY_REVIEW_PROMPT_VERSION}:
+        if envelope["promptVersion"] not in {evidence_purpose.review_version(envelope["current"]), evidence_purpose.REVIEW_VERSION, evidence_readiness.REVIEW_VERSION, LANE_REVIEW_PROMPT_VERSION, REVIEW_PROMPT_VERSION, CONTINUITY_REVIEW_PROMPT_VERSION, CITABLE_REVIEW_PROMPT_VERSION, LEGACY_REVIEW_PROMPT_VERSION}:
             return {}
         return {"taskId": row["task_id"], "draftHash": narrative_digest({**envelope["draft"], "input": envelope["current"]})}
 

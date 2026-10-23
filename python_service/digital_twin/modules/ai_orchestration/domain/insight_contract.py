@@ -233,7 +233,8 @@ def insight_errors(result, packet, *, causal_guard_version=CAUSAL_GUARD_VERSION)
                     errors.append(section + ": 평균 가격의 기울기 근거가 없습니다.")
     comparisons = result.get("observations", [])
     business = result.get("businessResearch") or {}
-    minimum = 0 if business.get("theses") or business.get("reviews") else 1
+    from .company_value import explains_value
+    minimum = 0 if business.get("theses") or business.get("reviews") or explains_value(result, packet) else 1
     if not isinstance(comparisons, list) or not minimum <= len(comparisons) <= 6:
         errors.append("확인 가능한 관측 비교가 필요합니다.")
     else:
@@ -275,6 +276,15 @@ def insight_fingerprint(result, packet):
         relations.append((pair, row["operator"]))
     documents = [material_fact(fact) for fact in packet.get("facts", [])
                  if fact.get("id") in result.get("evidenceIds", []) and fact.get("kind") not in OBSERVATION_QUOTE_KINDS]
+    from .company_value import enabled as value_enabled
+    if value_enabled(packet):
+        # Quote clocks and snapshot IDs inside valuation audit bundles do not
+        # turn unchanged business assumptions into another value explanation.
+        documents = [material_fact(f) for f in packet.get("facts", []) if f.get("id") in result.get("evidenceIds", [])
+                     and f.get("kind") not in set(OBSERVATION_QUOTE_KINDS) | {"valuation-assessment", "valuation-input-bundle", "fair-value-estimate"}]
+        for model in packet.get("companyValueContext", {}).get("models", []):
+            documents.append({"valueBasis": model["basisFingerprint"],
+                              "pricePosition": model.get("priceComparison", {}).get("position", "unavailable")})
     transitions = [row["conditionId"] for row in packet.get("followUpEvaluations", []) if row.get("transitionVerified")]
     return content_hash({"version": INSIGHT_VERSION, "relations": sorted(relations, key=str),
                          "documents": sorted(documents, key=content_hash), "transitions": sorted(transitions)})
@@ -290,6 +300,8 @@ def narrative_digest(result):
         content["wordingVersion"] = result["wordingVersion"]
     if "businessResearch" in result:
         content["businessResearch"] = result["businessResearch"]
+    if "companyValue" in result:
+        content["companyValue"] = result["companyValue"]
     if "questionResolutions" in result:
         content["questionResolutions"] = result["questionResolutions"]
     return content_hash(content)

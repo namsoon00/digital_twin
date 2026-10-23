@@ -103,8 +103,9 @@ def validate_plan(value, packet, research=(), require_research=False, require_re
         try:
             business = value.get("businessResearch") or {}
             from .scoped_research import research_only
+            from .company_value import explains_value
             internal = research_only(packet) and notification["send"] is False
-            result["followUpConditions"] = [] if value.get("followUpConditions") == [] and (internal or business.get("theses") or business.get("reviews")) else prepare_observation_conditions(value.get("followUpConditions"), packet)
+            result["followUpConditions"] = [] if value.get("followUpConditions") == [] and (internal or business.get("theses") or business.get("reviews") or explains_value(value, packet)) else prepare_observation_conditions(value.get("followUpConditions"), packet)
         except (ValueError, KeyError, TypeError) as error:
             result["followUpConditions"] = []
             result["conditionValidation"] = error.diagnostic if isinstance(error, ObservationConditionError) else {
@@ -121,6 +122,11 @@ def validate_plan(value, packet, research=(), require_research=False, require_re
         from .knowledge_research import validate_research
         result["knowledgeResearch"] = validate_research(value.get("knowledgeResearch"), packet,
             (result.get("businessResearch") or {}).get("theses", []))
+    from .company_value import enabled as value_enabled, validate as validate_value
+    if value_enabled(packet):
+        from copy import deepcopy
+        validate_value(packet)
+        result["companyValue"] = deepcopy(packet["companyValueContext"])
     from .scoped_research import validate_plan as validate_scope
     validate_scope(result, packet)
     return result

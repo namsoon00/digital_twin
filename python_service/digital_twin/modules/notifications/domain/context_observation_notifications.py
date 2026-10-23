@@ -786,11 +786,14 @@ def context_observation_delivery_decision(value: object) -> Dict[str, object]:
         "stageObservation": contract.get("decisionEligibility") == "stage-observation",
         "relationTransitionIds": [item["transitionId"] for item in relation_change["transitions"]],
         "customerEventIds": [item["eventId"] for item in relation_change["customerEvents"]],
+        "historyOnlyEventIds": [item["eventId"] for item in relation_change.get("historyOnlyEvents") or []],
         "notificationPurposes": sorted({item["purpose"] for item in relation_change["customerEvents"]}),
         "comparisonVersion": comparison["ruleNotificationComparison"]["version"],
         "baselineSource": comparison["ruleNotificationComparison"]["baselineSource"],
         "sourceRecheckRequired": any(row.get("sourceRecheckRequired") for row in relation_change["suppressedTransitions"]),
     }
+    if not relation_change["eligible"] and relation_change.get("historyOnlyEvents"):
+        decision["suppressionReason"] = relation_change["nonDeliveryReasonCode"]
     if decision["stageObservation"]:
         decision.pop("selectedRuleId", None)
     if outcome != "OBSERVATION":

@@ -359,6 +359,20 @@ def lifecycle_observation_context(outcome="OBSERVATION"):
             "observedValue": 1.2, "matched": False, "matchedByTypeDB": False,
             "observedAt": "2026-08-16T00:00:00Z", "source": "Fixture native evaluation",
             "freshnessRequired": True, "freshnessStatus": "fresh", "judgementEvidenceUsable": True}]}]
+    # A correction is customer-facing only after the original premise was
+    # successfully delivered. Keep the historical proof distinct from its closure.
+    from digital_twin.modules.notifications.domain.relation_change import relation_change_evidence
+    from digital_twin.modules.notifications.domain.relation_follow_up import delivery_snapshot
+    original = deepcopy(context)
+    original_relation = original['ontologyRelationContext']
+    original_relation['hypothesisLifecycle']['transitions'][0].update(
+        transitionId='original-premise', currentState='observed', previousState='')
+    original_trace = original_relation['graphStoreInference']['traces'][0]
+    original_trace['matched'] = True
+    original_trace['matchedConditions'][0].update(matched=True, matchedByTypeDB=True, observedValue=-1.2)
+    baseline = delivery_snapshot(relation_change_evidence(original), 'original-receipt', 'main')
+    baseline.update(receiptJobId='original-receipt', deliveredAt='2026-08-15T23:59:00Z')
+    context['relationChangeEvidence'] = {'previous': baseline}
     return context
 
 
@@ -449,6 +463,9 @@ class FinalAIDeliveryTests(unittest.TestCase):
 
         self.assertEqual("send", decision["decision"])
         self.assertEqual("NO_ACTION", decision.get("finalAction"))
+        never_delivered = lifecycle_observation_context()
+        never_delivered.pop('relationChangeEvidence')
+        self.assertEqual('suppress', final_ai_delivery_decision(never_delivered)['decision'])
         self.assertEqual(["typedb-relation-transition"], decision["authorizationSources"])
         self.assertEqual(
             "",

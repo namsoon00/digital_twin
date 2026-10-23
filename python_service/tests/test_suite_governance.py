@@ -404,7 +404,8 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # DST/close boundaries, provider closure, feed identity, missing clocks,
         # legacy isolation, source aging and generation-scoped outage reasons.
         # Four native MySQL parity/index/rollback regressions for outcome reads.
-        self.assertLessEqual(total, 2522)
+        # Eight response-value, receipt-correction, dispatch and presentation regressions.
+        self.assertLessEqual(total, 2530)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

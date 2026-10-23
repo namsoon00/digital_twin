@@ -25,6 +25,13 @@ def qualification_notice(event):
 
 
 def event_conclusion(event):
+    value = event.get("deliveryValue") or {}
+    if value.get("allowed") and value.get("reasonCode") == "eligible-response-changed":
+        added = "·".join(ACTION_LABELS[a] for a in value.get("addedEligibleActions") or [] if a in ACTION_LABELS)
+        removed = "·".join(ACTION_LABELS[a] for a in value.get("removedEligibleActions") or [] if a in ACTION_LABELS)
+        return " ".join(filter(None, [
+            added + "의 검토 조건이 새로 충족됐습니다. 매매 시점·수량을 확정한 판단은 아닙니다." if added else "",
+            "이전에 검토 가능했던 " + removed + " 후보는 현재 판단에 사용할 수 없습니다." if removed else ""]))
     if event.get('contextState'):
         return '시장 관측: ' + str(event.get('ruleLabel') or '새 시장 문맥') + '. 투자 행동 판단은 포함하지 않습니다.'
     if event.get("purpose") in {"management-policy", "execution-constraint"}:

@@ -7,7 +7,8 @@ VERSION = "rule-notice-receipt-comparison-v1"
 
 
 def rule_delivery_comparison(context, baseline=None, *, stage="admission", require_recovery_receipt=True):
-    packet = relation_change_evidence(context, baseline, require_recovery_receipt=require_recovery_receipt)
+    packet = relation_change_evidence(context, baseline, require_recovery_receipt=require_recovery_receipt,
+                                      for_delivery=True)
     previous = packet["previous"]
     events = packet["customerEvents"]
     components = sorted({event["purpose"] + ":" + event["changeKind"] for event in events})
@@ -26,6 +27,7 @@ def rule_delivery_comparison(context, baseline=None, *, stage="admission", requi
              "baselineJobId": previous.get("receiptJobId") or "", "baselineDeliveredAt": packet["baselineDeliveredAt"],
              "eligible": packet["eligible"], "reasonCode": packet["nonDeliveryReasonCode"],
              "customerEventIds": [e["eventId"] for e in events],
+             "historyOnlyEventIds": [e["eventId"] for e in packet["historyOnlyEvents"]],
              'policyTransitions': [{k: t[k] for k in ('eventId', 'sourceRuleIds', 'previous', 'current', 'cause')}
                                    for t in packet['policyLifecycle']['transitions']],
              'remainingPolicyRuleIds': sorted({r['ruleId'] for r in packet['policyLifecycle']['remainingRestrictions']}),

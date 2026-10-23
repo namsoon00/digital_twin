@@ -24,11 +24,14 @@ from digital_twin.modules.notifications.domain.notification_delivery_explanation
 from digital_twin.modules.notifications.application.notification_service import NotificationQueueRunner
 
 
-def independent_fixture(queue=None, material=True, account_id="main", data_change=False, reassessment=False, source_clock=None):
+def independent_fixture(queue=None, material=True, account_id="main", data_change=False, reassessment=False, source_clock=None, qualified=True):
     case = subject_case("subject:independent", action_authority="originate", eligible=("hypothesis:fixture",), outcome="READY")
     case.account_id = account_id
     case.synthesis = replace(case.synthesis, account_id=account_id)
     case.candidate_set = replace(case.candidate_set, account_id=account_id)
+    if not qualified:
+        case.synthesis = replace(case.synthesis, execution_eligible_hypothesis_ids=(), disposition_code="HYPOTHESIS_QUALIFICATION_PENDING")
+        case.candidate_set = replace(case.candidate_set, execution_eligible_hypothesis_ids=(), disposition_code="HYPOTHESIS_QUALIFICATION_PENDING")
     context = context_observation(case)
     relation = context["ontologyRelationContext"]
     context["accountId"] = account_id
@@ -36,10 +39,15 @@ def independent_fixture(queue=None, material=True, account_id="main", data_chang
     basis = {"owner": "market-hypothesis", "ruleKind": "predictive", "decisionEligibility": "action-candidate", "requiresHypothesis": True}
     for row in [*relation["activeRules"], *relation["matchedRules"], *relation["graphStoreInference"]["relations"], *relation["graphStoreInference"]["traces"]]:
         row["knowledgeBasis"] = dict(basis)
+        row.update(candidateAction="TRIM", decision_effect="constrain", relation_type="HAS_INFERRED_RISK")
         if source_clock:
             for condition in row.get("matchedConditions") or []:
                 condition.update(observedAt=source_clock, freshnessRequired=True, maxAgeMinutes=10,
                                  freshnessStatus="fresh", judgementEvidenceUsable=True)
+    rule_id = relation['activeRules'][0]['ruleId']
+    relation['hypothesisSet']['hypotheses'][0]['claimContract'] = frozen_notification_claim(rule_id)
+    relation['actionEnvelope'] = {'inferenceEligibilityAssessments': [{
+        'ruleId': rule_id, 'status': 'eligible', 'evidenceUsableForJudgement': True, 'freshnessStatus': 'fresh'}]}
     if not material:
         relation["hypothesisLifecycle"] = {}
     if data_change:

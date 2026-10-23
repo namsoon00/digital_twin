@@ -147,7 +147,7 @@ def context_observation(case):
             }]},
             "hypothesisSet": {"hypotheses": [{"hypothesisId": "hypothesis:fixture",
                 "expectedOutcome": "반등이 이어지지 않을 가능성", "supportingRuleIds": [rule["ruleId"]],
-                "claimContract": frozen_notification_claim(rule["ruleId"])}]},
+                "claimContract": frozen_notification_claim(rule["ruleId"], "causal-context")}]},
             "activeRules": [rule],
             "matchedRules": [rule],
             "decision": {

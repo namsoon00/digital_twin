@@ -102,7 +102,8 @@ def _measurements(current, previous, judgment, events, currency, transitions):
                 before_rules[rid] = {'conditions': event['previousConditions']}
     cause_ids = {rid for e in events for rid in e.get("sourceRuleIds") or []}
     strategy_ids = {rid for e in events if e.get("strategyPhases") for rid in e.get("sourceRuleIds") or []}
-    used = cause_ids | set(judgment.get("sourceRuleIds") or [])
+    hypothesis_only = bool(events) and all(e.get("purpose") == "hypothesis-evidence" for e in events)
+    used = cause_ids if hypothesis_only else cause_ids | set(judgment.get("sourceRuleIds") or [])
     changed, unchanged, reference = [], [], []
     for event in events:
         if not event.get('contextState'):
@@ -174,6 +175,8 @@ def _measurements(current, previous, judgment, events, currency, transitions):
     # Native policy responses carry their exact objective and bound values,
     # even when an old receipt did not keep condition detail.
     for response in (judgment.get("managementDecision") or {}).get("responses", []):
+        if hypothesis_only and response.get("ruleId") not in cause_ids:
+            continue
         objective = response.get("objective") or {}
         field = objective.get("field")
         if field in FIELDS and field not in seen:
@@ -184,6 +187,8 @@ def _measurements(current, previous, judgment, events, currency, transitions):
                              + " " + {"<=": "이하", ">=": "이상"}.get(objective.get("operator"), ""))
     policy_values = []
     for response in (judgment.get("managementDecision") or {}).get("responses") or []:
+        if hypothesis_only and response.get("ruleId") not in cause_ids:
+            continue
         objective = response.get("objective") or {}
         field = objective.get("field")
         if field in FIELDS and numeric(response.get("observedValue")) is not None and numeric(response.get("targetValue")) is not None:
@@ -222,18 +227,15 @@ def _comparison(judgment, current, events):
 
 
 def _next(judgment, events, currency):
-    composed_policy = any(r.get("policyRuleId") for r in saved_composition(judgment).get("compositions") or [])
-    active_policy = (judgment.get("managementDecision") or {}).get("responses")
     hypothesis_next = ""
-    if not composed_policy and events and all(e.get('purpose') in {'hypothesis-evidence', 'context-evidence'} for e in events):
+    if events and all(e.get('purpose') in {'hypothesis-evidence', 'context-evidence'} for e in events):
         for event in events:
             text = next_check_words((event.get('nextCheck') or {}).get('condition') or
                                     (event.get('hypothesis') or {}).get('falsificationContract'))
             if text and len(text) <= 150:
                 hypothesis_next = text.rstrip('. ') + '.'
-                if not active_policy:
-                    return hypothesis_next
-                break
+                return hypothesis_next
+        return "이번 가설의 구체적인 재확인 기준은 상세 근거에서 확인합니다."
     targets = []
     for response in (judgment.get("managementDecision") or {}).get("responses", []):
         objective = response.get("objective") or {}
@@ -336,10 +338,11 @@ def compact_rulebox_summary(packet):
     composition = saved_composition(judgment)
     native_rows = composition.get("compositions") or []
     if combined:
-        together = combined
+        together = together + " " + combined if remaining and not released_lead else combined
         if not any(g.get("executionEligible") for g in judgment.get("candidateGroups") or []):
             together += " 매매 후보의 예측 검증은 아직 충분하지 않습니다."
-    if native_rows and not released_lead:
+    if native_rows and not released_lead and not any(
+            (e.get("deliveryValue") or {}).get("reasonCode") == "eligible-response-changed" for e in events):
         # Keep policy and market facts visible; a first-event hypothesis must
         # not silently replace the persisted multi-rule conclusion.
         lead = _conclusion(judgment, events) if (judgment.get("managementDecision") or {}).get("responses") else native_rows[0]["label"]
@@ -356,7 +359,8 @@ def compact_rulebox_summary(packet):
                 lead = notice + " " + lead
     if any(e.get("purpose") in {"management-policy", "execution-constraint"} for e in events):
         together += " 관리 조건의 적용 안내이며 매수·매도 시점이 검증됐다는 뜻은 아닙니다."
-    next_text = composition_next(judgment, events, currency) or _next(judgment, events, currency)
+    next_text = _next(judgment, events, currency) if hypothesis_change else (
+        composition_next(judgment, events, currency) or _next(judgment, events, currency))
     measurements = _measurements(current, previous, judgment, events, currency, packet.get("transitions") or [])
     # Separate rows survive the shared customer-language normalizer, which
     # deliberately folds whitespace inside a single prose row.

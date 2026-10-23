@@ -231,6 +231,11 @@ class NotificationDispatchEligibilityService:
             comparison = rule_delivery_comparison(context, saved.get("previous"), stage=stage)
             context.update(comparison)
             packet = comparison["relationChangeEvidence"]
+            if not packet["eligible"] and packet.get("historyOnlyEvents"):
+                job.context = context
+                job.context["deliverySuppressionReason"] = packet["nonDeliveryReasonCode"]
+                self.suppress(job, packet["reason"])
+                return False
             pending = [row for row in packet["suppressedTransitions"] if row.get("sourceRecheckRequired")]
             if pending:
                 job.context = context

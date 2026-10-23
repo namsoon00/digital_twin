@@ -341,7 +341,7 @@ class RuleEvidenceCompositionTests(unittest.TestCase):
         result = native_evidence_composition({**IDENTITY, "symbol": "OTHER"}, relation(nodes))
         self.assertEqual([], result["evidenceGroups"])
 
-    def test_market_measurements_do_not_replace_active_policy_release_checks(self):
+    def test_policy_and_hypothesis_next_checks_stay_separate(self):
         from digital_twin.modules.notifications.domain.rulebox_notification_summary import compact_rulebox_summary
         _, nodes = scored_nodes()
         composition = native_evidence_composition(IDENTITY, relation(nodes))
@@ -362,13 +362,17 @@ class RuleEvidenceCompositionTests(unittest.TestCase):
         for events in ([], [event]):
             summary = compact_rulebox_summary({"current": current, "customerEvents": events})
             sections = {key: "\n".join(rows) for key, _, rows in summary["sections"]}
-            self.assertIn("45% 이하", sections["next-check-contract"])
-            self.assertIn("0%", sections["next-check-contract"])
-            self.assertIn("각각 확인", sections["next-check-contract"])
+            if not events:
+                self.assertIn("45% 이하", sections["next-check-contract"])
+                self.assertIn("0%", sections["next-check-contract"])
+                self.assertIn("각각 확인", sections["next-check-contract"])
             self.assertIn("미국 10년 국채 금리", sections["decision-impact"])
             self.assertIn("IEF", sections["decision-impact"])
             if events:
                 self.assertIn("금리 변화", sections["next-check-contract"])
+                self.assertNotIn("45%", sections["next-check-contract"])
+                self.assertNotIn("0%", sections["next-check-contract"])
+                self.assertNotIn("계좌 관리:", sections["decision-impact"])
             from digital_twin.modules.read_models.contracts import (
                 CustomerInvestmentDocument, CustomerInvestmentSection, normalized_customer_investment_document,
             )
@@ -380,6 +384,7 @@ class RuleEvidenceCompositionTests(unittest.TestCase):
             ))
             rendered = render_customer_investment_document(document)
             numeric_rows = next(s.rows for s in document.sections if s.key == "decision-impact")
-            self.assertEqual(4, len(numeric_rows))
-            self.assertEqual(4, len([line for line in rendered.splitlines() if line.startswith("• ")]))
+            expected_rows = 3 if events else 4
+            self.assertEqual(expected_rows, len(numeric_rows))
+            self.assertEqual(expected_rows, len([line for line in rendered.splitlines() if line.startswith("• ")]))
             self.assertTrue(any("IEF" in line for line in rendered.splitlines() if line.startswith("• ")))

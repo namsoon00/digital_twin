@@ -14,6 +14,7 @@ from digital_twin.modules.notifications.domain.rule_policy_lifecycle import poli
 from digital_twin.modules.notifications.domain.rule_dispatch_validity import rule_event_proof
 from digital_twin.modules.notifications.domain.rule_context_event import context_rule_events
 from digital_twin.modules.notifications.domain.rule_strategy_event import strategy_phase_events
+from digital_twin.modules.notifications.domain.rule_notice_delivery_value import delivery_value
 
 
 VERSION = "relation-change-evidence-v1"
@@ -256,7 +257,7 @@ def current_lifecycle_availability(relation):
     return result
 
 
-def relation_change_evidence(context, baseline=None, *, require_recovery_receipt=True):
+def relation_change_evidence(context, baseline=None, *, require_recovery_receipt=True, for_delivery=False):
     current = relation_change_snapshot(context)
     previous = deepcopy(mapping(baseline))
     if any(previous.get(key) != current.get(key) for key in ("symbol", "accountId", "worldId")):
@@ -289,6 +290,18 @@ def relation_change_evidence(context, baseline=None, *, require_recovery_receipt
             event.update(eligible=False, reasonCode=proof["reasonCode"])
             rejected.append({"transitionId": event.get("transitionId"), "eventId": event.get("eventId"),
                 "reasonCode": proof["reasonCode"], "reason": proof["reason"], "checks": proof["checks"]})
+    history_only = []
+    if for_delivery:
+        for event in events:
+            if not event.get("eligible"):
+                continue
+            assessment = delivery_value(event, current, previous)
+            event["deliveryValue"] = assessment
+            if not assessment["allowed"]:
+                event.update(eligible=False, reasonCode=assessment["reasonCode"])
+                history_only.append(event)
+                suppressed.append({"eventId": event["eventId"], "transitionId": event.get("transitionId"),
+                                   "reasonCode": assessment["reasonCode"], "reason": assessment["reason"]})
     admitted_events = [event for event in events if event.get("eligible")]
     # Outcome notices belong to the exact original. Other originals remain
     # pending until a subsequent pass sees the first successful reply receipt.
@@ -330,6 +343,8 @@ def relation_change_evidence(context, baseline=None, *, require_recovery_receipt
         non_delivery_code = "same_rule_notification_meaning"
     elif not current["proofIdentityVerified"]:
         non_delivery_code = "rule_notice_proof_identity_mismatch"
+    elif history_only:
+        non_delivery_code = "hypothesis_evidence_history_only"
     changes = {}
     for kind in ("hypotheses", "rules", "facts"):
         before = {row["id"]: row for row in rows(previous.get(kind))}
@@ -350,6 +365,7 @@ def relation_change_evidence(context, baseline=None, *, require_recovery_receipt
             "current": current, "previous": previous, "transitions": transitions, "changes": changes,
             "followUp": follow_up, "suppressedTransitions": suppressed,
             "customerEventVersion": "rule-notification-event-v1", "customerEvents": admitted_events,
+            "historyOnlyEvents": history_only,
             'policyLifecycle': policy_lifecycle(current, previous, admitted_events)}
 
 

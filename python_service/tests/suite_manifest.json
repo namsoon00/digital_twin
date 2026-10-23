@@ -1,5 +1,6 @@
 {
   "tests": [
+    {"file": "test_rule_notice_delivery_value.py", "tier": "contract", "core": true},
     {"file": "test_outcome_recovery_reads.py", "tier": "integration", "core": true},
     {"file": "test_source_session_observation.py", "tier": "integration", "core": true},
     {"file": "test_rule_strategy_contract.py", "tier": "integration", "core": true},

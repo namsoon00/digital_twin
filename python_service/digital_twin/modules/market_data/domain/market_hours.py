@@ -209,6 +209,63 @@ def session_summary(sessions: List[Dict[str, object]]) -> str:
     return " · ".join(parts)
 
 
+def source_session_observation(
+    market: str, source_as_of: str, captured_at: str,
+    provider_status: str = "", provider_session: str = "",
+) -> Dict[str, object]:
+    """Freeze a session fact at ingestion, using the selected quote's clocks.
+
+    This uses the existing standard-hours schedule, not a holiday calendar.
+    Explicit provider closure/reference states take precedence. Missing clocks
+    and historical rows without this record never acquire a live session.
+    """
+    market_key = normalize_market_key(market)
+    schedule = DEFAULT_MARKET_HOUR_SESSIONS.get(market_key)
+    try:
+        source = datetime.fromisoformat(str(source_as_of or "").replace("Z", "+00:00"))
+        captured = datetime.fromisoformat(str(captured_at or "").replace("Z", "+00:00"))
+    except ValueError:
+        return {}
+    if not schedule or not source.tzinfo or not captured.tzinfo or source > captured:
+        return {}
+
+    def session_at(stamp):
+        local = market_time(stamp, str(schedule["timezone"]))
+        if local.weekday() not in schedule["weekdays"]:
+            return "closed"
+        for item in session_items(schedule):
+            opened = local.replace(hour=parse_hhmm(item["openTime"])[0], minute=parse_hhmm(item["openTime"])[1], second=0, microsecond=0)
+            closed = local.replace(hour=parse_hhmm(item["closeTime"])[0], minute=parse_hhmm(item["closeTime"])[1], second=0, microsecond=0)
+            if opened <= local < closed:
+                return str(item["key"])
+        return "closed"
+
+    source_session = session_at(source)
+    capture_session = session_at(captured)
+    status = str(provider_status or "").strip().lower()
+    explicit = str(provider_session or "").strip().lower()
+    reference = status in {"last-close", "market-closed-reference", "reference-only"}
+    closed = explicit in {"closed", "closed_exception", "post_close"} or reference
+    session = "closed" if closed else source_session
+    # A delayed regular-session quote cannot open a later session at capture.
+    if session == "regular" and capture_session != "regular":
+        session = capture_session
+    if closed:
+        session = "closed"
+    elif explicit and explicit not in {"regular", "open", "pre", "after", "closed", "closed_exception", "pre_open", "post_close"}:
+        session = "unknown"
+    elif explicit in {"pre", "pre_open", "after"}:
+        session = "pre" if explicit == "pre_open" else explicit
+    return {
+        "version": "source-session-observation-v1", "market": market_key,
+        "sourceAsOf": source.astimezone(timezone.utc).isoformat().replace("+00:00", "Z"),
+        "capturedAt": captured.astimezone(timezone.utc).isoformat().replace("+00:00", "Z"),
+        "marketSession": session, "sourceSession": source_session,
+        "captureSession": capture_session, "basis": "source-and-capture-standard-hours",
+        "providerReference": bool(closed),
+    }
+
+
 def evaluate_market_hours(
     message_type: str,
     context: Dict[str, object],

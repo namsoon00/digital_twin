@@ -40,6 +40,26 @@ def change(context, kind="data-unavailable", identity="interruption"):
 
 
 class RelationFollowUpTests(unittest.TestCase):
+    def test_only_current_generation_source_restrictions_explain_non_delivery(self):
+        from digital_twin.modules.notifications.domain.relation_change import current_lifecycle_availability
+        old = {"lifecycleKey": "retained", "inferenceGenerationId": "old", "dataAvailability": {
+            "state": "unavailable", "reasons": ["old source exceeded 10 minutes"]}}
+        relation = {"inferenceGenerationId": "current", "hypothesisLifecycle": {"records": [old]}}
+        frozen = deepcopy(relation)
+        self.assertEqual({}, current_lifecycle_availability(relation))
+        self.assertEqual(frozen, relation)
+        old["judgementRefresh"] = {"inferenceGenerationId": "current", "status": "unavailable"}
+        self.assertEqual({"retained": old["dataAvailability"]}, current_lifecycle_availability(relation))
+        # A new healthy source check may preserve the old judgment while its
+        # grouping is reconciled. The historical outage is not a current one.
+        old["judgementRefresh"]["status"] = "ready"
+        old["pathReconciliation"] = {"inferenceGenerationId": "current", "status": "native-path-still-present"}
+        self.assertEqual({}, current_lifecycle_availability(relation))
+        current = {"lifecycleKey": "current", "inferenceGenerationId": "current", "dataAvailability": {
+            "state": "unavailable", "reasons": ["actual current source delay"]}}
+        relation["hypothesisLifecycle"]["records"].append(current)
+        self.assertEqual({"current": current["dataAvailability"]}, current_lifecycle_availability(relation))
+
     def setUp(self):
         self.context = context_fixture()
         self.original = receipt(relation_change_evidence(self.context))
@@ -222,7 +242,8 @@ class RelationFollowUpTests(unittest.TestCase):
     def test_repeated_hold_without_transition_retains_its_reason(self):
         relation = self.context["ontologyRelationContext"]
         relation["hypothesisLifecycle"].update(transitions=[], records=[{
-            "lifecycleKey": "recovery", "dataAvailability": {"state": "unavailable", "reasons": ["수급 원천이 10분 전입니다."]}}])
+            "lifecycleKey": "recovery", "inferenceGenerationId": relation["inferenceGenerationId"],
+            "dataAvailability": {"state": "unavailable", "reasons": ["수급 원천이 10분 전입니다."]}}])
         packet = relation_change_evidence(self.context, self.original)
         self.assertFalse(packet["eligible"])
         self.assertEqual("rule_evidence_unavailable", packet["nonDeliveryReasonCode"])

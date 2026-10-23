@@ -23,6 +23,16 @@ def assert_lifecycle_regrouping(test):
     test.assertIsNone(transition, 'a still-materialized native path cannot be closed by a missing read-model row')
     test.assertEqual(old.last_observed_at, retained.last_observed_at)
     test.assertEqual('native-path-still-present', retained.snapshot['pathReconciliation']['status'])
+    test.assertEqual('generation-2', retained.snapshot['judgementRefresh']['inferenceGenerationId'])
+    test.assertEqual('ready', retained.snapshot['judgementRefresh']['status'])
+    held = replace(old, snapshot={**old.snapshot, 'judgementRefresh': {
+        'status': 'awaiting-source', 'notificationAvailability': {'state': 'usable'}},
+        'dataAvailability': {'state': 'unavailable', 'reasons': ['closed-market source unchanged']}})
+    reconciled, notice = record_for_absent_snapshot(held, '2026-07-23T00:10:00Z',
+        current_basis={'nativeRuleIds': old.snapshot['sourceRuleIds'], 'nativeGenerationId': 'generation-2'})
+    test.assertIsNone(notice)
+    test.assertEqual({'state': 'usable'}, reconciled.snapshot['judgementRefresh']['notificationAvailability'],
+                     'healthy regrouping must preserve the receipt baseline and not invent outage recovery')
     second = deepcopy(relation_context('generation-2'))
     second['graphStoreInference']['traces'][0]['claimContract'] = {'ruleFingerprint': 'fixture:original-claim'}
     member = deepcopy(second['hypothesisSet']['hypotheses'][0])

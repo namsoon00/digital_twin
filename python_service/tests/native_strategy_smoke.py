@@ -7,6 +7,7 @@ import json
 import uuid
 
 from test_rule_strategy_contract import strategy
+from test_source_session_observation import source_row, source_signal
 from digital_twin.infrastructure.settings import load_local_env
 from digital_twin.infrastructure.web.adapters.strategy_proposals import investment_strategy_proposal_read_service
 from digital_twin.infrastructure.typedb_ontology import TypeDBOntologyGraphRepository
@@ -57,7 +58,17 @@ def run():
         schema += "\nrelation " + market_relation_type + ", sub ontology-assertion;"
     scenarios = {"fresh": [1, 1, 1, 1], "stale": [0, 0, 0, 0], "closed": [0, 0, 0, 0],
                  "ineligible": [0, 0, 0, 0], "wrong-release": [0, 0, 0, 0],
-                 "missing-entry-member": [1, 0, 1, 1], "wrong-market": [0, 0, 0, 0]}
+                 "missing-entry-member": [1, 0, 1, 1], "wrong-market": [0, 0, 0, 0],
+                 "persisted-source": [1, 1, 1, 1], "persisted-after-close": [0, 0, 0, 0],
+                 "persisted-missing-clock": [0, 0, 0, 0]}
+    # Session/age used to be injected from the rule itself, hiding a real
+    # ingestion defect. Exercise Position -> persisted row -> model signal.
+    source_packets = {
+        "persisted-source": source_signal(),
+        "persisted-after-close": source_signal(source_row(
+            "2026-10-23T06:29:59Z", "2026-10-23T06:30:01Z")),
+        "persisted-missing-clock": source_signal(source_row(source="")),
+    }
 
     def has(values):
         return ", ".join("has " + a + " " + typedb_literal_for_attribute(a, v) for a, v in values.items())
@@ -93,6 +104,11 @@ def run():
                     if field == "marketSession" and scenario == "closed": value = "closed"
                     if field == "eligibilityStatus" and scenario == "ineligible": value = "ineligible"
                     if field == "releaseId" and scenario == "wrong-release": value = "unregistered-release"
+                    if scenario in source_packets and field in {"marketSession", "sourceAgeSeconds"}:
+                        signal = source_packets[scenario].signals[0]
+                        value = signal.market_session if field == "marketSession" else signal.source_age_seconds
+                        if value in (None, ""):
+                            continue
                     values[typedb_target_attribute(field)] = value
                 values.update({"ontology-id": scenario + ":model:" + str(index),
                                "ontology-kind": "statistical-model-hypothesis-evidence"})
@@ -115,6 +131,7 @@ def run():
             assert actual == expected, (scenario, actual, expected)
             results[scenario] = actual
         return {"status": "passed", "cases": results, "nativeQueryCount": len(scenarios) * len(rules),
+                "sourceIngestionChecked": True,
                 "operationalGraphMutated": False}
     finally:
         if created:

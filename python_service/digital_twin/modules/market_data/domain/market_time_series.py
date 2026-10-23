@@ -6,6 +6,7 @@ from typing import Dict, Iterable, List, Mapping, Optional
 from zoneinfo import ZoneInfo
 
 from digital_twin.modules.portfolio.contracts import Position
+from .market_hours import normalize_market_key, source_session_observation
 
 
 GRANULARITY_SECONDS = {
@@ -265,6 +266,17 @@ class MarketTimeSeriesObservation:
             "ccnl": dict(execution_coverage),
             "orderbook": dict(orderbook_coverage),
         }
+        price_coverage = market_signal_coverage.get("price") or {}
+        # A coexisting feed may describe a different last-close quote. Only
+        # borrow its session when it belongs to the selected price clock.
+        provider_session = position.market_session or (price_coverage.get("marketSession") if (
+            isinstance(price_coverage, dict) and position.source_as_of
+            and iso_utc(price_coverage.get("sourceAsOf")) == iso_utc(position.source_as_of)) else "")
+        session = source_session_observation(
+            position.market, position.source_as_of, stamp,
+            position.freshness_status, provider_session)
+        if session and granularity != "1d":
+            stored_investor_coverage["_sourceSessionObservation"] = session
         return cls(
             account_id=str(account_id or ""),
             symbol=str(position.symbol or "").upper().strip(),
@@ -502,6 +514,16 @@ def temporal_observation_payload(
         if isinstance(investor_coverage.get("_marketSignalCoverage"), dict)
         else {}
     )
+    session = investor_coverage.get("_sourceSessionObservation") or {}
+    # Legacy history remains unknown. Do not reconstruct a session at read
+    # time or use coverage belonging to another source/capture revision.
+    if (isinstance(session, dict) and session.get("version") == "source-session-observation-v1"
+            and session.get("market") == normalize_market_key(row.get("market"))
+            and session.get("sourceAsOf") == iso_utc(row.get("source_as_of"))
+            and session.get("capturedAt") == iso_utc(row.get("observed_at"))
+            and row.get("granularity") != "1d"):
+        payload["marketSession"] = session.get("marketSession") or "unknown"
+        payload["sourceSessionObservation"] = dict(session)
     execution_coverage = (
         market_signal_coverage.get("ccnl")
         if isinstance(market_signal_coverage.get("ccnl"), dict)

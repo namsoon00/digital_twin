@@ -227,11 +227,33 @@ def relation_change_snapshot(context):
         "investorFlowParticipantStatus": deepcopy(mapping(facts.get("investorFlowParticipantStatus"))),
         "transitions": relation_change_authority(context),
         "modelEvidenceObservations": deepcopy(mapping(relation.get("modelEvidenceObservations"))),
-        "dataAvailability": {row.get("lifecycleKey"): deepcopy(mapping(row.get("dataAvailability")))
-                             for row in rows(mapping(relation.get("hypothesisLifecycle")).get("records")) if row.get("lifecycleKey")},
+        "dataAvailability": current_lifecycle_availability(relation),
         "evidenceComparisonPartial": any(mapping(row.get("evidenceComparison")).get("status") == "partial"
                                          for row in rows(mapping(relation.get("hypothesisLifecycle")).get("records"))),
     }
+
+
+def current_lifecycle_availability(relation):
+    """Historical source restrictions cannot explain a different generation.
+
+    A retained judgment may have a newer failed source check; that check is
+    current even when the judgment's generation stays frozen. Conversely a
+    healthy native path reconciliation must not reuse its old outage reason.
+    The lifecycle's historical snapshot remains available for audit.
+    """
+    generation = relation.get("inferenceGenerationId") or mapping(relation.get("graphStoreInference")).get("inferenceGenerationId")
+    result = {}
+    for row in rows(mapping(relation.get("hypothesisLifecycle")).get("records")):
+        refresh = mapping(row.get("judgementRefresh"))
+        reconciliation = mapping(row.get("pathReconciliation"))
+        if (generation and reconciliation.get("inferenceGenerationId") == generation
+                and refresh.get("inferenceGenerationId") == generation and refresh.get("status") == "ready"):
+            continue
+        current = (row.get("inferenceGenerationId") == generation or
+                   refresh.get("inferenceGenerationId") == generation)
+        if row.get("lifecycleKey") and generation and current:
+            result[row["lifecycleKey"]] = deepcopy(mapping(row.get("dataAvailability")))
+    return result
 
 
 def relation_change_evidence(context, baseline=None, *, require_recovery_receipt=True):

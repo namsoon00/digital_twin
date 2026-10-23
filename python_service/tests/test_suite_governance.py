@@ -400,7 +400,10 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # MySQL read/author/review proof regression preserve the new contract.
         # Eight frozen strategy/native proof/real storage regressions.
         # Operational strategy release, native phase delivery and receipt/freshness continuity.
-        self.assertLessEqual(total, 2510)
+        # Eight source-session regressions cover persisted model/ABox inputs,
+        # DST/close boundaries, provider closure, feed identity, missing clocks,
+        # legacy isolation, source aging and generation-scoped outage reasons.
+        self.assertLessEqual(total, 2518)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

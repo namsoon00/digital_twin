@@ -1,5 +1,6 @@
 {
   "tests": [
+    {"file": "test_source_session_observation.py", "tier": "integration", "core": true},
     {"file": "test_rule_strategy_contract.py", "tier": "integration", "core": true},
     {"file": "test_company_value_observation.py", "tier": "contract", "core": true},
     {"file": "test_rule_timing_validation.py", "tier": "contract", "core": true},

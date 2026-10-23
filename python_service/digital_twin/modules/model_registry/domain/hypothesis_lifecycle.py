@@ -1231,6 +1231,7 @@ def record_for_absent_snapshot(
     if current_basis is not None:
         refresh = _refresh_for_snapshot(previous, current_basis, prior.source_rule_ids)
         refresh["checkedAt"] = stamp
+        refresh["inferenceGenerationId"] = current_basis.get("nativeGenerationId") or ""
         if refresh["status"] != "ready":
             return _retain_source_judgement(previous, refresh, stamp)
         native_present = sorted(set(prior.source_rule_ids) & set(current_basis.get('nativeRuleIds') or []))
@@ -1238,6 +1239,8 @@ def record_for_absent_snapshot(
             # A filtered/regrouped read model is not a negative native result.
             # Keep the last source judgment/clock and record reconciliation only.
             return replace(previous, material_change=False, version=HYPOTHESIS_LIFECYCLE_VERSION, snapshot={**previous.snapshot,
+                'judgementRefresh': {**dict(previous.snapshot.get('judgementRefresh') or {}),
+                    **refresh, 'lastJudgedAt': previous.last_observed_at},
                 'pathReconciliation': {'status': 'native-path-still-present', 'ruleIds': native_present,
                     'checkedAt': stamp, 'inferenceGenerationId': current_basis.get('nativeGenerationId') or ''}}), None
     change_basis = compare_change_basis(
@@ -1326,6 +1329,7 @@ def lifecycle_context_summary(records: Iterable[HypothesisLifecycleRecord]) -> D
             "dataAvailability": dict(snapshot.data_availability),
             "lastJudgedAt": record.last_observed_at,
             "judgementRefresh": dict(record.snapshot.get("judgementRefresh") or {}),
+            "pathReconciliation": dict(record.snapshot.get("pathReconciliation") or {}),
             "evidenceComparison": {
                 "status": "partial" if any(":unresolved-slot:" in key for key in [*snapshot.supporting_evidence_keys, *snapshot.counter_evidence_keys]) else "resolved",
                 "reason": "식별되지 않은 근거는 강화·약화 판정에 사용하지 않습니다.",

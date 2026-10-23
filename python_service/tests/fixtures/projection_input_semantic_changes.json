@@ -4,5 +4,11 @@
     "bodyHash": "5edf13933f457b3641f1a1cdebdd6deb0d1921bd8076c356bea89a80a8fad8eb",
     "reason": "Read portfolio lifecycle at the exact market source cutoff. Mutable heads updated later are omitted, not relabelled as past facts. Paired validation separately binds the retained portfolio receipt while temporal reads and model execution remain independent.",
     "regressionTest": "test_paired_portfolio_input.PairedPortfolioInputTests.test_capture_uses_the_frozen_portfolio_but_retains_independent_market_reads"
+  },
+  "graph_for_graph_store_persistence": {
+    "baselineHash": "2f8084db3f19e3575201b269e73f7300b7038f7bad45bba639c887ce0e950a09",
+    "bodyHash": "a66cce5cdcbeba5ae8c6744253b2370f949b60065ce1966f875aef6e36eb4c84",
+    "reason": "Retain observed instrument-to-market identity independently of active RuleBox predicates so paired releases consume identical factual ABoxes. Do not fabricate a missing market or traverse a market hub to unrelated instruments. Graph assembly cache v25 prevents reuse of the old shape.",
+    "regressionTest": "test_rule_strategy_contract.RuleStrategyContractTests.test_operational_strategy_release_owns_market_clock_schema_and_complete_bundle"
   }
 }

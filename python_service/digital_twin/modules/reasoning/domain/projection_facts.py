@@ -44,6 +44,8 @@ ABOX_STRUCTURAL_RELATION_TYPES = {
     "HAS_REBALANCE_SCENARIO",
 }
 
+INSTRUMENT_IDENTITY_RELATION_TYPES = {"TRADED_IN"}
+
 
 VALUATION_LINEAGE_RELATION_TYPES = {
     "DERIVED_FROM_VALUATION_ASSUMPTION", "USES_VALUATION_MODEL",
@@ -262,7 +264,11 @@ def graph_for_graph_store_persistence(
     # edges that define that world even when no currently enabled rule
     # consumes one of them. Otherwise a valid Price/Liquidity concept can
     # exist as an orphaned node, producing a misleading coverage gap.
-    semantic_relation_types = ABOX_STRUCTURAL_RELATION_TYPES | {
+    # Exchange/market identity is a source fact, even when the selected
+    # RuleBox does not test it. Keep it in both sides of a release comparison.
+    # Do not add it to structural traversal: a shared market endpoint must
+    # not pull unrelated instruments into a target-scoped graph.
+    semantic_relation_types = ABOX_STRUCTURAL_RELATION_TYPES | INSTRUMENT_IDENTITY_RELATION_TYPES | {
         str(relation_type or "").upper().strip()
         for category_types in CATEGORY_RELATIONS.values()
         for relation_type in category_types

@@ -180,6 +180,16 @@ class RuleStrategyContractTests(TestCase):
         from digital_twin.infrastructure.graph_store_lifecycle import ontology_release_seed_artifact
         from digital_twin.modules.reasoning.domain.composition_upgrade_review import declared_composition_additions
         original = [r for r in default_graph_inference_rules() if not r.resolved_claim_contract.strategy_contract]
+        baseline_projection = graph_for_graph_store_persistence(graph, {
+            'rules': [r.to_dict() for r in original], 'inputRelationTypes': ['HAS_MODEL_SIGNAL']})
+        self.assertEqual(projected.entities, baseline_projection.entities)
+        self.assertEqual(projected.relations, baseline_projection.relations)
+        # A missing source market must stay missing; projection does not
+        # manufacture the new strategy's market predicate.
+        missing_market = deepcopy(graph)
+        missing_market.relations = []
+        self.assertEqual([], graph_for_graph_store_persistence(missing_market, {
+            'rules': [r.to_dict() for r in rules], 'inputRelationTypes': ['TRADED_IN']}).relations)
         binding = {'deploymentId': 'old', 'graphStoreBinding': 'old-db'}
         extra = operational_strategy_rules(original, binding)
         before, after = [ontology_release_seed_artifact(rows) for rows in (original, original + extra)]

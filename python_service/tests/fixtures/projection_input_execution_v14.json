@@ -1,0 +1,16 @@
+{
+  "sourceRevision": "7b1ef9b32 + source market identity",
+  "contractVersion": "projection-input-execution-v14",
+  "reason": "Retain observed TRADED_IN market identity independently of RuleBox predicates; cache v25 invalidates old factual graph shapes. V13 and earlier remain frozen and replay under their original market retention and cache contracts.",
+  "scenarios": {
+    "full": "53e540d82ed815b2b97564a07a405ece36e79ddba43805a55144d3b9d4cd0508",
+    "target": "11ace8678ba748238e2df09b4d9bd93e5bef7f4b70ac58c9e653714330aec406",
+    "source-facts": "d1a79475e560d359c3f751556843a8fb3fb237edadcc759c7b4b9d7b3cbd5e0f",
+    "live-context": "bc43608a885c756f947ac33fbd9229151b8e72a57d98b454db90a387b5064108",
+    "memory-hit": "079b73c0eb5b3c7b73c678089b54d845cde69c71848a91a5ebac0d410e1d644a",
+    "persistent-hit": "46a4f75f0b96118fdcd5bf0272a94f3d9f50bf8ccd1d5f58333c791552239abf",
+    "cache-errors": "9712f7681da634a4b45a7642bae704a5335d5324fc3532f39783f354fafe9ce6",
+    "scoring-failure": "fca07111d0d4a1798cf804a5ee9d8589deb68fcd6affed3498575e3f906c2fe4",
+    "world-identity": "804462b3babae57a1e157b808ddf7229e65302a0f27fa1d02d87a735554a19d0"
+  }
+}

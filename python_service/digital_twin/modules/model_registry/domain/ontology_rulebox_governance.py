@@ -31,6 +31,8 @@ def rulebox_semantic_violations(rules: Iterable[GraphInferenceRule]) -> List[str
         violations.extend(knowledge_basis_violations(knowledge_basis, rule_id))
         violations.extend(rule_claim_contract_violations(rule.resolved_claim_contract, rule_id))
         violations.extend(rule_model_signal_family_violations(rule))
+        from .rule_strategy_compilation import strategy_rule_violations
+        violations.extend(rule_id + ": " + issue for issue in strategy_rule_violations(rule))
         if not str(rule.hypothesis_family_key or "").strip():
             violations.append(rule_id + ": hypothesis_family_key is required")
         lifecycle = rule.resolved_hypothesis_lifecycle()
@@ -101,6 +103,13 @@ def rulebox_semantic_violations(rules: Iterable[GraphInferenceRule]) -> List[str
     for rule_ids in signatures.values():
         if len(rule_ids) > 1:
             violations.append("duplicate enabled rule conditions: " + ", ".join(sorted(rule_ids)))
+    from .rule_strategy_compilation import phase_rule_id
+    from .rule_strategy_contract import PHASES
+    present = {r.rule_id for r in enabled_rules}
+    for rule in enabled_rules:
+        contract = rule.resolved_claim_contract.strategy_contract
+        if contract and any(phase_rule_id(contract, phase) not in present for phase in PHASES):
+            violations.append(rule.rule_id + ": strategy requires the complete four-phase RuleBox bundle")
     return sorted(set(violations))
 
 
@@ -356,6 +365,9 @@ def deduplicate_candidates(candidates: List[Dict[str, object]]) -> List[Dict[str
 
 
 def build_rule_change_candidate_prompt(context: Dict[str, object]) -> str:
+    if context.get("strategyAuthoringContract"):
+        from .rule_strategy_contract import strategy_design_prompt
+        return strategy_design_prompt(context["strategyAuthoringContract"])
     if context.get("authoringContract"):
         from .hypothesis_authoring import build_hypothesis_design_prompt
         return build_hypothesis_design_prompt(context, compact_candidate_context(context))
@@ -490,6 +502,19 @@ def compact_candidate_context(context: Dict[str, object]) -> Dict[str, object]:
 def rule_change_candidates_from_text(text: str, context: Dict[str, object] = None) -> List[Dict[str, object]]:
     payload = json_object_from_text(text)
     raw_candidates = payload.get("candidates") if isinstance(payload.get("candidates"), list) else []
+    if (context or {}).get("strategyAuthoringContract"):
+        from .rule_strategy_compilation import assemble_strategy_design
+        prepared = []
+        for raw in raw_candidates[:3]:
+            if not isinstance(raw, dict):
+                continue
+            try:
+                raw = assemble_strategy_design(raw, context["strategyAuthoringContract"])
+            except (ValueError, TypeError, KeyError) as error:
+                raw = {**raw, "proposedRule": None, "blockers": [{"kind": "schema-mismatch",
+                    "requirement": str(error)[:1000], "dependencyKey": "registered-strategy-design"}]}
+            prepared.append(raw)
+        raw_candidates = prepared
     if (context or {}).get("authoringContract"):
         from .hypothesis_authoring import assemble_hypothesis_design
         prepared = []
@@ -601,6 +626,7 @@ def normalize_rule_change_candidate(
         "proposedRule": normalized_rule,
         "proposedRuleDraft": proposed if proposed and normalized_rule is None else None,
         **({"hypothesisDesign": candidate["hypothesisDesign"]} if "hypothesisDesign" in candidate else {}),
+        **({"strategyDesign": candidate["strategyDesign"]} if "strategyDesign" in candidate else {}),
         "validationWarnings": dedupe_strings(warnings),
     }
     if not payload["id"].startswith(("candidate.", "governance.", "ai-candidate:")):

@@ -170,6 +170,8 @@ class RuleClaimContract:
     version: str = RULE_CLAIM_CONTRACT_VERSION
     rule_fingerprint: str = ""
     notification_intent: Dict[str, object] | None = None
+    strategy_contract: Dict[str, object] | None = None
+    strategy_phase: str = ""
 
     @property
     def is_predictive(self) -> bool:
@@ -200,12 +202,15 @@ class RuleClaimContract:
             "source": self.source,
             **({"ruleFingerprint": self.rule_fingerprint} if self.rule_fingerprint else {}),
             **({"notificationIntent": dict(self.notification_intent)} if self.notification_intent is not None else {}),
+            **({"strategyContract": self.strategy_contract, "strategyPhase": self.strategy_phase}
+               if self.strategy_contract is not None else {}),
         }
 
     @staticmethod
     def from_dict(payload: Mapping[str, object] = None):
         item = dict(payload or {}) if isinstance(payload, Mapping) else {}
         from .rule_notification_intent import parse_notification_intent
+        from .rule_strategy_contract import parse_strategy_contract
         return RuleClaimContract(
             claim_contract_id=_text(item.get("claimContractId") or item.get("claim_contract_id")),
             rule_id=_text(item.get("ruleId") or item.get("rule_id")),
@@ -230,6 +235,8 @@ class RuleClaimContract:
             version=_text(item.get("version")) or RULE_CLAIM_CONTRACT_VERSION,
             rule_fingerprint=_text(item.get("ruleFingerprint") or item.get("rule_fingerprint")),
             notification_intent=parse_notification_intent(item),
+            strategy_contract=parse_strategy_contract(item.get("strategyContract", item.get("strategy_contract"))),
+            strategy_phase=_text(item.get("strategyPhase") or item.get("strategy_phase")),
         )
 
 
@@ -452,7 +459,7 @@ def _rule_semantic_fingerprint(rule: object) -> str:
     if isinstance(source.get("derivations"), (list, tuple)):
         source["derivations"] = [
             {key: value for key, value in derivation.items()
-             if key not in {"management_response", "composition_response"} or value}
+             if key not in {"management_response", "composition_response", "strategy_response"} or value}
             for derivation in source["derivations"]
         ]
     if not source.get("conditions"):
@@ -467,6 +474,13 @@ def _rule_semantic_fingerprint(rule: object) -> str:
 def rule_claim_contract_violations(contract: RuleClaimContract, rule_id: str = "") -> List[str]:
     prefix = (_text(rule_id) or contract.rule_id or "<unknown-rule>") + ": "
     issues: List[str] = []
+    if contract.strategy_phase and contract.strategy_contract is None:
+        issues.append(prefix + "strategy phase requires a frozen strategy contract")
+    if contract.strategy_contract is not None:
+        from .rule_strategy_contract import PHASES, strategy_contract_violations
+        issues.extend(prefix + issue for issue in strategy_contract_violations(contract.strategy_contract))
+        if contract.strategy_phase not in PHASES or contract.claim_type != "causal-context" or contract.decision_authority != "reference-only":
+            issues.append(prefix + "strategy phase must be a reference-only causal-context claim")
     if contract.notification_intent is not None:
         from .rule_notification_intent import intent_violations
         issues.extend(prefix + issue for issue in intent_violations(contract.notification_intent, contract.to_dict()))

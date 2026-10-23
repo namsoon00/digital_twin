@@ -102,6 +102,23 @@ def build_rule_change_candidate_service(settings=None) -> RuleChangeCandidatePro
     )
 
 
+def strategy_delivery_settings(settings):
+    """Bind strategy research to the actual delivery deployment, never a stale default DB."""
+    from digital_twin.infrastructure import operational_store as stores
+    configured = dict(settings)
+    registry = stores.reasoning_engine_registry_store({**configured,
+        "_skipOperationalHistoryRetention": "1", "_skipOperationalSchemaBootstrap": "1"})
+    control = registry.control()
+    deployment_id = str(control.delivery_deployment_id or control.active_deployment_id or "")
+    deployment = dict(registry.get(deployment_id) or {}) if deployment_id else {}
+    database = str(deployment.get("graphStoreBinding") or "")
+    if not deployment_id or not database:
+        raise RuntimeError("Strategy research requires an existing delivery deployment binding")
+    configured["typedbDatabase"] = database
+    configured["_strategySourceDeployment"] = {"deploymentId": deployment_id, "graphStoreBinding": database}
+    return configured
+
+
 def build_investment_strategy_proposal_service(settings=None, event_publisher=None) -> InvestmentStrategyProposalService:
     from digital_twin.infrastructure import operational_store as stores
     from digital_twin.infrastructure.event_bus import default_event_bus
@@ -110,11 +127,15 @@ def build_investment_strategy_proposal_service(settings=None, event_publisher=No
     from digital_twin.modules.model_registry.public import InvestmentStrategyProposalService
 
     configured_settings = settings or runtime_settings()
+    def strategy_repository_provider():
+        bound = strategy_delivery_settings(configured_settings)
+        return ontology_repository_from_settings(bound), bound["_strategySourceDeployment"]
     return InvestmentStrategyProposalService(
         proposal_store=stores.investment_strategy_proposal_store(configured_settings),
         ontology_repository=ontology_repository_from_settings(configured_settings),
         event_publisher=event_publisher or default_event_bus(),
         settings=configured_settings,
+        strategy_repository_provider=strategy_repository_provider,
     )
 
 

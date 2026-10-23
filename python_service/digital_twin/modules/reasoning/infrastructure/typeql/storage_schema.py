@@ -138,6 +138,8 @@ def typedb_subject_attribute(field: str) -> str:
 
 
 def typedb_target_attribute(field: str) -> str:
+    if field == "entityId":
+        return "ontology-id"
     if field in {"minValue", "maxValue"}:
         field = "value"
     promoted_attribute = TYPEDB_PROMOTED_NUMERIC_ATTRIBUTES.get(field) or TYPEDB_PROMOTED_TEXT_ATTRIBUTES.get(field)

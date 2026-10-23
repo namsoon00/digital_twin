@@ -77,6 +77,10 @@ def _assemble(identity, management, candidates, restrictions, relation, checks, 
     available_groups = [g for g in groups if g['action'] not in set(blocked) | set(not_applicable)]
     composition = native_evidence_composition(identity, relation)
     result["evidenceComposition"] = composition
+    from .strategy_observations import native_strategy_observations
+    strategies = native_strategy_observations(identity, relation)
+    if strategies:
+        result["strategyObservations"] = strategies
     result["sourceRuleIds"] = sorted(set(result["sourceRuleIds"]) |
         {r["ruleId"] for r in composition["evidenceGroups"]} |
         {r["ruleId"] for r in composition["compositions"]})

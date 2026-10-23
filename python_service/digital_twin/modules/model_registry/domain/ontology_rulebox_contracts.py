@@ -274,6 +274,7 @@ class GraphRuleDerivation:
     # never by a message renderer or by market-hypothesis qualification.
     management_response: Dict[str, object] = dataclass_field(default_factory=dict)
     composition_response: Dict[str, object] = dataclass_field(default_factory=dict)
+    strategy_response: Dict[str, object] = dataclass_field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, object]:
         payload = asdict(self)
@@ -281,6 +282,8 @@ class GraphRuleDerivation:
             payload.pop("management_response", None)
         if not self.composition_response:
             payload.pop("composition_response", None)
+        if not self.strategy_response:
+            payload.pop("strategy_response", None)
         return payload
 
     @staticmethod
@@ -319,6 +322,7 @@ class GraphRuleDerivation:
             notification_severity=str(payload.get("notification_severity") or payload.get("notificationSeverity") or ""),
             management_response=dict(payload.get("management_response") or payload.get("managementResponse") or {}),
             composition_response=dict(payload.get("composition_response") or payload.get("compositionResponse") or {}),
+            strategy_response=dict(payload.get("strategy_response") or payload.get("strategyResponse") or {}),
         )
 
 
@@ -428,6 +432,8 @@ class GraphInferenceRule:
                 derivation.pop("management_response", None)
             if not derivation.get("composition_response"):
                 derivation.pop("composition_response", None)
+            if not derivation.get("strategy_response"):
+                derivation.pop("strategy_response", None)
         return payload
 
     @staticmethod

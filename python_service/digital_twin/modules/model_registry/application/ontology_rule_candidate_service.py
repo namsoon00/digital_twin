@@ -47,8 +47,19 @@ class RuleChangeCandidateProposalService:
             return {"status": "disabled", "reason": "Rule candidate advisor is not configured.", "candidateCount": 0, "savedCount": 0}
         clean_symbols = sorted(set(str(item or "").upper().strip() for item in (symbols or []) if str(item or "").strip()))
         world_id = portfolio_world_id(account_id, tenant_id) if str(account_id or "").strip() else ""
-        context = self.build_context(clean_symbols, trigger, requests, alerts, world_id=world_id,
-                                     read_inference=not bool(hypothesis_proposal))
+        strategy_design = trigger == "short-term-strategy-design"
+        if strategy_design and hypothesis_proposal:
+            raise ValueError("Strategy and single-hypothesis authoring must be separate requests")
+        if strategy_design:
+            if not self.strategy_proposal_service:
+                raise RuntimeError("Strategy proposal service is required for delivery-bound authoring")
+            catalog = self.strategy_proposal_service.design_catalog()
+            context = {"symbols": clean_symbols, "trigger": trigger,
+                "ruleBox": {"status": "ok", "rulesHash": catalog["sourceRuleboxFingerprint"]},
+                "inferenceBox": {"status": "not-read"}, "strategyAuthoringContract": catalog}
+        else:
+            context = self.build_context(clean_symbols, trigger, requests, alerts, world_id=world_id,
+                                         read_inference=not bool(hypothesis_proposal))
         for box in ("ruleBox", "inferenceBox"):
             if str((context.get(box) or {}).get("status") or "") in {"error", "unavailable", "disabled"}:
                 payload = context.get(box) or {}
@@ -60,7 +71,7 @@ class RuleChangeCandidateProposalService:
                               + ", hash=" + str(failed.get("queryHash")) + "]") if failed else ""
                 raise RuntimeError(box + " unavailable: " + str(payload.get("reason") or "") + diagnostic)
         inference_status = str((context.get("inferenceBox") or {}).get("status") or "")
-        if not hypothesis_proposal and inference_status not in {"ok", "empty"}:
+        if not hypothesis_proposal and not strategy_design and inference_status not in {"ok", "empty"}:
             return {
                 "status": "deferred-inference", "candidateCount": 0, "savedCount": 0,
                 "reason": str((context.get("inferenceBox") or {}).get("reason") or "Published inference is not ready."),
@@ -87,6 +98,10 @@ class RuleChangeCandidateProposalService:
             "modelAssessmentContext": context.get("modelAssessmentContext") or {},
             "authoringContract": (context.get("authoringContract") or {}).get("contract"),
             "researchContext": context.get("researchContext") or {"status": "not-queried"},
+            **({"strategyAuthoring": {"version": context["strategyAuthoringContract"]["version"],
+                "sourceRuleboxFingerprint": context["strategyAuthoringContract"]["sourceRuleboxFingerprint"],
+                "modelCount": len(context["strategyAuthoringContract"]["models"]), "mode": "research-only"}}
+               if strategy_design else {}),
             "recentEventCount": len(context.get("recentEvents") or []),
             "alertCount": len(context.get("alerts") or []),
             "ruleCount": (context.get("ruleBox") or {}).get("ruleCount", 0),
@@ -95,7 +110,7 @@ class RuleChangeCandidateProposalService:
         if context_observer:
             context_observer(context_summary)
         candidates = list(self.advisor.propose(context) or [])[: self.max_candidates()]
-        persist_as_general_candidate = not bool(hypothesis_proposal)
+        persist_as_general_candidate = not bool(hypothesis_proposal) and not strategy_design
         save_result = self.ontology_repository.save_rule_change_candidates(candidates, {
             "trigger": trigger,
             "symbols": clean_symbols,
@@ -104,7 +119,8 @@ class RuleChangeCandidateProposalService:
         }) if candidates and persist_as_general_candidate and hasattr(self.ontology_repository, "save_rule_change_candidates") else {
             "status": "skipped",
             "savedCount": 0,
-            "reason": "Hypothesis candidates are persisted only after development governance." if hypothesis_proposal else "No candidates to save.",
+            "reason": ("Strategy bundles are persisted as research proposals." if strategy_design else
+                       "Hypothesis candidates are persisted only after development governance." if hypothesis_proposal else "No candidates to save."),
         }
         result = {
             "status": "ok" if candidates else "no-candidates",

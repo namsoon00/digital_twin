@@ -483,6 +483,8 @@ def derivation_payload_from_row(row: Dict[str, object]) -> Dict[str, object]:
            if (derivation.get("management_response") or derivation.get("managementResponse") or row.get("derivationManagementResponse")) else {}),
         **({"composition_response": dict(derivation.get("composition_response") or derivation.get("compositionResponse") or row.get("derivationCompositionResponse") or {})}
            if (derivation.get("composition_response") or derivation.get("compositionResponse") or row.get("derivationCompositionResponse")) else {}),
+        **({"strategy_response": dict(derivation.get("strategy_response") or derivation.get("strategyResponse") or row.get("derivationStrategyResponse") or {})}
+           if (derivation.get("strategy_response") or derivation.get("strategyResponse") or row.get("derivationStrategyResponse")) else {}),
         "notification_category": str(row.get("notificationCategory") or row.get("derivationNotificationCategory") or derivation.get("notification_category") or derivation.get("notificationCategory") or ""),
         "notification_severity": str(row.get("notificationSeverity") or row.get("derivationNotificationSeverity") or derivation.get("notification_severity") or derivation.get("notificationSeverity") or ""),
     }

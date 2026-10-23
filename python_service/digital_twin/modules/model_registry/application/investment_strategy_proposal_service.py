@@ -13,11 +13,43 @@ class InvestmentStrategyProposalService:
         ontology_repository=None,
         event_publisher=None,
         settings: Dict[str, object] = None,
+        strategy_repository_provider=None,
     ):
         self.proposal_store = proposal_store
         self.ontology_repository = ontology_repository
         self.event_publisher = event_publisher
         self.settings = dict(settings or {})
+        self.strategy_repository_provider = strategy_repository_provider
+
+    def strategy_runtime(self):
+        if self.strategy_repository_provider:
+            return self.strategy_repository_provider()
+        return self.ontology_repository, self.settings.get("_strategySourceDeployment") or {}
+
+    def design_catalog(self):
+        from ..domain.rule_strategy_contract import strategy_authoring_catalog
+        repository, binding = self.strategy_runtime()
+        if not repository:
+            raise RuntimeError("A frozen RuleBox is required for strategy authoring")
+        rulebox = repository.rulebox_snapshot()
+        if rulebox.get("status") != "ok" or not rulebox.get("rules"):
+            raise RuntimeError("RuleBox is unavailable for strategy authoring")
+        return strategy_authoring_catalog(rulebox, binding)
+
+    def create_design(self, payload):
+        if not isinstance(payload, dict):
+            raise ValueError("strategy design must be an object")
+        from ..domain.rule_strategy_compilation import assemble_strategy_design
+        from ..domain.ontology_rulebox_governance import normalize_rule_change_candidate
+        catalog = self.design_catalog()
+        if payload.get("sourceRuleboxFingerprint") != catalog["sourceRuleboxFingerprint"]:
+            raise ValueError("RuleBox changed; reload the strategy design catalog")
+        raw = assemble_strategy_design({"title": payload.get("title"), "rationale": payload.get("rationale", ""),
+                                       "strategyDesign": payload.get("strategyDesign")}, catalog)
+        candidate = normalize_rule_change_candidate(raw, source="rulebox-strategy-design")
+        return self.propose_from_rule_candidates({"candidates": [candidate]}, {
+            "trigger": "short-term-strategy-design", "symbols": payload.get("symbols") or [],
+            "ruleBox": {"rulesHash": catalog["sourceRuleboxFingerprint"]}})
 
     def list(self, limit: int = 100, detail: str = "full") -> Dict[str, object]:
         safe_limit = max(1, min(500, int(limit or 100)))
@@ -132,7 +164,8 @@ class InvestmentStrategyProposalService:
                 "lastExperimentId": getattr(experiment, "experiment_id", ""),
                 "promotionReadiness": result.get("promotionReadiness") if isinstance(result.get("promotionReadiness"), dict) else {},
             }
-            proposal.status = STRATEGY_STATUS_VALIDATED if validation_is_complete(proposal.validation) else proposal.status
+            proposal.status = (STRATEGY_STATUS_VALIDATED if validation_is_complete(proposal.validation)
+                               and not proposal.metadata.get("strategyContract") else proposal.status)
             append_strategy_review_log(proposal, "validated" if proposal.status == STRATEGY_STATUS_VALIDATED else "validation-recorded", {
                 "experimentId": getattr(experiment, "experiment_id", ""),
                 "validationStatus": proposal.validation.get("status"),
@@ -155,7 +188,12 @@ class InvestmentStrategyProposalService:
         if not proposal:
             return {"status": "not-found", "id": proposal_id}
         rule_payloads = proposal_rule_payloads(proposal)
-        if not self.ontology_repository or not hasattr(self.ontology_repository, "validate_rulebox_materialization"):
+        research_strategy = bool((proposal.metadata or {}).get("strategyContract"))
+        repository, binding = self.strategy_runtime() if research_strategy else (self.ontology_repository, {})
+        if research_strategy and proposal.metadata["strategyContract"]["sourceDeployment"] != binding:
+            validation = {"status": "source-deployment-changed", "reason": "전략을 작성한 배포와 현재 알림 담당 배포가 다릅니다. 새 배포의 RuleBox에서 전략 버전을 다시 작성해야 합니다.",
+                          "mutatedOperationalRuleBox": False, "wroteInferenceBox": False}
+        elif not repository or not hasattr(repository, "validate_rulebox_materialization"):
             validation = {
                 "status": "requires-typedb",
                 "reason": "Ontology repository does not support candidate materialization preview.",
@@ -172,7 +210,7 @@ class InvestmentStrategyProposalService:
                 "wroteInferenceBox": False,
             }
         else:
-            validation = self.ontology_repository.validate_rulebox_materialization({
+            validation = repository.validate_rulebox_materialization({
                 **dict(payload or {}),
                 "rules": rule_payloads,
                 "symbols": proposal.symbols,
@@ -181,7 +219,13 @@ class InvestmentStrategyProposalService:
             validation = validation if isinstance(validation, dict) else {"status": "unknown"}
         validation = materialization_validation_with_diff(validation)
         proposal.validation = {**dict(proposal.validation or {}), "materialization": validation}
-        if str(validation.get("status") or "") in {"ok", "empty"}:
+        if research_strategy:
+            from ..domain.rule_strategy_compilation import strategy_phase_evaluation
+            validation["decisionEligibility"] = "research-only"
+            validation["tradeTimingQualified"] = False
+            validation["remainingChecks"] = list(proposal.metadata["strategyContract"]["validationRequirements"])
+            validation["strategyPhaseEvaluation"] = strategy_phase_evaluation(proposal.metadata["strategyContract"], validation)
+        if str(validation.get("status") or "") in {"ok", "empty"} and not research_strategy:
             proposal.status = STRATEGY_STATUS_VALIDATED
             self.publish(investment_strategy_validated_event(proposal))
         append_strategy_review_log(proposal, "materialization-validated", {
@@ -199,6 +243,10 @@ class InvestmentStrategyProposalService:
         proposal = self.proposal_store.get(proposal_id) if self.proposal_store else None
         if not proposal:
             return {"status": "not-found", "id": proposal_id}
+        if (proposal.metadata or {}).get("strategyContract"):
+            return {"status": "not-ready", "id": proposal_id, "reason": "strategy-v1-research-only",
+                    "remainingChecks": proposal.metadata["strategyContract"]["validationRequirements"],
+                    "proposal": proposal.to_dict()}
         if proposal.status not in PROMOTABLE_STRATEGY_STATUSES and not truthy(payload.get("forceApproved"), False):
             return {"status": "not-ready", "id": proposal_id, "reason": "proposal-status-not-approvable", "proposal": proposal.to_dict()}
         stamp = utc_now_iso()
@@ -226,6 +274,8 @@ class InvestmentStrategyProposalService:
         proposals = self.find_by_rule_ids(rule_ids)
         updated = []
         for proposal in proposals:
+            if proposal.metadata.get("strategyContract"):
+                continue  # Research phase materialization is not a strategy trading deployment.
             stamp = str((application or {}).get("appliedAt") or utc_now_iso())
             proposal.status = STRATEGY_STATUS_DEPLOYED
             proposal.deployed_at = stamp
@@ -361,6 +411,10 @@ def validation_is_complete(validation: Dict[str, object]) -> bool:
 def proposal_rule_payloads(proposal: InvestmentStrategyProposal) -> List[Dict[str, object]]:
     metadata = proposal.metadata if isinstance(proposal.metadata, dict) else {}
     rule = metadata.get("proposedRule") if isinstance(metadata.get("proposedRule"), dict) else {}
+    contract = (rule.get("claim_contract") or {}).get("strategyContract")
+    if contract:
+        from ..domain.rule_strategy_compilation import compile_strategy_rules
+        return [r.to_dict() for r in compile_strategy_rules(contract)]
     return [dict(rule)] if rule else []
 
 

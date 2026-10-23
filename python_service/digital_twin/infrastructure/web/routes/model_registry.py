@@ -18,6 +18,7 @@ from digital_twin.infrastructure.web.adapters.strategy_proposals import investme
 from digital_twin.infrastructure.web.adapters.strategy_proposals import list_investment_strategy_proposals_payload
 from digital_twin.infrastructure.web.adapters.strategy_proposals import record_investment_strategy_proposal_performance_payload
 from digital_twin.infrastructure.web.adapters.strategy_proposals import validate_investment_strategy_proposal_payload
+from digital_twin.infrastructure.web.adapters.strategy_proposals import strategy_design_catalog_payload, create_strategy_design_payload
 from digital_twin.infrastructure.web.common import configured
 from digital_twin.infrastructure.web.common import first_query
 from digital_twin.infrastructure.web.common import operational_read_settings
@@ -34,6 +35,8 @@ import urllib.request
 @dataclass(frozen=True)
 class ModelRegistryRoutes:
     """HTTP translation with explicit replaceable use-case/read-model callbacks."""
+    strategy_design_catalog_payload: Callable[..., object] = strategy_design_catalog_payload
+    create_strategy_design_payload: Callable[..., object] = create_strategy_design_payload
 
     approve_hypothesis_development_payload: Callable[..., object] = approve_hypothesis_development_payload
     approve_investment_strategy_proposal_payload: Callable[..., object] = approve_investment_strategy_proposal_payload
@@ -55,6 +58,16 @@ class ModelRegistryRoutes:
     validate_investment_strategy_proposal_payload: Callable[..., object] = validate_investment_strategy_proposal_payload
 
     def route_investment_strategy_proposals(self, request, path: str, query: Query):
+        if path == "/api/investment-strategy-proposals/design-catalog" and request.command == "GET":
+            return request.send_payload(200, self.strategy_design_catalog_payload())
+        if path == "/api/investment-strategy-proposals/design" and request.command == "POST":
+            if not request.ensure_writable("공유 모드에서는 전략 설계를 저장할 수 없습니다."):
+                return
+            try:
+                result = self.create_strategy_design_payload(request.read_json_body())
+            except (ValueError, TypeError) as error:
+                return request.send_payload(400, {"status": "invalid-strategy-design", "reason": str(error)})
+            return request.send_payload(200, result)
         if path == "/api/investment-strategy-proposals" and request.command == "GET":
             return request.send_payload(200, self.list_investment_strategy_proposals_payload(query))
 

@@ -397,6 +397,7 @@ TYPEDB_FUNCTION_SUBJECT_FIELDS = {
 } | set(TYPEDB_PROMOTED_NUMERIC_ATTRIBUTES.keys()) | set(TYPEDB_PROMOTED_TEXT_ATTRIBUTES.keys())
 
 TYPEDB_FUNCTION_TARGET_FILTERS = {
+    "entityId",
     # Normalized ABox observations, including ExecutionMetric, retain their
     # numeric fact in the common ``ontology-value-number`` attribute.  These
     # are physical TypeDB values, not JSON-only filters.

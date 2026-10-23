@@ -1139,6 +1139,8 @@ def entity_row_from_typeql(
            if (derivation.get("management_response") or derivation.get("managementResponse") or merged.get("derivationManagementResponse")) else {}),
         **({"derivationCompositionResponse": dict(derivation.get("composition_response") or derivation.get("compositionResponse") or merged.get("derivationCompositionResponse") or {})}
            if (derivation.get("composition_response") or derivation.get("compositionResponse") or merged.get("derivationCompositionResponse")) else {}),
+        **({"derivationStrategyResponse": dict(derivation.get("strategy_response") or derivation.get("strategyResponse") or merged.get("derivationStrategyResponse") or {})}
+           if (derivation.get("strategy_response") or derivation.get("strategyResponse") or merged.get("derivationStrategyResponse")) else {}),
         "derivationNotificationCategory": str(
             derivation.get("notification_category")
             or derivation.get("notificationCategory")

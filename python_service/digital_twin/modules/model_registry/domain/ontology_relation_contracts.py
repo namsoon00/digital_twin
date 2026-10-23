@@ -86,10 +86,14 @@ class OntologyRuleMatch:
     knowledge_basis: Dict[str, object] = field(default_factory=dict)
     management_response: Dict[str, object] = field(default_factory=dict)
     composition_response: Dict[str, object] = field(default_factory=dict)
+    strategy_response: Dict[str, object] = field(default_factory=dict)
     action_applicability: Dict[str, object] = field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, object]:
         payload = asdict(self)
+        strategy = payload.pop("strategy_response")
+        if strategy:
+            payload["strategyResponse"] = strategy
         payload["reviewLevel"] = payload.pop("review_level")
         payload["reviewLabel"] = payload.pop("review_label")
         payload["dataState"] = payload.pop("data_state")

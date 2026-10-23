@@ -29,6 +29,7 @@ def add_rulebox_concepts(graph: PortfolioOntology, rules: Iterable[GraphInferenc
     ))
     add_threshold_policy_concepts(graph, registry_id)
     add_model_signal_interpretation_concepts(graph, registry_id, rules)
+    strategy_ids = set()
     for rule in rules:
         execution_profile = rule_execution_profile(rule)
         domain_manifest = rule_domain_manifest(rule, execution=execution_profile)
@@ -121,6 +122,18 @@ def add_rulebox_concepts(graph: PortfolioOntology, rules: Iterable[GraphInferenc
                 "claimType": claim_contract.claim_type,
             }),
         ))
+        if claim_contract.strategy_contract is not None:
+            strategy = claim_contract.strategy_contract
+            strategy_id = entity_id("strategy-contract", strategy["contractFingerprint"])
+            if strategy_id not in strategy_ids:
+                strategy_ids.add(strategy_id)
+                graph.entities.append(OntologyEntity(strategy_id, strategy["label"], "strategy-contract",
+                    rulebox_properties({"tboxClass": "Strategy", "tboxClasses": ["Strategy"],
+                        "strategyContract": strategy, "decisionEligibility": "research-only"})))
+            graph.relations.append(OntologyRelation(claim_id, strategy_id, "VALIDATES_STRATEGY",
+                properties=rulebox_relation_properties("VALIDATES_STRATEGY", {
+                    "phase": claim_contract.strategy_phase, "validationKind": "native-condition-observation",
+                    "tradeTimingQualified": False})))
         if claim_contract.is_predictive:
             outcome_payload = claim_contract.outcome_contract.to_dict()
             outcome_id = entity_id("hypothesis-outcome-contract", claim_contract.claim_contract_id)

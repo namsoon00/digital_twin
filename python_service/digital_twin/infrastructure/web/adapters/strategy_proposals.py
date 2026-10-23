@@ -36,6 +36,14 @@ def investment_strategy_proposals_status_payload() -> Dict[str, object]:
     return investment_strategy_proposal_read_service().status()
 
 
+def strategy_design_catalog_payload():
+    return investment_strategy_proposal_read_service().design_catalog()
+
+
+def create_strategy_design_payload(payload):
+    return investment_strategy_proposal_service().create_design(payload)
+
+
 def investment_strategy_proposal_payload(proposal_id: str) -> Dict[str, object]:
     return investment_strategy_proposal_read_service().get(proposal_id)
 

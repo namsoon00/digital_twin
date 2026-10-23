@@ -969,6 +969,7 @@ def matches_from_inference(
             next_checks=string_list(relation.get("nextChecks") or relation.get("next_checks")),
             management_response=dict(relation.get("managementResponse") or {}),
             composition_response=dict(relation.get("compositionResponse") or {}),
+            strategy_response=dict(relation.get("strategyResponse") or {}),
             notification_category=str(relation.get("notificationCategory") or relation.get("notification_category") or ""),
             notification_severity=str(relation.get("notificationSeverity") or relation.get("notification_severity") or ""),
             rule_source_kind=str(relation.get("ruleSourceKind") or relation.get("rule_source_kind") or ""),

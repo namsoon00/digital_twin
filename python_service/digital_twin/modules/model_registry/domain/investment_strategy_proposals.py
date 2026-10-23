@@ -33,6 +33,15 @@ RETIRED_STRATEGY_PROPOSAL_SCORE_FIELDS = RETIRED_AGGREGATE_FIELDS | {
 
 def without_retired_strategy_score_fields(value: object) -> object:
     if isinstance(value, dict):
+        # A frozen executable model predicate may legitimately reference a score.
+        # Never rewrite its meaning; only a valid, content-addressed contract gets
+        # this exception, not arbitrary proposal/performance score fields.
+        if value.get("version") == "rule-strategy-contract-v1":
+            from .rule_strategy_contract import parse_strategy_contract
+            try:
+                return parse_strategy_contract(value)
+            except (TypeError, ValueError):
+                pass
         return {
             str(key): without_retired_strategy_score_fields(item)
             for key, item in value.items()
@@ -244,6 +253,9 @@ def strategy_proposal_from_rule_candidate(
     rule_id = rule_id_from_payload(proposed_rule)
     if not rule_id:
         return None
+    strategy = (proposed_rule.get("claim_contract") or {}).get("strategyContract")
+    from .rule_strategy_compilation import phase_rule_id
+    rule_ids = [phase_rule_id(strategy, p) for p in strategy["phases"]] if strategy else [rule_id]
     now = utc_now_iso()
     candidate_id = clean_text(candidate.get("id") or candidate.get("candidateId") or rule_id, 160)
     rulebox = context.get("ruleBox") if isinstance(context.get("ruleBox"), dict) else {}
@@ -254,13 +266,15 @@ def strategy_proposal_from_rule_candidate(
         thesis=strategy_thesis(candidate, proposed_rule),
         symbols=symbols,
         target_universe=strategy_target_universe(candidate, proposed_rule, symbols),
-        entry_conditions=strategy_entry_conditions(proposed_rule),
-        exit_conditions=strategy_exit_conditions(proposed_rule),
+        entry_conditions=([strategy["models"][rid]["claimContract"]["statement"] for rid in strategy["phases"]["entry"]]
+                          if strategy else strategy_entry_conditions(proposed_rule)),
+        exit_conditions=([strategy["models"][rid]["claimContract"]["statement"] for rid in strategy["phases"]["exit"]]
+                         if strategy else strategy_exit_conditions(proposed_rule)),
         risk_controls=strategy_risk_controls(candidate, proposed_rule),
         position_sizing=strategy_position_sizing(proposed_rule),
         rebalance_policy=strategy_rebalance_policy(proposed_rule),
         evidence_refs=strategy_evidence_refs(candidate, context),
-        rule_ids=[rule_id],
+        rule_ids=rule_ids,
         source_candidate_ids=[candidate_id],
         source_trigger=clean_text(context.get("trigger") or candidate.get("trigger"), 80),
         rulebox_hash=clean_text(rulebox.get("ruleboxRulesHash") or rulebox.get("rulesHash"), 120),
@@ -273,6 +287,8 @@ def strategy_proposal_from_rule_candidate(
             "expectedEffect": clean_text(candidate.get("expectedEffect"), 1000),
             "risk": clean_text(candidate.get("risk"), 1000),
             "proposedRule": proposed_rule,
+            **({"strategyContract": strategy, "strategyDesign": candidate.get("strategyDesign"),
+                "decisionEligibility": "research-only", "tradeTimingQualified": False} if strategy else {}),
         },
         created_at=now,
         updated_at=now,

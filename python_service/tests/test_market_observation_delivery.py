@@ -5,7 +5,7 @@ from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 from digital_twin import service_manager
-from digital_twin.modules.market_data.domain.market_observations import market_observation_delivery_admission
+from digital_twin.modules.market_data.domain.market_observations import market_observation_delivery_admission, QUOTE_BASELINE_VERSION, quote_witness
 from digital_twin.modules.portfolio.domain.portfolio import AlertEvent
 from digital_twin.infrastructure.mysql_monitoring_stores import MySQLMonitoringCycleRecorder
 
@@ -19,6 +19,7 @@ def state_with_outbox_anchor(price):
                     "reasoningPrice": 1_676_500,
                     "initialPrice": 1_676_500,
                     "outboxPrice": price,
+                    "quoteBaselineVersion": QUOTE_BASELINE_VERSION,
                     "currency": "KRW",
                     "outboxQueuedAt": "2026-09-06T23:11:50Z",
                 }
@@ -27,28 +28,31 @@ def state_with_outbox_anchor(price):
     }
 
 
-def market_event(anchor=1_676_500, current=1_729_000):
+def market_event(anchor=1_676_500, current=1_729_000, symbol="000660", currency="KRW", stamp="2026-09-06T23:12:09Z"):
     return AlertEvent(
         "default",
         "Test",
         "WATCH",
         "marketObservation",
-        "default:market-observation:000660:up",
+        "default:market-observation:" + symbol + ":up",
         "SK하이닉스",
         [],
-        "000660",
+        symbol,
         metadata={
             "deliveryDeferred": False,
             "marketObservation": {
                 "outboxBaselinePrice": anchor,
                 "baselinePrice": anchor,
                 "currentPrice": current,
+                "quoteWitness": quote_witness({"symbol": symbol, "currency": currency, "current_price": current,
+                    "source_as_of": stamp, "source_timestamp_state": "provider",
+                    "freshness_status": "fresh", "data_quality": "actual"}, stamp),
                 "deliveryThresholdPct": 3,
                 "direction": "up",
-                "currency": "KRW",
+                "currency": currency,
             },
         },
-        generated_at="2026-09-06T23:12:09Z",
+        generated_at=stamp,
     )
 
 

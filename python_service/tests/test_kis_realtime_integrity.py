@@ -217,6 +217,40 @@ class KISRealtimeIntegrityTests(unittest.TestCase):
         values = {"MKSC_SHRN_ISCD": "000680", "BSOP_HOUR": "134410", "ACML_VOL": "9100", "TOTAL_BIDP_RSQN": "12440", "TOTAL_ASKP_RSQN": "17524"}
         book = client.apply_message(frame([values.get(k, "") for k in ORDERBOOK_COLUMNS] + ["2975", "0", "0", "2"], tr_id=KIS_TR_ORDERBOOK))[0]["payload"]
         self.assertEqual(63, book["marketSignalCoverage"]["orderbook"]["wireFieldCount"])
+        for key in ("sourceAsOf", "sourceFetchedAt", "sourceTimestampState", "updatedAt", "freshnessStatus"):
+            self.assertEqual(tick[key], book[key], key)
+        from digital_twin.modules.market_data.domain.price_observation_windows import source_point
+        from digital_twin.modules.portfolio.domain.portfolio import Position
+        client.now_provider = lambda: "2026-09-14T04:43:40Z"
+        fresh = client.apply_message(frame(tick_values()))[0]["payload"]
+        self.assertEqual("provider-execution", fresh["sourceTimestampState"])
+        self.assertEqual("2026-09-14T04:43:38+00:00", fresh["sourceAsOf"])
+        self.assertEqual("2026-09-14T04:43:40Z", fresh["sourceFetchedAt"])
+        provider = object.__new__(KISMarketSignalProvider)
+        account_quote = Position("000680", "Fixture", market="KR", currency="KRW", current_price=2900,
+            data_quality="actual", freshness_status="stale", source_timestamp_state="provider",
+            source_as_of="2026-09-14T04:40:00Z")
+        merged = provider.merge_position(account_quote, fresh)
+        self.assertEqual("available", source_point(merged.to_dict(), "2026-09-14T04:43:40Z")[1])
+        # A proven execution stage wins over a REST closing-reference stage;
+        # unrelated mixed evidence does not erase the execution's provenance.
+        mixed_price = {**fresh, "dataQuality": "mixed", "marketSignalCoverage": {
+            **fresh["marketSignalCoverage"], "price": {"freshnessStatus": "last-close"}}}
+        merged = provider.merge_position(account_quote, mixed_price)
+        self.assertEqual(2975, merged.current_price)
+        self.assertEqual("available", source_point(merged.to_dict(), "2026-09-14T04:43:40Z")[1])
+        for date, clock in (("20260914", "134337"), ("20260914", "134500"), ("", "134338")):
+            with self.subTest(date=date, clock=clock):
+                client.now_provider = lambda: "2026-09-14T04:43:41Z"
+                later = client.apply_message(frame(tick_values(BSOP_DATE=date, STCK_CNTG_HOUR=clock,
+                                                               STCK_PRPR="2970")))[0]["payload"]
+                self.assertEqual(fresh, later)
+        for date in ("", "invalid", "20260915"):
+            first = self.client(MemoryQuotes())
+            first.now_provider = lambda: "2026-09-14T04:43:40Z"
+            payload = first.apply_message(frame(tick_values(BSOP_DATE=date)))[0]["payload"]
+            selected = provider.merge_position(Position("000680", "Fixture"), payload)
+            self.assertIsNone(source_point(selected.to_dict(), "2026-09-14T04:43:40Z")[0])
         # A flattened REST write may replace fields between two socket frames.
         mixed = {**book, "currentPrice": 24382, "tradingValue": -101000}
         result = merge_fresh_websocket_stages({"currentPrice": 2970}, mixed, 120)

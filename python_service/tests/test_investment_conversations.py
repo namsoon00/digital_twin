@@ -251,8 +251,8 @@ class InvestmentConversationStorageTests(StabilizationDatabaseCase):
 
     def test_monitor_transaction_binds_actual_source_event_and_preserves_dedupe(self):
         snapshot = fixture_snapshot(account=self.account)
-        event = market_event()
-        event.account_id, event.symbol, event.key = self.account, "AAPL", "market-" + self.account
+        event = market_event(96, 100, symbol="AAPL", currency="USD", stamp=snapshot.generated_at)
+        event.account_id, event.key = self.account, "market-" + self.account
         recorder = MySQLMonitoringCycleRecorder(self.settings)
         result = recorder.record_cycle([self.account], [snapshot], [event])
         self.assertEqual(1, result.queued)

@@ -5,6 +5,7 @@ from digital_twin.modules.notifications.contracts import price_movement_lines, p
 from digital_twin.modules.portfolio.contracts import AlertEvent
 from .price_observation_episodes import enabled, policy, advance_episodes, VERSION
 from .price_observation_windows import finite, positions
+from .market_observations import quote_witness
 
 
 def position_effect(item, role, portfolio, start_price):
@@ -33,6 +34,9 @@ def position_effect(item, role, portfolio, start_price):
 
 
 def smart_market_observations(snapshot, previous, legacy_events, settings):
+    subjects = positions(snapshot.to_monitor_state())
+    legacy_events = [event for event in legacy_events
+                     if quote_witness(subjects.get(event.symbol, ({}, ""))[0], snapshot.generated_at)]
     if not enabled(settings):
         return legacy_events
     current = snapshot.to_monitor_state()
@@ -77,7 +81,8 @@ def smart_market_observations(snapshot, previous, legacy_events, settings):
             "baselineKind": "price-movement-start", "currentPrice": movement["currentPrice"],
             "changePct": movement["changePct"], "direction": movement["direction"], "currency": currency,
             "source": source, "subjectRole": role, "thresholdPct": movement["trigger"]["thresholdPct"],
-            "deliveryThresholdPct": movement["trigger"]["thresholdPct"]}
+            "deliveryThresholdPct": movement["trigger"]["thresholdPct"],
+            "quoteWitness": quote_witness(item, snapshot.generated_at)}
         result = [event for event in result if event.symbol != symbol]
         result.append(AlertEvent(snapshot.account_id, snapshot.account_label, "WATCH", "marketObservation",
             ":".join([snapshot.account_id, "price-movement", movement["episodeId"], str(movement["sequence"])]),

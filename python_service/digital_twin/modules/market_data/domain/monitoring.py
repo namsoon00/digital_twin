@@ -9,6 +9,8 @@ from digital_twin.modules.market_data.domain.external_api_sources import externa
 from digital_twin.modules.market_data.domain.external_signal_deltas import external_signals_with_deltas
 from digital_twin.modules.market_data.domain.market_data import number
 from digital_twin.modules.market_data.domain.market_observations import MARKET_OBSERVATION_CANDIDATES_KEY, market_observation_baseline, market_observation_delivery_cadence_minutes
+from .market_observations import quote_witness, QUOTE_BASELINE_VERSION
+from .price_observation_windows import source_point
 from digital_twin.modules.notifications.contracts import DEFAULT_ALERT_RULES, DEFAULT_ALERT_THRESHOLDS, DEFAULT_CADENCE, INVESTMENT_INSIGHT, MARKET_OBSERVATION, MIN_CADENCE_MINUTES, ONTOLOGY_OBSERVATION_FOLLOWUP, ONTOLOGY_INFERENCE_MISSING, PORTFOLIO_HOLDINGS_SNAPSHOT, WATCHLIST_ONTOLOGY_SIGNAL, CRYPTO_ONTOLOGY_SIGNAL
 from digital_twin.modules.reasoning.contracts import inferencebox_source_name, ontology_projection_from_metadata, relation_contexts_from_snapshot
 from digital_twin.modules.reasoning.contracts import build_investment_insight_events, relation_news_event_key_suffix, split_operational_and_investment_events
@@ -793,12 +795,23 @@ class RealtimeMonitor(MonitoringSampleDataMixin, MonitoringPositionContextMixin,
             previous_item = previous_positions.get(symbol)
             if not previous_item:
                 continue
+            witness = quote_witness(item.to_dict(), snapshot.generated_at)
+            if not witness:
+                continue
+            prior_point, _ = source_point(previous_item, (previous or {}).get("generatedAt"))
+            point, _ = source_point(witness, snapshot.generated_at)
+            if prior_point and point["at"] <= prior_point["at"]:
+                continue
             previous_price = self.position_current_price(previous_item)
             current_price = float(item.current_price or 0)
             if previous_price <= 0 or current_price <= 0:
                 continue
             currency = item.currency or self.position_currency(item.to_dict())
             baseline = market_observation_baseline(previous or {}, symbol, currency)
+            if baseline and baseline.get("quoteBaselineVersion") != QUOTE_BASELINE_VERSION:
+                continue  # Persistence will rebase the unproven legacy anchor.
+            if not baseline and not prior_point:
+                continue
             reasoning_baseline_price = (
                 number(baseline.get("reasoningPrice"))
                 or number(baseline.get("price"))
@@ -916,6 +929,7 @@ class RealtimeMonitor(MonitoringSampleDataMixin, MonitoringPositionContextMixin,
                         "direction": direction,
                         "currency": currency,
                         "source": source,
+                        "quoteWitness": witness,
                     },
                     "observationOnly": True,
                     "investmentJudgement": False,
@@ -924,6 +938,7 @@ class RealtimeMonitor(MonitoringSampleDataMixin, MonitoringPositionContextMixin,
                     "deliveryMode": "typedb-first" if delivery_deferred else "deterministic-outbox-before-typedb",
                     "reasoningFollowup": "queued-from-persisted-snapshot",
                 },
+                generated_at=snapshot.generated_at,
             ))
         from .smart_price_observations import smart_market_observations
         return smart_market_observations(snapshot, previous or {}, events, self.settings)

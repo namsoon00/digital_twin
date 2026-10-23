@@ -59,9 +59,9 @@ class RuntimeStabilityTests(unittest.TestCase):
         self.assertIn("10/02 16:52 KST", repr(market_snapshot_sections(snapshot)))
         position.freshness_status = "stale"
         selected = provider.merge_position(position, signal)
-        self.assertEqual((100, "KIS", "2026-10-02T06:57:06Z", "last-close"),
+        self.assertEqual((120, "Toss", position.source_as_of, "stale"),
                          (selected.current_price, selected.quote_source, selected.source_as_of, selected.freshness_status))
-        self.assertEqual("2026-10-02T06:57:10Z", selected.source_fetched_at)
+        self.assertEqual(position.source_fetched_at, selected.source_fetched_at)
         missing = provider.merge_position(position, {"currentPrice": 90})
         self.assertEqual("", missing.source_as_of)
         self.assertEqual("unknown", missing.freshness_status)

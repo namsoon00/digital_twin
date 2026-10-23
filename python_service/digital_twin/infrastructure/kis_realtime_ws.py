@@ -11,6 +11,7 @@ from digital_twin.modules.market_data.domain.trade_strength_quality import trade
 from digital_twin.modules.portfolio.domain.portfolio import utc_now_iso
 from .external_signal_utils import guarded_external_call
 from .kis_market_signals import KIS_CACHE_ACCOUNT_ID, KIS_CACHE_PROVIDER, clean_symbol
+from digital_twin.modules.market_data.domain.market_time_series import parse_timestamp
 from .kis_realtime_validation import (
     KIS_REALTIME_STAGE_FIELDS, KIS_REALTIME_VALIDATION_VERSION,
     has_unvalidated_websocket_stage, valid_kis_wire_row,
@@ -161,6 +162,7 @@ def normalize_ws_ccnl(row: Dict[str, object]) -> Dict[str, object]:
         "changeRate": number(row.get("prdy_ctrt")),
         "volume": volume,
         "volumeSourceAsOf": volume_source_time(row),
+        "priceSourceAsOf": volume_source_time(row),
         "volumeRatio": (number(row.get("prdy_vol_vrss_acml_vol_rate")) or 0) / 100 if row.get("prdy_vol_vrss_acml_vol_rate") not in (None, "") else None,
         "tradingValue": trading_value,
         "tradeStrength": number(row.get("cttr")),
@@ -218,6 +220,15 @@ def websocket_stage_coverage(stage: str, fields: Iterable[str], fetched_at: str,
 
 def merge_realtime_signal(previous: Dict[str, object], update: Dict[str, object], stage: str, tr_id: str, fetched_at: str) -> Dict[str, object]:
     merged = {} if has_unvalidated_websocket_stage(previous or {}) else dict(previous or {})
+    execution_at = parse_timestamp(update.get("priceSourceAsOf")) if stage == "ccnl" else None
+    received_at = parse_timestamp(fetched_at)
+    verified_clock = execution_at is not None and received_at is not None and execution_at <= received_at
+    old_execution = (merged.get("marketSignalCoverage") or {}).get("ccnl", {})
+    old_clock = parse_timestamp(old_execution.get("sourceAsOf")) if old_execution.get("sourceTimestampState") == "provider-execution" else None
+    if stage == "ccnl" and old_clock and (
+            (execution_at and execution_at < old_clock)
+            or (not verified_clock and merged.get("sourceTimestampState") == "provider-execution")):
+        return merged  # Delayed/unverifiable frames cannot rewind a proven trade.
     for key, value in (update or {}).items():
         if value not in (None, ""):
             merged[key] = value
@@ -227,27 +238,38 @@ def merge_realtime_signal(previous: Dict[str, object], update: Dict[str, object]
     merged.setdefault("name", info["name"])
     merged.setdefault("market", "KR")
     merged.setdefault("currency", "KRW")
-    merged["quoteSource"] = append_source(merged.get("quoteSource"), "KIS WebSocket")
-    merged["quoteStatus"] = "KIS 실시간 체결·호가 반영"
-    merged["quoteMessage"] = "KIS WebSocket 체결·호가를 실시간 모델링 데이터에 반영했습니다. 투자자별 수급은 KIS REST live-poll 근거와 분리해서 봅니다."
-    merged["dataQuality"] = "actual"
-    merged["updatedAt"] = fetched_at
-    merged["sourceAsOf"] = fetched_at
-    merged["sourceFetchedAt"] = fetched_at
-    merged["sourceTimestampState"] = "websocket-received"
-    merged["freshnessStatus"] = "realtime"
-    merged["freshnessReason"] = "KIS WebSocket에서 실제 체결 또는 호가 프레임을 수신했습니다."
-    merged["freshnessAgeMinutes"] = 0
-    merged["latencyStatus"] = "live-transport"
-    merged["latencyReason"] = "WebSocket 수신 시각 기준의 장중 체결·호가 관측값입니다."
-    merged["transport"] = "websocket"
-    merged["realTime"] = True
-    merged["marketSession"] = "regular"
-    merged["marketSessionLabel"] = "정규장"
+    if stage == "ccnl":
+        merged["quoteSource"] = append_source(merged.get("quoteSource"), "KIS WebSocket")
+        merged["quoteStatus"] = "KIS 실시간 체결·호가 반영"
+        merged["quoteMessage"] = "KIS WebSocket 체결·호가를 실시간 모델링 데이터에 반영했습니다. 투자자별 수급은 KIS REST live-poll 근거와 분리해서 봅니다."
+        merged["dataQuality"] = "actual"
+        merged["updatedAt"] = fetched_at
+        merged["sourceAsOf"] = fetched_at
+        merged["sourceFetchedAt"] = fetched_at
+        merged["sourceTimestampState"] = "websocket-received"
+        merged["freshnessStatus"] = "realtime"
+        merged["freshnessReason"] = "KIS WebSocket에서 실제 체결 또는 호가 프레임을 수신했습니다."
+        merged["freshnessAgeMinutes"] = 0
+        merged["latencyStatus"] = "live-transport"
+        merged["latencyReason"] = "WebSocket 수신 시각 기준의 장중 체결·호가 관측값입니다."
+        merged["transport"] = "websocket"
+        merged["realTime"] = True
+        merged["marketSession"] = "regular"
+        merged["marketSessionLabel"] = "정규장"
     coverage = dict(merged.get("marketSignalCoverage") or {}) if isinstance(merged.get("marketSignalCoverage"), dict) else {}
     fields = [key for key in KIS_REALTIME_STAGE_FIELDS[stage] if update.get(key) not in (None, "")]
     coverage[stage] = websocket_stage_coverage(stage, fields, fetched_at, tr_id)
     if stage == "ccnl":
+        if verified_clock:
+            source_clock = execution_at.isoformat()
+            age_minutes = (received_at - execution_at).total_seconds() / 60
+            clock_fields = {"sourceAsOf": source_clock, "sourceTimestampState": "provider-execution",
+                            "freshnessStatus": "realtime" if age_minutes <= 3 else "stale",
+                            "freshnessAgeMinutes": age_minutes,
+                            "latencyReason": "KIS 영업일과 실제 체결 시각 기준 관측값입니다."}
+            merged.update(clock_fields)
+            coverage[stage].update(clock_fields)
+            coverage[stage]["dataQuality"] = "actual"
         coverage[stage].update(trade_strength_quality_snapshot(
             trade_strength=merged.get("tradeStrength"),
             coverage=coverage[stage],

@@ -55,6 +55,57 @@ class SmartPriceObservationTests(unittest.TestCase):
             snap = snapshot(3, 95, **change)
             paths = advance_paths(snap.to_monitor_state(), state)
             self.assertEqual([], price_windows(paths["TEST"]))
+        from digital_twin.modules.market_data.domain.market_observations import (
+            apply_market_observation_outbox_baselines, hydrate_market_observation_baselines,
+            market_observation_delivery_admission, QUOTE_BASELINE_VERSION)
+        monitor = RealtimeMonitor({**SETTINGS, "marketObservationSmartEnabled": "0"})
+        for role, start, reference, final in (("holding", 16430, 18020, 16400),
+                                              ("watchlist", 152800, 160000, 152700)):
+            with self.subTest(role=role):
+                original = snapshot_state_for_persistence(snapshot(0, start, role), {}, SETTINGS)
+                bad = snapshot(12, reference, role, source_timestamp_state="queried-at-fallback",
+                               freshness_status="last-close", data_quality="mixed", quote_source="KIS")
+                self.assertEqual([], monitor.market_observation_events(bad, original))
+                saved = snapshot_state_for_persistence(bad, original, SETTINGS)
+                self.assertEqual(start, saved["metadata"]["marketObservationBaselines"]["TEST"]["initialPrice"])
+                live = snapshot(22, final, role, source_timestamp_state="provider-execution",
+                                freshness_status="realtime", quote_source="KIS WebSocket")
+                self.assertEqual([], monitor.market_observation_events(live, saved))
+                # Real cumulative movement still works without a short path.
+                moved = snapshot(25, start * 1.06, role)
+                events = monitor.market_observation_events(moved, saved)
+                self.assertEqual(1, len(events))
+                self.assertTrue(market_observation_delivery_admission(events[0], saved)["accepted"])
+                advanced = apply_market_observation_outbox_baselines(saved, events)
+                self.assertEqual(start * 1.06, advanced["metadata"]["marketObservationBaselines"]["TEST"]["outboxPrice"])
+                events[0].metadata["marketObservation"]["quoteWitness"]["source_timestamp_state"] = "queried-at-fallback"
+                self.assertFalse(market_observation_delivery_admission(events[0], saved)["accepted"])
+                self.assertEqual(saved, apply_market_observation_outbox_baselines(saved, events))
+                legacy = deepcopy(saved)
+                legacy["metadata"]["marketObservationBaselines"]["TEST"] = {"price": reference, "outboxPrice": reference}
+                self.assertEqual([], monitor.market_observation_events(live, legacy))
+                migrated = hydrate_market_observation_baselines(live.to_monitor_state(), legacy)
+                anchor = migrated["metadata"]["marketObservationBaselines"]["TEST"]
+                self.assertEqual(final, anchor["initialPrice"])
+                self.assertNotIn("outboxPrice", anchor)
+                self.assertEqual(QUOTE_BASELINE_VERSION, anchor["quoteBaselineVersion"])
+                self.assertEqual("legacy-quote-unverified", anchor["deliveryAnchorResetReason"])
+                # A stale snapshot cannot reset a concurrently committed anchor.
+                slower = live.to_monitor_state()
+                slower["metadata"] = deepcopy(legacy["metadata"])
+                concurrent = hydrate_market_observation_baselines(slower, advanced)
+                self.assertEqual(start * 1.06, concurrent["metadata"]["marketObservationBaselines"]["TEST"]["outboxPrice"])
+                changed_account = live.to_monitor_state()
+                changed_account["accountId"] = "other-fixture"
+                separate = hydrate_market_observation_baselines(changed_account, advanced)
+                self.assertEqual(final, separate["metadata"]["marketObservationBaselines"]["TEST"]["initialPrice"])
+                self.assertNotIn("outboxPrice", separate["metadata"]["marketObservationBaselines"]["TEST"])
+
+        execution_state = {}
+        for minute, price in [(0, 100), (1, 100), (2, 99.5), (3, 98)]:
+            execution_state, execution_events = cycle(execution_state, minute, price,
+                source_timestamp_state="provider-execution", freshness_status="realtime")
+        self.assertEqual("initial", execution_events[0].metadata["priceMovement"]["stage"])
         state, events = cycle(state, 10, 90)
         self.assertFalse(events)
         self.assertEqual(1, len(state["metadata"][PATHS]["TEST"]["points"]))
@@ -190,11 +241,11 @@ class SmartPriceObservationTests(unittest.TestCase):
         fallback.symbol = "TEST"
         unavailable = snapshot(4, 94, source_timestamp_state="queried-at-fallback")
         fallback_events = smart_market_observations(unavailable, state, [fallback], SETTINGS)
-        self.assertEqual([fallback], fallback_events)
-        self.assertFalse(fallback_events[0].metadata.get("deliveryDeferred"))
+        self.assertEqual([], fallback_events)
         for mode in ("disabled", "typedb-first"):
             self.assertFalse(smart_market_observations(snapshot(4, 96), state, [], {**SETTINGS, "marketObservationRawDeliveryMode": mode}))
-        marker = market_event()
+        marker = market_event(100, 104)
+        marker.symbol = "TEST"
         self.assertEqual([marker], smart_market_observations(snap, {}, [marker], {}))
 
     def test_duplicate_watchlist_holding_wins_and_fx_unknown_is_not_guessed(self):

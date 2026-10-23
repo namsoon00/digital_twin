@@ -13,10 +13,39 @@ from typing import Dict, Iterable
 from digital_twin.modules.market_data.domain.market_data import number
 from digital_twin.modules.notifications.contracts import MARKET_OBSERVATION, MIN_CADENCE_MINUTES
 from digital_twin.modules.portfolio.contracts import AlertEvent
+from .price_observation_windows import source_point
 
 
 MARKET_OBSERVATION_BASELINES_KEY = "marketObservationBaselines"
 MARKET_OBSERVATION_CANDIDATES_KEY = "marketObservationReasoningCandidates"
+QUOTE_BASELINE_VERSION = "verified-trade-baseline-v1"
+
+
+def quote_witness(item, observed_at):
+    point, _ = source_point(item, observed_at)
+    if not point:
+        return {}
+    keys = ("symbol", "current_price", "currency", "quote_source", "source_as_of",
+            "source_timestamp_state", "freshness_status", "data_quality")
+    witness = {key: item.get(key) for key in keys}
+    if item.get("data_quality") == "mixed":
+        witness["market_signal_coverage"] = {}
+        for stage in ("selectedPrice", "ccnl"):
+            execution = (item.get("market_signal_coverage") or {}).get(stage, {})
+            witness["market_signal_coverage"][stage] = {
+                **{key: execution.get(key) for key in ("dataQuality", "sourceAsOf", "sourceTimestampState")},
+                "values": {"currentPrice": (execution.get("values") or {}).get("currentPrice")},
+            }
+    return {**witness, "observedAt": observed_at, "version": QUOTE_BASELINE_VERSION}
+
+
+def observation_quote_verified(observation, symbol):
+    witness = observation.get("quoteWitness") or {}
+    point, _ = source_point(witness, witness.get("observedAt"))
+    return bool(point and witness.get("version") == QUOTE_BASELINE_VERSION
+                and str(witness.get("symbol") or "").upper() == str(symbol).upper()
+                and point["price"] == number(observation.get("currentPrice"))
+                and witness.get("currency") == observation.get("currency"))
 
 
 def market_observation_delivery_cadence_minutes(settings: Dict[str, object] = None) -> int:
@@ -131,6 +160,11 @@ def market_observation_delivery_admission(
     if str(getattr(event, "rule", "") or "") != MARKET_OBSERVATION:
         return {"accepted": True, "reasonCode": "not-market-observation"}
     metadata = dict(getattr(event, "metadata", {}) or {})
+    if not observation_quote_verified(metadata.get("marketObservation") or {}, event.symbol):
+        return {"accepted": False, "reasonCode": "unverified-observation-quote"}
+    witness = metadata["marketObservation"]["quoteWitness"]
+    if not source_point(witness, event.generated_at)[0]:
+        return {"accepted": False, "reasonCode": "observation-quote-outside-event-window"}
     if bool(metadata.get("deliveryDeferred")):
         return {"accepted": True, "reasonCode": "delivery-deferred"}
     from .price_observation_episodes import admit_transition
@@ -155,6 +189,8 @@ def market_observation_delivery_admission(
         or number(observation.get("thresholdPct"))
     )
     baseline = market_observation_baseline(authoritative_state or {}, symbol, currency)
+    if baseline and baseline.get("quoteBaselineVersion") != QUOTE_BASELINE_VERSION:
+        return {"accepted": False, "reasonCode": "unverified-legacy-anchor"}
     authoritative_anchor = (
         number(baseline.get("outboxPrice"))
         or number(baseline.get("initialPrice"))
@@ -196,12 +232,24 @@ def hydrate_market_observation_baselines(
     """
 
     updated = deepcopy(state or {})
+    if (updated.get("accountId") and (previous_state or {}).get("accountId")
+            and updated["accountId"] != previous_state["accountId"]):
+        previous_state = {}
     current_positions = _state_positions(updated)
     if not current_positions:
         return updated
     previous_positions = _state_positions(previous_state or {})
     inherited = market_observation_baselines(previous_state or {})
     inherited.update(market_observation_baselines(updated))
+    # The locked persisted delivery anchor wins over metadata captured by a
+    # slower monitor before another worker queued a newer observation.
+    for symbol, durable in market_observation_baselines(previous_state or {}).items():
+        if durable.get("quoteBaselineVersion") == QUOTE_BASELINE_VERSION:
+            for key in ("initialPrice", "outboxPrice", "outboxQueuedAt", "currency", "source",
+                        "quoteBaselineVersion", "quoteWitness", "deliveryAnchorResetReason", "deliveryAnchorResetAt"):
+                inherited[symbol].pop(key, None)
+                if key in durable:
+                    inherited[symbol][key] = deepcopy(durable[key])
     baselines: Dict[str, Dict[str, object]] = {}
     for symbol, item in current_positions.items():
         currency = _position_currency(item)
@@ -210,10 +258,27 @@ def hydrate_market_observation_baselines(
         baseline_currency = str(baseline.get("currency") or "").upper().strip()
         if baseline_currency and currency and baseline_currency != currency:
             baseline = {}
+        witness = quote_witness(item, updated.get("generatedAt"))
+        if not witness:
+            if baseline:
+                baselines[symbol] = baseline
+            continue
+        if baseline and baseline.get("quoteBaselineVersion") != QUOTE_BASELINE_VERSION:
+            # Legacy delivery anchors have no price/source proof. Rebase once,
+            # without sending an alert or claiming reasoning completion.
+            baseline.update(initialPrice=current_price,
+                            quoteBaselineVersion=QUOTE_BASELINE_VERSION, quoteWitness=witness,
+                            deliveryAnchorResetReason="legacy-quote-unverified",
+                            deliveryAnchorResetAt=updated.get("generatedAt"))
+            baseline.pop("outboxPrice", None)
+            baseline.pop("outboxQueuedAt", None)
         if number(baseline.get("price")) <= 0:
             previous_item = previous_positions.get(symbol) or {}
             previous_currency = _position_currency(previous_item)
             previous_price = _position_price(previous_item)
+            previous_witness = quote_witness(previous_item, (previous_state or {}).get("generatedAt"))
+            if not previous_witness:
+                previous_price = 0.0
             if previous_currency and currency and previous_currency != currency:
                 previous_price = 0.0
             anchor_price = previous_price or current_price
@@ -226,6 +291,8 @@ def hydrate_market_observation_baselines(
                 "currency": currency,
                 "source": _position_source(item),
                 "initializedAt": str(updated.get("generatedAt") or ""),
+                "quoteBaselineVersion": QUOTE_BASELINE_VERSION,
+                "quoteWitness": previous_witness if previous_price else witness,
             }
         else:
             reasoning_price = number(baseline.get("reasoningPrice")) or number(baseline.get("price"))
@@ -235,10 +302,9 @@ def hydrate_market_observation_baselines(
             baseline["currency"] = currency or baseline_currency
             baseline.setdefault("source", _position_source(item))
         baselines[symbol] = baseline
-    if baselines:
-        metadata = dict(updated.get("metadata") or {})
-        metadata[MARKET_OBSERVATION_BASELINES_KEY] = baselines
-        updated["metadata"] = metadata
+    metadata = dict(updated.get("metadata") or {})
+    metadata[MARKET_OBSERVATION_BASELINES_KEY] = baselines
+    updated["metadata"] = metadata
     return updated
 
 
@@ -266,7 +332,7 @@ def apply_market_observation_outbox_baselines(
         observation = getattr(event, "metadata", {}).get("marketObservation") if isinstance(getattr(event, "metadata", None), dict) else {}
         observation = observation if isinstance(observation, dict) else {}
         price = number(observation.get("currentPrice"))
-        if not symbol or price <= 0:
+        if not symbol or price <= 0 or not observation_quote_verified(observation, symbol):
             continue
         previous = dict(baselines.get(symbol) or {})
         baselines[symbol] = {
@@ -274,6 +340,8 @@ def apply_market_observation_outbox_baselines(
             "price": number(previous.get("reasoningPrice")) or number(previous.get("price")) or price,
             "reasoningPrice": number(previous.get("reasoningPrice")) or number(previous.get("price")) or price,
             "outboxPrice": price,
+            "quoteBaselineVersion": QUOTE_BASELINE_VERSION,
+            "quoteWitness": deepcopy(observation["quoteWitness"]),
             "initialPrice": number(previous.get("initialPrice")) or price,
             "currency": str(observation.get("currency") or "").upper().strip(),
             "source": str(observation.get("source") or "").strip(),

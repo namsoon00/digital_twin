@@ -398,7 +398,15 @@ class VerifiedSnapshotReasoningTests(unittest.TestCase):
         stable.metadata["marketObservationBaselines"] = {
             "AAPL": {"price": 80.0, "outboxPrice": 80.0, "pendingReasoningPrice": 100.0, "pendingReasoningEventId": "already-queued"},
         }
+        from digital_twin.modules.market_data.domain.market_observations import QUOTE_BASELINE_VERSION
+        stable.metadata["marketObservationBaselines"]["AAPL"]["quoteBaselineVersion"] = QUOTE_BASELINE_VERSION
         prior_state = stable.to_monitor_state()
+        stable.generated_at = "2026-07-29T00:04:00Z"
+        for item in stable.positions:
+            item.source_as_of = stable.generated_at
+            item.source_timestamp_state = "provider"
+            item.freshness_status = "fresh"
+            item.data_quality = "actual"
         monitor = RealtimeMonitor({})
         candidates = monitor.market_observation_events(stable, prior_state)
         self.assertTrue(candidates)

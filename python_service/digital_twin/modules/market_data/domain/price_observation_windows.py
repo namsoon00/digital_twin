@@ -39,9 +39,17 @@ def source_point(item, observed_at):
     # A poll time or last-close reference is not a new trade observation.
     if not clock or not now or price is None or price <= 0:
         return None, "missing-source-clock-or-price"
-    if state not in {"provider", "exchange", "provider-timestamp"}:
+    if state not in {"provider", "exchange", "provider-timestamp", "provider-execution"}:
         return None, "unverified-source-clock"
-    if quality not in {"actual", "live", "real"} or freshness not in {"fresh", "live", "real-time"}:
+    # Mixed ancillary REST fields do not downgrade a separately proven trade.
+    for stage in ("selectedPrice", "ccnl"):
+        execution = (item.get("market_signal_coverage") or {}).get(stage) or {}
+        if (quality == "mixed" and execution.get("dataQuality") == "actual"
+                and execution.get("sourceTimestampState") == state
+                and parse_timestamp(execution.get("sourceAsOf")) == clock
+                and finite((execution.get("values") or {}).get("currentPrice")) == price):
+            quality = "actual"
+    if quality not in {"actual", "live", "real"} or freshness not in {"fresh", "live", "real-time", "realtime"}:
         return None, "reference-or-unusable-quote"
     age = (now - clock).total_seconds()
     if age < 0 or age > MAX_GAP_SECONDS:

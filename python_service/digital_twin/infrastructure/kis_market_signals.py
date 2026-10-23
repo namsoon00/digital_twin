@@ -656,6 +656,9 @@ def price_stage_is_reference(signal: Dict[str, object]) -> bool:
     """Return whether KIS supplied a last-close price rather than a live quote."""
     coverage = signal.get("marketSignalCoverage") if isinstance(signal.get("marketSignalCoverage"), dict) else {}
     price = coverage.get("price") if isinstance(coverage, dict) and isinstance(coverage.get("price"), dict) else {}
+    execution = coverage.get("ccnl") or {}
+    if "currentPrice" in (execution.get("fields") or []) and execution.get("transport") == "websocket":
+        price = execution
     if not price:
         return False
     freshness = str(price.get("freshnessStatus") or "").strip().lower()
@@ -672,12 +675,21 @@ def keep_fresh_position_quote(position: Position, signal: Dict[str, object]) -> 
     """Prefer the account quote unless KIS has a genuine WebSocket price tick."""
     if not position.current_price:
         return False
+    # A closing reference must never replace an observed trade, even when the
+    # trade has aged while waiting for the next extended-session tick.
+    if (price_stage_is_reference(signal)
+            and position.source_timestamp_state in {"provider", "exchange", "provider-timestamp", "provider-execution"}
+            and position.freshness_status not in {"last-close", "reference"}):
+        return True
+    execution = (signal.get("marketSignalCoverage") or {}).get("ccnl") or {}
+    incoming_clock = parse_iso(execution.get("sourceAsOf"))
+    current_clock = parse_iso(position.source_as_of)
+    if incoming_clock and current_clock and incoming_clock < current_clock:
+        return True
     freshness = str(position.freshness_status or "").strip().lower()
     account_quote_is_fresh = bool(position.real_time) or freshness in {"fresh", "realtime", "live"}
     if not account_quote_is_fresh:
         return False
-    if price_stage_is_reference(signal):
-        return True
     coverage = signal.get("marketSignalCoverage") if isinstance(signal.get("marketSignalCoverage"), dict) else {}
     ccnl = coverage.get("ccnl") if isinstance(coverage, dict) and isinstance(coverage.get("ccnl"), dict) else {}
     fields = {str(field) for field in ccnl.get("fields") or []}
@@ -2107,6 +2119,16 @@ class KISMarketSignalProvider:
             market_value = position.quantity * merged_price
 
         data_quality = combine_quality(position.data_quality, signal.get("dataQuality"))
+        if preserve_fresh_quote:
+            # Preserve price-specific provenance without labelling unrelated
+            # mixed REST evidence as actual data for the whole position.
+            market_signal_coverage = dict(market_signal_coverage or {})
+            market_signal_coverage["selectedPrice"] = {
+                "dataQuality": position.data_quality,
+                "sourceAsOf": position.source_as_of,
+                "sourceTimestampState": position.source_timestamp_state,
+                "values": {"currentPrice": position.current_price},
+            }
         ma5_distance = pct_distance(merged_price, position.ma5) if merged_price and position.ma5 else position.ma5_distance
         ma20_distance = pct_distance(merged_price, position.ma20) if merged_price and position.ma20 else position.ma20_distance
         ma60_distance = pct_distance(merged_price, position.ma60) if merged_price and position.ma60 else position.ma60_distance

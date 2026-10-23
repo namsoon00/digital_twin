@@ -395,7 +395,8 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # One quote-delta versus total unrealized P&L regression, both alert paths and missing cost.
         # Six receipt-clock/qualification/trend contract regressions.
         # One isolated-DB receipt/import/idempotency regression.
-        self.assertLessEqual(total, 2488)
+        # Two real stored-quote regressions cover 3m receipt/horizon reads and scoped recovery.
+        self.assertLessEqual(total, 2490)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

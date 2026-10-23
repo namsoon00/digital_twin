@@ -88,5 +88,5 @@ class RuleTimingValidationTests(TestCase):
             "currentPrice": 100, "sourceAsOf": "2026-10-22T01:05:30Z", "dataQuality": "actual"}}
         result = NotificationTimingService(store, receipts, series).observe("main", "2026-10-22T01:06:00Z")
         self.assertEqual(1, result["registeredReceiptCount"])
-        self.assertEqual(["1m"], series.load_outcome_observations.call_args.args[1][0]["allowedGranularities"])
+        self.assertEqual(["1m", "3m"], series.load_outcome_observations.call_args.args[1][0]["allowedGranularities"])
         self.assertEqual(100, store.save.call_args.args[0]["entry"]["price"])

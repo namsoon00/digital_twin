@@ -314,6 +314,73 @@ class DeliveryHistoryDatabaseTests(StabilizationDatabaseCase):
         self.assertEqual(100, saved[0]["entry"]["price"])
         self.assertEqual([], timing.pending("main", stamp))
 
+    def _stored_timing_fixture(self, symbol="TIMING"):
+        from digital_twin.infrastructure.composition.outcomes import build_notification_timing_service
+        from digital_twin.infrastructure.operational_store import market_time_series_store
+        from digital_twin.modules.outcomes.domain.notification_timing import VERSION
+        series = market_time_series_store(self.settings)
+        service = build_notification_timing_service(self.settings, series)
+        contract = {"version": VERSION, "accountId": "timing-fixture", "symbol": symbol,
+                    "signalPrice": 100, "horizons": [60], "claims": [{"frozen": "unchanged"}]}
+        row = {"receiptId": "timing-" + symbol, "jobId": "job-" + symbol,
+               "deliveredAt": "2026-10-22T01:05:00Z", "contract": contract}
+        service.store.register(row, row["deliveredAt"])
+        return service, row
+
+    def _insert_timing_quote(self, symbol, source, price, granularity="3m", bucket=None, quality="actual"):
+        with self.notifications.transaction() as connection:
+            connection.execute(
+                "INSERT INTO market_time_series_observations "
+                "(account_id,symbol,granularity,bucket_at,observed_at,source_as_of,current_price,data_quality,provider) "
+                "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+                ("timing-fixture", symbol, granularity, bucket or source, source, source, price, quality, "fixture"))
+
+    def test_real_three_minute_storage_observes_receipt_and_horizon_with_source_clock(self):
+        service, row = self._stored_timing_fixture()
+        # The bucket begins BEFORE delivery; the actual quote arrived AFTER it.
+        self._insert_timing_quote("TIMING", "2026-10-22T01:06:20Z", 102, bucket="2026-10-22T01:03:00Z")
+        self._insert_timing_quote("TIMING", "2026-10-22T01:05:01Z", 999, granularity="1d")
+        self._insert_timing_quote("TIMING", "2026-10-22T01:04:59Z", 888, granularity="1m")
+        self._insert_timing_quote("TIMING", "2026-10-22T02:06:20Z", 103.02)
+        service.observe("timing-fixture", "2026-10-22T01:06:00Z")
+        self.assertNotIn("entry", service.store.report_rows("timing-fixture")[0])
+        service.observe("timing-fixture", "2026-10-22T01:07:00Z")
+        first = service.store.report_rows("timing-fixture")[0]
+        self.assertEqual(102, first["entry"]["price"])
+        self.assertEqual("2026-10-22T01:06:20+00:00", first["entry"]["sourceAsOf"])
+        service.observe("timing-fixture", "2026-10-22T02:07:00Z")
+        final = service.store.report_rows("timing-fixture")[0]
+        self.assertEqual("complete", final["state"])
+        self.assertEqual(first["entry"], final["entry"])
+        self.assertEqual(row["contract"], final["contract"])
+        self.assertEqual(1, final["outcomes"]["60"]["grossPriceChangePct"])
+        self.assertIsNone(final["outcomes"]["60"]["netReturnPct"])
+        self.assertFalse(final["tradeTimingQualified"])
+
+    def test_historical_entry_repair_is_scoped_bounded_audited_and_idempotent(self):
+        from digital_twin.modules.outcomes.domain.notification_timing import advance_timing
+        service, row = self._stored_timing_fixture("RECOVER")
+        service2, late = self._stored_timing_fixture("LATE")
+        for item in (row, late):
+            pending = next(r for r in service.store.pending("timing-fixture", "2026-10-22T01:11:00Z")
+                           if r["receiptId"] == item["receiptId"])
+            service.store.save(advance_timing(pending, {}, "2026-10-22T01:11:00Z"), "2026-10-22T01:11:00Z")
+        self._insert_timing_quote("RECOVER", "2026-10-22T01:06:20Z", 102)
+        self._insert_timing_quote("LATE", "2026-10-22T01:10:01Z", 999)
+        ids = [row["receiptId"], late["receiptId"]]
+        self.assertEqual(0, service.repair_missing_entries("other-account", ids, "2026-10-22T01:20:00Z")["repairedReceiptCount"])
+        result = service.repair_missing_entries("timing-fixture", ids, "2026-10-22T01:20:00Z")
+        self.assertEqual({"checkedReceiptCount": 2, "repairedReceiptCount": 1}, result)
+        repaired = service.store.report_rows("timing-fixture", "RECOVER")[0]
+        self.assertEqual("awaiting-outcomes", repaired["state"])
+        self.assertNotIn("reason", repaired)
+        self.assertEqual("post-delivery-quote-unavailable", repaired["entryRecovery"]["previousReason"])
+        self.assertEqual(row["contract"], repaired["contract"])
+        self.assertEqual(row["deliveredAt"], repaired["deliveredAt"])
+        self.assertEqual("unmeasurable", service2.store.report_rows("timing-fixture", "LATE")[0]["state"])
+        self.assertEqual(0, service.repair_missing_entries("timing-fixture", ids, "2026-10-22T01:21:00Z")["repairedReceiptCount"])
+        self.assertEqual(repaired, service.store.report_rows("timing-fixture", "RECOVER")[0])
+
     def test_nested_delivery_locks_leave_pool_capacity_and_release_after_failure(self):
         from digital_twin.infrastructure.mysql_connection_pool import MySQLConnectionPool
         from digital_twin.infrastructure.mysql_operational_connection import MySQLConnectionProxy

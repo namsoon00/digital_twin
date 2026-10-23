@@ -16,8 +16,35 @@ class NotificationTimingService:
             self.store.register(receipt, now)
             registered += 1
         pending = self.store.pending(account_id, now)
-        requests = []
+        loaded = self._observations(account_id, pending, now)
         for row in pending:
+            self.store.save(advance_timing(row, self._for_receipt(row, loaded), now), now)
+        return {"status": "observed", "registeredReceiptCount": registered, "checkedReceiptCount": len(pending)}
+
+    def repair_missing_entries(self, account_id, receipt_ids, now):
+        """Explicit, receipt-scoped recovery using the original historical window."""
+        rows = self.store.repairable_entries(account_id, receipt_ids)
+        loaded = self._observations(account_id, rows, now)
+        repaired = 0
+        for row in rows:
+            updated = advance_timing(row, self._for_receipt(row, loaded), now)
+            if not updated.get("entry"):
+                continue
+            updated.pop("reason", None)
+            updated["entryRecovery"] = {"repairedAt": now, "previousState": row["state"],
+                "previousReason": row["reason"], "reason": "stored-minute-granularity-recovery-v1",
+                "allowedGranularities": ["1m", "3m"]}
+            repaired += bool(self.store.save(updated, now))
+        return {"checkedReceiptCount": len(rows), "repairedReceiptCount": repaired}
+
+    @staticmethod
+    def _for_receipt(row, loaded):
+        prefix = row["receiptId"] + "/"
+        return {key[len(prefix):]: value for key, value in loaded.items() if key.startswith(prefix)}
+
+    def _observations(self, account_id, rows, now):
+        requests = []
+        for row in rows:
             delivered = clock(row.get("deliveredAt"))
             if not delivered:
                 continue
@@ -27,14 +54,10 @@ class NotificationTimingService:
             for key, target in targets:
                 if target <= clock(now):
                     requests.append({"requestId": row["receiptId"] + "/" + key, "symbol": row["contract"]["symbol"],
-                                     "targetAt": target.isoformat(), "allowedGranularities": ["1m"],
+                                     "targetAt": target.isoformat(), "allowedGranularities": ["1m", "3m"],
+                                     "maximumObservationAt": now,
                                      "maximumObservationDelayMinutes": MAX_QUOTE_DELAY_MINUTES})
-        loaded = self.series.load_outcome_observations(account_id, requests, max_delay_minutes=MAX_QUOTE_DELAY_MINUTES) if requests else {}
-        for row in pending:
-            prefix = row["receiptId"] + "/"
-            observations = {key[len(prefix):]: value for key, value in loaded.items() if key.startswith(prefix)}
-            self.store.save(advance_timing(row, observations, now), now)
-        return {"status": "observed", "registeredReceiptCount": registered, "checkedReceiptCount": len(pending)}
+        return self.series.load_outcome_observations(account_id, requests, max_delay_minutes=MAX_QUOTE_DELAY_MINUTES) if requests else {}
 
     def performance(self, account_id="", symbol="", limit=100):
         return timing_report(self.store.report_rows(account_id, symbol, limit))

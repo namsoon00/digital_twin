@@ -35,15 +35,32 @@ class MySQLNotificationTimingStore(MySQLOperationalConnection):
             ).fetchall()
         return [{**json.loads(row["payload_json"]), "_expectedPayload": row["payload_json"]} for row in rows]
 
+    def repairable_entries(self, account_id, receipt_ids):
+        ids = list(dict.fromkeys(receipt_ids))
+        if not ids:
+            return []
+        if len(ids) > 100:
+            raise ValueError("Repair at most 100 explicit receipts per call")
+        with self.connect() as connection:
+            rows = connection.execute(
+                "SELECT payload_json FROM investment_notification_timing WHERE account_id=%s "
+                "AND state='unmeasurable' AND receipt_id IN (" + ",".join(["%s"] * len(ids)) + ")",
+                (account_id, *ids),
+            ).fetchall()
+        candidates = [{**json.loads(row["payload_json"]), "_expectedPayload": row["payload_json"]} for row in rows]
+        return [row for row in candidates if not row.get("entry")
+                and row.get("reason") == "post-delivery-quote-unavailable"]
+
     def save(self, row, now):
         payload = {key: value for key, value in row.items() if key != "_expectedPayload"}
         with self.transaction() as connection:
-            connection.execute(
+            result = connection.execute(
                 "UPDATE investment_notification_timing SET state=%s,next_check_at=%s,payload_json=%s,updated_at=%s "
                 "WHERE receipt_id=%s AND account_id=%s AND payload_json=%s",
                 (row["state"], row.get("nextCheckAt") or "", json.dumps(payload, ensure_ascii=False), now,
                  row["receiptId"], row["contract"]["accountId"], row["_expectedPayload"]),
             )
+            return result.rowcount == 1
 
     def report_rows(self, account_id="", symbol="", limit=100):
         clauses, params = ["state != 'duplicate-receipt'"], []

@@ -403,7 +403,8 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # Eight source-session regressions cover persisted model/ABox inputs,
         # DST/close boundaries, provider closure, feed identity, missing clocks,
         # legacy isolation, source aging and generation-scoped outage reasons.
-        self.assertLessEqual(total, 2518)
+        # Four native MySQL parity/index/rollback regressions for outcome reads.
+        self.assertLessEqual(total, 2522)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

@@ -1,5 +1,47 @@
 # Reasoning Input Latency
 
+## Indexed outcome recovery reads (2026-10-23)
+
+Recent delivery traces spent a median 12.6 seconds preparing runtime context
+and 56.2 seconds in projection/inference. Outcome observation queried pending
+targets twice per subject: baseline collection includes future targets, then
+due-outcome collection applies the original observation cutoff. Both reads
+repeatedly examined completed shadow outcomes to find legacy data gaps.
+
+The existing MySQL schema tuning now adds an indexed, virtual
+`recovery_candidate` field to decision and shadow outcomes. It computes the
+exact existing data-gap and automatic-retry-stop predicate from the authoritative
+JSON; legacy rows and repairs update it atomically. No history backfill, extra
+worker, TTL cache or qualification rule is introduced.
+
+The reader selects pending and recoverable target identities in disjoint,
+bounded branches before loading their payloads. Recovery starts at the new
+outcome index and joins targets by outcome identity. Each branch retains its
+earliest N, then the original order and limit choose the final N. The fifteen
+minute retry age, `nextRetryAt`, account scope, future-target mode, missing
+outcomes and legacy observed gaps retain their previous meaning. Decision
+episode orphan exclusion occurs before either branch's limit.
+
+A read-only, repeatable-read comparison at source cutoff
+`2026-10-23T06:40:09.796740Z` ran the original and revised readers twice in
+alternating order against the same stored data:
+
+| Read | Original | Indexed | Exact returned rows |
+| --- | ---: | ---: | ---: |
+| Due outcome targets | 2.486–3.393 s | 0.016–0.030 s | 6, identical |
+| Baseline collection targets | 2.221–2.229 s | 0.047–0.065 s | 200, identical |
+
+These measurements cover two input queries, not total alert latency. Native
+TypeDB persistence/inference, other history reads, queue debt and dispatch
+revalidation retain their own costs. The frozen subject/snapshot batch boundary,
+investment rules, source freshness and receipt cooldowns are unchanged.
+
+`test_outcome_recovery_reads` exercises both outcome stores on isolated MySQL:
+exact pre-change selection parity, bounded interleaving, source cutoffs, retry
+backoff/stops, legacy gaps, other accounts, orphan episodes, generated-index
+repair/rollback and native index plans. An attempted compact shadow-history
+projection was slower in the measured workload and is not part of this change.
+
 ## Reuse exact performance observations within one calculation (2026-10-19)
 
 The account performance calculation previously reconstructed the same outcome

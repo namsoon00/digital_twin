@@ -177,46 +177,38 @@ class PendingTargetRead:
 def pending_outcome_targets(
     request: PendingTargetRead, *, _connect: ConnectionFactory
 ) -> List[Dict[str, object]]:
-    normalized_account_id = request.account_id
     observed_stamp = request.observed_at
     target_limit = request.limit
     cutoff = canonical_investment_timestamp((datetime.fromisoformat(observed_stamp.replace("Z", "+00:00")) - timedelta(minutes=15)).isoformat())
-    time_clause = "" if request.include_future else " AND targets.target_at <= %s"
-    state_clause = """ AND (targets.status = 'pending' OR (
-        targets.status IN ('needs-data', 'observed') AND targets.updated_at <= %s
-        AND COALESCE(JSON_UNQUOTE(JSON_EXTRACT(outcomes.payload_json, '$.payload.evaluationRecovery.automaticRetryStopped')), 'false') <> 'true'
-        AND COALESCE(NULLIF(JSON_UNQUOTE(JSON_EXTRACT(outcomes.payload_json, '$.payload.evaluationRecovery.nextRetryAt')), ''), targets.updated_at) <= %s
-        AND JSON_UNQUOTE(JSON_EXTRACT(outcomes.payload_json, '$.payload.calibrationEligibility'))
-          IN ('excluded-contract-data-gap', 'excluded-criterion-data-gap')
-    ))"""
-    params = (normalized_account_id, cutoff, observed_stamp, *(() if request.include_future else (observed_stamp,)), target_limit)
     with _connect() as connection:
+        decision_selection, decision_params = pending_target_selection(request, cutoff, shadow=False)
         decision_rows = connection.execute(
             """
                 SELECT targets.payload_json, outcomes.payload_json AS outcome_json,
                        episodes.payload_json AS episode_json
-                FROM investment_decision_outcome_targets AS targets
+                FROM (""" + decision_selection + """) AS selected
+                STRAIGHT_JOIN investment_decision_outcome_targets AS targets
+                  ON targets.target_id = selected.target_id
                 JOIN investment_decision_episodes AS episodes
                   ON episodes.episode_id = targets.episode_id
                 LEFT JOIN investment_decision_outcomes AS outcomes ON outcomes.outcome_id = targets.outcome_id
-                WHERE targets.account_id = %s
-                """ + state_clause + time_clause + """
                 ORDER BY targets.target_at ASC, targets.target_id ASC
                 LIMIT %s
                 """,
-            params,
+            (*decision_params, target_limit),
         ).fetchall()
+        shadow_selection, shadow_params = pending_target_selection(request, cutoff, shadow=True)
         shadow_rows = connection.execute(
             """
                 SELECT targets.payload_json, outcomes.payload_json AS outcome_json
-                FROM investment_hypothesis_observation_targets AS targets
+                FROM (""" + shadow_selection + """) AS selected
+                STRAIGHT_JOIN investment_hypothesis_observation_targets AS targets
+                  ON targets.target_id = selected.target_id
                 LEFT JOIN investment_hypothesis_observation_outcomes AS outcomes ON outcomes.outcome_id = targets.outcome_id
-                WHERE targets.account_id = %s
-                """ + state_clause + time_clause + """
                 ORDER BY targets.target_at ASC, targets.target_id ASC
                 LIMIT %s
                 """,
-            params,
+            (*shadow_params, target_limit),
         ).fetchall()
     targets: List[Dict[str, object]] = []
     for row in decision_rows or []:
@@ -270,3 +262,45 @@ def pending_outcome_targets(
             str(item.get("requestId") or ""),
         ),
     )[:target_limit]
+
+
+def pending_target_selection(request: PendingTargetRead, cutoff: str, *, shadow: bool):
+    """Select disjoint pending/recovery identities before loading audit JSON.
+
+    Each branch keeps its earliest N targets, sufficient for the same global
+    earliest N. The recovery index includes legacy observed data gaps; only
+    its existing JSON predicate is projected, not the clocks or retry policy.
+    """
+    target_table, outcome_table = (
+        ("investment_hypothesis_observation_targets", "investment_hypothesis_observation_outcomes")
+        if shadow else ("investment_decision_outcome_targets", "investment_decision_outcomes")
+    )
+    time_clause = "" if request.include_future else " AND targets.target_at <= %s"
+    time_params = () if request.include_future else (request.observed_at,)
+    # Preserve the original inner join's orphan exclusion before either LIMIT.
+    episode_clause = "" if shadow else (
+        " AND EXISTS (SELECT 1 FROM investment_decision_episodes AS episode "
+        "WHERE episode.episode_id = targets.episode_id)"
+    )
+    order_limit = " ORDER BY targets.target_at ASC, targets.target_id ASC LIMIT %s)"
+    pending = (
+        "(SELECT targets.target_id FROM " + target_table + " AS targets "
+        "WHERE targets.account_id = %s AND targets.status = 'pending'"
+        + time_clause + episode_clause + order_limit
+    )
+    recovery = (
+        "(SELECT targets.target_id FROM " + outcome_table
+        + " AS outcomes FORCE INDEX (idx_outcome_recovery_candidate) "
+        "STRAIGHT_JOIN " + target_table + " AS targets FORCE INDEX (idx_outcome_target_recovery) "
+        "ON targets.outcome_id = outcomes.outcome_id "
+        "WHERE outcomes.recovery_candidate = 1 AND targets.account_id = %s "
+        "AND targets.status IN ('needs-data', 'observed') AND targets.updated_at <= %s "
+        "AND COALESCE(NULLIF(JSON_UNQUOTE(JSON_EXTRACT(outcomes.payload_json, "
+        "'$.payload.evaluationRecovery.nextRetryAt')), ''), targets.updated_at) <= %s"
+        + time_clause + episode_clause + order_limit
+    )
+    params = (
+        request.account_id, *time_params, request.limit,
+        request.account_id, cutoff, request.observed_at, *time_params, request.limit,
+    )
+    return pending + " UNION ALL " + recovery, params

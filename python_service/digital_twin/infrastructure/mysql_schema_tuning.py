@@ -129,6 +129,18 @@ class MySQLKeyPartitionDefinition:
 
 
 MYSQL_OPERATIONAL_INDEXES: Dict[str, Sequence[MySQLIndexDefinition]] = {
+    "investment_decision_outcomes": (
+        MySQLIndexDefinition("investment_decision_outcomes", "idx_outcome_recovery_candidate", "`recovery_candidate`, `outcome_id`"),
+    ),
+    "investment_hypothesis_observation_outcomes": (
+        MySQLIndexDefinition("investment_hypothesis_observation_outcomes", "idx_outcome_recovery_candidate", "`recovery_candidate`, `outcome_id`"),
+    ),
+    "investment_decision_outcome_targets": (
+        MySQLIndexDefinition("investment_decision_outcome_targets", "idx_outcome_target_recovery", "`outcome_id`, `account_id`, `status`"),
+    ),
+    "investment_hypothesis_observation_targets": (
+        MySQLIndexDefinition("investment_hypothesis_observation_targets", "idx_outcome_target_recovery", "`outcome_id`, `account_id`, `status`"),
+    ),
     "external_collection_runs": (
         MySQLIndexDefinition("external_collection_runs", "idx_external_collection_retention", "`completed_at`"),
     ),
@@ -688,7 +700,24 @@ MYSQL_OPERATIONAL_UNIQUE_INDEX_RETIREMENTS: Sequence[MySQLUniqueIndexRetirementD
 )
 
 
+# This is an exact physical projection of the existing recovery predicate.
+# Generated values follow legacy rows and every payload update atomically;
+# there is no stale cache, history rewrite or additional qualification policy.
+OUTCOME_RECOVERY_CANDIDATE_COLUMN = (
+    "TINYINT GENERATED ALWAYS AS (IF("
+    "COALESCE(JSON_UNQUOTE(JSON_EXTRACT(payload_json, '$.payload.evaluationRecovery.automaticRetryStopped')), 'false') <> 'true' "
+    "AND JSON_UNQUOTE(JSON_EXTRACT(payload_json, '$.payload.calibrationEligibility')) "
+    "IN ('excluded-contract-data-gap', 'excluded-criterion-data-gap'), 1, 0)) VIRTUAL"
+)
+
+
 MYSQL_OPERATIONAL_COLUMNS: Dict[str, Sequence[MySQLColumnDefinition]] = {
+    "investment_decision_outcomes": (
+        MySQLColumnDefinition("investment_decision_outcomes", "recovery_candidate", OUTCOME_RECOVERY_CANDIDATE_COLUMN),
+    ),
+    "investment_hypothesis_observation_outcomes": (
+        MySQLColumnDefinition("investment_hypothesis_observation_outcomes", "recovery_candidate", OUTCOME_RECOVERY_CANDIDATE_COLUMN),
+    ),
     "external_fact_current": (
         MySQLColumnDefinition("external_fact_current", "revision_id", "VARCHAR(191) NOT NULL DEFAULT ''"),
         MySQLColumnDefinition(

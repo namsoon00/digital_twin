@@ -760,11 +760,13 @@ def context_observation_delivery_decision(value: object) -> Dict[str, object]:
     lifecycle_transition = relation_lifecycle_transition_contract(relation)
     reasoning_trigger = _reasoning_delivery_trigger(payload)
     saved = _mapping(payload.get("relationChangeEvidence"))
-    # Before enqueueing, no receipt has been loaded yet. Admit proven recovery
-    # to that check; the durable delivery gate freezes a packet (even when its
-    # previous receipt is empty) and enforces the actual delivered baseline.
-    comparison = rule_delivery_comparison(payload, saved.get("previous") or payload.get('rulePolicyReceiptBaseline'), stage="publication",
-                                         require_recovery_receipt=bool(saved))
+    # Publication reads the same scoped successful receipt as final admission.
+    # Re-read under the send lock later, since another job may deliver meanwhile.
+    receipt_loaded = "ruleNotificationReceiptBaseline" in payload
+    baseline = payload["ruleNotificationReceiptBaseline"] if receipt_loaded else (
+        saved.get("previous") or payload.get("rulePolicyReceiptBaseline"))
+    comparison = rule_delivery_comparison(payload, baseline, stage="publication",
+                                         require_recovery_receipt=receipt_loaded or bool(saved))
     relation_change = comparison["relationChangeEvidence"]
     authorization_sources = ["typedb-relation-transition"] if relation_change["eligible"] else []
 

@@ -36,6 +36,7 @@ class InvestmentInsightDispatchService:
         account_repository=None,
         legacy_ai_handoff_enabled=True,
         source_recheck_requester=None,
+        notification_receipt_reader=None,
     ):
         self.notification_ingress = notification_ingress
         self.notification_queue = notification_queue
@@ -44,6 +45,7 @@ class InvestmentInsightDispatchService:
         self.account_repository = account_repository
         self.legacy_ai_handoff_enabled = bool(legacy_ai_handoff_enabled)
         self.source_recheck_requester = source_recheck_requester
+        self.notification_receipt_reader = notification_receipt_reader
 
     def enqueue(self, events: Iterable[AlertEvent]) -> Dict[str, object]:
         """Compatibility entry point used by the versioned reasoning engine."""
@@ -107,6 +109,11 @@ class InvestmentInsightDispatchService:
                 })
                 route_counts[INVALID] += 1
                 continue
+            if callable(self.notification_receipt_reader):
+                world_id = str(_mapping(metadata.get("ontologyRelationContext")).get("worldId") or "")
+                # Empty is authoritative too: never fall back to a provisional snapshot.
+                metadata["ruleNotificationReceiptBaseline"] = dict(
+                    self.notification_receipt_reader(event_account, event_symbol, world_id) or {})
             metadata["accountId"] = event_account
             metadata["symbol"] = event_symbol
             if subject_case.publication:

@@ -46,8 +46,7 @@ def delivery_value(event, current, previous):
     before = eligible_actions(previous) if delivered_baseline(current, previous) else set()
     after = eligible_actions(current)
     received = delivered_predecessor(event, current, previous)
-    correction = event.get("changeKind") in {"invalidated", "counter-added", "support-removed"} or any(
-        c.get("kind") in {"counter-added", "support-removed"} for c in event.get("evidenceChanges") or [])
+    correction = premise_correction(event)
     added = eligible_actions(current, event) - before
     removed = eligible_actions(previous, event) - after if received else set()
     changed = bool(added or removed)
@@ -61,3 +60,23 @@ def delivery_value(event, current, previous):
             "reason": "검증된 대응 후보가 달라졌습니다." if changed else
                       "앞서 전달한 설명의 반대 근거 또는 해제 조건을 확인했습니다." if allowed else
                       "가설 근거는 달라졌지만 새로 사용할 대응이나 앞선 판단의 철회가 없어 상세 이력에 남깁니다."}
+
+
+def has_receipt_correction(packet):
+    """Only an admitted correction to a delivered claim can bypass repeat cadence."""
+    current, previous = packet.get("current") or {}, packet.get("previous") or {}
+    if not packet.get("eligible"):
+        return False
+    for event in packet.get("customerEvents") or []:
+        if event.get("purpose") != "hypothesis-evidence" or not event.get("eligible"):
+            continue
+        value = delivery_value(event, current, previous)
+        if value.get("deliveredPredecessor") and (value.get("removedEligibleActions")
+                or premise_correction(event)):
+            return True
+    return False
+
+
+def premise_correction(event):
+    return event.get("changeKind") in {"invalidated", "counter-added", "support-removed"} or any(
+        c.get("kind") in {"counter-added", "support-removed"} for c in event.get("evidenceChanges") or [])

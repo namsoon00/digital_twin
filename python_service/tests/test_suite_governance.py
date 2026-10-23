@@ -405,7 +405,7 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # legacy isolation, source aging and generation-scoped outage reasons.
         # Four native MySQL parity/index/rollback regressions for outcome reads.
         # Eight response-value, receipt-correction, dispatch and presentation regressions.
-        self.assertLessEqual(total, 2530)
+        self.assertLessEqual(total, 2534)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

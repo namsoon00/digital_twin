@@ -149,16 +149,18 @@ class StaticSeedOwnershipTests(unittest.TestCase):
 
     def test_original_schema_fingerprints_queries_and_restore_results_match(self):
         golden = json.loads(
-            (ROOT / "tests/fixtures/static_seed_execution_v4.json").read_text()
+            (ROOT / "tests/fixtures/static_seed_execution_v5.json").read_text()
         )
         self.assertEqual(golden["scenarios"], execution_contracts(api))
-        from research_knowledge_fixture import pre_research_knowledge_catalog, pre_operational_strategy_schema
+        from research_knowledge_fixture import pre_research_knowledge_catalog, pre_operational_strategy_schema, pre_composition_flag_schema
         previous = json.loads((ROOT / "tests/fixtures/static_seed_execution_v2.json").read_text())["scenarios"]
-        with pre_operational_strategy_schema():
-            self.assertEqual(json.loads((ROOT / "tests/fixtures/static_seed_execution_v3.json").read_text())["scenarios"], execution_contracts(api))
-            with pre_research_knowledge_catalog():
-                self.assertEqual(previous, execution_contracts(api))
-                frozen_previous_artifact = artifact()
+        with pre_composition_flag_schema():
+            self.assertEqual(json.loads((ROOT / "tests/fixtures/static_seed_execution_v4.json").read_text())["scenarios"], execution_contracts(api))
+            with pre_operational_strategy_schema():
+                self.assertEqual(json.loads((ROOT / "tests/fixtures/static_seed_execution_v3.json").read_text())["scenarios"], execution_contracts(api))
+                with pre_research_knowledge_catalog():
+                    self.assertEqual(previous, execution_contracts(api))
+                    frozen_previous_artifact = artifact()
         with patch("static_seed_fixture.artifact", side_effect=lambda: copy.deepcopy(frozen_previous_artifact)):
             restored = execution_contracts(api)
             # The manifest records the new physical schema identity too;

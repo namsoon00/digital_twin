@@ -1245,7 +1245,7 @@ def apply_state_cooldown_rule(
             verified_source_transition.get("cadenceTier") or "material"
         )
         cadence_minutes = (
-            immediate_minutes if cadence_tier == "immediate" else material_minutes
+            0 if cadence_tier == "correction" else immediate_minutes if cadence_tier == "immediate" else material_minutes
         )
         if not delivery_cadence_allows(
             decision,

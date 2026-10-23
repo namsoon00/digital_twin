@@ -11,7 +11,7 @@ from digital_twin.modules.notifications.domain.message_types import AI_OBSERVATI
 from digital_twin.modules.notifications.domain.notification_rules import DEFAULT_NOTIFICATION_RULES, NotificationRuleConfig, default_notification_rule, notification_fingerprint, ontology_relation_delivery_metadata, notification_subject_group_key, notification_state_group_key
 from digital_twin.modules.notifications.domain.notification.lifecycle import age_minutes_since
 from digital_twin.modules.notifications.domain.context_observation_notifications import typedb_context_observation_contract
-from digital_twin.modules.notifications.domain.relation_change import relation_change_evidence
+from digital_twin.modules.notifications.domain.relation_change import relation_change_evidence, relation_change_snapshot
 from digital_twin.modules.notifications.domain.rule_delivery_comparison import rule_delivery_comparison
 from digital_twin.modules.notifications.domain.notifications import NotificationJob
 from digital_twin.modules.notifications.domain.delivery_recovery import (
@@ -1977,11 +1977,16 @@ class MySQLNotificationJobStore(DiagnosticThreadStore, InvestmentConversationSto
         with self.connect() as connection:
             if typedb_context_observation_contract(job.context or {}):
                 baseline = self.relation_delivery_snapshot_with_connection(connection, job)
+                job.context.pop("ruleNotificationReceiptBaseline", None)
                 comparison = rule_delivery_comparison(job.context, baseline, stage="dispatch-receipt-lock")
                 job.context.update(comparison)
                 packet = comparison["relationChangeEvidence"]
                 if not packet["eligible"]:
                     return {"allowed": False, "suppressionReason": packet.get("nonDeliveryReasonCode") or "unchanged_rulebox_relation", "reason": packet["reason"]}
+                from digital_twin.modules.notifications.domain.rule_notice_delivery_value import has_receipt_correction
+                if has_receipt_correction(packet):
+                    return {"allowed": True, "tier": "correction", "minutes": 0,
+                            "reason": "실제 전달한 판단의 약화·철회는 반복 알림 간격을 적용하지 않습니다."}
             rule = self.rule_for_connection(connection, job.message_type)
             if not rule.enabled or not rule.state_cooldown_enabled:
                 return {"allowed": True, "reason": "repeat-policy-disabled"}
@@ -2167,17 +2172,21 @@ class MySQLNotificationJobStore(DiagnosticThreadStore, InvestmentConversationSto
         return selected_context
 
     def rule_policy_receipt_baseline(self, account_id, symbol, world_id):
-        """Bound a clearance candidate to an actual account/subject/world receipt."""
+        """Read the same scoped successful receipt used at admission and send."""
+        with self.connect() as connection:
+            return self.rule_receipt_with_connection(connection, account_id, symbol, world_id)
+
+    def rule_receipt_with_connection(self, connection, account_id, symbol, world_id, exclude_job_id=""):
         if not all((account_id, symbol, world_id)):
             return {}
-        with self.connect() as connection:
-            row = connection.execute(
-                "SELECT job_id, completed_at, JSON_EXTRACT(metadata_json, '$.relationChangeSnapshot') AS snapshot "
-                "FROM notification_delivery_attempts WHERE status='delivered' "
-                "AND JSON_UNQUOTE(JSON_EXTRACT(metadata_json, '$.accountId'))=%s "
-                "AND JSON_UNQUOTE(JSON_EXTRACT(metadata_json, '$.relationChangeSnapshot.symbol'))=%s "
-                "AND JSON_UNQUOTE(JSON_EXTRACT(metadata_json, '$.relationChangeSnapshot.worldId'))=%s "
-                "ORDER BY completed_at DESC, attempt_id DESC LIMIT 1", (account_id, symbol, world_id)).fetchone()
+        row = connection.execute(
+            "SELECT job_id, completed_at, JSON_EXTRACT(metadata_json, '$.relationChangeSnapshot') AS snapshot "
+            "FROM notification_delivery_attempts WHERE status='delivered' AND job_id != %s "
+            "AND JSON_UNQUOTE(JSON_EXTRACT(metadata_json, '$.accountId'))=%s "
+            "AND JSON_UNQUOTE(JSON_EXTRACT(metadata_json, '$.relationChangeSnapshot.symbol'))=%s "
+            "AND JSON_UNQUOTE(JSON_EXTRACT(metadata_json, '$.relationChangeSnapshot.worldId'))=%s "
+            "ORDER BY completed_at DESC, attempt_id DESC LIMIT 1",
+            (exclude_job_id, account_id, symbol, world_id)).fetchone()
         baseline = _json_loads(row.get('snapshot'), {}) if row else {}
         if baseline and all(baseline.get(k) == v for k, v in
                             (('accountId', account_id), ('symbol', symbol), ('worldId', world_id))):
@@ -2186,6 +2195,10 @@ class MySQLNotificationJobStore(DiagnosticThreadStore, InvestmentConversationSto
 
     def relation_delivery_snapshot_with_connection(self, connection, job):
         """Successful receipt scoped to account and subject, surviving job retention."""
+        if typedb_context_observation_contract(job.context or {}):
+            current = relation_change_snapshot(job.context)
+            return self.rule_receipt_with_connection(connection, job.account_id,
+                current.get("symbol"), current.get("worldId"), job.job_id)
         row = connection.execute(
             "SELECT job_id, completed_at, JSON_EXTRACT(metadata_json, '$.relationChangeSnapshot') AS snapshot, "
             "JSON_UNQUOTE(JSON_EXTRACT(metadata_json, '$.notificationConversation.worldId')) AS world_id "

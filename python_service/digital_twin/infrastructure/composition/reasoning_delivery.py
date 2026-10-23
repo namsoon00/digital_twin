@@ -134,6 +134,7 @@ def wire_v2_decision_services(
         subject_decision_orchestrator,
         account_repository=account_repository,
         legacy_ai_handoff_enabled=not legacy_route_retired(candidate_settings),
+        notification_receipt_reader=insight_notification_queue.rule_policy_receipt_baseline,
         source_recheck_requester=lambda account_id: request_source_recheck(store_settings, account_id, delivery_authorized),
     )
     return ReasoningDelivery(

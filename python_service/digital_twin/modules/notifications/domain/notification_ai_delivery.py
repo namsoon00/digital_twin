@@ -7,6 +7,8 @@ from typing import Dict, Mapping
 from digital_twin.modules.notifications.domain.context_observation_notifications import context_observation_delivery_decision, review_observation_delivery_decision, typedb_context_observation_contract, typedb_review_observation_contract
 from digital_twin.modules.model_registry.contracts import has_material_delta, relation_lifecycle_transition_contract
 from digital_twin.modules.notifications.domain.relation_change import relation_change_authority, relation_change_evidence
+from digital_twin.modules.notifications.domain.rule_delivery_comparison import rule_delivery_comparison
+from digital_twin.modules.notifications.domain.rule_notice_delivery_value import has_receipt_correction
 from digital_twin.modules.decisions.contracts import investment_decision_actionability
 from digital_twin.modules.decisions.contracts import DecisionDelta
 from digital_twin.modules.decisions.contracts import reasoning_disposition_delivery
@@ -269,11 +271,14 @@ def verified_typedb_direct_delivery_authorization(
         for condition in matched_conditions
         for marker in ("direction-changed", "severity-escalated")
     )
+    correction = verified_relation and has_receipt_correction(rule_delivery_comparison(
+        payload, _mapping(payload.get("relationChangeEvidence")).get("previous"),
+        stage="cadence")["relationChangeEvidence"])
     reasons = [_text(item) for item in trigger.get("reasons") or [] if _text(item)]
     return {
         "status": "authorized",
         "reason": _text(semantic.get("reason")) if verified_relation or verified_policy else reasons[0] if reasons else _text(semantic.get("reason")),
-        "cadenceTier": "immediate" if immediate else "material",
+        "cadenceTier": "correction" if correction else "immediate" if immediate else "material",
         "stageObservation": stage_observation,
         **({"managementPolicyObservation": True} if verified_policy else {}),
         "matchedConditions": matched_conditions,

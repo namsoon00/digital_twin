@@ -1,0 +1,71 @@
+{
+  "sourceRevision": "10e543d5a + native composition flag promotion",
+  "engineVersion": "typedb-direct-typeql-rule-engine-v19",
+  "semanticChange": "Promote existing contractMatched and freshnessCompatible facts for native composition; preserve authored rules, thresholds and unrelated native behavior.",
+  "changedCases": [
+    "catalog",
+    "condition",
+    "indexed",
+    "match",
+    "planning",
+    "profiles",
+    "schema"
+  ],
+  "groups": {
+    "any-group": {
+      "count": 58,
+      "bytes": 139096,
+      "sha256": "e26b7a70cb467afb47db5ff977f74292f45dbc0bc22b11e2f36584a0ecafca5a"
+    },
+    "bridge": {
+      "count": 10,
+      "bytes": 38198,
+      "sha256": "51f13637a489b344037f356ee34c8474074600ed84ef48fce25015fd4f64a6ab"
+    },
+    "catalog": {
+      "count": 1,
+      "bytes": 2921301,
+      "sha256": "2ca48cb0e2006cc374f7798075e19028451aa761e7621873ffddd43a21267d24"
+    },
+    "condition": {
+      "count": 308,
+      "bytes": 620540,
+      "sha256": "77af9f2f53d09793b07092b0e4fae0dd97cf207275b85a76441514d6acd99c54"
+    },
+    "governed": {
+      "count": 29,
+      "bytes": 297993,
+      "sha256": "ee488f96dd680bf2d1cc6a3adebdb127f683433461ae8fcbe4509ca6b7d3807e"
+    },
+    "indexed": {
+      "count": 266,
+      "bytes": 752381,
+      "sha256": "b1956e9906aab3be81c1f5d9c62ec6add162a0e089d033d284bc524f463eca28"
+    },
+    "literals": {
+      "count": 30,
+      "bytes": 1033,
+      "sha256": "6767b7f1c7d34d9bf06cf6b684f7d7c2528d7ed79aaebc4bf6e899e0566b3f31"
+    },
+    "match": {
+      "count": 399,
+      "bytes": 1545096,
+      "sha256": "14f19e486050055147bc255fe1914db5641c6b41549bb894d0558152c4a16e65"
+    },
+    "planning": {
+      "count": 2,
+      "bytes": 45879,
+      "sha256": "79cc9f141e6787384c5dd5ebb40a780e2b4178007e295494852894603c2a180c"
+    },
+    "profiles": {
+      "count": 1,
+      "bytes": 293626,
+      "sha256": "639c15e7fe30dca5d37609a19669397f18929b40acdf9b32d3973abf4280f976"
+    },
+    "schema": {
+      "count": 1,
+      "bytes": 26509,
+      "sha256": "4d7a88e15d8751eb25ddc5d3bea398494b2b1b73f7c871e905e7b0e4df57abc8"
+    }
+  }
+}

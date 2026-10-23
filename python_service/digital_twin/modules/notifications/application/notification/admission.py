@@ -154,6 +154,8 @@ class NotificationAdmissionPolicy:
             baseline = context.pop("_relationDeliveredSnapshot", None)
             if baseline is None:
                 baseline = (context.get("relationChangeEvidence") or {}).get("previous")
+            # The receipt read for admission supersedes the earlier publication read.
+            context.pop("ruleNotificationReceiptBaseline", None)
             context.update(rule_delivery_comparison(context, baseline))
             job.context = context
             relation_diff = context["ontologyRelationDiff"]

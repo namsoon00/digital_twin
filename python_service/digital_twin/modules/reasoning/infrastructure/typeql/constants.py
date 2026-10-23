@@ -17,7 +17,7 @@ TYPEDB_NATIVE_REASONING_PROFILE_VERSION = "typedb-native-rule-profile-v10"
 
 # V12 also compares allocation facts using the existing ABox precision, so a
 # full-precision context cannot discard a native policy response after reading.
-TYPEDB_NATIVE_RULE_ENGINE_VERSION = "typedb-direct-typeql-rule-engine-v18"
+TYPEDB_NATIVE_RULE_ENGINE_VERSION = "typedb-direct-typeql-rule-engine-v19"
 
 TYPEDB_NATIVE_REASONING_LAYER = "typedb-native-rule"
 
@@ -363,6 +363,8 @@ TYPEDB_PROMOTED_TEXT_ATTRIBUTES = {
     "signalFamily": "ontology-model-signal-family",
     "horizon": "ontology-model-signal-horizon",
     "strengthBand": "ontology-model-signal-strength-band",
+    "contractMatched": "ontology-model-contract-matched",
+    "freshnessCompatible": "ontology-model-freshness-compatible",
     "releaseId": "ontology-model-release-id",
     "validationStatus": "ontology-model-validation-status",
     "decisionEligibility": "ontology-model-decision-eligibility",

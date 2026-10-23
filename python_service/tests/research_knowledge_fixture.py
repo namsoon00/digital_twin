@@ -46,3 +46,17 @@ def pre_research_knowledge_catalog():
         for (rows, _), original in zip(values, saved):
             rows[:] = original
         clear_caches()
+
+
+@contextmanager
+def pre_composition_flag_schema():
+    """Reproduce schemas authored before the two model booleans were promoted."""
+    from digital_twin.modules.reasoning.infrastructure.typeql import constants, storage_schema
+    previous = {k: v for k, v in constants.TYPEDB_PROMOTED_TEXT_ATTRIBUTES.items()
+                if k not in {"contractMatched", "freshnessCompatible"}}
+    storage_schema.typedb_rule_schema_capability_contract.cache_clear()
+    try:
+        with patch.dict(constants.TYPEDB_PROMOTED_TEXT_ATTRIBUTES, previous, clear=True):
+            yield
+    finally:
+        storage_schema.typedb_rule_schema_capability_contract.cache_clear()

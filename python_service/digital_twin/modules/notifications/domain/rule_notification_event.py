@@ -198,4 +198,7 @@ def carry_intent_receipts(current, previous, events, job_id):
         if event.get('policyState'):
             history[key].update({k: deepcopy(event.get(k)) for k in
                                  ('policyState', 'sourceRuleIds', 'blockedActions', 'conditions', 'managementResponses')})
+        if event.get("strategyPhases"):
+            history[key].update({k: deepcopy(event.get(k)) for k in
+                                ("strategyId", "strategyPhases", "sourceRuleIds", "conditions")})
     current["notificationIntentContinuity"] = dict(list(history.items())[-64:])

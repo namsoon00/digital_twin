@@ -11,7 +11,8 @@ def native_strategy_observations(identity, relation):
     strategies = {}
     for rule in relation.get("matchedRules") or []:
         response = rule.get("strategyResponse") or {}
-        if response.get("version") != "rule-strategy-contract-v1" or response.get("mode") != "research-only":
+        if (response.get("version"), response.get("mode")) not in {
+                ("rule-strategy-contract-v1", "research-only"), ("rule-strategy-contract-v2", "live-observation")}:
             continue
         rid = rule.get("ruleId") or rule.get("rule_id")
         trace = traces.get(rid) or {}
@@ -29,7 +30,7 @@ def native_strategy_observations(identity, relation):
         if not all(isinstance(v, str) and v for v in key):
             continue
         item = strategies.setdefault(key, {"strategyId": key[0], "contractFingerprint": key[1],
-            "mode": "research-only", "confirmedPhases": [], "phaseProofs": [],
+            "mode": response["mode"], "confirmedPhases": [], "phaseProofs": [],
             "maximumHoldingSessions": response.get("maximumHoldingSessions"),
             "signalValiditySeconds": response.get("signalValiditySeconds"),
             "selectedMarketAction": None, "orderAuthorized": False, "tradeTimingQualified": False})
@@ -43,6 +44,7 @@ def native_strategy_observations(identity, relation):
         item["confirmedPhases"].sort()
         item["unknownPhases"] = sorted({"setup", "entry", "invalidation", "exit"} - set(item["confirmedPhases"]))
         item["status"] = ("conflicting-conditions" if "entry" in item["confirmedPhases"]
-            and set(item["confirmedPhases"]) & {"invalidation", "exit"} else "research-conditions-observed")
+            and set(item["confirmedPhases"]) & {"invalidation", "exit"} else
+            "live-conditions-observed" if item["mode"] == "live-observation" else "research-conditions-observed")
         result.append(item)
     return sorted(result, key=lambda r: (r["strategyId"], r["contractFingerprint"]))

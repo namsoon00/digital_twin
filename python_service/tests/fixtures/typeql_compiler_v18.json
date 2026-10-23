@@ -1,0 +1,71 @@
+{
+  "sourceRevision": "21729bc09 + operational strategy phase release",
+  "engineVersion": "typedb-direct-typeql-rule-engine-v18",
+  "semanticChange": "Add eight KR/US four-phase native rules and physical market/source-clock capability; existing market/action predicates remain byte-identical.",
+  "changedCases": [
+    "catalog",
+    "condition",
+    "indexed",
+    "match",
+    "planning",
+    "profiles",
+    "schema"
+  ],
+  "groups": {
+    "any-group": {
+      "count": 58,
+      "bytes": 139096,
+      "sha256": "e26b7a70cb467afb47db5ff977f74292f45dbc0bc22b11e2f36584a0ecafca5a"
+    },
+    "bridge": {
+      "count": 10,
+      "bytes": 38198,
+      "sha256": "51f13637a489b344037f356ee34c8474074600ed84ef48fce25015fd4f64a6ab"
+    },
+    "catalog": {
+      "count": 1,
+      "bytes": 2921301,
+      "sha256": "2ca48cb0e2006cc374f7798075e19028451aa761e7621873ffddd43a21267d24"
+    },
+    "condition": {
+      "count": 308,
+      "bytes": 620044,
+      "sha256": "2e788280cf47deaafa86407a009e5b114e0c2a963335723c4aa0413dd5c7ae75"
+    },
+    "governed": {
+      "count": 29,
+      "bytes": 297993,
+      "sha256": "ee488f96dd680bf2d1cc6a3adebdb127f683433461ae8fcbe4509ca6b7d3807e"
+    },
+    "indexed": {
+      "count": 266,
+      "bytes": 751469,
+      "sha256": "74088b6119aa412dde2ee1ac8e2db0d3d75702e4b999d1c971e06690cb8a1d74"
+    },
+    "literals": {
+      "count": 30,
+      "bytes": 1033,
+      "sha256": "6767b7f1c7d34d9bf06cf6b684f7d7c2528d7ed79aaebc4bf6e899e0566b3f31"
+    },
+    "match": {
+      "count": 399,
+      "bytes": 1543728,
+      "sha256": "7dc712bf35cede27d5b16835d0db23f6decae7a9e16c4297961cf8adde95bfc5"
+    },
+    "planning": {
+      "count": 2,
+      "bytes": 45879,
+      "sha256": "79cc9f141e6787384c5dd5ebb40a780e2b4178007e295494852894603c2a180c"
+    },
+    "profiles": {
+      "count": 1,
+      "bytes": 294997,
+      "sha256": "3a8d573d5e5fced294d2e7cc56b974bb1a723ebc57ce7416c64f8947b8a27ebc"
+    },
+    "schema": {
+      "count": 1,
+      "bytes": 26365,
+      "sha256": "f4e96275a6af0fc9d82e403daff42e8a4b7322d07eca495dea8b70c1cae84840"
+    }
+  }
+}

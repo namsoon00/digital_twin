@@ -16,7 +16,7 @@ from digital_twin.modules.reasoning.infrastructure.typeql.condition_queries impo
 from digital_twin.modules.reasoning.contracts import entity_id
 from digital_twin.modules.reasoning.infrastructure.typeql.constants import TYPEDB_NUMERIC_ATTRIBUTES
 from digital_twin.modules.reasoning.infrastructure.typeql.literals import typedb_literal_for_attribute, typedb_string
-from digital_twin.modules.reasoning.infrastructure.typeql.storage_schema import typedb_target_attribute
+from digital_twin.modules.reasoning.infrastructure.typeql.storage_schema import typedb_target_attribute, typedb_relation_storage_type
 
 
 def run():
@@ -30,7 +30,9 @@ def run():
     if not imported[0]:
         raise RuntimeError("TypeDB driver unavailable")
     transaction_type = imported[0][-1]
-    contract = strategy()
+    from digital_twin.modules.model_registry.contracts import default_graph_inference_rules
+    contract = next(r.resolved_claim_contract.strategy_contract for r in default_graph_inference_rules()
+                    if r.resolved_claim_contract.strategy_contract and r.resolved_claim_contract.strategy_contract['market'] == 'KR')
     rules = compile_strategy_rules(contract)
     models = {rid: next(c for c in r.conditions if c.relation_type == "HAS_MODEL_SIGNAL"
                        and c.target_property_filters["hypothesisContractId"] == rid)
@@ -50,6 +52,9 @@ def run():
         schema += "\nentity " + market_type + ", sub ontology-node;"
     schema += "\nrelation ontology-assertion, relates source, relates target, owns ontology-id, owns ontology-storage-id, owns ontology-relation-type;"
     schema += "\nrelation ontology-relation-has-model-signal, sub ontology-assertion;"
+    market_relation_type = typedb_relation_storage_type('TRADED_IN')
+    if market_relation_type != 'ontology-assertion':
+        schema += "\nrelation " + market_relation_type + ", sub ontology-assertion;"
     scenarios = {"fresh": [1, 1, 1, 1], "stale": [0, 0, 0, 0], "closed": [0, 0, 0, 0],
                  "ineligible": [0, 0, 0, 0], "wrong-release": [0, 0, 0, 0],
                  "missing-entry-member": [1, 0, 1, 1], "wrong-market": [0, 0, 0, 0]}
@@ -73,7 +78,7 @@ def run():
                 "ontology-symbol": "STRATEGY_TEST"}) + ";"]
             market_relation = scenario + ":market-relation"
             clauses.append("$market isa " + market_type + ", " + has({"ontology-id": entity_id("market", "US" if scenario == "wrong-market" else "KR"), "ontology-kind": "market"}) + ";")
-            clauses.append("$marketRelation isa ontology-assertion, links (source: $source, target: $market), "
+            clauses.append("$marketRelation isa " + market_relation_type + ", links (source: $source, target: $market), "
                            + has({"ontology-id": market_relation, "ontology-storage-id": market_relation, "ontology-relation-type": "TRADED_IN"}) + ";")
             relation_ids = {}
             for index, (rid, condition) in enumerate(models.items()):
@@ -84,7 +89,7 @@ def run():
                 values = {}
                 for field, value in condition.target_property_filters.items():
                     if isinstance(value, list): value = value[0]
-                    if field == "sourceAgeSeconds": value = 181 if scenario == "stale" else 30
+                    if field == "sourceAgeSeconds": value = contract['signalValiditySeconds'] + 1 if scenario == "stale" else 30
                     if field == "marketSession" and scenario == "closed": value = "closed"
                     if field == "eligibilityStatus" and scenario == "ineligible": value = "ineligible"
                     if field == "releaseId" and scenario == "wrong-release": value = "unregistered-release"

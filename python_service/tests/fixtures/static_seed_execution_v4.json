@@ -1,0 +1,25 @@
+{
+  "sourceRevision": "21729bc09 + operational strategy source-clock schema",
+  "contractVersion": "static-seed-execution-v4",
+  "reason": "Rule-derived schema adds TRADED_IN/Market and model source clock ownership. Authored old release artifacts, identity and failure boundaries are unchanged; previous schemas are independently reproduced.",
+  "changedCases": [
+    "schema",
+    "schemaIdentity",
+    "manifestIdentity"
+  ],
+  "scenarios": {
+    "schema": "23950980fc920a23eb716a1749258f85ac1db50b796a6acee6c2cb2d64e1e608",
+    "schemaIdentity": "9c60ce6afc885a3ea19f198258b619ec99e7f2e59d13cabb839de33986fdea50",
+    "manifestIdentity": "ac5f0c21582462c54d90fd7a83e8888c4bc581fa358ea4b32a16dbb000ac5951",
+    "generatedRows": "80621c24965aaf2c7a0b78aec925f1484ae11aa03a6beed93f10208285a0571b",
+    "sentinels": "d5ab4a5c1814c359f34eeb343bc97ece24bf0f19d546a4e3718070b40baf8c26",
+    "restore:ok": "1071d072665321a01c3c38a781b50bfcb815a3a5abb464b88fc108558b976594",
+    "restore:schema-error": "efd028dcb469055af5f90d9c970a48c41097c4239a89577fe86dea9a9063c6c4",
+    "restore:static-error": "e16dbc36106d181b8e722fe532fdebac6f6875d012e9748060d79808bb6b2943",
+    "restore:manifest-error": "e76f9ed27e69aac5e3fefdb6d78f7d264ac55afe262981c99bc815f2fc79f647",
+    "restore:readback-error": "8f653b27f7e678dcb52f72307e23a92c5b763ace24676b08d72ecf4ecbecc64e",
+    "restore:hash-error": "cf956e95de926529c5a374f535506fae7dc15223087baf78ca34293ddacf22db",
+    "restore:contract-error": "fccca9db4148a8be1964036f491a51f4f17e6a69c40413eb2ca9905637c14cfe",
+    "restore:missing-box": "0ccfdc6e478a56a911fc2a4d27092fba6473a8d96a5c7c0bd65068ef1611a373"
+  }
+}

@@ -424,7 +424,8 @@ def validate_rule_domain_manifests(rules: Iterable[object]) -> Dict[str, object]
         for rule in source_rules
     ]
     ownership = validate_rule_ownership(
-        str(_value(rule, "rule_id", "ruleId") or "") for rule in source_rules
+        (str(_value(rule, "rule_id", "ruleId") or "") for rule in source_rules),
+        governed_rules=source_rules,
     )
     invalid = [
         item["ruleId"]

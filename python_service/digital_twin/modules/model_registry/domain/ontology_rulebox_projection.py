@@ -129,7 +129,7 @@ def add_rulebox_concepts(graph: PortfolioOntology, rules: Iterable[GraphInferenc
                 strategy_ids.add(strategy_id)
                 graph.entities.append(OntologyEntity(strategy_id, strategy["label"], "strategy-contract",
                     rulebox_properties({"tboxClass": "Strategy", "tboxClasses": ["Strategy"],
-                        "strategyContract": strategy, "decisionEligibility": "research-only"})))
+                        "strategyContract": strategy, "decisionEligibility": strategy["mode"]})))
             graph.relations.append(OntologyRelation(claim_id, strategy_id, "VALIDATES_STRATEGY",
                 properties=rulebox_relation_properties("VALIDATES_STRATEGY", {
                     "phase": claim_contract.strategy_phase, "validationKind": "native-condition-observation",

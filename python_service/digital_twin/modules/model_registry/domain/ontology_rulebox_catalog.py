@@ -7865,7 +7865,9 @@ def _production_graph_inference_rules() -> tuple[GraphInferenceRule, ...]:
 
     from digital_twin.modules.model_registry.domain.rule_evidence_composition import composition_rules
     rules = production_model_signal_rulebox(governed_graph_inference_rules())
-    return tuple([*rules, *composition_rules(rules)])
+    from digital_twin.modules.model_registry.domain.operational_strategies import operational_strategy_rules
+    base = [*rules, *composition_rules(rules)]
+    return tuple([*base, *operational_strategy_rules(base)])
 
 
 def default_graph_inference_rules() -> List[GraphInferenceRule]:

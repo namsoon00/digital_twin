@@ -101,6 +101,7 @@ def _measurements(current, previous, judgment, events, currency, transitions):
             if rid not in before_rules and event.get('previousConditions'):
                 before_rules[rid] = {'conditions': event['previousConditions']}
     cause_ids = {rid for e in events for rid in e.get("sourceRuleIds") or []}
+    strategy_ids = {rid for e in events if e.get("strategyPhases") for rid in e.get("sourceRuleIds") or []}
     used = cause_ids | set(judgment.get("sourceRuleIds") or [])
     changed, unchanged, reference = [], [], []
     for event in events:
@@ -125,7 +126,8 @@ def _measurements(current, previous, judgment, events, currency, transitions):
     def value_text(field, value):
         return decimal(value) + "%" if field in {"positionAccountWeight", "positionWeight"} else measurement(field, value, currency)
     for rule in ordered_rules:
-        if rule.get("id") not in used or rule.get("referenceOnly") or rule.get("evidenceUsableForJudgement") is False:
+        if (rule.get("id") not in used or (rule.get("id") not in strategy_ids
+                and (rule.get("referenceOnly") or rule.get("evidenceUsableForJudgement") is False))):
             continue
         for condition in rule.get("conditions", []):
             field, actual = condition.get("field"), condition.get("observedValue")
@@ -288,6 +290,11 @@ def compact_rulebox_summary(packet):
         market += " (전일 " + decimal(daily, signed=True) + "%)"
     if profit is not None and (numeric(facts.get("quantity")) or 0) > 0:
         market += " · 보유 수익률 " + decimal(profit, signed=True) + "%"
+    from .rule_strategy_event import strategy_summary
+    strategy_events = [e for e in events if e.get("strategyPhases")]
+    strategy = strategy_summary(packet, market, _measurements(current, previous, {}, strategy_events, currency, packet.get("transitions") or [])) if strategy_events else None
+    if strategy:
+        return strategy
     released_lead = release_conclusion(packet)
     lead = released_lead or _conclusion(judgment, events)
     impact = ((packet.get('policyLifecycle') or {}).get('decisionImpact') or {}) if judgment else {}

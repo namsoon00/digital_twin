@@ -1,7 +1,7 @@
-"""Frozen research strategies owned by RuleBox, never by alert wording.
+"""Frozen strategies owned by RuleBox, never by alert wording.
 
-V1 deliberately grants no trading authority. Native phase matches are research
-observations; a complete trade/cost/calendar validation needs a later release.
+V1 is research only; V2 permits operational phase notices. Neither claims
+empirical trading qualification or grants automatic order authority.
 """
 from copy import deepcopy
 import hashlib
@@ -12,6 +12,8 @@ from .statistical_signals.registry import DEFAULT_PRICE_SIGNAL_RELEASE_ID, DEFAU
 
 VERSION = "rule-strategy-contract-v1"
 COMPILER_VERSION = "native-strategy-phase-v1"
+LIVE_VERSION = "rule-strategy-contract-v2"
+LIVE_COMPILER_VERSION = "native-strategy-phase-v2"
 # graph_scoring supplies source age and session only from these family scorers.
 # Contract-only corporate/event/cross-asset evidence has no intraday source clock.
 INTRADAY_CLOCK_RELEASES = {DEFAULT_PRICE_SIGNAL_RELEASE_ID, DEFAULT_FLOW_SIGNAL_RELEASE_ID}
@@ -43,9 +45,10 @@ def strategy_contract_violations(contract):
     if not isinstance(contract, dict) or set(contract) != expected:
         return ["complete strategy fields are required"]
     errors = []
-    if (contract["version"] != VERSION or contract["compilerVersion"] != COMPILER_VERSION
-            or contract["mode"] != "research-only"):
-        errors.append("V1 is research-only")
+    versions = ((VERSION, COMPILER_VERSION, "research-only"),
+                (LIVE_VERSION, LIVE_COMPILER_VERSION, "live-observation"))
+    if (contract["version"], contract["compilerVersion"], contract["mode"]) not in versions:
+        errors.append("unsupported strategy version, compiler or operating mode")
     for key in ("strategyId", "label", "sourceRuleboxFingerprint"):
         if not isinstance(contract[key], str) or not 1 <= len(contract[key]) <= 240:
             errors.append("invalid " + key)

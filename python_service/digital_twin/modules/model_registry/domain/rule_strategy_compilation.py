@@ -6,11 +6,11 @@ is introduced here. Missing phases mean unknown, never a cancellation or exit.
 from copy import deepcopy
 from dataclasses import replace
 
-from .rule_strategy_contract import VERSION, PHASES, parse_strategy_contract, strategy_from_design
+from .rule_strategy_contract import VERSION, LIVE_VERSION, PHASES, parse_strategy_contract, strategy_from_design
 
 
 def phase_rule_id(contract, phase):
-    return "graph.strategy." + contract["contractFingerprint"][:24] + "." + phase + ".v1"
+    return "graph.strategy." + contract["contractFingerprint"][:24] + "." + phase + (".v2" if contract["version"] == LIVE_VERSION else ".v1")
 
 
 def phase_conditions(contract, phase):
@@ -20,6 +20,7 @@ def phase_conditions(contract, phase):
     # TRADED_IN relation binds the market's stable identity without schema edits.
     result = [GraphRuleCondition("strategy-market", "relation", "전략 대상 시장",
               relation_type="TRADED_IN", target_kind="market",
+              hypothesis_scope="market" if contract["version"] == LIVE_VERSION else "",
               target_property_filters={"entityId": entity_id("market", contract["market"])})]
     for index, rid in enumerate(contract["phases"][phase]):
         source = deepcopy(contract["models"][rid]["condition"])
@@ -42,26 +43,34 @@ def compile_strategy_rules(contract):
     for phase, label in PHASES.items():
         rid = phase_rule_id(contract, phase)
         conditions = phase_conditions(contract, phase)
-        response = {"version": VERSION, "strategyId": contract["strategyId"],
+        response = {"version": contract["version"], "strategyId": contract["strategyId"],
                     "contractFingerprint": contract["contractFingerprint"], "phase": phase, "label": label,
-                    "mode": "research-only", "conditionIds": [c.condition_id for c in conditions],
+                    "mode": contract["mode"], "conditionIds": [c.condition_id for c in conditions],
                     "sourceModelRuleIds": list(contract["phases"][phase]),
                     "maximumHoldingSessions": contract["maximumHoldingSessions"],
                     "signalValiditySeconds": contract["signalValiditySeconds"]}
-        raw = GraphInferenceRule(rule_id=rid, label=contract["label"] + " · " + label, version=VERSION,
+        live = contract["version"] == LIVE_VERSION
+        if live:
+            response.update(strategyLabel=contract["label"], nextCheck={
+                "setup": "가격 회복과 장중 상승 전환이 함께 확인되는지 확인합니다.",
+                "entry": "반등 실패 또는 장중 하락 가속이 확인되면 진입 근거를 다시 판단합니다.",
+                "invalidation": "기존 진입 근거의 취소 조건입니다. 새 가격 회복과 장중 상승 전환을 기다립니다.",
+                "exit": "보유 중이면 단기 회복 전략의 종료를 검토할 조건입니다. 보유하지 않으면 하락 위험 참고입니다.",
+            }[phase])
+        raw = GraphInferenceRule(rule_id=rid, label=contract["label"] + " · " + label, version=contract["version"],
             source_kind="stock", action_group="context", action_level="review", conditions=conditions,
-            knowledge_basis=RuleKnowledgeBasis(rule_kind="context-observation", theory_family="strategy-research",
+            knowledge_basis=RuleKnowledgeBasis(rule_kind="context-observation", theory_family="strategy-phase-composition" if live else "strategy-research",
                 thesis_family="strategy-phase-observation", basis_origin="authored-strategy-contract",
                 threshold_origin="frozen-model-contract", validation_status="reference-only",
                 decision_eligibility="reference-only", evidence_independence_key=contract["contractFingerprint"],
-                plain_language_basis="등록된 모델 조건의 조합을 연구하며 매매 행동을 선택하지 않습니다."),
-            prompt_hint="연구용 전략의 조건 관측입니다. 진입·청산 지시 또는 매매 성과 검증으로 해석하지 않습니다.",
+                plain_language_basis=("등록된 모델 조건을 함께 확인한 단기 전략 단계입니다. 성과 검증 상태와 구분합니다." if live else "등록된 모델 조건의 조합을 연구하며 매매 행동을 선택하지 않습니다.")),
+            prompt_hint=("단기 전략의 현재 단계, 확인 수치와 취소 조건을 설명합니다. 매매 성과는 검증 중입니다." if live else "연구용 전략의 조건 관측입니다. 진입·청산 지시 또는 매매 성과 검증으로 해석하지 않습니다."),
             enabled=False, derivations=[GraphRuleDerivation(
                 relation_type="REQUIRES_NEXT_CHECK", target_kind="next-check", target_key="{subjectId}:" + rid,
                 target_label="{displayName} " + label, tbox_class="NextCheck", tbox_classes=["NextCheck"],
                 polarity="context", evidence_role="context", decision_effect="defer", action_group="context",
                 action_level="review", decision_stage="MACRO_REGIME", decision_label=label,
-                next_checks=["새 자료에서 전략의 나머지 조건과 반대 근거를 함께 확인합니다."],
+                next_checks=[response.get("nextCheck") or "새 자료에서 전략의 나머지 조건과 반대 근거를 함께 확인합니다."],
                 strategy_response=response)])
         rule = with_rulebox_v3_governance([raw])[0]
         claim = replace(rule.resolved_claim_contract, claim_type="causal-context", decision_authority="reference-only",

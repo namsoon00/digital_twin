@@ -20,13 +20,16 @@ def native_context_rule_ids(relation):
     """
     graph = _mapping(relation.get('graphStoreInference'))
     subject = _mapping(relation.get('subject'))
-    if (subject.get('market') != 'CRYPTO' or relation.get('generationAligned') is False
+    if (subject.get('market') not in {'CRYPTO', 'KR', 'US'} or relation.get('generationAligned') is False
             or not all(relation.get(k) and relation[k] == graph.get(k)
                        for k in ('sourceAboxSnapshotId', 'inferenceGenerationId'))):
         return []
     native = rows(graph.get('traces'))
     claims = [_mapping(row.get('claimContract')) for row in native if row.get('matched') is not False]
     if not claims or any(claim.get('claimType') != 'causal-context' for claim in claims):
+        return []
+    if subject.get('market') != 'CRYPTO' and any(
+            (claim.get('strategyContract') or {}).get('mode') != 'live-observation' for claim in claims):
         return []
     result = []
     for row in native:

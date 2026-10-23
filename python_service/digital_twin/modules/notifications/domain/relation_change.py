@@ -13,6 +13,7 @@ from digital_twin.modules.notifications.domain.rule_outcome_event import outcome
 from digital_twin.modules.notifications.domain.rule_policy_lifecycle import policy_lifecycle
 from digital_twin.modules.notifications.domain.rule_dispatch_validity import rule_event_proof
 from digital_twin.modules.notifications.domain.rule_context_event import context_rule_events
+from digital_twin.modules.notifications.domain.rule_strategy_event import strategy_phase_events
 
 
 VERSION = "relation-change-evidence-v1"
@@ -252,6 +253,7 @@ def relation_change_evidence(context, baseline=None, *, require_recovery_receipt
     if current["proofIdentityVerified"]:
         events.extend(policy_events(current, previous))
         events.extend(context_rule_events(current, previous))
+        events.extend(strategy_phase_events(current, previous))
     if receipt_scope and current["proofIdentityVerified"]:
         events.extend(outcome_events(current, previous))
     # An unavailable rule in one hypothesis must not discard an independent
@@ -317,6 +319,7 @@ def relation_change_evidence(context, baseline=None, *, require_recovery_receipt
             "reason": " · ".join(str(row.get("changeLabel") or row.get("reason") or "관계 상태 변경") for row in transitions)
             if transitions else ("등록된 가설의 확인 결과가 새로 저장됐습니다." if any(e.get("outcome") for e in admitted_events) else
                                  "새로운 시장 문맥이 확인됐습니다." if admitted_events and all(e.get('contextState') for e in admitted_events) else
+                                 "단기 전략의 단계 조건이 새로 확인됐습니다." if any(e.get("strategyPhases") for e in admitted_events) else
                                  "관리 기준의 적용 상태가 달라졌습니다." if admitted_events else suppressed[0]["reason"] if suppressed else
                                  "판단 보류: " + " · ".join(wait_reasons) if wait_reasons else
                                  "룰박스 관계의 새 의미 변화가 없어 웹 이력에만 저장합니다."),

@@ -8,6 +8,20 @@ from digital_twin.modules.reasoning.domain import ontology_schema as schema
 
 
 @contextmanager
+def pre_operational_strategy_schema():
+    """Recompile the previous physical capabilities without new phase rules."""
+    from digital_twin.modules.reasoning.infrastructure.typeql import storage_schema
+    previous = [r for r in storage_schema.default_graph_inference_rules()
+                if not r.resolved_claim_contract.strategy_contract]
+    storage_schema.typedb_rule_schema_capability_contract.cache_clear()
+    try:
+        with patch.object(storage_schema, 'default_graph_inference_rules', return_value=previous):
+            yield
+    finally:
+        storage_schema.typedb_rule_schema_capability_contract.cache_clear()
+
+
+@contextmanager
 def pre_research_knowledge_catalog():
     def clear_caches():
         schema.tbox_fingerprint.cache_clear()

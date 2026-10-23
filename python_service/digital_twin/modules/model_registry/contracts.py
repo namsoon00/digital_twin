@@ -13,6 +13,7 @@ _EXPORTS['rule_notification_intent'] = ('digital_twin.modules.model_registry.dom
 
 
 _EXPORTS.update({
+    "operational_strategy_rules": ("digital_twin.modules.model_registry.domain.operational_strategies", "operational_strategy_rules"),
     "composition_rules": ("digital_twin.modules.model_registry.domain.rule_evidence_composition", "composition_rules"),
     "composition_response_violations": ("digital_twin.modules.model_registry.domain.rule_evidence_composition", "composition_response_violations"),
     "verified_measurement_packet": ("digital_twin.modules.model_registry.domain.statistical_signals.measurements", "verified_measurement_packet"),

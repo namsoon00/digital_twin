@@ -15,7 +15,7 @@ from typeql_contract_fixture import WORLD, contract_fingerprints, enabled_rules,
 ROOT = Path(__file__).resolve().parents[1] / "digital_twin"
 PACKAGE = "digital_twin.modules.reasoning.infrastructure.typeql"
 COMPILER = ROOT / "modules/reasoning/infrastructure/typeql"
-GOLDEN = Path(__file__).parent / "fixtures/typeql_compiler_v17.json"
+GOLDEN = Path(__file__).parent / "fixtures/typeql_compiler_v18.json"
 
 
 class TypeQLCompilerTests(unittest.TestCase):
@@ -44,7 +44,7 @@ class TypeQLCompilerTests(unittest.TestCase):
             typedb_value_match("$s", "ontology-profit-loss-rate", {"field": "typo", "default": -8}, "<=", "$v")
 
     def test_compiler_matches_versioned_account_policy_contract(self):
-        # Earlier releases stay frozen; V17 adds native composition predicates.
+        # V18 adds operational strategy phase predicates and their physical clocks.
         expected = json.loads(GOLDEN.read_text())
         actual = contract_fingerprints(typeql)
         self.assertEqual(expected["engineVersion"], typeql.TYPEDB_NATIVE_RULE_ENGINE_VERSION)
@@ -57,7 +57,7 @@ class TypeQLCompilerTests(unittest.TestCase):
         from unittest.mock import patch
         import typeql_contract_fixture as fixture
         previous = json.loads((GOLDEN.parent / 'typeql_compiler_v15.json').read_text())
-        legacy_rules = [r for r in enabled_rules() if not r.rule_id.startswith('graph.composition.')]
+        legacy_rules = [r for r in enabled_rules() if not r.rule_id.startswith(('graph.composition.', 'graph.strategy.'))]
         with patch.object(fixture, 'enabled_rules', return_value=legacy_rules):
             legacy = contract_fingerprints(typeql)
         for group in ('match', 'condition', 'indexed', 'any-group', 'governed', 'bridge', 'literals'):

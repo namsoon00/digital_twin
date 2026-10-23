@@ -276,14 +276,29 @@ def rule_ownership_contract(rule_id: object) -> RuleOwnershipContract:
     )
 
 
-def validate_rule_ownership(rule_ids: Iterable[object]) -> Dict[str, object]:
+def validate_rule_ownership(rule_ids: Iterable[object], governed_rules=()) -> Dict[str, object]:
+    # Content-addressed strategy IDs cannot be enumerated in the static catalog.
+    # Admit only complete, frozen native contracts; a matching name grants nothing.
+    from .rule_strategy_compilation import strategy_rule_violations
+    from .rule_strategy_contract import LIVE_VERSION, parse_strategy_contract
+    strategies = set()
+    for rule in governed_rules:
+        try:
+            claim = rule.resolved_claim_contract
+            contract = parse_strategy_contract(claim.strategy_contract)
+            if (contract["version"] == LIVE_VERSION and contract["mode"] == "live-observation"
+                    and claim.claim_type == "causal-context" and claim.decision_authority == "reference-only"
+                    and not strategy_rule_violations(rule)):
+                strategies.add(rule.rule_id)
+        except (AttributeError, KeyError, TypeError, ValueError):
+            continue
     requested = [str(value or "").strip() for value in rule_ids or [] if str(value or "").strip()]
     duplicates = sorted({value for value in requested if requested.count(value) > 1})
     missing = []
     ambiguous = []
     for rule_id in sorted(set(requested)):
         owners = [owner for owner, values in OWNER_RULE_IDS.items() if rule_id in values]
-        if not owners:
+        if not owners and rule_id not in strategies:
             missing.append(rule_id)
         elif len(owners) > 1:
             ambiguous.append(rule_id)
@@ -294,7 +309,7 @@ def validate_rule_ownership(rule_ids: Iterable[object]) -> Dict[str, object]:
         "ruleCount": len(requested),
         "ownedRuleCount": len(set(requested)) - len(missing) - len(ambiguous),
         "ownerCounts": {
-            owner: len(set(requested).intersection(values))
+            owner: len(set(requested).intersection(values | (strategies if owner == "ontology-semantic" else set())))
             for owner, values in sorted(OWNER_RULE_IDS.items())
         },
         "duplicateRuleIds": duplicates,

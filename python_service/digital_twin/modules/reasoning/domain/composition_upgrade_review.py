@@ -35,18 +35,28 @@ def declared_composition_additions(baseline, candidate, declaration):
     left = {r["rule_id"]: r for r in baseline["rules"]}
     right = {r["rule_id"]: r for r in candidate["rules"]}
     added = set(right) - set(left)
+    strategy_upgrade = declaration.get("version") == "native-strategy-phase-migration-v1"
     if (len(left) != len(baseline["rules"]) or len(right) != len(candidate["rules"])
-            or added != set(declaration.get("addedRuleIds") or []) or len(added) != 3
+            or added != set(declaration.get("addedRuleIds") or []) or len(added) != (8 if strategy_upgrade else 3)
             or any(right.get(k) != v for k, v in left.items())):
         raise ValueError("existing-rules-changed-or-additions-undeclared")
-    expected = {r.rule_id: GraphInferenceRule.from_dict(r.to_dict()).to_dict() for r in composition_rules([GraphInferenceRule.from_dict(r) for r in baseline["rules"]])}
+    if strategy_upgrade:
+        from digital_twin.modules.model_registry.contracts import operational_strategy_rules
+        binding = declaration.get("sourceDeployment") or {}
+        if binding.get("deploymentId") != declaration.get("baselineDeploymentId") or not binding.get("graphStoreBinding"):
+            raise ValueError("strategy-source-deployment-unbound")
+        authored = operational_strategy_rules(baseline["rules"], binding)
+    else:
+        authored = composition_rules([GraphInferenceRule.from_dict(r) for r in baseline["rules"]])
+    expected = {r.rule_id: (r.to_dict() if strategy_upgrade else GraphInferenceRule.from_dict(r.to_dict()).to_dict()) for r in authored}
     if any(right[rid] != expected.get(rid) for rid in added):
         raise ValueError("composition-is-not-the-declared-native-contract")
     for rid in added:
         rule = GraphInferenceRule.from_dict(right[rid])
-        if (not rid.startswith("graph.composition.") or not rule.enabled
-                or len(rule.derivations) != 1 or not rule.derivations[0].composition_response
-                or composition_response_violations(rule, rule.derivations[0])):
+        if (not rule.enabled or len(rule.derivations) != 1 or
+                (not strategy_upgrade and (not rid.startswith("graph.composition.")
+                    or not rule.derivations[0].composition_response
+                    or composition_response_violations(rule, rule.derivations[0])))):
             raise ValueError("addition-is-not-an-actionless-native-composition")
     old_nodes = {n["id"]: n for n in baseline["graph"]["entities"] if (n.get("properties") or {}).get("ontologyBox") == "TBox"}
     new_nodes = {n["id"]: n for n in candidate["graph"]["entities"] if (n.get("properties") or {}).get("ontologyBox") == "TBox"}
@@ -100,7 +110,7 @@ def review_composition_upgrade(baseline_job, candidate_job, comparison, baseline
                 raise ValueError("immutable-artifact-unverified")
         baseline, candidate = baseline_record["artifact"], candidate_record["artifact"]
         declaration = candidate.get("compositionUpgradeContract") or {}
-        if (declaration.get("version") != "native-composition-migration-v1"
+        if (declaration.get("version") not in {"native-composition-migration-v1", "native-strategy-phase-migration-v1"}
                 or declaration.get("baselineDeploymentId") != baseline_job.get("deploymentId")
                 or declaration.get("baselineArtifactFingerprint") != baseline_record["artifactFingerprint"]
                 or declaration.get("baselineRuleboxFingerprint") != baseline["ruleboxFingerprint"]

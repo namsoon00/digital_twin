@@ -8,7 +8,7 @@ import unittest
 import zipfile
 from unittest.mock import Mock, patch
 
-from digital_twin.modules.ai_orchestration.domain import evidence_readiness, execution_lanes, bounded_retrieval, memory_reference, evidence_purpose, purpose_retrieval
+from digital_twin.modules.ai_orchestration.domain import evidence_readiness, execution_lanes, bounded_retrieval, memory_reference, evidence_purpose, purpose_retrieval, compact_retrieval
 from digital_twin.modules.ai_orchestration.domain.execution_input import (
     freeze_execution_input, freeze_repair_input, freeze_review_input, validate_execution_input,
 )
@@ -95,7 +95,7 @@ class BoundedEvidenceReadinessTests(unittest.TestCase):
         self.assertEqual(evidence_purpose.author_version(result['input']), result['executionPromptVersion'])
         self.assertNotEqual('data-wait', result['processingOutcome']['status'])
         self.assertEqual('requested', result['dataRecovery']['status'])
-        self.assertEqual(purpose_retrieval.VERSION, result['input']['retrieval']['version'])
+        self.assertEqual(compact_retrieval.VERSION, result['input']['retrieval']['version'])
         self.assertEqual(1, refresh.call_count)
         store.memory.return_value = [{**result, 'quality': {'status': 'accepted'}}]
         author.reset_mock(); service.read_planner.reset_mock()
@@ -401,6 +401,8 @@ class SourceRenewalStorageTests(unittest.TestCase):
         result = {'input':selected,'summary':'보고 시점을 보존한 관찰','executionInputId':save(env)}
         reviewed = freeze_review_input(result)
         self.assertEqual(self.job['taskId'], self.store.review_proof(save(reviewed))['taskId'])
+        from compact_retrieval_checks import check_compact_storage
+        check_compact_storage(self, value, save)
 
     def setUp(self):
         from test_ai_control import AIControlStorageTests, SUBJECT

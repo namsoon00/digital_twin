@@ -73,7 +73,8 @@ class CompanyValueObservationTests(unittest.TestCase):
         self.assertEqual('ready', final['retrieval']['status'])
         self.assertEqual(3, len(final['companyValueEvidence']['factIds']))
         self.assertTrue(set(final['companyValueEvidence']['factIds']).issubset(f['id'] for f in final['facts']))
-        self.assertEqual(company_value.RETRIEVAL_VERSION, saved[0]['promptVersion'])
+        from digital_twin.modules.ai_orchestration.domain import compact_retrieval
+        self.assertEqual(compact_retrieval.VERSION, saved[0]['promptVersion'])
         self.assertEqual(1, len(trace))
         env = freeze_execution_input(final, history, research, retrieval_trace=trace)
         self.assertEqual(company_value.PROMPT_VERSION, env['promptVersion'])

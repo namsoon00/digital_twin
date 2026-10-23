@@ -50,6 +50,8 @@ class PurposeScopedEvidenceTests(unittest.TestCase):
         self.assertTrue(publication_block(result, now+timedelta(minutes=11)))
 
     def test_dated_observation_reads_and_all_frozen_phases_preserve_old_source_clock(self):
+        from compact_retrieval_checks import check_compact_routing
+        check_compact_routing(self)
         value = stale(packet()); saved = []
         def save(env):
             validate_execution_input(env); saved.append(env); return 'input-'+str(len(saved))

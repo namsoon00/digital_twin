@@ -820,6 +820,45 @@ input suppression: a brain-case review timer alone no longer bypasses that gate.
 Changed source facts, questions/answers, policies and verified follow-up transitions
 still trigger evaluation; independent publication review remains required.
 
+### Compact routing inputs
+
+New purpose-aware reads use `independent-observation-retrieval-v11-compact-routing`.
+The persisted envelope retains the complete frozen source packet, continuity and
+read trace. Only the planner presentation is compacted: old delivery fact bodies
+and large research-knowledge sections become exact read references; duplicate
+memory path listings and raw model-response copies leave the routing text.
+Current facts, financial values/provenance, original question/checkpoint
+contracts, reviewed missing requirements, counter-premises and follow-up
+observations remain intact. The final author still receives the selected original
+facts and required memories. Historical V9/V10 prompts remain reproducible.
+
+`read_context(path)` reads only paths issued from that same frozen packet and
+continuity. It never queries a newer database snapshot or an external URL. Large
+sections return child paths; a scalar that cannot fit returns an explicit context
+limit. Results retain source hashes and are checked at input validation, round
+persistence and research receipt verification. Source JSON cannot issue its own
+paths. These context reads do not manufacture new fact IDs, resolve a research
+question, or grant publication authority. Missing detail means unread, not absent
+or contradicted. Existing per-round, total read and prompt limits still apply.
+
+Read results are presented once with request receipts. A round containing only
+repeated requests stops as `repeated-read` before another planning call. Existing
+material-change and source-readiness gates continue to suppress unchanged waits;
+changing this presentation does not force an otherwise unchanged judgment to run.
+Token budgets, independent publication review and receipt-based delivery controls
+are unchanged.
+
+Replay private captures without model calls, database writes or notifications:
+
+```bash
+python3 scripts/verify-compact-ai-retrieval.py /private/captured-inputs.json.gz
+```
+
+The input is a list of objects with an `envelope` field. The report compares prompt
+and output-schema bytes separately, validates both versions, and verifies source
+and history preservation. Byte reductions are not measured token savings,
+provider billing savings, judgment accuracy or evidence of customer delivery.
+
 Independent work defaults to **48 task starts and 24 model calls per UTC day**.
 The owner can set `aiControlBudgetEnabled=false` to remove both daily limits.
 Usage accounting, duplicate-input suppression, leases, process concurrency and

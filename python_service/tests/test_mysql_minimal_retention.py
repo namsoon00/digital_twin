@@ -299,6 +299,21 @@ class MySQLMinimalRetentionTests(unittest.TestCase):
         )
         self.assertIn("market_observation_reasoning_anchors", select_sql)
         self.assertIn("pending_event_id", select_sql)
+        # Keep the curated suite's deliberate case budget while exercising
+        # each cleanup failure/locking scenario with an isolated MySQL fixture.
+        for scenario in (
+            "bounded_orphans_preserve_all_existing_jobs_and_do_not_lock_live_lineage",
+            "delete_rechecks_parent_created_after_selection",
+            "deadlock_after_one_commit_resumes_without_another_parent_deletion",
+            "cleanup_obeys_byte_and_time_budgets",
+        ):
+            with self.subTest(lineage=scenario):
+                checks = MySQLReasoningLineageRetentionChecks()
+                try:
+                    checks.setUp()
+                    getattr(checks, "check_" + scenario)()
+                finally:
+                    checks.doCleanups()
 
     def test_minimal_policy_is_opt_in_without_runtime_defaults_and_bounds_inputs(self):
         self.assertFalse(mysql_minimal_retention_policy({}).enabled)
@@ -697,6 +712,114 @@ class IndexedRetentionExecutionTests(unittest.TestCase):
         self.assertEqual(1, result["deleted"])
         self.assertEqual({"signal-head", "assessment-head", "new-head", "recent"},
                          self.remaining("statistical_model_signal_snapshots", "snapshot_id"))
+
+
+class MySQLReasoningLineageRetentionChecks(unittest.TestCase):
+    """Exercise the real MySQL guards and resume after partial autocommit work."""
+
+    def setUp(self):
+        import os
+        from dataclasses import replace
+        from unittest.mock import patch
+        from mysql_fixtures import mysql_test_connection
+        from pymysql.cursors import DictCursor
+        from digital_twin.infrastructure.mysql_operational_connection import MySQLConnectionProxy
+        self.env = patch.dict(os.environ, {"MYSQL_TEST_DATABASE": "orbit_alpha_test_retention_lineage"})
+        self.env.start()
+        self.addCleanup(self.env.stop)
+        self.raw = mysql_test_connection()
+        self.raw.cursorclass = DictCursor
+        self.raw.autocommit(True)
+        self.connection = MySQLConnectionProxy(self.raw)
+        self.addCleanup(self.connection.close)
+        for table in ("reasoning_engine_job_sources", "reasoning_engine_jobs"):
+            self.connection.execute("DROP TABLE IF EXISTS " + table)
+        self.connection.execute("CREATE TABLE reasoning_engine_jobs (job_id VARCHAR(40) PRIMARY KEY, job_status VARCHAR(40)) ENGINE=InnoDB")
+        self.connection.execute("CREATE TABLE reasoning_engine_job_sources ("
+            "survivor_job_id VARCHAR(40), source_event_id VARCHAR(40), account_id VARCHAR(40), symbol VARCHAR(40), "
+            "deployment_id VARCHAR(40), source_snapshot_id VARCHAR(40), source_snapshot_at VARCHAR(40), "
+            "representation_mode VARCHAR(40), created_at VARCHAR(40), "
+            "PRIMARY KEY(survivor_job_id, source_event_id, account_id, symbol)) ENGINE=InnoDB")
+        self.policy = replace(mysql_minimal_retention_policy({}), batch_size=3)
+        self.budget = {"started": time.monotonic(), "maxSeconds": 30,
+                       "remainingBytes": 10000, "deletedBytes": 0}
+        self.repo = MySQLMinimalRetentionRepository(self.connection)
+
+    def source(self, job, event="event", account="", symbol=""):
+        self.connection.execute("INSERT INTO reasoning_engine_job_sources VALUES (%s,%s,%s,%s,'v2','','','direct','2026-01-01')",
+                                (job, event, account, symbol))
+
+    def remaining(self):
+        return {(row["survivor_job_id"], row["source_event_id"])
+                for row in self.connection.execute("SELECT survivor_job_id, source_event_id FROM reasoning_engine_job_sources").fetchall()}
+
+    def check_bounded_orphans_preserve_all_existing_jobs_and_do_not_lock_live_lineage(self):
+        from mysql_fixtures import mysql_test_connection
+        for status in ("queued", "processing", "completed", "failed"):
+            self.connection.execute("INSERT INTO reasoning_engine_jobs VALUES (%s,%s)", (status, status))
+            self.source(status)
+        for i in range(5):
+            self.source("orphan-" + str(i))
+        # A concurrent ingestion transaction owns a live lineage row. Orphan
+        # cleanup must not wait for that unrelated lock.
+        other = mysql_test_connection()
+        try:
+            other.autocommit(False)
+            with other.cursor() as cursor:
+                cursor.execute("SELECT * FROM reasoning_engine_job_sources WHERE survivor_job_id='processing' FOR UPDATE")
+            self.connection.execute("SET SESSION innodb_lock_wait_timeout=1")
+            result = self.repo._delete_reasoning_job_sources(self.policy, self.budget)
+        finally:
+            other.rollback()
+            other.close()
+        self.assertEqual(3, result["deleted"])
+        self.assertEqual({"reasoning_engine_job_sources": 3}, result["tables"])
+        self.assertGreater(result["estimatedBytes"], 0)
+        self.assertEqual(10000 - result["estimatedBytes"], self.budget["remainingBytes"])
+        self.assertEqual({(status, "event") for status in ("queued", "processing", "completed", "failed")}
+                         | {("orphan-3", "event"), ("orphan-4", "event")}, self.remaining())
+
+    def check_delete_rechecks_parent_created_after_selection(self):
+        from unittest.mock import patch
+        self.source("raced")
+        execute = self.connection.execute
+        def race(sql, params=()):
+            if sql.startswith("DELETE FROM `reasoning_engine_job_sources`"):
+                execute("INSERT INTO reasoning_engine_jobs VALUES ('raced','processing')")
+            return execute(sql, params)
+        with patch.object(self.connection, "execute", side_effect=race):
+            self.assertEqual(0, self.repo._delete_reasoning_job_sources(self.policy, self.budget)["deleted"])
+        self.assertEqual({("raced", "event")}, self.remaining())
+
+    def check_deadlock_after_one_commit_resumes_without_another_parent_deletion(self):
+        from unittest.mock import patch
+        from pymysql.err import OperationalError
+        for event in ("a", "b", "c"):
+            self.source("gone", event)
+        execute = self.connection.execute
+        def fail(sql, params=()):
+            if sql.startswith("DELETE FROM `reasoning_engine_job_sources`") and params[1] == "b":
+                raise OperationalError(1213, "injected deadlock")
+            return execute(sql, params)
+        with patch.object(self.connection, "execute", side_effect=fail):
+            with self.assertRaises(OperationalError):
+                self.repo._delete_reasoning_job_sources(self.policy, self.budget)
+        self.assertEqual({("gone", "b"), ("gone", "c")}, self.remaining())
+        result = self.repo._delete_reasoning_job_sources(self.policy, self.budget)
+        self.assertEqual(2, result["deleted"])
+        self.assertEqual(set(), self.remaining())
+        self.assertEqual(0, self.repo._delete_reasoning_job_sources(self.policy, self.budget)["deleted"])
+
+    def check_cleanup_obeys_byte_and_time_budgets(self):
+        self.source("orphan", "a")
+        self.source("orphan", "b")
+        size = 6 + 1 + 2 + len("direct") + len("2026-01-01")
+        self.budget["remainingBytes"] = size
+        self.assertEqual(1, self.repo._delete_reasoning_job_sources(self.policy, self.budget)["deleted"])
+        self.assertEqual(0, self.budget["remainingBytes"])
+        self.budget.update(remainingBytes=10000, started=time.monotonic() - 31)
+        self.assertEqual(0, self.repo._delete_reasoning_job_sources(self.policy, self.budget)["deleted"])
+        self.assertEqual({("orphan", "b")}, self.remaining())
 
 
 if __name__ == "__main__":

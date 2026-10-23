@@ -389,6 +389,7 @@ class MySQLMinimalRetentionRepository:
                     self._delete_reasoning_engine_jobs,
                     (cutoffs["reasoningEngineJobs"],),
                 ),
+                ("reasoningJobSources:orphaned", self._delete_reasoning_job_sources, ()),
                 (
                     "reasoningSourceSnapshots:terminal",
                     self._delete_reasoning_source_snapshots,
@@ -885,13 +886,45 @@ class MySQLMinimalRetentionRepository:
             statuses + (cutoff_iso,),
             budget,
         )
-        if deleted:
-            self.connection.execute(
-                "DELETE source FROM `reasoning_engine_job_sources` source "
-                "LEFT JOIN `reasoning_engine_jobs` job ON job.job_id = source.survivor_job_id "
-                "WHERE job.job_id IS NULL",
-            )
         return self._result("reasoning_engine_jobs", deleted, bytes_deleted)
+
+    def _delete_reasoning_job_sources(self, policy, budget) -> Dict[str, object]:
+        # A table-wide DELETE JOIN also locks live ingress lineage while looking
+        # for orphans. Select a bounded, nonlocking key list, then delete by the
+        # full primary key. Run independently of parent deletion so an interrupted
+        # pass can collect its remaining orphans on a later scheduled turn.
+        absent_parent = (
+            "NOT EXISTS (SELECT 1 FROM `reasoning_engine_jobs` job "
+            "WHERE job.job_id = `reasoning_engine_job_sources`.survivor_job_id)"
+        )
+        keys = ("survivor_job_id", "source_event_id", "account_id", "symbol")
+        candidates = self._byte_bounded_candidates(
+            "SELECT survivor_job_id, source_event_id, account_id, symbol, "
+            "OCTET_LENGTH(deployment_id) + OCTET_LENGTH(survivor_job_id) + "
+            "OCTET_LENGTH(source_event_id) + OCTET_LENGTH(account_id) + OCTET_LENGTH(symbol) + "
+            "OCTET_LENGTH(source_snapshot_id) + OCTET_LENGTH(source_snapshot_at) + "
+            "OCTET_LENGTH(representation_mode) + OCTET_LENGTH(created_at) AS payload_bytes "
+            "FROM `reasoning_engine_job_sources` WHERE " + absent_parent
+            + " ORDER BY survivor_job_id, source_event_id, account_id, symbol LIMIT %s",
+            (policy.batch_size,), "survivor_job_id", policy, budget,
+        )
+        deleted = bytes_deleted = 0
+        for row in candidates:
+            if not self._has_budget(budget):
+                break
+            # Account and symbol may legitimately be empty in ingress lineage.
+            values = tuple(_row_value(row, key, index=index, fallback="") for index, key in enumerate(keys))
+            cursor = _execute(self.connection,
+                "DELETE FROM `reasoning_engine_job_sources` WHERE "
+                + " AND ".join(key + " = %s" for key in keys) + " AND " + absent_parent,
+                values)
+            if _integer(getattr(cursor, "rowcount", 0)):
+                deleted += 1
+                row_bytes = max(0, _integer(_row_value(row, "payload_bytes")))
+                bytes_deleted += row_bytes
+                budget["remainingBytes"] = max(0, _integer(budget.get("remainingBytes")) - row_bytes)
+                budget["deletedBytes"] = _integer(budget.get("deletedBytes")) + row_bytes
+        return self._result("reasoning_engine_job_sources", deleted, bytes_deleted)
 
     def _delete_reasoning_source_snapshots(self, policy, budget, cutoff_iso) -> Dict[str, object]:
         candidates = self._byte_bounded_candidates(

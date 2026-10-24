@@ -607,6 +607,8 @@ class InvestmentResearchOrchestrationService:
         return self.persist_run(run)
 
     def execute_queued(self, queued: ResearchRun) -> ResearchRun:
+        from ..domain.research_execution_owner import require_queue_owned_run
+        require_queue_owned_run(queued)
         request = dict(queued.request_context or {})
         question_payload = request.get("question") if isinstance(request.get("question"), dict) else {}
         target_payload = request.get("target") if isinstance(request.get("target"), dict) else {}
@@ -667,6 +669,9 @@ class InvestmentResearchQueueRunner:
             except Exception as error:
                 preparation = {"status": "failed", "errorKind": type(error).__name__}
         runs = self.store.claim_queued_runs(limit) if self.store and hasattr(self.store, "claim_queued_runs") else []
+        from ..domain.research_execution_owner import central_research_run
+        foreign = [run for run in runs if central_research_run(run)]
+        runs = [run for run in runs if not central_research_run(run)]
         for queued in runs:
             try:
                 completed = self.orchestrator.execute_queued(queued)
@@ -700,6 +705,7 @@ class InvestmentResearchQueueRunner:
         return {
             "status": "ok",
             "processedCount": len(runs),
+            "foreignOwnerSkippedCount": len(foreign),
             "queuedCount": self.store.queued_count() if self.store and hasattr(self.store, "queued_count") else 0,
             "results": self.last_results,
             "hypothesisProposalAutomation": proposal_result,

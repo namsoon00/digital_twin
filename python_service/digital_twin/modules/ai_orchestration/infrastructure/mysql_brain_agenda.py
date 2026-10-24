@@ -50,6 +50,11 @@ class MySQLBrainAgendaStore(MySQLOperationalConnection):
         return json.loads(row["payload_json"]) if row else None
 
     def save(self, connection, case, task_id, stage, details=None):
+        return self.save_with_connection(connection, case, task_id, stage, details,
+                                         getattr(self, "progress_writer", None))
+
+    @staticmethod
+    def save_with_connection(connection, case, task_id, stage, details=None, progress_writer=None):
         fill_case_names(connection, [case], task_id)
         now = stamp()
         case["revision"] += 1
@@ -58,7 +63,6 @@ class MySQLBrainAgendaStore(MySQLOperationalConnection):
             "caseId": case["caseId"], "taskId": task_id, "stage": stage, "at": now,
             "revision": case["revision"], "status": case["status"], "reason": case.get("reason", ""),
             "details": copy.deepcopy(details or {})}
-        progress_writer = getattr(self, "progress_writer", None)
         progress = None
         if progress_writer is not None:
             from ..domain.research_progress import research_progress

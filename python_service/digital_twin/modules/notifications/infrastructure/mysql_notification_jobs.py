@@ -2326,6 +2326,10 @@ class MySQLNotificationJobStore(PriceMetricsStore, DiagnosticThreadStore, Invest
             self.register_research_thread(connection, job)
         return bool(outcome.accepted)
 
+    def enqueue_research_followup_with_connection(self, connection, event):
+        from .research_followup_batch import enqueue_followup_batch
+        return enqueue_followup_batch(self, connection, event)
+
     def enqueue(self, job: NotificationJob) -> bool:
         with self.transaction() as connection:
             accepted = self.enqueue_with_connection(connection, job)

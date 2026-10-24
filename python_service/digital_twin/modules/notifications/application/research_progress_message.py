@@ -14,6 +14,16 @@ def render_research_progress(value):
     symbol = str(value["symbol"]).strip()
     name = str(value.get("name") or "").strip()
     subject = text(name, 160) + " (" + text(symbol, 64) + ")" if name and name != symbol else text(symbol, 64)
+    if value.get("version") == "research-followup-batch-v1":
+        items = value["items"]
+        lines = ["<b>🔬 연구 진행 · " + subject + "</b>",
+                 f"기존 질문 {len(items)}개의 자료 보완 조사를 예약했습니다.", ""]
+        for index, item in enumerate(items, 1):
+            lines.append(f"{index}. " + text(item["question"], 180))
+        lines.extend(["", "아직 추가 답변을 확보한 것은 아닙니다. 자료를 확인해 답변이 달라지면 알려드리겠습니다.",
+                      "질문별 부족한 자료와 조사 경로는 연구 기록에 보관했습니다.",
+                      "기록 시각: " + text(kst_timestamp(value["at"]), 60)])
+        return notification_times_kst("\n".join(lines))
     lines = ["<b>🔬 연구 진행 · " + subject + "</b>",
              text(value["label"]), "", "<b>연구 질문</b>", text(value["question"])]
     answer = value.get("documentaryAnswer") or {}

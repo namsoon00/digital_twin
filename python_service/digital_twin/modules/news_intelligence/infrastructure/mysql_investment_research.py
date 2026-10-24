@@ -9,7 +9,20 @@ from digital_twin.infrastructure.mysql_operational_helpers import _json_loads
 from digital_twin.infrastructure.operational_common import json_dumps
 
 
+# The central ledger owns its retries and budget waits. A timestamp alone must
+# never transfer these runs to the independent research queue, including legacy
+# checkpoints that carry only one of the ownership markers.
+QUEUE_OWNED = """LEFT(run_id, 11) <> 'ai-control-'
+    AND COALESCE(JSON_UNQUOTE(JSON_EXTRACT(payload_json, '$.requestContext.source')), '') <> 'ai-control'
+    AND COALESCE(JSON_UNQUOTE(JSON_EXTRACT(payload_json, '$.requestContext.aiControlTaskId')), '') = ''"""
+
+
 class MySQLInvestmentResearchStore(MySQLOperationalConnection):
+    @staticmethod
+    def read_run_for_repair(connection, run_id):
+        row = connection.execute("SELECT payload_json FROM investment_research_runs WHERE run_id=%s FOR UPDATE", (run_id,)).fetchone()
+        return _json_loads(row["payload_json"], {}) if row else {}
+
     def enqueue_hypothesis_proposal_request(self, payload: Dict[str, object]) -> Dict[str, object]:
         item = dict(payload or {})
         request_id = str(item.get("requestId") or "").strip()
@@ -228,7 +241,7 @@ class MySQLInvestmentResearchStore(MySQLOperationalConnection):
         cutoff = (datetime.now(timezone.utc) - timedelta(minutes=stale_minutes)).isoformat().replace("+00:00", "Z")
         with self.connect() as connection:
             connection.execute(
-                "UPDATE investment_research_runs SET status = 'queued', updated_at = %s WHERE status = 'processing' AND updated_at < %s",
+                "UPDATE investment_research_runs SET status = 'queued', updated_at = %s WHERE status = 'processing' AND updated_at < %s AND " + QUEUE_OWNED,
                 (utc_now_iso(), cutoff),
             )
         for _ in range(max(1, min(50, int(limit or 5)))):
@@ -237,7 +250,7 @@ class MySQLInvestmentResearchStore(MySQLOperationalConnection):
                     """
                     SELECT run_id, payload_json
                     FROM investment_research_runs
-                    WHERE status = 'queued'
+                    WHERE status = 'queued' AND """ + QUEUE_OWNED + """
                     ORDER BY started_at, run_id
                     LIMIT 1
                     FOR UPDATE
@@ -257,7 +270,7 @@ class MySQLInvestmentResearchStore(MySQLOperationalConnection):
 
     def queued_count(self) -> int:
         with self.connect() as connection:
-            row = connection.execute("SELECT COUNT(*) AS count FROM investment_research_runs WHERE status = 'queued'").fetchone()
+            row = connection.execute("SELECT COUNT(*) AS count FROM investment_research_runs WHERE status = 'queued' AND " + QUEUE_OWNED).fetchone()
         return int(row.get("count") or 0) if row else 0
 
     def mark_reasoning_refreshed(

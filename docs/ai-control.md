@@ -1576,8 +1576,30 @@ history. Issuer document publication time never supplies an invented report peri
 
 A newly persisted follow-up task can emit one `researchProgress` milestone,
 “부족한 자료 추가 조사 예약”, with its missing requirements. Dedupe uses the actual
-scheduled task, and wait/blocked plans emit nothing. A scheduling notice is not
-answer delivery or empirical validation; delivery still requires a notifier receipt.
+scheduled task, and wait/blocked plans emit nothing. The case events stay separate;
+customer scheduling notices from one account/subject/world/planner execution are
+coalesced transactionally into one `research-followup-batch-v1` message. The batch
+has its own conversation anchor and retains the constituent question/event IDs.
+Claimed, attempted or delivered bodies cannot be changed. Question answers retain
+their own threads and material-change gates. A scheduling notice is not answer
+delivery or empirical validation; delivery still requires a notifier receipt.
+
+Central source runs belong exclusively to the central task ledger, including
+while a model budget or cooldown defers them. The general research queue excludes
+the `ai-control-` run prefix and both central request-context ownership markers
+from stale recovery, claiming and backlog counts. Its executor rejects foreign
+owners before any write; missing queued context cannot become `not-required`.
+
+`scripts/repair-research-ownership.py --task-id <id>` previews a narrowly scoped
+repair. `--apply` creates one deterministic replacement execution only for a
+completed central task whose exact same-account source run lost its task plan
+and became `not-required`. The original completed task/run and historical case
+events remain intact. The current case, original question/contract, latest partial
+answer and consumed research/intent/route limits must match and are preserved.
+Changed, answered, already replaced or recursively repaired work is rejected.
+Replacement insertion, case ownership and the repair audit commit together;
+repair does not emit another scheduling notification. Budget admission remains
+unchanged. Missing checkpoints are not reconstructed as previously observed facts.
 
 Internal research retry identity includes original question contracts and source
 content/answer state, but excludes its own checkpoint, failed-attempt bookkeeping,

@@ -31,6 +31,9 @@ def execute_research(job, research_store, orchestrator_factory):
     run_id = "ai-control-" + job["taskId"][:40]
     source_task_id = identity(job["taskId"], "sources")
     existing = research_store.get_run(run_id)
+    from ..domain.research_execution_repair import lost_source_plan
+    if existing and lost_source_plan(job, existing):
+        raise ValueError("source-plan-lost-repair-required")
     if existing and existing.get("status") not in {"queued", "processing", "failed", "research-cooldown"}:
         return {**research_return(existing, run_id, source_task_id, request), "reused": True}
     question = InvestmentQuestion.create(job["question"], subject_symbol=job["symbol"],

@@ -12,6 +12,8 @@ class ResearchProgressPublication:
     def publish(self, connection, event):
         if not parse_assignments(self.settings.get("alertRules", ""), {"researchProgress": 1}).get("researchProgress", 1):
             return {"status": "disabled"}
+        if event.get("stage") == "research-planned" and event.get("sourceFollowUp"):
+            return self.notifications.enqueue_research_followup_with_connection(connection, event)
         body = render_research_progress(event)
         job_id = "research-" + event["eventId"][:39]
         job = NotificationJob(job_id=job_id, account_id=event["accountId"], account_label="",

@@ -29,10 +29,18 @@ def hold_details(model, packet):
     stage = {"calculated": "계산 완료", "blocked": "계산 미완료"}.get(
         assessment.get("calculationStatus"), "계산 상태 확인 필요")
     reasons = set(model.get("blockedReasons", []))
+    if packet.get('evidenceCompletionPolicy') == 'evidence-completion-v1':
+        readiness = next((row for row in packet.get('companyValueReadiness', {}).get('models', [])
+            if row.get('assessmentFactId') == model.get('assessmentFactId')), {})
+        # Preserve the actual admission result; avoid calling a rejected
+        # alternative candidate a missing input in the selected calculation.
+        reasons -= set(readiness.get('excludedCandidateReasons', []))
     checks = []
     if "valuation-not-admitted" in reasons:
         approval = assessment.get("modelApprovalState")
-        if approval in {"shadow", "unapproved", "not-registered"}:
+        if packet.get('evidenceCompletionPolicy') == 'evidence-completion-v1' and approval == 'ai_applied_pending_review':
+            checks.append(("모델 검토 대기", "계산은 가능하지만 적용한 모델과 가정의 검토가 끝나지 않았습니다. 같은 자료를 다시 수집해도 검토가 완료되지는 않습니다."))
+        elif approval in {"shadow", "unapproved", "not-registered"}:
             checks.append(("모델 검증 필요", "판단에 사용하도록 허용되지 않은 모델입니다. 모델과 가정의 검증이 필요합니다."))
         elif approval == "reference-released":
             checks.append(("참고용 모델", "참고용으로 허용된 모델입니다. 판단에 사용하려면 별도의 검증이 필요합니다."))

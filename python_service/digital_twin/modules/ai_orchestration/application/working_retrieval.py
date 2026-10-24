@@ -10,7 +10,7 @@ from ..domain.continuity import continuity_memory, merge_recalled
 from ..domain.business_research import evaluate_thesis
 from ..domain.execution_input import freeze_execution_input, prompt_budget
 from ..domain.knowledge_research import knowledge_prompt
-from ..domain import bounded_retrieval, purpose_retrieval, compact_retrieval, quality_retrieval, judgment_policy, retrieval_view, evidence_readiness, evidence_purpose, company_value
+from ..domain import bounded_retrieval, purpose_retrieval, compact_retrieval, quality_retrieval, completion_retrieval, judgment_policy, evidence_completion, retrieval_view, evidence_readiness, evidence_purpose, company_value
 from .read_tools import ObservationReadTools
 from .retrieval import RetrievalLeaseLost, RetrievalContractFailure
 
@@ -19,22 +19,31 @@ def byte_size(value):
     return len(json.dumps(value, ensure_ascii=False, separators=(",", ":"), allow_nan=False).encode())
 
 
+def selected_packet(session, packet, ids, views):
+    selected = session.select(ids, views=views, **({"macro_baseline": False} if judgment_policy.enabled(packet) else {}))
+    if evidence_completion.enabled(packet):
+        # The source session owns source selection, not later attached memories.
+        return {**selected, **packet, **{key: selected[key] for key in
+            ("facts", "coverage", "includedFactCount", "quoteAssessment")}}
+    return {**packet, **selected}
+
+
 def author_packet(session, packet, ids, seen, research, trace, status, reserve=0, contract=legacy_contract):
     views = {key: row for key, row in seen.items() if row.get("evidenceView")}
     protected = {key for key, row in seen.items() if row.get("evidenceCategory") == "quality"}
     value_protected = set(packet.get("companyValueEvidence", {}).get("factIds", [])) if company_value.enabled(packet) else set()
-    result = {**packet, **session.select(set(ids) | protected | value_protected, views=views,
-              **({"macro_baseline": False} if judgment_policy.enabled(packet) else {})), "retrieval": contract.trace_summary(trace, status)}
+    result = {**selected_packet(session, packet, set(ids) | protected | value_protected, views),
+              "retrieval": contract.trace_summary(trace, status)}
     if evidence_purpose.enabled(result):
         result = evidence_purpose.annotate(result)
         decision = next((row["decision"] for row in reversed(trace) if row.get("decision")), {})
         result["analysisPurpose"] = decision.get("purpose", "")
-    if contract in {scoped_retrieval, indexed_retrieval, question_retrieval, lane_retrieval, bounded_retrieval, purpose_retrieval, compact_retrieval, quality_retrieval}:
+    if contract in {scoped_retrieval, indexed_retrieval, question_retrieval, lane_retrieval, bounded_retrieval, purpose_retrieval, compact_retrieval, quality_retrieval, completion_retrieval}:
         result["researchScope"] = contract.research_scope(trace, status)
     result["businessThesisMemory"] = []
     for row in research:
         if row.get("kind") == "business-thesis":
-            value = memory_reference.brief(row, "memories") if contract in {indexed_retrieval, question_retrieval, lane_retrieval, bounded_retrieval, purpose_retrieval, compact_retrieval, quality_retrieval} else deepcopy(row)
+            value = memory_reference.brief(row, "memories") if contract in {indexed_retrieval, question_retrieval, lane_retrieval, bounded_retrieval, purpose_retrieval, compact_retrieval, quality_retrieval, completion_retrieval} else deepcopy(row)
             observations = evaluate_thesis(row, result)
             value.update(reviewDue=value.get("reviewDue", False) or observations != value.get("observations", []), observations=observations)
             result["businessThesisMemory"].append(value)
@@ -46,6 +55,12 @@ def author_packet(session, packet, ids, seen, research, trace, status, reserve=0
     if company_value.enabled(result):
         result["workingEvidence"]["requiredCompanyValueFactIds"] = sorted(value_protected)
     result = company_value.refresh(result)
+    if evidence_completion.enabled(result) and result.get("researchScope", {}).get("assessmentPolicy") == scoped_retrieval.AUTHOR_SCOPE_POLICY:
+        result["researchDeferredQuestions"] = [{key: deepcopy(row[key]) for key in
+            ("caseId", "question", "questionContract", "capability", "reviewDue", "revision") if key in row}
+            for row in research if row.get("kind") == "brain-case"]
+        result["researchWindow"] = {**result["researchWindow"],
+            "authorDeferredCaseIds": [row["caseId"] for row in result["researchDeferredQuestions"]]}
     if reserve:
         result["pendingTraceBudget"] = " " * reserve
     validate_evidence_packet(result)
@@ -56,8 +71,8 @@ def retrieve_working_evidence(session, packet, history, research, decide, save_i
                              max_rounds=MAX_ROUNDS, record_round=None):
     indexed = packet.get("memoryReadPolicy") == memory_reference.VERSION
     question_work = question_assessment.enabled(packet)
-    contract = quality_retrieval if judgment_policy.enabled(packet) else compact_retrieval if evidence_purpose.enabled(packet) else bounded_retrieval if evidence_readiness.enabled(packet) else lane_retrieval if execution_lanes.identified(packet) else question_retrieval if question_work else indexed_retrieval if indexed else scoped_retrieval if packet.get("researchKnowledge") else legacy_contract
-    scoped = contract in {scoped_retrieval, indexed_retrieval, question_retrieval, lane_retrieval, bounded_retrieval, purpose_retrieval, compact_retrieval, quality_retrieval}
+    contract = completion_retrieval if evidence_completion.enabled(packet) else quality_retrieval if judgment_policy.enabled(packet) else compact_retrieval if evidence_purpose.enabled(packet) else bounded_retrieval if evidence_readiness.enabled(packet) else lane_retrieval if execution_lanes.identified(packet) else question_retrieval if question_work else indexed_retrieval if indexed else scoped_retrieval if packet.get("researchKnowledge") else legacy_contract
+    scoped = contract in {scoped_retrieval, indexed_retrieval, question_retrieval, lane_retrieval, bounded_retrieval, purpose_retrieval, compact_retrieval, quality_retrieval, completion_retrieval}
     if question_work:
         research = question_assessment.prepare(research, session.question_work_inventory())
     if scoped:
@@ -73,8 +88,8 @@ def retrieve_working_evidence(session, packet, history, research, decide, save_i
             for source in (case.get("latestSourceAnswer") or {}).get("sources", []):
                 if source.get("evidenceId"):
                     sources.setdefault(source["evidenceId"], []).append(case["caseId"])
-    documents = session.question_document_index(sources, document_views=True) if question_work or contract in {lane_retrieval, bounded_retrieval, purpose_retrieval, compact_retrieval, quality_retrieval} else session.question_document_index(sources)
-    baseline = session.business_baseline(documents, document_views=True) if question_work or contract in {lane_retrieval, bounded_retrieval, purpose_retrieval, compact_retrieval, quality_retrieval} else session.business_baseline(documents)
+    documents = session.question_document_index(sources, document_views=True) if question_work or contract in {lane_retrieval, bounded_retrieval, purpose_retrieval, compact_retrieval, quality_retrieval, completion_retrieval} else session.question_document_index(sources)
+    baseline = session.business_baseline(documents, document_views=True) if question_work or contract in {lane_retrieval, bounded_retrieval, purpose_retrieval, compact_retrieval, quality_retrieval, completion_retrieval} else session.business_baseline(documents)
     packet = {**packet, "businessEvidence": baseline}
     from ..domain.research_evidence_use import answered_research_scope
     scope = answered_research_scope(research)
@@ -87,12 +102,17 @@ def retrieve_working_evidence(session, packet, history, research, decide, save_i
     baseline_views = {key: session.read_document(key)["facts"][0] for key in baseline.get("viewFactIds", [])}
     value_ids = []
     if company_value.enabled(packet):
-        value_baseline = session.company_value_baseline()
+        value_baseline = session.company_value_baseline(**({"diagnostics": True} if evidence_completion.enabled(packet) else {}))
         packet["companyValueEvidence"] = {k: v for k, v in value_baseline.items() if k != "views"}
         baseline_views.update(value_baseline["views"])
         value_ids = value_baseline["factIds"]
-    current = {**packet, **session.select(baseline["factIds"] + value_ids, views=baseline_views,
-               **({"macro_baseline": False} if judgment_policy.enabled(packet) else {}))}
+    if evidence_completion.enabled(packet):
+        from .completion_admission import admit_baseline
+        required = memory_reference.continuity(history, research) if indexed else continuity_memory(history, research, compact_cases=scoped)
+        packet = admit_baseline(session, packet, baseline_views, research, required["previousAnalyses"], prompt_bytes, contract)
+        baseline = packet["businessEvidence"]
+        value_ids = packet.get("companyValueEvidence", {}).get("factIds", [])
+    current = selected_packet(session, packet, baseline["factIds"] + value_ids, baseline_views)
     current = company_value.refresh(current)
     if evidence_purpose.enabled(current):
         current = evidence_purpose.annotate(current)
@@ -127,7 +147,7 @@ def retrieve_working_evidence(session, packet, history, research, decide, save_i
             raise RetrievalLeaseLost()
 
     for index in range(rounds):
-        reserve = 8192  # Reserve the final decision's reason, selection and audit metadata.
+        reserve = 16384 if evidence_completion.enabled(packet) else 8192  # Reserve the final decision's reason, selection and audit metadata.
         candidate = author_packet(session, packet, selected, {**seen, **active}, research, trace, "round-limit", contract=contract)
         source_bytes = source_packet_bytes(candidate)
         context.update(tools.context(), trace=trace, callsRemainingAfterThis=rounds-index-1,
@@ -142,7 +162,7 @@ def retrieve_working_evidence(session, packet, history, research, decide, save_i
             selectedFactIds=sorted(selected),
             knownFacts=[{"factId": key, "category": row["evidenceCategory"], "kind": row["kind"],
                          "bytes": byte_size(row), "view": row.get("evidenceView", {})} for key, row in seen.items()])
-        if contract in {bounded_retrieval, purpose_retrieval, compact_retrieval, quality_retrieval}:
+        if contract in {bounded_retrieval, purpose_retrieval, compact_retrieval, quality_retrieval, completion_retrieval}:
             context.update(tools.issued_context())
         try:
             envelope = contract.freeze(current, context, prompt_bytes)
@@ -166,17 +186,22 @@ def retrieve_working_evidence(session, packet, history, research, decide, save_i
             if scoped:
                 contract.validate_scope(decision, context, seen)
             try:
-                proposed = author_packet(session, packet, chosen, seen, research, trace, "round-limit", reserve, contract)
+                admission_trace, admission_status = trace, "round-limit"
+                if evidence_completion.enabled(packet):
+                    admission_trace = trace + [{**step, "status": "valid", "decision": decision}]
+                    admission_status = {"finish": "ready", "research": "research-ready", "assess": "assessment-ready",
+                                        "defer": "deferred"}.get(decision["action"], "round-limit")
+                proposed = author_packet(session, packet, chosen, seen, research, admission_trace, admission_status, reserve, contract)
                 adjusted = {row["caseId"]: row for row in proposed["businessThesisMemory"]}
                 required_research = [adjusted.get(row.get("caseId"), row) if row.get("kind") == "business-thesis" else row
                                     for row in (continuity["researchResults"] if scoped else research)]
                 freeze_execution_input(proposed, merge_recalled(continuity["previousAnalyses"], recalled["analyses"]),
                     merge_recalled(required_research, recalled["memories"]),
-                    max_prompt_bytes=prompt_bytes, retrieval_trace=trace)
+                    max_prompt_bytes=prompt_bytes, retrieval_trace=admission_trace)
             except EvidenceContractError as error:
                 if "exceeds-context-budget" not in error.code:
                     raise
-                if contract in {lane_retrieval, bounded_retrieval, purpose_retrieval, compact_retrieval, quality_retrieval}:
+                if contract in {lane_retrieval, bounded_retrieval, purpose_retrieval, compact_retrieval, quality_retrieval, completion_retrieval}:
                     # This is an admission limit, not malformed model output.
                     # Save the valid choice and stop without a paid correction.
                     step.update(status="valid", decision=decision)
@@ -186,7 +211,7 @@ def retrieve_working_evidence(session, packet, history, research, decide, save_i
                 raise ReadRequestError([issue("selectedFactIds", "최종 입력 한도 초과: 질문과 관계 없는 선택을 해제하거나 보고서 지표를 발췌하세요")])
             plans = []
             for i, request in enumerate(decision["requests"]):
-                if request["tool"] == "read_context" and contract in {compact_retrieval, quality_retrieval}:
+                if request["tool"] == "read_context" and contract in {compact_retrieval, quality_retrieval, completion_retrieval}:
                     retrieval_view.read(current, context, request)  # Validate issued path before any reads.
                     plans.append(None)
                 elif request["tool"] == "read_document":
@@ -217,7 +242,7 @@ def retrieve_working_evidence(session, packet, history, research, decide, save_i
         if decision["action"] != "read":
             status = "ready" if decision["action"] == "finish" else "assessment-ready" if decision["action"] == "assess" else "research-ready" if decision["action"] == "research" else "deferred"
             if status == "ready" and not company_value.available(proposed) and (bounded_retrieval.price_only_finish(decision, seen)
-                    if contract in {bounded_retrieval, purpose_retrieval, compact_retrieval, quality_retrieval} else not any(seen[key]["kind"] not in OBSERVATION_QUOTE_KINDS for key in selected)):
+                    if contract in {bounded_retrieval, purpose_retrieval, compact_retrieval, quality_retrieval, completion_retrieval} else not any(seen[key]["kind"] not in OBSERVATION_QUOTE_KINDS for key in selected)):
                 status = "deferred"
             record(step)
             break
@@ -243,6 +268,29 @@ def retrieve_working_evidence(session, packet, history, research, decide, save_i
                 if result.get("omitted") or size > MAX_RESULT_BYTES or used+size > MAX_TOTAL_RESULT_BYTES:
                     result = {"status": "context-budget", "facts": [], "reason": "read-audit-budget", "omittedResultHash": content_hash(result)}
                 else:
+                    if evidence_completion.enabled(packet):
+                        from .completion_admission import budget_error
+                        prospective = {**seen, **{row["id"]: row for row in result.get("facts", [])}, **active}
+                        trial_trace = trace + [{**step, "reads": step["reads"] + [{"request": request, "result": result}]}]
+                        try:
+                            trial = author_packet(session, packet, selected, prospective, research, trial_trace,
+                                "round-limit", reserve, contract)
+                            trial_memories = merge_recalled(continuity["researchResults"], recalled["memories"])
+                            trial_history = merge_recalled(continuity["previousAnalyses"], recalled["analyses"])
+                            if result.get("records"):
+                                if request["category"] == "memories":
+                                    trial_memories = merge_recalled(trial_memories, result["records"])
+                                else:
+                                    trial_history = merge_recalled(trial_history, result["records"])
+                            freeze_execution_input(trial, trial_history, trial_memories, prompt_bytes, retrieval_trace=trial_trace)
+                        except EvidenceContractError as error:
+                            if not budget_error(error):
+                                raise
+                            tools.cursors.pop(result.get("nextCursor"), None)
+                            result = {"status": "context-budget", "facts": [], "reason": "author-packet-budget",
+                                      "omittedResultHash": content_hash(result)}
+                            step["reads"].append({"request": request, "result": result})
+                            continue
                     used += size
                     tools.admit(result)
                     seen.update({row["id"]: row for row in result.get("facts", [])})
@@ -250,7 +298,10 @@ def retrieve_working_evidence(session, packet, history, research, decide, save_i
                         recalled[request["category"]] = merge_recalled(recalled[request["category"]], result["records"])
             step["reads"].append({"request": request, "result": result})
         record(step)
-        if contract in {compact_retrieval, quality_retrieval} and step["reads"] and all(
+        if evidence_completion.enabled(packet) and any(read["result"].get("status") == "context-budget" for read in step["reads"]):
+            status = "context-budget"
+            break
+        if contract in {compact_retrieval, quality_retrieval, completion_retrieval} and step["reads"] and all(
                 read["result"].get("status") == "repeated-read" for read in step["reads"]):
             status = "repeated-read"
             break  # Identical requests cannot create a paid third decision.

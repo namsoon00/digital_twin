@@ -9,7 +9,7 @@ import json
 from digital_twin.modules.ai_orchestration.domain.planning import enabled, identity, stamp
 from digital_twin.modules.ai_orchestration.domain.publication import MESSAGE_TYPE, RETIRED_REASON, QUOTE_SELECTION_VERSION, legacy_route_retired, publication_block, repeat_block
 from digital_twin.modules.ai_orchestration.domain.insight_quality import quality_block
-from digital_twin.modules.ai_orchestration.domain.insight_memory import receipt_facts, restore_legacy_receipt
+from digital_twin.modules.ai_orchestration.domain.insight_memory import receipt_facts, restore_legacy_receipt, restore_receipt_provenance, RECEIPT_EVIDENCE_VERSION
 from digital_twin.modules.ai_orchestration.domain.observation_diagnostic import observation_diagnostic
 from digital_twin.modules.reasoning.contracts import quote_clock_assessment
 from digital_twin.modules.decisions.domain.investment_narrative_policy import narrative_presentation_errors
@@ -91,13 +91,15 @@ class AIControlPublication:
 
     def memory(self, account_id, symbol):
         receipt = next(iter(self.receipts(account_id, symbol)), {})
-        if not receipt or receipt.get("insightVersion") or not receipt.get("taskId"):
+        if (not receipt or not receipt.get("taskId")
+                or receipt.get("insightVersion") and receipt.get("receiptEvidenceVersion") == RECEIPT_EVIDENCE_VERSION):
             return receipt
         with self.control.connect() as connection:
             row = connection.execute("SELECT result_json FROM ai_control_tasks WHERE task_id=%s AND account_id=%s "
                                      "AND symbol=%s AND status='completed'",
                                      (receipt["taskId"], account_id, symbol)).fetchone()
-        return restore_legacy_receipt(receipt, json.loads(row["result_json"])) if row else receipt
+        restore = restore_receipt_provenance if receipt.get("insightVersion") else restore_legacy_receipt
+        return restore(receipt, json.loads(row["result_json"])) if row else receipt
 
     def publish(self, connection, task, result):
         result["quoteSelectionVersion"] = QUOTE_SELECTION_VERSION
@@ -212,7 +214,8 @@ class AIControlPublication:
             job.context["aiControlDeliverySnapshot"] = {"accountId": job.account_id, "symbol": row["symbol"],
                 "taskId": task_id, "inputFingerprint": result["inputFingerprint"], "observedAt": result["observedAt"],
                 **{key: result[key] for key in ("summary", "hypothesis", "counterEvidence", "comparison", "portfolioImpact", "insightVersion", "followUpConditions", "observations")},
-                "insightFingerprint": result["quality"]["insightFingerprint"], "facts": receipt_facts(result)}
+                "insightFingerprint": result["quality"]["insightFingerprint"], "facts": receipt_facts(result),
+                "receiptEvidenceVersion": RECEIPT_EVIDENCE_VERSION}
             if "companyValue" in result:
                 job.context["aiControlDeliverySnapshot"]["companyValue"] = result["companyValue"]
             if "quoteAssessment" in packet:

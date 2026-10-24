@@ -10,6 +10,7 @@ import math
 from .observation_evidence import content_hash, canonical_json, EvidenceContractError
 
 VERSION = "company-value-evidence-v1"
+DIAGNOSTIC_VERSION = "company-value-evidence-v2-diagnostics"
 KINDS = {"valuation-assessment", "valuation-input-bundle", "fair-value-estimate"}
 BASELINE_MAX_BYTES = 32000
 PAYLOAD_FIELDS = {
@@ -29,12 +30,14 @@ IMPLIED_FIELDS = ("contractVersion", "status", "solverId", "dcfAssessmentId", "i
     "exposureReadiness")
 
 
-def value_view(fact):
+def value_view(fact, *, diagnostics=False):
     if fact.get("kind") not in KINDS:
         raise EvidenceContractError("unsupported company value view")
     result = deepcopy(fact)
     payload = result.pop("payload", {})
     result["payload"] = {key: deepcopy(payload[key]) for key in PAYLOAD_FIELDS[fact["kind"]] if key in payload}
+    if diagnostics and fact["kind"] == "valuation-input-bundle" and "exclusions" in payload:
+        result["payload"]["exclusions"] = deepcopy(payload["exclusions"])
     nested_omissions = {}
     if fact["kind"] == "valuation-assessment" and isinstance(payload.get("impliedExpectations"), dict):
         implied = payload["impliedExpectations"]
@@ -42,14 +45,14 @@ def value_view(fact):
         # source artifact, not every AI prompt. Preserve exact results/limits.
         result["payload"]["impliedExpectations"] = {key: deepcopy(implied[key]) for key in IMPLIED_FIELDS if key in implied}
         nested_omissions["impliedExpectations"] = sorted(set(implied) - set(result["payload"]["impliedExpectations"]))
-    result["evidenceView"] = {"version": VERSION, "sourceFactHash": content_hash(fact),
+    result["evidenceView"] = {"version": DIAGNOSTIC_VERSION if diagnostics else VERSION, "sourceFactHash": content_hash(fact),
         "omittedPayloadFields": sorted(set(payload) - set(result["payload"])),
         "omittedNestedFields": nested_omissions,
         "authority": "exact-field-projection", "omissionMeaning": "not-selected-not-missing"}
     return result
 
 
-def value_baseline(facts, max_bytes=BASELINE_MAX_BYTES):
+def value_baseline(facts, max_bytes=BASELINE_MAX_BYTES, *, diagnostics=False):
     """Reserve complete assessment/input/estimate groups, with explicit omissions."""
     rows = sorted(facts, key=lambda f: (f.get("valuationDecisionEligible") is not True, f["id"]))
     selected, views, omitted, used = [], {}, [], 0
@@ -59,7 +62,7 @@ def value_baseline(facts, max_bytes=BASELINE_MAX_BYTES):
         group = [assessment] + [f for f in rows if
             (bid and f.get("kind") == "valuation-input-bundle" and f.get("valuationBundleId") == bid) or
             (aid and f.get("kind") == "fair-value-estimate" and f.get("valuationAssessmentId") == aid)]
-        projected = [value_view(f) for f in group if f["id"] not in views]
+        projected = [value_view(f, diagnostics=diagnostics) for f in group if f["id"] not in views]
         size = sum(len(canonical_json(f).encode()) for f in projected)
         if len(selected) >= 2 or used + size > max_bytes:
             omitted.append({"factId": assessment["id"], "reason": "company-value-budget"})
@@ -67,7 +70,7 @@ def value_baseline(facts, max_bytes=BASELINE_MAX_BYTES):
         selected.append(assessment["id"])
         views.update((f["id"], f) for f in projected)
         used += size
-    return {"version": VERSION, "factIds": sorted(views), "views": views,
+    return {"version": DIAGNOSTIC_VERSION if diagnostics else VERSION, "factIds": sorted(views), "views": views,
         "omitted": omitted, "bytes": used, "availableAssessments": len(assessments)}
 
 

@@ -55,12 +55,24 @@ def context(packet):
 
 
 def refresh(packet):
-    return {**packet, "companyValueContext": context(packet)} if enabled(packet) else packet
+    if not enabled(packet):
+        return packet
+    result = {**packet, "companyValueContext": context(packet)}
+    from .evidence_completion import enabled as completion_enabled
+    if completion_enabled(packet):
+        from .value_readiness import assess
+        result['companyValueReadiness'] = assess(result)
+    return result
 
 
 def validate(packet):
     if not enabled(packet) or packet.get("companyValueContext") != context(packet):
         raise EvidenceContractError("company value context differs from frozen graph evidence")
+    from .evidence_completion import enabled as completion_enabled
+    if completion_enabled(packet):
+        from .value_readiness import assess
+        if packet.get('companyValueReadiness') != assess(packet):
+            raise EvidenceContractError('company value readiness differs from frozen graph evidence')
 
 
 def explains_value(result, packet=None):

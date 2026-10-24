@@ -9,6 +9,42 @@ Question-specific collection failures and bounded, same-revision focused reads
 follow the [source recovery contract](source-recovery.md). Diagnostics return to
 the original question and next plan without changing past answers or eligibility.
 
+## Complete evidence admission and receipt provenance
+
+When `judgment-quality-v1` is enabled, new inputs also freeze
+`evidence-completion-v1`: author v25, repair v21, review v14 and retrieval v13.
+Earlier versions retain their original prompt and schema constructors.
+
+Admission measures the complete author packet, including the previous delivered
+notification, required question contracts, thesis memory, valuation lineage and
+reserved final trace space. Optional business facts are admitted whole; each
+valuation assessment/input/estimate group stays together. Excluded items remain
+in source inventories and are explicitly marked as unread, not missing. Source
+facts remain subject to the 96,000-byte packet limit and the existing prompt
+limit. A newly read mandatory quality fact or memory must fit the final input
+before its read is admitted; overflow stops without a paid correction or an
+extra identical read. Required memory is never silently removed to make room.
+
+New successful-delivery memories preserve the original document validation
+fields alongside cited scalars. Older compact memories can recover those fields
+only from their own completed, delivered task input after account, symbol, task,
+publication, fingerprint, chronology and recursive saved-field equality checks.
+No receipt, prior judgment or historical prompt is rewritten. Today's source
+cannot substitute for the old evidence. New output schemas apply the same
+field-level eligibility as local validation; limitations remain separately citable.
+
+`companyValueReadiness` distinguishes calculation completion, selected-input
+eligibility, model review and exact input/result links. The v2 valuation evidence
+view also retains excluded candidate reasons, separately from the inputs actually
+selected. An `ai_applied_pending_review` model remains blocked; collecting the
+same source again cannot complete its review. These diagnostics neither approve
+models nor make reference calculations eligible for a customer valuation.
+
+Validation includes frozen historical inputs, exact receipt restoration, bounded
+read/author/review persistence and negative cases for tampered source text,
+identity, approval and oversized required context. Replay success is not a
+measurement of investment accuracy or customer delivery.
+
 ## Bounded evidence renewal and exact retention
 
 Production enables `bounded-evidence-readiness-v1`: author v21, repair v17,

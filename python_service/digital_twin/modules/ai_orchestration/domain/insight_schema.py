@@ -47,15 +47,20 @@ def legacy_planning_schema(packet):
 
 def evidence_references(packet, *, usable=False, numeric=False, current_only=False):
     """Bind a field to its captured fact and period, rather than their Cartesian product."""
+    from .evidence_completion import enabled
+    from .research_evidence_use import usable_fact
+    strict = enabled(packet)
     groups = {}
     periods = [("current", packet.get("facts", []))]
     if not current_only:
         periods.append(("baseline", (packet.get("lastDeliveredNotification") or {}).get("facts", [])))
     for period, facts in periods:
         for fact in facts:
-            if usable and (fact.get("judgementEvidenceUsable") is False or fact.get("valuationDecisionEligible") is False):
+            if usable and not strict and (fact.get("judgementEvidenceUsable") is False or fact.get("valuationDecisionEligible") is False):
                 continue
             paths = scalar_paths(fact)
+            if usable and strict:
+                paths = [path for path in paths if usable_fact(fact, path)]
             if numeric:
                 paths = [path for path in paths if path in METRICS and finite(fact[path]) is not None
                          and (METRICS[path][1] != "money" or fact.get("currency"))
@@ -67,6 +72,8 @@ def evidence_references(packet, *, usable=False, numeric=False, current_only=Fal
     # An empty reference set must not produce an invalid structured-output schema.
     # Local evidence and comparison validation still rejects an unusable packet.
     if not variants:
+        if strict:
+            return obj({"factId": choice(["unavailable-evidence"]), "field": choice(["unavailable"]), "period": choice(["current"])})
         if usable or numeric or current_only:
             return evidence_references(packet)
         return obj({"factId": choice([""]), "field": choice(["id"]), "period": choice(["current"])})

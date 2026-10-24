@@ -359,7 +359,8 @@ class SourceRenewalStorageTests(unittest.TestCase):
         from digital_twin.modules.ai_orchestration.infrastructure.mysql_brain_agenda import MySQLBrainAgendaStore
         from digital_twin.infrastructure.transactions.ai_control_research_knowledge import AIControlResearchKnowledge
         from digital_twin.modules.ai_orchestration.domain import company_value
-        value = valuation_packet(); value.update(self.subject); value['taskId'] = self.job['taskId']
+        from test_evidence_completion import active
+        value = active(valuation_packet()); value.update(self.subject); value['taskId'] = self.job['taskId']
         value['sourceSnapshots'] = {value['worldId']: value['sourceSnapshotId']}
         for fact in value['facts']:
             fact.update(sourceWorldId=value['worldId'], sourceSnapshotId=value['sourceSnapshotId'])

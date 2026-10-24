@@ -91,6 +91,8 @@ class AIControlService:
                         packet["judgmentQualityPolicy"] = judgment_policy.VERSION
                         from ..domain.evidence_completion import VERSION as completion_policy
                         packet["evidenceCompletionPolicy"] = completion_policy
+                        from ..domain.business_insight import VERSION as business_policy
+                        packet["businessInsightPolicy"] = business_policy
                         packet = company_value.refresh(packet)
                     brain_reader = (self.market_brain_memory or self.brain_memory) if lanes.market(packet) else self.brain_memory
                     research = list(brain_reader(job["accountId"], job["symbol"], job["worldId"]))

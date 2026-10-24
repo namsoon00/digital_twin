@@ -67,14 +67,17 @@ def checkpoints(packet, trace):
         return []
     if packet.get("retrieval", {}).get("status") == "context-budget":
         return []  # An unadmitted selection is not completed question progress.
-    from . import scoped_retrieval, indexed_retrieval, question_retrieval, lane_retrieval, bounded_retrieval, purpose_retrieval, compact_retrieval, quality_retrieval, completion_retrieval
-    contract = completion_retrieval if packet["retrieval"]["version"] == completion_retrieval.VERSION else quality_retrieval if packet["retrieval"]["version"] == quality_retrieval.VERSION else compact_retrieval if packet["retrieval"]["version"] == compact_retrieval.VERSION else purpose_retrieval if packet["retrieval"]["version"] == purpose_retrieval.VERSION else bounded_retrieval if packet["retrieval"]["version"] == bounded_retrieval.VERSION else lane_retrieval if packet["retrieval"]["version"] == lane_retrieval.VERSION else question_retrieval if packet["retrieval"]["version"] == question_retrieval.VERSION else indexed_retrieval if packet["retrieval"]["version"] == indexed_retrieval.VERSION else scoped_retrieval
+    from . import scoped_retrieval, indexed_retrieval, question_retrieval, lane_retrieval, bounded_retrieval, purpose_retrieval, compact_retrieval, quality_retrieval, completion_retrieval, business_retrieval
+    contract = business_retrieval if packet["retrieval"]["version"] == business_retrieval.VERSION else completion_retrieval if packet["retrieval"]["version"] == completion_retrieval.VERSION else quality_retrieval if packet["retrieval"]["version"] == quality_retrieval.VERSION else compact_retrieval if packet["retrieval"]["version"] == compact_retrieval.VERSION else purpose_retrieval if packet["retrieval"]["version"] == purpose_retrieval.VERSION else bounded_retrieval if packet["retrieval"]["version"] == bounded_retrieval.VERSION else lane_retrieval if packet["retrieval"]["version"] == lane_retrieval.VERSION else question_retrieval if packet["retrieval"]["version"] == question_retrieval.VERSION else indexed_retrieval if packet["retrieval"]["version"] == indexed_retrieval.VERSION else scoped_retrieval
     decision = contract.validate_decision(trace[-1]["decision"])
     if decision["action"] == "read":
         return []  # An exhausted read budget is not a completed per-question assessment.
     index = packet.get("questionEvidenceIndex", [])
     facts = {row["id"]: row for row in packet["facts"]}
-    contract.validate_scope(decision, {"questionIndex": index, "questionEvidencePolicy": VERSION}, facts)
+    context = {"questionIndex": index, "questionEvidencePolicy": VERSION}
+    if contract is business_retrieval:
+        context.update(executionLane=packet.get("executionLane"), evidenceUses=packet.get("evidenceUses", {}))
+    contract.validate_scope(decision, context, facts)
     if packet.get("researchScope") != contract.research_scope(trace, packet["retrieval"]["status"]):
         raise ValueError("question progress must match the frozen read scope")
     captured = {row["caseId"]: row for row in index}

@@ -322,4 +322,6 @@ def narrative_digest(result):
         content["questionResolutions"] = result["questionResolutions"]
     if "documentaryReview" in result:
         content["documentaryReview"] = result["documentaryReview"]
+    if "judgmentChange" in result:
+        content["judgmentChange"] = result["judgmentChange"]
     return content_hash(content)

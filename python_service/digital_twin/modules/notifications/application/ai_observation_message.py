@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 import math
 from digital_twin.modules.ai_orchestration.contracts import OBSERVATION_METRICS, OBSERVATION_WORDING_VERSION, resolve_observation_ref
 from digital_twin.modules.ai_orchestration.contracts import observation_subject_quote, QUOTE_SELECTION_VERSIONS, dated_observation
+from digital_twin.modules.ai_orchestration.contracts import observation_judgment_focus
 from digital_twin.modules.reasoning.contracts import quote_clock_assessment, OBSERVATION_QUOTE_KINDS
 from digital_twin.modules.notifications.domain.observation_price_basis import PRICE_PRESENTATION_VERSION, observation_price_basis
 from zoneinfo import ZoneInfo
@@ -45,6 +46,7 @@ def metric(fact, field):
 
 def render_ai_observation(result, *, sent_at="", debug_number=""):
     packet = result["input"]
+    focus = observation_judgment_focus(result)
     # Persisted jobs without this version retain their original rendered bytes.
     quote = (observation_subject_quote(packet) if result.get("quoteSelectionVersion") in QUOTE_SELECTION_VERSIONS
              else next((row for row in packet["facts"] if figure(row.get("currentPrice")) and float(row["currentPrice"]) > 0), {}))
@@ -56,15 +58,17 @@ def render_ai_observation(result, *, sent_at="", debug_number=""):
         current = quote_clock_assessment(packet["facts"], sent_at or result["observedAt"])
         assessment = next((row for row in current["quotes"] if row["evidenceId"] == quote.get("id")), {})
     basis = observation_price_basis(quote, assessment) if result.get("pricePresentationVersion") == PRICE_PRESENTATION_VERSION else {}
-    lines = [f"🧠 AI 관찰 · {packet['name']} ({packet['symbol']})", ""]
+    label = {"business": "AI 기업 관찰", "market": "AI 시장 관찰"}.get(focus, "AI 관찰")
+    lines = [f"🧠 {label} · {packet['name']} ({packet['symbol']})", ""]
     if dated:
         lines += ["각 근거에 표시된 시점의 자료로 작성한 관찰입니다.", ""]
     if basis and not basis["currentUseAllowed"] and (quote or not dated):
         lines += [basis["label"] + " 기준 · " + clock_label(basis.get("sourceAsOf")), basis["reason"], ""]
     lines.append(result["summary"])
     from .company_value_message import value_lines
-    lines += value_lines(result.get("companyValue"), clock_label, figure, packet=packet,
-                         presentation_version=result.get("companyValuePresentationVersion"))
+    if focus not in {"market", "none"}:
+        lines += value_lines(result.get("companyValue"), clock_label, figure, packet=packet,
+                            presentation_version=result.get("companyValuePresentationVersion"), compact=bool(focus))
     lines += ["", "이전 알림과 비교", result["comparison"]]
     compared = set()
     for row in result.get("observations", []):
@@ -87,6 +91,7 @@ def render_ai_observation(result, *, sent_at="", debug_number=""):
     if result.get("companyValue") or result.get("businessResearch", {}).get("theses") or result.get("businessResearch", {}).get("reviews"):
         fields = ["currentPrice", "profitLossRate", "positionWeight"]
     fields += [field for field in OBSERVATION_METRICS if field in cited_fields and field not in fields]
+    displayed = set()
     for key in fields:
         if key not in quote or quote[key] is None:
             continue
@@ -110,7 +115,8 @@ def render_ai_observation(result, *, sent_at="", debug_number=""):
         elif key == "currentPrice" and assessment and assessment["status"] != "fresh":
             text = "기준 시점 가격: " + text.split(": ", 1)[1]
         lines.append("• " + text)
-    if quote.get("volumeRatio"):
+        displayed.add(key)
+    if quote.get("volumeRatio") and (not focus or "volumeRatio" in displayed):
         lines.append("거래량 비율은 같은 장중 시각끼리의 비교가 아닙니다.")
     session = (" · 출처의 마감 참고값" if assessment.get("referenceState") == "last-close" else "") if assessment else (
         " · 장 마감 자료" if quote.get("marketSessionStatus") == "closed" else "")
@@ -122,6 +128,8 @@ def render_ai_observation(result, *, sent_at="", debug_number=""):
         if status == "stale":
             lines.append("시세 경과 " + figure(assessment["ageMinutes"], "분") + " · 갱신 기준 "
                          + figure(assessment["maxAgeMinutes"], "분") + " 초과 · 과거 시점 참고 자료")
+        elif status == "fresh" and focus and assessment.get("referenceState") == "last-close":
+            lines.append("마감 참고 시점으로부터 " + figure(assessment["ageMinutes"], "분") + " 경과 · 실시간 시세 아님")
         elif status == "fresh":
             lines.append("시세 경과 " + figure(assessment["ageMinutes"], "분") + " · 갱신 기준 이내")
         elif status == "unknown-budget":
@@ -146,10 +154,14 @@ def render_ai_observation(result, *, sent_at="", debug_number=""):
             title = str(fact.get("label") or fact.get("title") or "추가 근거")[:80]
             source_clock = fact.get("sourceAsOf") or fact.get("publishedAt") or fact.get("asOf")
             dated_suffix = " · 자료 기준 " + clock_label(source_clock) if dated and source_clock else ""
+            if focus and fact.get("kind") == "company-financial-state":
+                dated_suffix = " · 보고기간 " + str(fact.get("periodEnd") or "미확인")
+                if source_clock:
+                    dated_suffix += " · 출처 기준 " + clock_label(source_clock)
             citations.append("• " + title + " · " + source_label(fact) + dated_suffix)
     if citations:
         lines += ["", "함께 확인한 근거", *citations[:3]]
-    business = result.get("businessResearch") or {}
+    business = {} if focus in {"market", "none"} else result.get("businessResearch") or {}
     if business.get("theses"):
         lines += ["", "사업 가설과 확인할 실적"]
         for thesis in business["theses"][:2]:

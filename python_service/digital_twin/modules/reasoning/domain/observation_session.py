@@ -64,8 +64,11 @@ class ObservationEvidenceSession:
                 records.append(material_fact(fact))
         return sorted(content_hash(row) for row in records)
 
-    def business_baseline(self, question_documents=(), document_views=False):
+    def business_baseline(self, question_documents=(), document_views=False, period_priority=False):
         """Reserve report history and documentary context before discretionary reads."""
+        if period_priority:
+            from .observation_business_baseline import baseline
+            return baseline(self, list(self._facts.values()), question_documents, self._packet["capturedAt"])
         rows = sorted(self._facts.values(), key=lambda row: (-source_clock(row), row["id"]))
         groups = [[self._facts[row["factId"]] for row in question_documents]] + [
             [row for row in rows if row.get("historicalReport") and row.get("frequency") == frequency]
@@ -133,11 +136,13 @@ class ObservationEvidenceSession:
         return {"facts": result, "available": len(rows), "nextOffset": end if end < len(rows) else None,
                 "omitted": omitted, "sourceSnapshots": deepcopy(self._packet["sourceSnapshots"])}
 
-    def report_index(self):
+    def report_index(self, period_priority=False):
         from .observation_report_view import report_metrics
+        from .observation_business_baseline import ordered_reports
         return [{"factId": row["id"], "periodEnd": row.get("periodEnd"), "frequency": row.get("frequency"),
                  "metrics": report_metrics(row), "bytes": len(canonical_json(row).encode())}
-                for row in sorted(self._facts.values(), key=lambda x: (-source_clock(x), x["id"]))
+                for row in (ordered_reports(self._facts.values()) if period_priority else
+                            sorted(self._facts.values(), key=lambda x: (-source_clock(x), x["id"])))
                 if row.get("kind") == "company-financial-state"][:32]
 
     def read_report(self, fact_id, metrics):

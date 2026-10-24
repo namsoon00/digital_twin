@@ -1,6 +1,7 @@
 from digital_twin.modules._exports import resolve_export
 
 _EXPORTS = {
+    "observation_judgment_focus": ("digital_twin.modules.ai_orchestration.domain.business_progress", "focus"),
     "ai_call_metrics": ("digital_twin.modules.ai_orchestration.domain.judgment_metrics", "calls_summary"),
     "ai_judgment_metrics": ("digital_twin.modules.ai_orchestration.domain.judgment_metrics", "judgments_summary"),
     "ai_task_metrics": ("digital_twin.modules.ai_orchestration.domain.judgment_metrics", "task_summary"),

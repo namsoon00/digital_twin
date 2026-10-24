@@ -408,6 +408,8 @@ class SourceRenewalStorageTests(unittest.TestCase):
         check_compact_storage(self, value, save)
         from judgment_quality_checks import check_quality_storage
         check_quality_storage(self, value, save)
+        from test_business_insight_progress import check_storage
+        check_storage(self, save)
 
     def setUp(self):
         from test_ai_control import AIControlStorageTests, SUBJECT

@@ -17,7 +17,7 @@ from .question_resolution import resolution_prompt, resolution_schema, resolutio
 from .knowledge_research import knowledge_prompt, knowledge_schema, knowledge_review_prompt
 from . import working_retrieval
 from . import scoped_retrieval
-from . import indexed_retrieval, memory_reference, question_retrieval, lane_retrieval, bounded_retrieval, purpose_retrieval, compact_retrieval, quality_retrieval, completion_retrieval, judgment_policy, evidence_completion, retrieval_view, evidence_readiness, evidence_purpose, company_value
+from . import indexed_retrieval, memory_reference, question_retrieval, lane_retrieval, bounded_retrieval, purpose_retrieval, compact_retrieval, quality_retrieval, completion_retrieval, business_retrieval, judgment_policy, evidence_completion, business_insight, retrieval_view, evidence_readiness, evidence_purpose, company_value
 from digital_twin.modules.ai_orchestration.domain.retrieval import (
     RETRIEVAL_PROMPT_VERSION, retrieval_prompt, retrieval_schema, directed_planning_prompt, trace_summary,
     LEGACY_RETRIEVAL_PROMPT_VERSION, legacy, validate_trace,
@@ -84,8 +84,8 @@ def freeze_execution_input(packet, history, research, max_prompt_bytes=DEFAULT_P
     indexed = packet.get("memoryReadPolicy") == memory_reference.VERSION
     continuity = memory_reference.continuity(history, research) if indexed else continuity_memory(history, research)
     previous, results = continuity["previousAnalyses"], continuity["researchResults"]
-    builder = evidence_completion.prompt if evidence_completion.enabled(current) else judgment_policy.prompt if judgment_policy.enabled(current) else evidence_purpose.prompt if evidence_purpose.enabled(current) else evidence_readiness.prompt if evidence_readiness.enabled(current) else knowledge_prompt
-    schema_builder = evidence_readiness.schema if evidence_readiness.enabled(current) else knowledge_schema
+    builder = business_insight.prompt if business_insight.enabled(current) else evidence_completion.prompt if evidence_completion.enabled(current) else judgment_policy.prompt if judgment_policy.enabled(current) else evidence_purpose.prompt if evidence_purpose.enabled(current) else evidence_readiness.prompt if evidence_readiness.enabled(current) else knowledge_prompt
+    schema_builder = business_insight.schema if business_insight.enabled(current) else evidence_readiness.schema if evidence_readiness.enabled(current) else knowledge_schema
     prompt = builder(current, previous, results)
     limit = prompt_budget(max_prompt_bytes)
     if len(prompt.encode()) > limit:
@@ -126,6 +126,8 @@ def freeze_execution_input(packet, history, research, max_prompt_bytes=DEFAULT_P
 
 
 def validate_execution_input(envelope):
+    if envelope.get("promptVersion") in business_insight.VERSIONS:
+        return business_insight.validate_input(envelope)
     if envelope.get("promptVersion") in evidence_completion.VERSIONS:
         return evidence_completion.validate_input(envelope)
     if envelope.get("promptVersion") in judgment_policy.VERSIONS:
@@ -208,16 +210,18 @@ def validate_execution_input(envelope):
     from . import research_work
     if envelope.get("promptVersion") == research_work.PROMPT_VERSION:
         return research_work.validate_input(envelope)
-    if envelope.get("promptVersion") in {working_retrieval.VERSION, scoped_retrieval.VERSION, indexed_retrieval.VERSION, question_retrieval.VERSION, lane_retrieval.VERSION, bounded_retrieval.VERSION, purpose_retrieval.VERSION, company_value.RETRIEVAL_VERSION, compact_retrieval.VERSION, quality_retrieval.VERSION, completion_retrieval.VERSION}:
-        contract = completion_retrieval if envelope["promptVersion"] == completion_retrieval.VERSION else quality_retrieval if envelope["promptVersion"] == quality_retrieval.VERSION else compact_retrieval if envelope["promptVersion"] == compact_retrieval.VERSION else purpose_retrieval if envelope["promptVersion"] in {purpose_retrieval.VERSION, company_value.RETRIEVAL_VERSION} else bounded_retrieval if envelope["promptVersion"] == bounded_retrieval.VERSION else lane_retrieval if envelope["promptVersion"] == lane_retrieval.VERSION else question_retrieval if envelope["promptVersion"] == question_retrieval.VERSION else indexed_retrieval if envelope["promptVersion"] == indexed_retrieval.VERSION else scoped_retrieval if envelope["promptVersion"] == scoped_retrieval.VERSION else working_retrieval
+    if envelope.get("promptVersion") in {working_retrieval.VERSION, scoped_retrieval.VERSION, indexed_retrieval.VERSION, question_retrieval.VERSION, lane_retrieval.VERSION, bounded_retrieval.VERSION, purpose_retrieval.VERSION, company_value.RETRIEVAL_VERSION, compact_retrieval.VERSION, quality_retrieval.VERSION, completion_retrieval.VERSION, business_retrieval.VERSION}:
+        contract = business_retrieval if envelope["promptVersion"] == business_retrieval.VERSION else completion_retrieval if envelope["promptVersion"] == completion_retrieval.VERSION else quality_retrieval if envelope["promptVersion"] == quality_retrieval.VERSION else compact_retrieval if envelope["promptVersion"] == compact_retrieval.VERSION else purpose_retrieval if envelope["promptVersion"] in {purpose_retrieval.VERSION, company_value.RETRIEVAL_VERSION} else bounded_retrieval if envelope["promptVersion"] == bounded_retrieval.VERSION else lane_retrieval if envelope["promptVersion"] == lane_retrieval.VERSION else question_retrieval if envelope["promptVersion"] == question_retrieval.VERSION else indexed_retrieval if envelope["promptVersion"] == indexed_retrieval.VERSION else scoped_retrieval if envelope["promptVersion"] == scoped_retrieval.VERSION else working_retrieval
         if envelope.get("protocolVersion") != EXECUTION_INPUT_PROTOCOL:
             raise EvidenceContractError("unsupported AI execution input")
         validate_evidence_packet(envelope["current"])
-        if contract is completion_retrieval and not evidence_completion.enabled(envelope["current"]):
+        if contract is business_retrieval and not business_insight.enabled(envelope["current"]):
+            raise EvidenceContractError("business insight policy missing")
+        if contract in {completion_retrieval, business_retrieval} and not evidence_completion.enabled(envelope["current"]):
             raise EvidenceContractError("evidence completion policy missing")
-        if contract in {quality_retrieval, completion_retrieval} and not judgment_policy.enabled(envelope["current"]):
+        if contract in {quality_retrieval, completion_retrieval, business_retrieval} and not judgment_policy.enabled(envelope["current"]):
             raise EvidenceContractError("quality retrieval policy missing")
-        if contract in {purpose_retrieval, compact_retrieval, quality_retrieval, completion_retrieval}:
+        if contract in {purpose_retrieval, compact_retrieval, quality_retrieval, completion_retrieval, business_retrieval}:
             if contract is purpose_retrieval and (envelope["promptVersion"] == company_value.RETRIEVAL_VERSION) != company_value.enabled(envelope["current"]):
                 raise EvidenceContractError("company value retrieval policy mismatch")
             if company_value.enabled(envelope["current"]):
@@ -225,7 +229,7 @@ def validate_execution_input(envelope):
             evidence_purpose.validate(envelope["current"])
             if envelope["retrievalContext"].get("evidenceUses") != envelope["current"]["evidenceUses"]:
                 raise EvidenceContractError("retrieval purpose clocks changed")
-        if contract in {compact_retrieval, quality_retrieval, completion_retrieval} and envelope["retrievalContext"].get("readableContextPaths") != retrieval_view.paths(envelope["current"], envelope["retrievalContext"]):
+        if contract in {compact_retrieval, quality_retrieval, completion_retrieval, business_retrieval} and envelope["retrievalContext"].get("readableContextPaths") != retrieval_view.paths(envelope["current"], envelope["retrievalContext"]):
             raise EvidenceContractError("frozen context paths mismatch")
         contract.validate_trace(envelope["retrievalContext"].get("trace", []))
         prompt = contract.prompt(envelope["current"], envelope["retrievalContext"])
@@ -279,11 +283,11 @@ def validate_execution_input(envelope):
         if directed and envelope["current"].get("retrieval"):
             trace = envelope.get("retrievalTrace", [])
             version = envelope["current"]["retrieval"]["version"]
-            if version in {working_retrieval.VERSION, scoped_retrieval.VERSION, indexed_retrieval.VERSION, question_retrieval.VERSION, lane_retrieval.VERSION, bounded_retrieval.VERSION, purpose_retrieval.VERSION, compact_retrieval.VERSION, quality_retrieval.VERSION, completion_retrieval.VERSION}:
-                contract = completion_retrieval if version == completion_retrieval.VERSION else quality_retrieval if version == quality_retrieval.VERSION else compact_retrieval if version == compact_retrieval.VERSION else purpose_retrieval if version == purpose_retrieval.VERSION else bounded_retrieval if version == bounded_retrieval.VERSION else lane_retrieval if version == lane_retrieval.VERSION else question_retrieval if version == question_retrieval.VERSION else indexed_retrieval if version == indexed_retrieval.VERSION else scoped_retrieval if version == scoped_retrieval.VERSION else working_retrieval
+            if version in {working_retrieval.VERSION, scoped_retrieval.VERSION, indexed_retrieval.VERSION, question_retrieval.VERSION, lane_retrieval.VERSION, bounded_retrieval.VERSION, purpose_retrieval.VERSION, compact_retrieval.VERSION, quality_retrieval.VERSION, completion_retrieval.VERSION, business_retrieval.VERSION}:
+                contract = business_retrieval if version == business_retrieval.VERSION else completion_retrieval if version == completion_retrieval.VERSION else quality_retrieval if version == quality_retrieval.VERSION else compact_retrieval if version == compact_retrieval.VERSION else purpose_retrieval if version == purpose_retrieval.VERSION else bounded_retrieval if version == bounded_retrieval.VERSION else lane_retrieval if version == lane_retrieval.VERSION else question_retrieval if version == question_retrieval.VERSION else indexed_retrieval if version == indexed_retrieval.VERSION else scoped_retrieval if version == scoped_retrieval.VERSION else working_retrieval
                 contract.validate_trace(trace)
                 summary = contract.trace_summary(trace, envelope["current"]["retrieval"]["status"])
-                if contract in {scoped_retrieval, indexed_retrieval, question_retrieval, lane_retrieval, bounded_retrieval, purpose_retrieval, compact_retrieval, quality_retrieval, completion_retrieval} and envelope["current"].get("researchScope") != contract.research_scope(trace, envelope["current"]["retrieval"]["status"]):
+                if contract in {scoped_retrieval, indexed_retrieval, question_retrieval, lane_retrieval, bounded_retrieval, purpose_retrieval, compact_retrieval, quality_retrieval, completion_retrieval, business_retrieval} and envelope["current"].get("researchScope") != contract.research_scope(trace, envelope["current"]["retrieval"]["status"]):
                     raise EvidenceContractError("research scope does not match retrieval trace")
             else:
                 validate_trace(trace, version)
@@ -305,7 +309,7 @@ def freeze_repair_input(envelope, draft, errors, parent_input_id, review=None):
     limit = prompt_budget(value.get("promptBudgetBytes", DEFAULT_PROMPT_BYTES))
     value["promptBudgetBytes"] = limit
     active = evidence_readiness.enabled(value["current"])
-    builder = evidence_completion.prompt if evidence_completion.enabled(value["current"]) else judgment_policy.prompt if judgment_policy.enabled(value["current"]) else evidence_purpose.prompt if evidence_purpose.enabled(value["current"]) else evidence_readiness.prompt if active else knowledge_prompt
+    builder = business_insight.prompt if business_insight.enabled(value["current"]) else evidence_completion.prompt if evidence_completion.enabled(value["current"]) else judgment_policy.prompt if judgment_policy.enabled(value["current"]) else evidence_purpose.prompt if evidence_purpose.enabled(value["current"]) else evidence_readiness.prompt if active else knowledge_prompt
     value["promptVersion"] = evidence_purpose.repair_version(value["current"]) if evidence_purpose.enabled(value["current"]) else evidence_readiness.REPAIR_VERSION if active else LANE_REPAIR_PROMPT_VERSION if value["current"].get("executionLanePolicy") else REPAIR_PROMPT_VERSION
     value["repair"] = {"parentInputId": parent_input_id, "rejectedDraft": copy.deepcopy(draft),
                        "errors": list(errors), "comparisons": comparison_diagnostics(draft, value["current"])}
@@ -323,7 +327,7 @@ def freeze_repair_input(envelope, draft, errors, parent_input_id, review=None):
             value.setdefault("memoryCoverage", {}).setdefault("excluded", {}).setdefault(kind, []).append(
                 {"hash": content_hash(omitted), "reason": "repair-context-budget"})
             value["prompt"] = repair_prompt(builder(value["current"], value["previousAnalyses"], value["researchResults"]), value["repair"])
-    value["outputSchema"] = (evidence_readiness.schema if active else knowledge_schema)(value["current"], value["researchResults"])
+    value["outputSchema"] = (business_insight.schema if business_insight.enabled(value["current"]) else evidence_readiness.schema if active else knowledge_schema)(value["current"], value["researchResults"])
     value.setdefault("memoryCoverage", {}).update(analysesIncluded=memory_count(value["previousAnalyses"]),
         researchIncluded=memory_count(value["researchResults"]), promptBytes=len(value["prompt"].encode()))
     value["promptHash"] = hashlib.sha256(value["prompt"].encode()).hexdigest()
@@ -335,9 +339,9 @@ def freeze_repair_input(envelope, draft, errors, parent_input_id, review=None):
 def freeze_review_input(result, max_prompt_bytes=DEFAULT_PROMPT_BYTES):
     draft = copy.deepcopy({key: value for key, value in result.items() if key not in {"input", "quality", "comparisonFacts"}})
     packet = copy.deepcopy(result["input"])
-    prompt = (evidence_completion.review_prompt if evidence_completion.enabled(packet) else judgment_policy.review_prompt if judgment_policy.enabled(packet) else evidence_purpose.review_prompt if evidence_purpose.enabled(packet) else knowledge_review_prompt)(packet, draft)
+    prompt = (business_insight.review_prompt if business_insight.enabled(packet) else evidence_completion.review_prompt if evidence_completion.enabled(packet) else judgment_policy.review_prompt if judgment_policy.enabled(packet) else evidence_purpose.review_prompt if evidence_purpose.enabled(packet) else knowledge_review_prompt)(packet, draft)
     limit = prompt_budget(max_prompt_bytes)
     if len(prompt.encode()) > limit:
         raise EvidenceContractError("observation review exceeds context budget")
     return {"protocolVersion": EXECUTION_INPUT_PROTOCOL, "promptVersion": evidence_purpose.review_version(packet) if evidence_purpose.enabled(packet) else evidence_readiness.REVIEW_VERSION if evidence_readiness.enabled(packet) else LANE_REVIEW_PROMPT_VERSION if packet.get("executionLanePolicy") else REVIEW_PROMPT_VERSION, "promptBudgetBytes": limit,
-            "current": packet, "draft": draft, "prompt": prompt, "promptHash": hashlib.sha256(prompt.encode()).hexdigest(), "outputSchema": review_schema()}
+            "current": packet, "draft": draft, "prompt": prompt, "promptHash": hashlib.sha256(prompt.encode()).hexdigest(), "outputSchema": business_insight.review_schema() if business_insight.enabled(packet) else review_schema()}

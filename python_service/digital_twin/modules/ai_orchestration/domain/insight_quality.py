@@ -52,6 +52,8 @@ def local_quality(result, *, causal_guard_version=CAUSAL_GUARD_VERSION):
         return {**version, "status": "not-applicable", "errors": [],
                 "reasonCode": "internal-research", "authority": "no-notification"}
     errors = insight_errors(result, result["input"], causal_guard_version=causal_guard_version)
+    from .business_progress import quality_errors as progress_errors, focus
+    errors.extend(progress_errors(result))
     if result["input"].get("retrieval", {}).get("status") in {"deferred", "repeated-read", "context-budget"}:
         errors.append("내부 조회를 충분히 완료하지 못해 발송을 보류했습니다.")
     from .company_value import explains_value
@@ -60,7 +62,7 @@ def local_quality(result, *, causal_guard_version=CAUSAL_GUARD_VERSION):
     if result.get("documentaryReview", {}) != documentary:
         errors.append("자료 재검토 계획이 원래 질문·원문과 일치하지 않습니다.")
     business = result.get("businessResearch") or {}
-    if "businessResearch" in result and result.get("notification", {}).get("send"):
+    if "businessResearch" in result and result.get("notification", {}).get("send") and focus(result) != "market":
         facts = {row["id"]: row for row in result["input"].get("facts", [])}
         available = {key for key, row in facts.items() if (row.get("historicalReport") or row.get("documentVerified") or row.get("kind") == "company-relationship")
                      and row.get("judgementEvidenceUsable") is not False}
@@ -87,7 +89,8 @@ def accept_review(result, review, input_id):
     quality = local_quality(result)
     if quality["errors"] or quality["status"] == "not-applicable":
         return quality
-    errors = []
+    from .business_progress import review_errors
+    errors = review_errors(result, review)
     if not isinstance(review, dict) or review.get("version") != REVIEW_VERSION or set(review.get("sections", {})) != set(SECTIONS):
         errors.append("독립 검토 응답이 완전하지 않습니다.")
     else:

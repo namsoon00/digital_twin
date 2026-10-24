@@ -27,7 +27,14 @@ MODEL_LABELS = {
 }
 
 
-def value_lines(value, clock_label, figure, *, packet=None, presentation_version=None):
+def value_lines(value, clock_label, figure, *, packet=None, presentation_version=None, compact=False):
+    if compact and value:
+        available = [model for model in value.get("models", []) if model.get("status") == "available"]
+        if available:
+            return legacy_value_lines({**value, "models": available}, clock_label, figure)
+        pending = any(model.get("nextStep") == "model-review"
+                      for model in (packet or {}).get("companyValueReadiness", {}).get("models", []))
+        return ["", "기업 가치 평가: " + ("모델 검토 대기" if pending else "검증된 평가 범위 확인 필요")]
     if not value or presentation_version != COMPANY_VALUE_PRESENTATION_VERSION:
         return legacy_value_lines(value, clock_label, figure)
     packet = packet or {}

@@ -416,7 +416,8 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # Seven sibling-execution regressions cover immutable boundaries,
         # source coverage, native budgets and independently fenced subjects.
         # Six source-owner, lost-plan repair/rollback and scheduling-batch regressions.
-        self.assertLessEqual(total, 2604)
+        # Ten period-selection, judgment-progress, immutable prompt, original-question and message contracts.
+        self.assertLessEqual(total, 2614)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

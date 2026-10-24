@@ -48,6 +48,9 @@ def validate_plan(value, packet, research=(), require_research=False, require_re
     # No model-authored account, symbol, command, source URL or action is executable.
     allowed = {"summary", "hypothesis", "counterEvidence", "comparison", "evidenceIds", "questions", "nextCheckMinutes", "notification",
                "insightVersion", "portfolioImpact", "claimEvidence", "observations", "followUpConditions", "caseReviews", "serviceFeedback", "businessResearch", "questionResolutions", "knowledgeResearch"}
+    from . import business_progress
+    if business_progress.enabled(packet):
+        allowed.add("judgmentChange")
     if set(value) - allowed:
         raise ValueError("AI plan contains unsupported fields")
     known = {str(row["id"]) for row in packet.get("facts", []) if row.get("id")}
@@ -55,6 +58,8 @@ def validate_plan(value, packet, research=(), require_research=False, require_re
     if not isinstance(evidence, list) or not evidence or any(not isinstance(item, str) or item not in known for item in evidence):
         raise ValueError("AI plan must cite current packet facts")
     result = {}
+    if business_progress.enabled(packet):
+        result["judgmentChange"] = business_progress.validate_change(value.get("judgmentChange"), packet)
     notification = value.get("notification")
     if not isinstance(notification, dict) or set(notification) != {"send", "reason"} or type(notification["send"]) is not bool:
         raise ValueError("AI must explicitly decide whether a useful notification is warranted")

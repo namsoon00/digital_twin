@@ -11,6 +11,44 @@ the original question and next plan without changing past answers or eligibility
 
 ## Complete evidence admission and receipt provenance
 
+New quality-enabled inputs additionally freeze `business-insight-v1`: author
+v26, repair v22, review v15 and retrieval v14. Earlier inputs retain their
+original constructors, validation and rendered bodies.
+
+The v3 business reservation orders financial evidence by the actual reporting
+period, then source revision time, rather than collection time and lexical ID.
+It reserves the newest and a preceding period for each available frequency,
+using exact metric projections for earnings, operating cash, capital spending
+and working capital. It keeps provenance, units, comparison evidence and the
+original hash; omitted metrics remain queryable. Question-specific source
+documents keep their priority. This selection is not permission to compare
+different consolidated scopes, currencies, or cumulative/quarterly durations.
+
+The frozen `reportRequirements` inventory survives total-input admission. A
+market explanation selecting an older financial period without an available
+newer period is deferred before authoring; database read-proof validation uses
+the same disposition. Original-period research and explanations that do not
+use financial reports do not inherit this requirement. Budget exclusions are
+unread evidence, not proof that the source is missing.
+
+`judgmentChange` separates business progress, market context and internal work.
+It records the impact, reason and exact current source fields. `unchanged` and
+`insufficient` cannot request delivery. Business progress needs source content
+cited in both the summary and hypothesis; a price, account label, collection
+clock or model approval status is insufficient. Identical previously delivered
+business scalars cannot be renewed by a quote tick. Independent review must
+separately approve the judgment change, including comparable periods and the
+cash-flow alternatives. This remains an evidence/publication contract, not
+empirical qualification or action authority. Missing research continues through
+the existing bounded questions and source workflow.
+
+New market observations omit the business-research and valuation checklist.
+Business observations retain usable value ranges, or one short pending status;
+complete diagnostics remain in the frozen result. Financial citations separate
+reporting period from source time. Last-close references are labelled explicitly
+and unused volume-ratio warnings are omitted. No historical receipt is rewritten
+and no old notification is resent because of this presentation change.
+
 When `judgment-quality-v1` is enabled, new inputs also freeze
 `evidence-completion-v1`: author v25, repair v21, review v14 and retrieval v13.
 Earlier versions retain their original prompt and schema constructors.

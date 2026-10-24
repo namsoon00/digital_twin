@@ -1371,6 +1371,39 @@ while an unresolved question is stalled, unless a distinct explicit period is
 present; they are not silently merged or assigned an answer. Suppressed work is
 recorded in the agenda, with its reason visible in the existing research view.
 
+For a past Korean filing investigation whose owned source receipt explicitly
+records `unsupported-document-source`, a configured DART original-document route
+grants one `question-source-route-v1` planning opportunity per original case.
+The model still decides whether to investigate; the original question, partial
+answer, six-investigation ceiling, per-intent ceiling and six-hour retry delay
+remain intact. Planning and source scheduling consume separate phases of that
+single opportunity in the existing task transaction. A timer, deployment, changed
+wording or another receipt cannot reset it. Route support is not evidence that a
+document is available, nor a completed answer; unchanged source fingerprints
+remain unchanged. Other source failures retain the normal conservative guard.
+
+New source tasks carry explicit ISO reporting-period ends from the original
+question contract as `question-collection-scope-v1`. DART and SEC selection
+prioritize those periods over newer unrelated reports. Bounded index discovery
+may find a missing comparison period within the existing document-read limits.
+Collection receipts distinguish requested, selected, collected and still-missing
+periods. Independent review must still check individual facts, accounting scope
+and corrections; reading both periods alone cannot complete the question.
+Interrupted exploration retains its captured task fields and replay identity.
+DART XML extraction retains each statement's own title, period/unit header table
+and cell delimiters, including TE/TU cells. It does not carry a consolidated
+statement's labels into a separate statement. Question passages V4 prioritizes
+operating-cash/working-capital rows over generic cash-flow-hedging prose and keeps
+the bilingual topic terms within the existing term limit. Whole-row, document
+and UTF-8 byte limits remain enforced; selecting a table grants no answer authority.
+An original rejected solely for age may enter `question-historical-original-v1`
+only after its unchanged issuer/document/clock/hash and lifecycle checks pass and
+its reporting period matches the original question. General rejection and current
+investment ineligibility remain intact. Question review and the dated graph
+reference can read those originals; unrelated periods, news, quality failures,
+conflicts, withdrawn documents and future knowledge remain excluded. No answer
+is completed without a separate cited review of the original criteria.
+
 Partial answers retain their cited content when a later collection fails.
 Follow-up source tasks carry the known answer and missing requirements as dated
 work context, while the original question's full completion criterion remains

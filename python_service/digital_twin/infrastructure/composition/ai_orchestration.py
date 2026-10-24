@@ -130,7 +130,11 @@ def build_ai_control_service(settings=None):
     agenda = MySQLBrainAgendaStore(configured)
     from digital_twin.infrastructure.operational_store import research_evidence_store
     from digital_twin.modules.news_intelligence.infrastructure.research_material_reader import ResearchMaterialReader
-    agenda.research_source_reader = ResearchMaterialReader(research_evidence_store(configured))
+    from digital_twin.modules.ai_orchestration.infrastructure.research_route_reader import ResearchRouteReader
+    routes = ["dart-original-document"] if str(configured.get("opendartApiKey") or "").strip() else []
+    agenda.research_route_reader = ResearchRouteReader(research_store.get_run, routes)
+    agenda.research_source_reader = ResearchMaterialReader(research_evidence_store(configured),
+        route_reader=agenda.research_route_reader)
     from digital_twin.infrastructure.transactions.research_progress_publication import ResearchProgressPublication
     agenda.progress_writer = ResearchProgressPublication(publication.notifications, configured).publish
     store.agenda_writer, store.agenda_failure = agenda.record, agenda.failed

@@ -9,6 +9,7 @@ from digital_twin.modules.market_data.contracts import ExternalCallDeferred
 from digital_twin.modules.news_intelligence.contracts import (
     QUESTION_PASSAGES_VERSION as VERSION, sec_research_evidence,
     question_terms, select_question_filings, select_question_passages,
+    required_report_periods, question_collection_scope,
 )
 from .sec_report_passages import question_document_blocks
 
@@ -65,6 +66,7 @@ def collect_question_documents(provider, target, signals, tasks):
     now = datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z')
     filings = [*(sec.get('reportFilings') or []), sec.get('latestFiling') or {}, *(sec.get('recentFilings') or [])]
     candidates = [(row, str(row.get('url') or ''), '') for row in select_question_filings(filings, tasks, now)]
+    required = required_report_periods(tasks)
     seen, evidence, statuses, fetched = set(), [], [], 0
     history = {}
     try:
@@ -75,14 +77,17 @@ def collect_question_documents(provider, target, signals, tasks):
                              'complete': history['complete'], 'coverageGaps': history['coverageGaps']})
             # A discovered amendment is eligible for a bounded original read.
             # Listing presence itself does not establish what was corrected.
-            amendments = []
+            amendments, discovered = [], []
             periods = {row.get('reportDate') for row, _, _ in candidates}
             for row in history['rows']:
+                url = ('https://www.sec.gov/Archives/edgar/data/' + str(int(history['cik'])) + '/'
+                       + row['accessionNumber'].replace('-', '') + '/' + row['primaryDocument'])
+                discovered.append({**row, 'url': url})
                 if row['form'].endswith('/A') and row['reportDate'] in periods:
-                    url = ('https://www.sec.gov/Archives/edgar/data/' + str(int(history['cik'])) + '/'
-                           + row['accessionNumber'].replace('-', '') + '/' + row['primaryDocument'])
                     amendments.append(({**row, 'url': url}, url, ''))
-            candidates = amendments[:1] + candidates
+            candidates = ([(row, row.get('url', ''), '') for row in
+                           select_question_filings([*discovered, *filings], tasks, now)] if required else
+                          amendments[:1] + candidates)
     except ExternalCallDeferred as error:
         statuses.append({**base, 'ok': False, 'status': 'filing-history-deferred',
                          'reason': error.reason, 'retryAt': error.retry_at})
@@ -91,6 +96,7 @@ def collect_question_documents(provider, target, signals, tasks):
                          'errorKind': type(error).__name__})
     # The same bounded, provider-guarded transport serves primary documents and
     # exhibits. URLs are discovered from issuer filings, never supplied by AI.
+    selected_periods = [row.get('reportDate', '') for row, _, _ in candidates]
     while candidates and fetched < 3:
         metadata, url, parent = candidates.pop(0)
         accession, cik = str(metadata.get('accessionNumber') or ''), str(sec.get('cik') or '')
@@ -149,5 +155,7 @@ def collect_question_documents(provider, target, signals, tasks):
             statuses.append({**base, 'ok': False, 'status': 'document-unavailable',
                              'errorKind': type(error).__name__, 'reasonCode': code})
     statuses.append({**base, 'ok': True, 'status': 'passages-collected' if evidence else 'unresolved',
-                     'count': len(evidence), 'documentsAttempted': fetched, 'remainingCandidates': len(candidates)})
+                     'count': len(evidence), 'documentsAttempted': fetched, 'remainingCandidates': len(candidates),
+                     **({'collectionScope': question_collection_scope(tasks, selected_periods,
+                         [row.raw_payload.get('reportPeriodEnd', '') for row in evidence])} if required else {})})
     return evidence, statuses

@@ -34,7 +34,9 @@ def documentary_answer(run, task_id):
         [latest.get("planningAudit") or {}, *(run.get("providerStatuses") or [])]
         if item.get("status") in BLOCKERS))[:4]
     excluded = {reason for item in row.get("excludedEvidence", []) for reason in item.get("reasons", [])}
-    rejected = {reason for item in run.get("rejectedClaims", []) for reason in item.get("reasons", [])}
+    historical = {key for key in row.get("candidateEvidenceIds", []) if packets.get(key, {}).get("historicalOriginal")}
+    rejected = {reason for item in run.get("rejectedClaims", []) if item.get("evidenceId") not in historical
+                for reason in item.get("reasons", [])}
     if not complete and ("stale-for-task" in excluded or "evidence-stale" in rejected):
         blockers.append("설정된 조회 기간보다 오래된 일부 자료는 이번 답변 근거에서 제외했습니다.")
     if not reviewed:

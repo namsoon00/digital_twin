@@ -412,7 +412,8 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # Nine complementary-source scheduling, lease/backoff and transport regressions.
         # Seven source-preparation regressions cover SQL/delta parity, exact
         # authority, copy/namespace isolation, memory bounds and atomic rollback.
-        self.assertLessEqual(total, 2579)
+        # Twelve original-period/statement collection, dated-source and finite recovery contracts.
+        self.assertLessEqual(total, 2591)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

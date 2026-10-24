@@ -1,6 +1,7 @@
 """Conservative, deterministic admission before expensive source/model work."""
 from copy import deepcopy
 import re
+from . import research_route
 
 
 VERSION = "research-repeat-v1"
@@ -45,7 +46,7 @@ def admission(case, action):
     if len(known | current) > MAX_MATERIALS:
         return "research-material-limit"
     from .question_recovery import gap_opportunity
-    if guard.get(action) and not current - known and not gap_opportunity(case, action):
+    if guard.get(action) and not current - known and not gap_opportunity(case, action) and not research_route.opportunity(case, action):
         return "unchanged-research-material"
     return ""
 
@@ -53,6 +54,7 @@ def admission(case, action):
 def remember(case, action, task_id=""):
     from .question_recovery import gap_opportunity
     recovery = gap_opportunity(case, action)
+    route = research_route.opportunity(case, action)
     initialize(case)
     guard = case["researchRepeat"]
     guard[action] = True
@@ -60,6 +62,8 @@ def remember(case, action, task_id=""):
     guard.pop("waitReason", None)
     if recovery:
         guard.setdefault("gapRecovery", {})[action] = recovery
+    if route:
+        guard.setdefault("sourceRoutes", {}).setdefault(route, {})[action] = True
     if action == "scheduled":
         guard["authorizedTaskId"] = task_id
 
@@ -70,12 +74,13 @@ def planning_due(case, now):
     from .brain_management import later
     requested = (case.get("lastResearch") or {}).get("requestedAt")
     guard = case.get("researchRepeat") or {}
-    if (gap_opportunity(case, "planned") and guard.get("planned")
+    route_due = research_route.opportunity(case, "planned")
+    if ((gap_opportunity(case, "planned") or route_due) and guard.get("planned")
             and not set(materials(case)) - set(guard.get("plannedMaterials", []))
             and requested and later(requested, 360) > now):
         return False
     gap_due = gap_opportunity(case, "planned") and (not requested or later(requested, 360) <= now)
-    return (needs_research_plan(case) and (case.get("nextCheckAt", "") <= now or gap_due)
+    return (needs_research_plan(case) and (case.get("nextCheckAt", "") <= now or gap_due or route_due)
             and not admission(case, "planned"))
 
 
@@ -92,6 +97,8 @@ def planning_memory(case):
     if opportunity:
         result["sourceFollowUpOpportunity"] = {"version": recovery_version, "key": opportunity,
             "remaining": 1, "authority": "source-planning-only"}
+    if research_route.opportunity(case, "planned"):
+        result["sourceRouteOpportunity"] = deepcopy(case["researchSourceState"]["sourceRouteOpportunity"])
     return result
 
 

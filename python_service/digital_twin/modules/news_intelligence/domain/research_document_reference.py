@@ -5,6 +5,7 @@ import hashlib
 import json
 from urllib.parse import urlparse
 from .disclosure_quality import normalize_official_document_text
+from .historical_document_admission import current_or_dated_source, allowed_reference_reasons
 
 VERSION = "research-document-reference-v1"
 MAX_BYTES = 16000
@@ -48,13 +49,12 @@ def research_document_reference(item):
     if (item.kind != "filing" or not raw.get("researchTaskIds")
             or not raw.get("documentVerified") or not raw.get("analysisReady")
             or raw.get("officialDocumentState") != "document-verified"
-            or governance.get("verificationStatus") != "verified-primary"
+            or not current_or_dated_source(raw)
             or governance.get("sourceTrustState") != "trusted"
             or governance.get("validationState") != "ready"
-            or governance.get("investmentJudgmentEligible") is not True
             or governance.get("supersededByEvidenceId") or governance.get("conflictingEvidenceIds")
             or raw.get("evidenceLifecycleState") != "active"
-            or set(admission.get("reasonCodes") or []) - {"evidence-stale"}
+            or set(admission.get("reasonCodes") or []) - allowed_reference_reasons(raw)
             or issuer.get("symbol") != item.symbol or issuer.get("sourceUrl") != item.url
             or issuer.get("verification") != "sec-discovered-issuer-document"
             or urlparse(item.url).hostname not in {"sec.gov", "www.sec.gov"}

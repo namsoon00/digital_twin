@@ -84,6 +84,18 @@ class MySQLBrainAgendaStore(MySQLOperationalConnection):
                 case["researchSourceState"] = {"status": "unavailable", "fingerprints": []}
         repeat.initialize(case)
 
+    def refresh_research_route(self, case):
+        reader = getattr(self, "research_route_reader", None)
+        if reader:
+            state = case.setdefault("researchSourceState", {})
+            state.pop("sourceRouteOpportunity", None)
+            try:
+                opportunity = reader(case)
+            except Exception:
+                opportunity = {}
+            if opportunity:
+                state["sourceRouteOpportunity"] = opportunity
+
     def research_admission(self, job):
         if not job.get("brainCaseId"):
             return {"allowed": False, "reason": "research-case-required"}
@@ -299,6 +311,8 @@ class MySQLBrainAgendaStore(MySQLOperationalConnection):
         repeat.initialize(case)
         from ..domain.question_recovery import gap_opportunity
         recovery_key = gap_opportunity(case, "scheduled")
+        from ..domain.research_route import opportunity as route_opportunity
+        route_key = route_opportunity(case, "scheduled")
         new_material = set(repeat.materials(case)) - set(case["researchRepeat"].get("scheduledMaterials", []))
         ceiling = 6 if result.get("researchBasis") else 3
         repeated = "research-attempt-limit" if case.get("researchAttempts", 0) >= ceiling else repeat.admission(case, "scheduled")
@@ -314,10 +328,10 @@ class MySQLBrainAgendaStore(MySQLOperationalConnection):
             json.loads(row["payload_json"]).get("researchRequest") if row else case.get("researchRequest"))
         retryable = previous.get("result", {}).get("status") in {"failed", "research-cooldown"}
         attempts = case.get("researchIntentAttempts", {}).get(intent, 0)
-        reason = ("이미 시도한 조사 경로입니다. 보완 조사는 다른 출처나 조회 범위를 지정해야 합니다." if recovery_key and not new_material and (intent == previous_intent or attempts) else
+        reason = ("이미 시도한 조사 경로입니다. 보완 조사는 다른 출처나 조회 범위를 지정해야 합니다." if recovery_key and not route_key and not new_material and (intent == previous_intent or attempts) else
                   "조사 횟수 한도에 도달해 추가 자료나 기능 검토가 필요합니다." if case["researchAttempts"] >= ceiling or attempts >= 2 else
-                  "기존 조사 한도를 사용했습니다. 다른 출처나 구체적으로 달라진 조사 계획이 필요합니다." if result.get("researchBasis") and case["researchAttempts"] >= 3 and previous_intent == intent else
-                  "같은 근거로 조사를 반복하지 않고 새 자료를 기다립니다." if previous.get("inputFingerprint") == fingerprint and previous_intent == intent and not retryable else
+                  "기존 조사 한도를 사용했습니다. 다른 출처나 구체적으로 달라진 조사 계획이 필요합니다." if result.get("researchBasis") and case["researchAttempts"] >= 3 and previous_intent == intent and not route_key else
+                  "같은 근거로 조사를 반복하지 않고 새 자료를 기다립니다." if previous.get("inputFingerprint") == fingerprint and previous_intent == intent and not retryable and not route_key else
                   "조사 재시도 간격을 기다립니다." if previous.get("requestedAt") and later(previous["requestedAt"], 360) > now else "")
         if reason:
             exhausted = case["researchAttempts"] >= ceiling or attempts >= 2
@@ -341,7 +355,8 @@ class MySQLBrainAgendaStore(MySQLOperationalConnection):
                if previous.get("taskId") and previous.get("result", {}).get("runId") else {}),
             **({"questionContract": copy.deepcopy(case["questionContract"])} if case.get("questionContract") else {}),
             **({"evidenceRequirements": copy.deepcopy((case.get("questionAssessment") or case.get("evidenceProgress", {}))["missingRequirements"])[:8]}
-               if recovery_key else {}),
+               if (recovery_key or route_key) and (case.get("questionAssessment") or case.get("evidenceProgress", {})).get("missingRequirements") else {}),
+            **({"sourceRouteOpportunity": copy.deepcopy(case["researchSourceState"]["sourceRouteOpportunity"])} if route_key else {}),
             "priority": 5, "availableAt": now})
         case.update(status="waiting", researchAttempts=case["researchAttempts"] + 1,
             lastResearch={"taskId": task_id, "requestedAt": now, "inputFingerprint": fingerprint, "requestFingerprint": intent},

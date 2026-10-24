@@ -57,8 +57,11 @@ def execute_research(job, research_store, orchestrator_factory):
         task["sourceFocus"] = source_research_focus(missing)
     prior_plan = (existing or {}).get("executedPlan") or {}
     if job.get("questionContract") and not prior_plan.get("sourceExploration"):
-        from digital_twin.modules.news_intelligence.contracts import source_requirements
+        from digital_twin.modules.news_intelligence.contracts import source_requirements, required_report_periods
         task["sourceRequirements"] = source_requirements(job["questionContract"], missing, previous_answer.get("sources", []))
+        periods = required_report_periods([task])
+        if periods:
+            task["requiredPeriodEnds"] = periods
     if prior_plan.get("sourceExploration"):
         # A deployed selector must not change the identity of an already
         # checkpointed exploration or reset its consumed call/read budget.
@@ -70,6 +73,8 @@ def execute_research(job, research_store, orchestrator_factory):
             task.pop("sourceFocus", None)
         if "sourceRequirements" in prior_task:
             task["sourceRequirements"] = deepcopy(prior_task["sourceRequirements"])
+        if "requiredPeriodEnds" in prior_task:
+            task["requiredPeriodEnds"] = deepcopy(prior_task["requiredPeriodEnds"])
     if job.get("evidenceRequirements"):
         task["purpose"] += "\n원문 조회에서 확인한 미확인 항목만 보완합니다: " + json.dumps(job["evidenceRequirements"], ensure_ascii=False)
     if previous_answer.get("status") == "partial" or (previous_answer.get("status") == "answered" and job.get("evidenceRequirements")):

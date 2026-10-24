@@ -29,6 +29,7 @@
     {"file": "test_ai_diagnostic_progress.py", "tier": "integration", "core": true},
     {"file": "test_ai_task_dispatch.py", "tier": "integration", "core": true},
     {"file": "test_research_work.py", "tier": "integration", "core": true},
+    {"file": "test_question_collection_scope.py", "tier": "integration", "core": true},
     {"file": "test_rulebox_decision_brief.py", "tier": "contract", "core": true},
     {"file": "test_rule_notification_intent.py", "tier": "contract", "core": true},
     {"file": "test_relation_followups.py", "tier": "contract", "core": true},

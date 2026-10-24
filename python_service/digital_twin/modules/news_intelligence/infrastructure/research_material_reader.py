@@ -6,8 +6,20 @@ from ..domain.research_material import research_material_fingerprint, research_s
 
 
 class ResearchMaterialReader:
-    def __init__(self, repository, cache_seconds=300):
+    def __init__(self, repository, cache_seconds=300, route_reader=None):
         self.repository, self.cache_seconds, self.cache = repository, cache_seconds, {}
+        self.route_reader = route_reader
+
+    def with_route(self, case, result):
+        result = {**result, "fingerprints": list(result["fingerprints"])}
+        if self.route_reader:
+            try:
+                opportunity = self.route_reader(case)
+            except Exception:
+                opportunity = {}
+            if opportunity:
+                result["sourceRouteOpportunity"] = opportunity
+        return result
 
     def __call__(self, case):
         sources = tuple(sorted(set((case.get("researchRequest") or {}).get("sourceTypes", []))))
@@ -16,7 +28,7 @@ class ResearchMaterialReader:
         key = (case["symbol"], sources, periods)
         cached = self.cache.get(key)
         if cached and monotonic() - cached[0] < self.cache_seconds:
-            return {**cached[1], "fingerprints": list(cached[1]["fingerprints"])}
+            return self.with_route(case, cached[1])
         kinds = []
         if "official-filing" in sources:
             kinds += ["financial-fact", "filing", "disclosure", "sec-filing", "issuer-ir"]
@@ -37,4 +49,4 @@ class ResearchMaterialReader:
         if len(self.cache) >= 256:
             self.cache.clear()
         self.cache[key] = (monotonic(), result)
-        return {**result, "fingerprints": list(result["fingerprints"])}
+        return self.with_route(case, result)

@@ -39,6 +39,8 @@ class CommandHypothesisResearchPlanningAdvisor(HypothesisResearchPlanningAdvisor
 
 
 def hypothesis_research_planning_prompt(context: Dict[str, object]) -> str:
+    historical = any(row.get("historicalOriginal") for row in
+                     (context.get("researchProgress") or {}).get("evidencePackets", []))
     return (
         "당신은 투자 가설의 AI 조사 분석가입니다. 투자 행동을 선택하거나 아직 수집하지 않은 사실을 사실처럼 쓰지 마세요. "
         "기존 TypeDB 가설을 검증할 수 있고, 입력의 dataCoverageMap에 없는 정보가 결론을 바꿀 수 있다면 새로운 조사 질문도 제안할 수 있습니다. "
@@ -71,6 +73,9 @@ def hypothesis_research_planning_prompt(context: Dict[str, object]) -> str:
         "requiredPeriodEnds는 비교에 필요한 실제 보고기간 말일(YYYY-MM-DD) 목록이며 수집일이나 미래 발표예정일로 대신하지 마세요. "
         "재무 질문의 requiredMetrics는 supportedFinancialMetrics에서 고릅니다. 기간별 숫자가 없거나 통화·연결범위·누적기간이 다른 경우 해결됐다고 판단하지 마세요. "
         "유효한 추가 작업이 없으면 빈 배열을 반환하세요.\n"
+        + ("historicalOriginal은 원문과 출처가 검증된 과거 기간 비교 자료입니다. 일반 최신성 기준의 rejected 표시는 유지되지만, "
+           "현재 candidateEvidenceIds에 포함되고 원래 질문의 기간과 맞으면 해당 과거 기간 답변에 사용할 수 있습니다. "
+           "현재 상황이나 투자 적합성이 검증됐다는 뜻은 아닙니다. 기간·연결범위·단위·정정 여부는 원문에서 각각 확인하세요.\n" if historical else "")
         + json.dumps(context, ensure_ascii=False, sort_keys=True)
     )
 

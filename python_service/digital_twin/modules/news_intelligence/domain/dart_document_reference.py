@@ -7,6 +7,7 @@ import re
 from digital_twin.modules.market_data.contracts import parse_datetime
 from .disclosure_quality import normalize_official_document_text
 from .dart_question_filings import period_end
+from .historical_document_admission import current_or_dated_source, allowed_reference_reasons
 
 
 def dart_document_reference(item):
@@ -30,12 +31,11 @@ def dart_document_reference(item):
             or raw.get("documentTextVersion") != "dart-question-original-v1"
             or not raw.get("researchTaskIds") or not raw.get("documentVerified") or not raw.get("analysisReady")
             or raw.get("officialDocumentState") != "document-verified"
-            or governance.get("verificationStatus") != "verified-primary"
+            or not current_or_dated_source(raw)
             or governance.get("sourceTrustState") != "trusted" or governance.get("validationState") != "ready"
-            or governance.get("investmentJudgmentEligible") is not True
             or governance.get("supersededByEvidenceId") or governance.get("conflictingEvidenceIds")
             or raw.get("evidenceLifecycleState", item.lifecycle_state) != "active"
-            or set((raw.get("promptEvidenceAdmission") or {}).get("reasonCodes", [])) - {"evidence-stale"}
+            or set((raw.get("promptEvidenceAdmission") or {}).get("reasonCodes", [])) - allowed_reference_reasons(raw)
             or not text or digest(text) != raw.get("documentHash")
             or not re.fullmatch(r"[a-f0-9]{64}", str(raw.get("sourceDocumentHash", "")))
             or not isinstance(passages, list) or not 1 <= len(passages) <= 8):

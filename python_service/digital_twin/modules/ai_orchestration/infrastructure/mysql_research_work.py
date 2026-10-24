@@ -37,6 +37,8 @@ def record_plan(store, connection, job, result, children):
         repeat.initialize(case)
         from ..domain.question_recovery import gap_opportunity
         recovery_key = gap_opportunity(case, "planned")
+        from ..domain.research_route import opportunity as route_opportunity
+        route_key = route_opportunity(case, "planned")
         if repeat.admission(case, "planned"):
             receipt["deferred"].append({"caseId": case["caseId"], "reason": "unchanged-research-material"})
             continue
@@ -78,6 +80,8 @@ def record_plan(store, connection, job, result, children):
             "stateKey": state, "unchangedPlans": repeats, "authority": "research-planning-only"}
         if recovery_key:
             case["researchPlan"]["gapRecoveryKey"] = recovery_key
+        if route_key:
+            case["researchPlan"]["sourceRouteOpportunityKey"] = route_key
         if review["action"] == "research":
             case["researchRequest"] = deepcopy(review["researchRequest"])
             basis = identity(case["caseId"], work.contract_key(review["contract"]),
@@ -151,6 +155,7 @@ def reconcile_and_schedule(store, connection, subjects):
                         store.save(connection, case, task_id, "answer-reconciled", case["answerResolution"])
                         counts["answersReconciled"] += 1
             from ..domain.question_recovery import answer_review_key, gap_opportunity
+            from ..domain.research_route import opportunity as route_opportunity
             review_key = answer_review_key(case)
             if review_key and (case.get("answerReviewWake") or {}).get("key") != review_key:
                 updated = store.wake_observation(connection, *scope, now)
@@ -161,9 +166,11 @@ def reconcile_and_schedule(store, connection, subjects):
                 if updated:
                     case["answerReviewWake"] = {"key": review_key, "at": now, "authority": "review-scheduling-only"}
                     store.save(connection, case, "answer-review-wake", "answer-review-scheduled", case["answerReviewWake"])
+            before = deepcopy(case)
+            store.refresh_research_route(case)
             if work.needs_research_plan(case) and (case.get("nextCheckAt", "") <= now
-                    or (gap_opportunity(case, "planned") and not repeat.admission(case, "planned"))):
-                before = deepcopy(case)
+                    or ((gap_opportunity(case, "planned") or route_opportunity(case, "planned"))
+                        and not repeat.admission(case, "planned"))):
                 store.refresh_research_material(case)
                 reason = repeat.admission(case, "planned")
                 if reason:

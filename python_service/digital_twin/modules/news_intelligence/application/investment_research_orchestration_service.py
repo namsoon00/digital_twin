@@ -175,7 +175,12 @@ class InvestmentResearchOrchestrationService:
 
         cached_accepted, verified, rejected = govern()
         corpus = list(corpus_by_id.values())
-        packets = evidence_packets(cached_accepted, verified)
+        from ..domain.question_document_packets import historical_packets
+
+        def source_packets(accepted, verified, rejected):
+            return evidence_packets(accepted, verified) + historical_packets(corpus_by_id.values(), rejected, tasks())
+
+        packets = source_packets(cached_accepted, verified, rejected)
         assessments = assess_tasks(tasks(), packets, target.normalized_symbol(), utc_now_iso(), plan.get("taskReviews"))
         needs_research = force or question.source == "user" or self.plan_requires_research(brain, tasks())
         if not needs_research:
@@ -194,7 +199,7 @@ class InvestmentResearchOrchestrationService:
         for review_round in range(round_budget + 1):
             assessed_at = utc_now_iso()
             accepted, verified, rejected = govern()
-            packets = evidence_packets(accepted, verified)
+            packets = source_packets(accepted, verified, rejected)
             assessments = assess_tasks(tasks(), packets, target.normalized_symbol(), assessed_at, plan.get("taskReviews"))
             planning_brain = {**brain, "researchPlan": progress_plan(plan, assessments, packets)}
             plan, brief = self.plan_collection_work(planning_brain, question, target, account_id, brief)

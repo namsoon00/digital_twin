@@ -158,6 +158,7 @@ def evidence_packets(items: Iterable[ResearchEvidence], claims: Iterable[object]
 
 
 def eligible_packets(task: Dict[str, object], packets: List[Dict[str, object]], symbol: str, assessed_at: str):
+    from .question_document_packets import matches_historical_question
     cutoff = parse_datetime(assessed_at)
     accepted, excluded = [], []
     try:
@@ -175,7 +176,10 @@ def eligible_packets(task: Dict[str, object], packets: List[Dict[str, object]], 
         if cutoff and any(stamp and stamp > cutoff for stamp in (observed, published)):
             reasons.append("not-known-at-assessment")
         reference = (parse_datetime(packet.get("freshnessObservedAt")) or observed) if packet.get("freshnessBasis") == "source-observation" else published or observed
-        if cutoff and reference and (cutoff - reference).total_seconds() > age_limit * 60:
+        historical = matches_historical_question(task, packet)
+        if packet.get("historicalOriginal") and not historical:
+            reasons.append("outside-original-period-scope")
+        if cutoff and reference and (cutoff - reference).total_seconds() > age_limit * 60 and not historical:
             reasons.append("stale-for-task")
         if str(packet.get("symbol") or "").upper() != symbol.upper():
             reasons.append("different-subject")

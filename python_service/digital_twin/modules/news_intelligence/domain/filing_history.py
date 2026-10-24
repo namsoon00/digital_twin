@@ -16,7 +16,7 @@ def digest(value):
                                      separators=(",", ":"), allow_nan=False).encode()).hexdigest()
 
 
-def build_filing_history(payload, symbol, cik, from_date, observed_at):
+def build_filing_history(payload, symbol, cik, from_date, observed_at, *, report_periods=()):
     """Scan the complete recent array before applying a bounded output slice."""
     if (not re.fullmatch(r"\d{10}", cik) or not isinstance(payload, dict)
             or str(payload.get("cik", "")).lstrip("0") != cik.lstrip("0")
@@ -26,6 +26,8 @@ def build_filing_history(payload, symbol, cik, from_date, observed_at):
     start, end = date.fromisoformat(from_date), cutoff.date()
     if cutoff.tzinfo is None or start > end:
         raise ValueError("filing-history-invalid-window")
+    if len(report_periods) > 8 or any(date.fromisoformat(value).isoformat() != value for value in report_periods):
+        raise ValueError("filing-history-invalid-period-scope")
     filings = payload.get("filings") or {}
     recent = filings.get("recent") or {}
     forms = recent.get("form")
@@ -65,6 +67,20 @@ def build_filing_history(payload, symbol, cik, from_date, observed_at):
     if len(rows) > MAX_ROWS:
         gaps.append("filing-history-row-budget")
     rows.sort(key=lambda row: (row["filingDate"], row["accessionNumber"]), reverse=True)
+    if report_periods:
+        # A busy issuer's recent event filings must not crowd an explicitly
+        # requested historical report out of the bounded listing receipt.
+        reports, others = [], []
+        for row in rows:
+            (reports if row["reportDate"] in report_periods else others).append(row)
+        reports.sort(key=lambda row: row["form"].removesuffix('/A') in {'8-K', '6-K'})
+        first, seen, rest = [], set(), []
+        for row in reports:
+            if row["reportDate"] not in seen:
+                first.append(row); seen.add(row["reportDate"])
+            else:
+                rest.append(row)
+        rows = first + rest + others
     result = {"version": VERSION, "symbol": symbol, "cik": cik,
         "sourceUrl": "https://data.sec.gov/submissions/CIK" + cik + ".json",
         "observedAt": observed_at, "fromDate": from_date, "throughDate": end.isoformat(),

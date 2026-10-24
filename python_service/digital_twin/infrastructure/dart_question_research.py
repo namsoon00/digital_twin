@@ -10,9 +10,10 @@ from digital_twin.modules.market_data.contracts import ExternalCallDeferred
 from digital_twin.modules.news_intelligence.contracts import (
     question_terms, select_question_passages, select_dart_question_filings,
     research_evidence_from_external_signals,
+    required_report_periods, question_collection_scope,
 )
 from .external_signal_utils import dart_document_error_response
-from .sec_report_passages import question_document_blocks
+from .dart_document_passages import document_passages, VERSION as PASSAGES_VERSION
 
 VERSION = "dart-question-original-v1"
 MAX_ARCHIVE_BYTES = 8 * 1024 * 1024
@@ -64,12 +65,13 @@ def collect_dart_question_documents(provider, target, signals, tasks):
     rows = [row for row in disclosure.get("items", []) if isinstance(row, dict)
             and str(row.get("corpCode") or row.get("corp_code") or corp) == corp]
     selected = select_dart_question_filings(rows, tasks, now)
+    required = required_report_periods(tasks)
     statuses, evidence = [], []
     # Normal monitoring's short filing lookback is not a research inventory.
     # One guarded, bounded list read discovers comparable older originals.
     if len(selected) < 2:
         text = " ".join(str(t.get("question", "")) + " " + " ".join(t.get("queryTerms") or []) for t in tasks)
-        years = [int(y) for y in re.findall(r"(?:19|20)\d{2}", text)]
+        years = [int(value[:4]) for value in required] or [int(y) for y in re.findall(r"(?:19|20)\d{2}", text)]
         year = datetime.now(timezone.utc).year
         begin = str(max(year-5, min([year-1, *years]))) + "0101"
         params = {"crtfc_key": key, "corp_code": corp, "bgn_de": begin, "end_de": now[:10].replace("-", ""),
@@ -105,7 +107,7 @@ def collect_dart_question_documents(provider, target, signals, tasks):
                     break
                 continue
             members = document_members(raw)
-            blocks = [block for _, markup in members for block in question_document_blocks(markup, include_context=True)]
+            blocks = [block for _, markup in members for block in document_passages(markup)]
             passages = select_question_passages(blocks, tasks, 14000, max_block_chars=14000)
             # The source reference has a separate UTF-8 budget. Keep whole
             # tables/qualifications; never cut a Korean table to fit a byte cap.
@@ -132,6 +134,7 @@ def collect_dart_question_documents(provider, target, signals, tasks):
                 item.evidence_id = "research:"+symbol+":dart-question:"+receipt+":"+passage_hash
                 item.observed_at = now
                 item.raw_payload.update(documentPassages=passages, documentTextVersion=VERSION,
+                    passageSelectionVersion=PASSAGES_VERSION,
                     reportPeriodEnd=filing["reportPeriodEnd"],
                     officialDocumentScope="question-selected-passages", sourceDocumentHash=digest,
                     documentIssuerIdentity={"symbol": symbol, "corpCode": corp, "receiptNo": receipt,
@@ -149,5 +152,8 @@ def collect_dart_question_documents(provider, target, signals, tasks):
             statuses.append({**base, "ok": False, "status": "document-unavailable", "errorKind": type(error).__name__,
                              "reasonCode": code, "receiptNo": receipt})
     statuses.append({**base, "ok": True, "status": "passages-collected" if evidence else "unresolved",
-                     "count": len(evidence), "documentsAttempted": attempted, "metadataPageLimit": 100})
+                     "count": len(evidence), "documentsAttempted": attempted, "metadataPageLimit": 100,
+                     **({"collectionScope": question_collection_scope(tasks,
+                         [row["reportPeriodEnd"] for row in selected],
+                         [row.raw_payload.get("reportPeriodEnd", "") for row in evidence])} if required else {})})
     return evidence, statuses

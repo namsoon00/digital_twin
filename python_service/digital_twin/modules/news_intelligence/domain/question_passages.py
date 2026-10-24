@@ -4,22 +4,24 @@ import re
 from datetime import date
 
 
-VERSION = 'question-passages-v3'
+VERSION = 'question-passages-v4'
 _TOPICS = (
     (r'순손실|적자|손실|net loss', ('net loss', 'operating loss', 'losses')),
     (r'순이익|수익성|profitability', ('net income', 'profitability', 'operating income')),
     (r'매출|revenue|sales', ('revenue', 'net sales')),
     (r'데이터.?센터|data.?center', ('data center', 'datacenter')),
     (r'영업.?이익|operating income', ('operating income', 'income from operations')),
-    (r'운전.?자본|working capital', ('working capital', 'accounts receivable', 'inventories', 'accounts payable')),
+    (r'운전.?자본|working capital', ('working capital', 'accounts receivable', 'inventories', 'accounts payable',
+                               '운전자본', '매출채권', '재고자산', '매입채무', '자산·부채의 변동')),
     (r'활성.?고객|고객|customer', ('active customers', 'customers', 'customer')),
     (r'마진|margin', ('margin', 'gross profit')),
     (r'한국|korea', ('korea', 'korean')),
     (r'소비|수요|demand|consumer', ('consumer', 'consumption', 'spending', 'demand')),
     (r'전망|가이던스|outlook|guidance', ('outlook', 'guidance', 'expect', 'anticipated')),
     (r'원인|요인|cause|driver', ('due to', 'driven by', 'primarily', 'attributable', 'because')),
-    (r'현금.?흐름|cash flow', ('cash flow', 'operating activities')),
-    (r'투자.?지출|설비.?투자|capital', ('capital expenditure', 'capital spending', 'purchases of property', 'payments for property')),
+    (r'영업.?현금|현금.?흐름|cash flow', ('cash flow', 'operating activities', '영업활동', '현금흐름표', '영업으로부터 창출')),
+    (r'투자.?지출|설비.?투자|capital', ('capital expenditure', 'capital spending', 'purchases of property', 'payments for property',
+                                     '유형자산의 취득', '유형자산 취득', '무형자산의 취득')),
     (r'세금|법인세|tax', ('income tax', 'tax provision', 'tax expense')),
     (r'부문|segment|범위\s*정의', ('segment information', 'reportable segments', 'compute & networking', 'chief operating decision maker')),
     (r'정정|재작성|restat|amend', ('restatement', 'restated', 'amendment', 'correction', 'error')),
@@ -33,10 +35,11 @@ def question_terms(tasks):
                     for t in tasks if isinstance(t, dict)).casefold()
     terms = {term for pattern, aliases in _TOPICS if re.search(pattern, text) for term in aliases}
     # Literal terms also cover topics outside the small bilingual vocabulary.
-    terms.update(token for token in re.findall(r'[a-z][a-z-]{3,}|[가-힣]{2,}', text)
+    literal = {token for token in re.findall(r'[a-z][a-z-]{3,}|[가-힣]{2,}', text)
                  if token not in {'최근', '공식', '분기보고서', '경영진', '무엇인가', '대한', '확인',
-                                  'what', 'which', 'latest', 'recent', 'report', 'official'})
-    return sorted(terms)[:64]
+                                  'what', 'which', 'latest', 'recent', 'report', 'official'}}
+    selected = sorted(terms)[:64]
+    return selected + sorted(literal - terms)[:64-len(selected)]
 
 
 def select_question_passages(blocks, tasks, limit=6000, *, max_block_chars=12000):
@@ -49,6 +52,12 @@ def select_question_passages(blocks, tasks, limit=6000, *, max_block_chars=12000
                 "restatement", "restated", "amendment", "correction", "rounding",
                 "rounded", "reconciliation", "reclassified", "reclassification"}
     priority = set(focus_terms) & specific
+    question_text = ' '.join(str(t.get('question') or '') + ' ' + ' '.join(t.get('queryTerms') or [])
+                             for t in [*tasks, *focused_tasks(tasks)])
+    cash_question = bool(re.search(r'영업.?현금|영업활동|운전.?자본|설비.?투자|현금흐름표|'
+                                  r'operating.{0,20}cash|cash.{0,20}operating|working capital|capital expend',
+                                  question_text, re.I))
+    consolidated = any('연결' in str(task.get('question', '')) for task in tasks)
     candidates = []
     for index, block in enumerate(dict.fromkeys(blocks)):
         if not 80 <= len(block) <= (max(12000, min(14000, max_block_chars)) if '\n' in block else 2800):
@@ -56,7 +65,12 @@ def select_question_passages(blocks, tasks, limit=6000, *, max_block_chars=12000
         text = block.casefold()
         matched = [term for term in sorted(set(terms) | set(focus_terms)) if term in text]
         if matched:
-            rank = (bool(priority.intersection(matched)), len(set(focus_terms).intersection(matched)), len(matched))
+            cash_table = (cash_question and '\n' in block and ' | ' in block and bool(re.search(r'\d[\d,]*', block))
+                          and bool(re.search(r'영업활동|현금흐름표|자산·부채의 변동|operating activities|working capital', text)))
+            # Original statement rows answer an operating-cash question more
+            # directly than long cash-flow-hedging policy paragraphs.
+            scope = cash_table and consolidated and '연결' in '\n'.join(block.splitlines()[:4])
+            rank = (cash_table, scope, bool(priority.intersection(matched)), len(set(focus_terms).intersection(matched)), len(matched))
             candidates.append((rank, index, block, matched))
     candidates.sort(key=lambda row: (tuple(-int(value) for value in row[0]), row[1]))
     remaining, result = max(500, min(20000, int(limit))), []
@@ -73,6 +87,8 @@ def select_question_passages(blocks, tasks, limit=6000, *, max_block_chars=12000
 
 
 def select_question_filings(filings, tasks, cutoff):
+    from .collection_scope import required_report_periods
+    required = required_report_periods(tasks)
     text = ' '.join(str(t.get('question') or '') + ' ' + ' '.join(t.get('queryTerms') or [])
                     for t in tasks if isinstance(t, dict))
     annual = bool(re.search(r'연간|연차|annual|10-K|20-F', text, re.I))
@@ -88,7 +104,9 @@ def select_question_filings(filings, tasks, cutoff):
             date.fromisoformat(filing_date)
         except ValueError:
             continue
-        if form not in allowed or filing_date > cutoff[:10]:
+        period = str(row.get('reportDate') or '')[:10]
+        if (form not in allowed or filing_date > cutoff[:10]
+                or (required and (period not in required or period > cutoff[:10]))):
             continue
         identity = str(row.get('accessionNumber') or '')
         if identity:
@@ -96,6 +114,17 @@ def select_question_filings(filings, tasks, cutoff):
     rows = sorted(selected.values(), key=lambda row: str(row['filingDate']), reverse=True)
     rows.sort(key=lambda row: 0 if str(row['form']).upper().removesuffix('/A') in preferred
               else 1 if str(row['form']).upper().removesuffix('/A') in {'8-K', '6-K'} else 2)
+    if required:
+        # Cover distinct requested periods before spending remaining reads on
+        # amendments/exhibits from just one of those periods.
+        first, seen, rest = [], set(), []
+        for row in rows:
+            period = row['reportDate'][:10]
+            if period not in seen:
+                first.append(row); seen.add(period)
+            else:
+                rest.append(row)
+        return (first + rest)[:3]
     if rows and re.search(r'전년|전년도|동기|year.over.year|prior.year|previous.year|yoy', text, re.I):
         latest = rows[0]
         try:

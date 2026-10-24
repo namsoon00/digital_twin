@@ -12,6 +12,7 @@ from digital_twin.modules.market_data.application.external_data.fact_transition_
 from digital_twin.modules.market_data.domain.external_call import ExternalCallDeferred
 from digital_twin.modules.market_data.domain.external_data_fitness import evaluate_external_data_fitness
 from digital_twin.modules.market_data.domain.issuer_ir import issuer_ir_coverage
+from .collection_recovery_service import ExternalCollectionRecoveryService
 
 
 def utc_now() -> datetime:
@@ -80,6 +81,7 @@ class ExternalDataCollectionService:
         self._last_cleanup_at = None
         self._next_cleanup_at = self.now_provider() + timedelta(seconds=60)
         self.document_recovery = document_recovery
+        self.collection_recovery = ExternalCollectionRecoveryService(self.registry, self.store, self.settings, self.now_provider)
 
     def enabled(self) -> bool:
         return setting_enabled(self.settings, "externalDataPlatformEnabled", True)
@@ -349,11 +351,19 @@ class ExternalDataCollectionService:
         results = []
         for job in jobs:
             try:
-                results.append(self._run_stage("process-job", self._process_job, job))
+                result = self._run_stage("process-job", self._process_job, job)
             except Exception as error:
-                results.append({"datasetId": job.dataset_id, "partitionKey": job.partition_key,
+                result = {"datasetId": job.dataset_id, "partitionKey": job.partition_key,
                                 "status": "error", "error": str(error)[:500],
-                                "requiresAttention": True, "diagnostics": collection_error_diagnostics(error)})
+                                "requiresAttention": True, "diagnostics": collection_error_diagnostics(error)}
+            # A recovery scheduling failure cannot undo a completed source job.
+            try:
+                recovery = self.collection_recovery.recover(job, result)
+                if recovery:
+                    result["collectionRecovery"] = recovery
+            except Exception as error:
+                result["collectionRecovery"] = {"status": "error", "errorType": type(error).__name__}
+            results.append(result)
         return results
 
     def _process_job(self, job) -> Dict[str, object]:
@@ -491,6 +501,7 @@ class ExternalDataCollectionService:
                 "datasetId": job.dataset_id,
                 "partitionKey": job.partition_key,
                 "status": "no-data" if no_data else "success",
+                "dataUsable": not no_data and quality.get("dataUsable") is not False,
                 "durationMs": duration_ms,
                 "responseBytes": response_bytes,
                 "sourceAsOf": observation.source_as_of,

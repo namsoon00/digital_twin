@@ -3078,7 +3078,7 @@ def runtime_settings(fast_operational_read: bool = False) -> Dict[str, str]:
         "newsCollectionProviderParallelism": value("newsCollectionProviderParallelism", "NEWS_COLLECTION_PROVIDER_PARALLELISM", "2"),
         "newsCollectionPrimaryProviderCount": value("newsCollectionPrimaryProviderCount", "NEWS_COLLECTION_PRIMARY_PROVIDER_COUNT", "2"),
         "newsCollectionPrimaryMinimumItems": value("newsCollectionPrimaryMinimumItems", "NEWS_COLLECTION_PRIMARY_MINIMUM_ITEMS", "2"),
-        "newsCollectionGdeltTimeoutSeconds": value("newsCollectionGdeltTimeoutSeconds", "NEWS_COLLECTION_GDELT_TIMEOUT_SECONDS", "6"),
+        "newsCollectionGdeltTimeoutSeconds": value("newsCollectionGdeltTimeoutSeconds", "NEWS_COLLECTION_GDELT_TIMEOUT_SECONDS", "20"),
         "newsCollectionGdeltSyncEnabled": value("newsCollectionGdeltSyncEnabled", "NEWS_COLLECTION_GDELT_SYNC_ENABLED", "1"),
         "newsCollectionArticleBodyTimeoutSeconds": value("newsCollectionArticleBodyTimeoutSeconds", "NEWS_COLLECTION_ARTICLE_BODY_TIMEOUT_SECONDS", "3"),
         "newsCollectionArticleBodyCacheMinutes": value("newsCollectionArticleBodyCacheMinutes", "NEWS_COLLECTION_ARTICLE_BODY_CACHE_MINUTES", "180"),

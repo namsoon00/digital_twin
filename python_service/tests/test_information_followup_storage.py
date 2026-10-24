@@ -8,7 +8,7 @@ from digital_twin.infrastructure.external_api.mysql_stores import MySQLExternalD
 from digital_twin.modules.market_data.application.information_followup_service import stamp
 from digital_twin.modules.market_data.infrastructure.mysql_information_followups import MySQLInformationFollowups
 from digital_twin.modules.market_data.public import DatasetDescriptor
-from digital_twin.modules.market_data.application.external_data.contracts import CollectionJob, ExternalSubject, FollowupCollectionRequest, SourceObservation
+from digital_twin.modules.market_data.application.external_data.contracts import CollectionJob, CollectionPartition, ExternalSubject, FollowupCollectionRequest, SourceObservation
 from digital_twin.shared_kernel.events import DomainEvent
 from digital_twin.modules.market_data.domain.market_time_series import MarketTimeSeriesObservation
 from digital_twin.modules.market_data.infrastructure.mysql_market_time_series import MySQLMarketTimeSeriesStore
@@ -17,6 +17,54 @@ from digital_twin.modules.notifications.infrastructure.mysql_notification_jobs i
 
 @unittest.skipUnless(os.environ.get('MYSQL_DATABASE') == 'orbit_alpha_test', 'requires isolated test database')
 class InformationStorageTests(unittest.TestCase):
+    def test_complementary_recovery_is_idempotent_and_preserves_leases_backoff_and_fresh_facts(self):
+        from concurrent.futures import ThreadPoolExecutor
+        store = MySQLExternalDataStore(runtime_settings())
+        symbol = 'test-recovery-' + uuid.uuid4().hex
+        descriptor = DatasetDescriptor('fixture.recovery', 'fixture-recovery', 'fixture', 900, 3600)
+        subject = ExternalSubject(symbol, symbol=symbol)
+        partition = CollectionPartition(descriptor.dataset_id, symbol, subject)
+        now = datetime.now(timezone.utc)
+        future = stamp(now + timedelta(hours=2))
+        try:
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                outcomes = list(pool.map(lambda _: store.request_recovery_partition(descriptor, partition, now), range(2)))
+            self.assertEqual(['already-pending', 'scheduled'], sorted(row['status'] for row in outcomes))
+            with store.transaction() as c:
+                c.execute("UPDATE external_dataset_state SET job_status='running', lease_owner='other-worker', lease_until=%s, next_due_at=%s WHERE dataset_id=%s AND partition_key=%s",
+                          (future, future, descriptor.dataset_id, symbol))
+            self.assertEqual('leased', store.request_recovery_partition(descriptor, partition, now)['status'])
+            with store.transaction() as c:
+                state = c.execute('SELECT lease_owner, lease_until FROM external_dataset_state WHERE dataset_id=%s AND partition_key=%s', (descriptor.dataset_id, symbol)).fetchone()
+                self.assertEqual('other-worker', state['lease_owner'])
+                self.assertEqual(future, state['lease_until'])
+                c.execute("UPDATE external_dataset_state SET job_status='pending', lease_owner='', lease_until='', last_error='HTTP 429' WHERE dataset_id=%s AND partition_key=%s", (descriptor.dataset_id, symbol))
+            self.assertEqual('retry-scheduled', store.request_recovery_partition(descriptor, partition, now)['status'])
+            with store.transaction() as c:
+                c.execute("UPDATE external_dataset_state SET last_error='', last_attempt_at=%s WHERE dataset_id=%s AND partition_key=%s", (stamp(now), descriptor.dataset_id, symbol))
+            self.assertEqual('recent-attempt', store.request_recovery_partition(descriptor, partition, now)['status'])
+            with store.transaction() as c:
+                c.execute("UPDATE external_dataset_state SET last_attempt_at=%s WHERE dataset_id=%s AND partition_key=%s", (stamp(now - timedelta(minutes=6)), descriptor.dataset_id, symbol))
+            self.assertEqual('scheduled', store.request_recovery_partition(descriptor, partition, now)['status'])
+            source_job = CollectionJob(descriptor.dataset_id, symbol, descriptor.provider_id, 50, subject)
+            store.complete_observation(source_job, descriptor, SourceObservation(descriptor.dataset_id, descriptor.provider_id,
+                symbol, 'fixture-v1', stamp(now), stamp(now), {'value': 1}, quality={'dataUsable': True}), future)
+            self.assertEqual('fresh', store.request_recovery_partition(descriptor, partition, now)['status'])
+            with store.connect() as c:
+                state = c.execute('SELECT next_due_at FROM external_dataset_state WHERE dataset_id=%s AND partition_key=%s', (descriptor.dataset_id, symbol)).fetchone()
+                self.assertEqual(future, state['next_due_at'])
+            with store.transaction() as c:
+                c.execute('DELETE FROM external_dataset_state WHERE dataset_id=%s AND partition_key=%s', (descriptor.dataset_id, symbol))
+            self.assertEqual('fresh', store.request_recovery_partition(descriptor, partition, now)['status'])
+            with store.connect() as c:
+                state = c.execute('SELECT next_due_at FROM external_dataset_state WHERE dataset_id=%s AND partition_key=%s', (descriptor.dataset_id, symbol)).fetchone()
+                self.assertGreater(state['next_due_at'], stamp(now))
+        finally:
+            with store.transaction() as c:
+                for table in ('external_fact_revision', 'external_fact_current'):
+                    c.execute('DELETE FROM ' + table + ' WHERE dataset_id=%s AND subject_key=%s', (descriptor.dataset_id, symbol))
+                c.execute('DELETE FROM external_dataset_state WHERE dataset_id=%s AND partition_key=%s', (descriptor.dataset_id, symbol))
+
     def test_error_page_revision_is_not_replayed_and_completed_document_is_requeued(self):
         store = MySQLExternalDataStore(runtime_settings())
         symbol = 'test-error-page-' + uuid.uuid4().hex

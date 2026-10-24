@@ -678,7 +678,7 @@ def admin_preview_config() -> Dict[str, object]:
                     {"key": "newsCollectionYahooRssEnabled", "label": "Yahoo Finance RSS 사용", "type": "toggle", "default": "1"},
                     {"key": "newsCollectionGdeltSyncEnabled", "label": "GDELT 뉴스 사용", "type": "toggle", "default": "1"},
                     {"key": "newsCollectionGdeltRateLimitSeconds", "label": "GDELT 최소 요청 간격 (6초 이상)", "type": "number", "default": "6", "unit": "seconds"},
-                    {"key": "newsCollectionGdeltTimeoutSeconds", "label": "GDELT 요청 타임아웃", "type": "number", "default": "6", "unit": "seconds"},
+                    {"key": "newsCollectionGdeltTimeoutSeconds", "label": "GDELT 요청 타임아웃", "type": "number", "default": "20", "unit": "seconds"},
                     {"key": "newsCollectionGdeltDailyRequestBudget", "label": "GDELT 하루 요청 예산", "type": "number", "default": "240"},
                     {"key": "informationFollowupEnabled", "label": "뉴스·공시·발표 결과 후속 관찰", "type": "toggle", "default": "1"},
                     {"key": "newsCollectionGoogleOriginalUrlResolveEnabled", "label": "Google RSS 원문 주소 해석", "type": "toggle", "default": "1"},

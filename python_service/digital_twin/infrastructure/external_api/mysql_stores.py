@@ -588,6 +588,62 @@ class MySQLExternalDataStore(MySQLOperationalConnection):
                 connection.execute("UPDATE external_dataset_state SET next_due_at = %s, updated_at = %s WHERE dataset_id = 'sec.document' AND job_status = 'pending' AND last_error IN (%s, %s, %s)",
                     (stamp, stamp, "circuit-open", "SEC document job requires a contact email, accession number, and URL", "SEC contact email is not configured"))
 
+    def request_recovery_partition(self, descriptor, partition, now=None):
+        """Wake stale complementary work without stealing leases or bypassing backoff."""
+        current = now or utc_now()
+        stamp = iso(current)
+
+        def mutation(connection):
+            inserted = connection.execute(
+                "INSERT IGNORE INTO external_dataset_state "
+                "(dataset_id, partition_key, provider_id, subject_json, watermark_json, priority, active, "
+                "job_status, next_due_at, created_at, updated_at) "
+                "VALUES (%s,%s,%s,%s,'{}',%s,1,'pending',%s,%s,%s)",
+                (descriptor.dataset_id, partition.partition_key, descriptor.provider_id,
+                 json_dumps(partition.subject.to_dict()), partition.priority, stamp, stamp, stamp),
+            ).rowcount
+            state = connection.execute(
+                "SELECT active, job_status, lease_owner, next_due_at, last_attempt_at, last_error "
+                "FROM external_dataset_state WHERE dataset_id=%s AND partition_key=%s FOR UPDATE",
+                (descriptor.dataset_id, partition.partition_key),
+            ).fetchone() or {}
+            if not state.get("active"):
+                return {"status": "inactive"}
+            if state.get("lease_owner") or state.get("job_status") == "running":
+                return {"status": "leased"}
+            fact = connection.execute(
+                "SELECT expires_at, quality_json, availability FROM external_fact_current "
+                "WHERE dataset_id=%s AND subject_key=%s",
+                (descriptor.dataset_id, partition.subject.subject_key),
+            ).fetchone() or {}
+            expiry = parse_iso(fact.get("expires_at"))
+            quality = _json_loads(fact.get("quality_json"), {})
+            if expiry and expiry >= current and quality.get("dataUsable") is not False and fact.get("availability") == "observed":
+                if inserted:
+                    connection.execute(
+                        "UPDATE external_dataset_state SET next_due_at=%s WHERE dataset_id=%s AND partition_key=%s",
+                        (iso(expiry), descriptor.dataset_id, partition.partition_key),
+                    )
+                return {"status": "fresh", "expiresAt": iso(expiry)}
+            due = parse_iso(state.get("next_due_at"))
+            if state.get("last_error") and due and due > current:
+                return {"status": "retry-scheduled", "nextDueAt": iso(due)}
+            attempted = parse_iso(state.get("last_attempt_at"))
+            if attempted and (current - attempted).total_seconds() < 300:
+                return {"status": "recent-attempt"}
+            if inserted or (state.get("job_status") == "pending" and due and due <= current):
+                return {"status": "scheduled" if inserted else "already-pending", "nextDueAt": state.get("next_due_at")}
+            if state.get("job_status") != "pending":
+                return {"status": "not-pending"}
+            connection.execute(
+                "UPDATE external_dataset_state SET next_due_at=%s, updated_at=%s "
+                "WHERE dataset_id=%s AND partition_key=%s",
+                (stamp, stamp, descriptor.dataset_id, partition.partition_key),
+            )
+            return {"status": "scheduled", "nextDueAt": stamp}
+
+        return dict(self.transaction_with_deadlock_retry("external-collection-recovery", mutation) or {})
+
     def make_due(
         self,
         dataset_ids: Iterable[str] = None,

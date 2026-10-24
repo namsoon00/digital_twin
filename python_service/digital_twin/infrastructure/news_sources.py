@@ -623,16 +623,17 @@ class NewsSourceGateway:
     def guarded_json_fetcher(self, timeout: float) -> JsonFetcher:
         def fetch(url: str, headers: Dict[str, str] = None) -> object:
             source = news_source_for_url(url)
+            request_timeout = self.provider_timeout_seconds("gdelt") if source == "GDELT News" else timeout
             # GDELT queries differ for every symbol.  A request-specific key
             # would therefore never accumulate failures and could fan out a
             # provider outage across the complete collection rotation.
             guard_target = "api.gdeltproject.org/provider" if source == "GDELT News" else external_call_target(url)
             if source == "GDELT News" and self.request_budget:
-                return self.request_budget.call(lambda: default_json_fetcher(url, headers, timeout=timeout))
+                return self.request_budget.call(lambda: default_json_fetcher(url, headers, timeout=request_timeout))
             def request():
                 return guarded_external_call(
                     self.settings, source, guard_target,
-                    lambda: default_json_fetcher(url, headers, timeout=timeout),
+                    lambda: default_json_fetcher(url, headers, timeout=request_timeout),
                     state=NEWS_API_GUARD_STATE,
                     attempts=1 if source == "GDELT News" else 2,
                     rate_limit_seconds=0,
@@ -765,7 +766,7 @@ class NewsSourceGateway:
     def provider_timeout_seconds(self, provider: str) -> float:
         normalized = str(provider or "").strip().lower().replace("-", "_")
         if normalized == "gdelt":
-            return float_setting(self.settings, "newsCollectionGdeltTimeoutSeconds", 4.0, 0.5, 30.0)
+            return float_setting(self.settings, "newsCollectionGdeltTimeoutSeconds", 20.0, 0.5, 30.0)
         return float_setting(
             self.settings,
             "newsCollectionProviderTimeoutSeconds",

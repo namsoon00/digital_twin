@@ -43,7 +43,11 @@ class ExternalSignalNewsMixin:
         if self.news_request_budget is None and self._uses_default_json_fetcher:
             from .provider_http_budget import news_http_budget
             self.news_request_budget = news_http_budget(self.settings)
-        fetch = lambda: self.fetch_json(url, {"Accept": "application/json", "User-Agent": "DigitalTwin/1.0"})
+        fetch = lambda: self.fetch_json_with_timeout(
+            url, {"Accept": "application/json", "User-Agent": "DigitalTwin/1.0"},
+            setting_key="newsCollectionGdeltTimeoutSeconds", fallback_timeout=20.0,
+            minimum_timeout=0.5, maximum_timeout=30.0,
+        )
         payload = self.news_request_budget.call(fetch) if self.news_request_budget else fetch()
         articles = payload.get("articles") if isinstance(payload, dict) and isinstance(payload.get("articles"), list) else []
         items = []

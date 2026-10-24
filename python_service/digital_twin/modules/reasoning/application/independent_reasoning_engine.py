@@ -2041,6 +2041,7 @@ class IndependentReasoningJobRunner:
         }
         self._queue_preparation_at = 0.0
         self._queue_preparation: Dict[str, object] = {}
+        self._consecutive_delivery_turns = 0
 
     def enabled(self) -> bool:
         return str(self.settings.get("reasoningEngineV2IndependentEnabled") or "1").strip().lower() not in {"0", "false", "no", "off", "disabled"}
@@ -3579,6 +3580,35 @@ class IndependentReasoningJobRunner:
             }
         return dict(self._last_failure_recovery)
 
+    def watch_delay_seconds(self, result: Mapping[str, object], interval: int) -> int:
+        """Drain ready delivery work in bounded bursts, outside the writer lock.
+
+        The queue's next-lane probe applies the same availability/source-boundary
+        filter as normal claims. It grants no lease or execution authority.
+        Every third successful turn retains the existing polling window for
+        competing writers, including a continuously queued candidate.
+        """
+        if (
+            self.deployment_role not in {"delivery", "active"}
+            or result.get("status") != "completed"
+            or not result.get("processedCount")
+            or result.get("retryAfterSeconds")
+            or result.get("graphWriterBackoff")
+            or dict(result.get("result") or {}).get("retryable")
+        ):
+            self._consecutive_delivery_turns = 0
+            return interval
+        self._consecutive_delivery_turns += 1
+        if self._consecutive_delivery_turns < 3:
+            next_lane = getattr(self.queue, "next_lane", None)
+            try:
+                if callable(next_lane) and next_lane(self.engine.descriptor().deployment_id):
+                    return 0
+            except Exception:  # A failed advisory probe retains normal polling.
+                pass
+        self._consecutive_delivery_turns = 0
+        return interval
+
     def watch(self, should_retire=None) -> None:
         interval = _int_setting(self.settings, "reasoningEngineV2IntervalSeconds", 5, 1, 300)
         descriptor = self.engine.descriptor()
@@ -3599,10 +3629,9 @@ class IndependentReasoningJobRunner:
                     return
                 if result.get("status") == "inactive-control-binding":
                     return
-                # Successful delivery turns also yield. An immediate reclaim
-                # previously monopolized the single writer while a candidate
-                # polled at this same configured interval.
-                time.sleep(interval)
+                delay = self.watch_delay_seconds(result, interval)
+                if delay:
+                    time.sleep(delay)
         finally:
             liveness_stop.set()
             liveness_thread.join(timeout=2)

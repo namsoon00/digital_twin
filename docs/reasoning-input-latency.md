@@ -1,5 +1,34 @@
 # Reasoning Input Latency
 
+## Bounded delivery bursts and optional cache storage (2026-10-24)
+
+The managed delivery/active V2 worker now immediately checks its next turn after
+a completed, non-retryable job when the existing `next_lane` query finds work
+whose source boundary and availability time permit a claim. At most three
+successful turns run consecutively before the normal polling sleep. The writer
+is released between every turn; candidate/configured workers, idle/failed turns,
+writer backoff and an unavailable queue probe retain normal polling. This removes
+the fixed five-second sleep between the first three ready delivery turns without
+making candidate writers wait behind an unbounded drain. The advisory probe
+cannot claim a job or bypass deployment, lease, source or native execution checks.
+
+Only the managed worker serving the current delivery deployment omits the optional
+durable graph-assembly cache port. It does not change projection settings, source
+keys, frozen releases, the process-memory cache or authoritative TypeDB writes.
+Candidate, explicitly configured/replay and other non-delivery builders retain
+the existing durable cache. A cold live process rebuilds its graph from the same
+authoritative sources instead of reading a saved assembly copy. The previous
+eight completed jobs had no graph-cache hits and spent 0.87–2.83 seconds storing
+these optional copies; this is a removable component, not an end-to-end guarantee.
+
+`test_rule_delivery_latency` covers real local writer locks across seven bounded
+turns, retirement, due-work/probe failures, retry/backoff isolation, managed role
+wiring, exact graph/context equality with and without the optional port, memory
+reuse, caller mutation, changed source clocks and cold replay from durable cache.
+`test_independent_reasoning_engine`, `test_graph_writer_guard`,
+`test_projection_input_ownership` and `test_runtime_composition` retain the wider
+execution/replay contracts. No investment alert is fabricated to measure latency.
+
 ## Rule delivery preparation and wakeup (2026-10-24)
 
 Six recent delivery jobs showed 0.7–77.4 seconds in the queue, 5.4–17.6

@@ -14,6 +14,7 @@ if TYPE_CHECKING:
 def build_v2_reasoning_engine(
     settings=None,
     deployment_id: str = "",
+    persistent_graph_cache_enabled: bool = True,
 ) -> V2ReasoningEngine:
     """Compose V2 from source ports without constructing MonitorRunner."""
     from digital_twin.infrastructure import operational_store as stores
@@ -100,10 +101,13 @@ def build_v2_reasoning_engine(
         investment_domain_store=stores.investment_domain_store(store_settings),
         world_projection_outbox=shared_world_projection_outbox,
         inference_detail_outbox=V2InferenceDetailReceiptSink(),
-        # V2 workers are isolated processes. Reuse is still exact-source only:
-        # the cache key includes the source snapshot, TBox, RuleBox, model
-        # settings, target scope, and runtime context fingerprints.
-        graph_assembly_cache_store=stores.ontology_graph_assembly_cache_store(store_settings),
+        # Live delivery avoids synchronous storage of optional assembly copies.
+        # Keep source settings/identities and the in-process exact cache intact;
+        # candidate/replay callers retain cross-process reuse through this port.
+        graph_assembly_cache_store=(
+            stores.ontology_graph_assembly_cache_store(store_settings)
+            if persistent_graph_cache_enabled else None
+        ),
         statistical_signal_service=build_statistical_signal_pipeline_service(
             {
                 **store_settings,
@@ -365,6 +369,9 @@ def build_v2_reasoning_job_runner(
         engine=build_v2_reasoning_engine(
             configured,
             deployment_id=selected_deployment_id,
+            persistent_graph_cache_enabled=not (
+                role in {"delivery", "active"} and selected_deployment_id == delivery_id
+            ),
         ),
         registry=registry,
         settings=configured,

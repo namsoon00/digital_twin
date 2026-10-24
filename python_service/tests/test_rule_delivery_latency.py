@@ -1,7 +1,8 @@
 """Latency reductions preserve source history and committed delivery authority."""
 
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from copy import deepcopy
+from dataclasses import asdict
 import json
 from pathlib import Path
 import subprocess
@@ -23,6 +24,179 @@ from test_independent_reasoning_engine import descriptor, source_event, FakeAsse
 
 
 class RuleDeliveryLatencyTests(TestCase):
+    def test_managed_delivery_omits_durable_cache_capability_without_changing_source_settings(self):
+        from digital_twin.infrastructure import operational_store
+        from digital_twin.infrastructure.composition import reasoning
+        from digital_twin.modules.reasoning.domain.reasoning_engine_versions import EngineControlState
+
+        stores = Mock()
+        registry = stores.reasoning_engine_registry_store.return_value
+        registry.control.return_value = EngineControlState('live', 'live', 'candidate')
+        registry.get.side_effect = lambda deployment: {'engineVersion': 'v2', 'graphStoreBinding': deployment}
+        with ExitStack() as stack:
+            stack.enter_context(patch('digital_twin.infrastructure.operational_store', stores))
+            stack.enter_context(patch('digital_twin.infrastructure.composition.runtime_support.ontology_graph_single_writer_enabled', return_value=False))
+            stack.enter_context(patch('digital_twin.infrastructure.composition.runtime_support.typedb_capacity_guard', return_value=lambda: {'ready': True}))
+            stack.enter_context(patch('digital_twin.modules.reasoning.infrastructure.mysql_reasoning_ingress.MySQLReasoningIngressRouter'))
+            builder = stack.enter_context(patch.object(reasoning, 'build_v2_reasoning_engine'))
+            for role, deployment, enabled in [
+                ('delivery', 'live', False), ('active', 'live', False),
+                ('active', 'other', True), ('candidate', 'candidate', True), ('configured', 'live', True),
+            ]:
+                with self.subTest(role=role, deployment=deployment):
+                    reasoning.build_v2_reasoning_job_runner({'fixture': True}, worker_role=role, deployment_id=deployment)
+                    self.assertIs(enabled, builder.call_args.kwargs['persistent_graph_cache_enabled'])
+
+        configured = {'ontologyProjectionGraphPersistentCacheEnabled': '1', 'ontologyProjectionGraphCacheEnabled': '1'}
+        binding = SimpleNamespace(candidate_rulebox={}, rulebox_release_preflight={}, rulebox_fingerprint='rules',
+                                  release_identity={'releaseFingerprint': 'frozen'}, release_artifact_persistence={})
+        launch = SimpleNamespace(configured=configured, platform=Mock(), descriptor=descriptor(),
+                                 deployment_health={}, candidate_settings=dict(configured), store_settings=dict(configured))
+        warmup = SimpleNamespace(runtime_rulebox_catalog={}, compiled_ontology_release={}, runtime_world_partition={})
+        delivery = SimpleNamespace(delivery_authorized=lambda: False, subject_decision_orchestrator=None,
+                                   ai_insight_handoff_service=None, insight_dispatch_service=None)
+        stores.reset_mock()
+        with ExitStack() as stack:
+            stack.enter_context(patch('digital_twin.infrastructure.operational_store', stores))
+            stack.enter_context(patch('digital_twin.infrastructure.composition.reasoning_launch.prepare_v2_launch', return_value=launch))
+            stack.enter_context(patch('digital_twin.infrastructure.composition.reasoning_binding.bind_v2_release', return_value=binding))
+            stack.enter_context(patch('digital_twin.infrastructure.ontology_graph_store.ontology_repository_from_settings'))
+            stack.enter_context(patch('digital_twin.infrastructure.time_series_factory.build_time_series_adapters', return_value={descriptor().time_series_backend_id: Mock()}))
+            stack.enter_context(patch('digital_twin.infrastructure.statistical_signal_factory.build_statistical_signal_pipeline_service'))
+            stack.enter_context(patch('digital_twin.infrastructure.composition.reasoning_warmup.warm_v2_release', return_value=warmup))
+            stack.enter_context(patch('digital_twin.infrastructure.composition.reasoning_release_health.record_v2_release_health'))
+            stack.enter_context(patch('digital_twin.infrastructure.composition.reasoning_delivery.wire_v2_decision_services', return_value=delivery))
+            stack.enter_context(patch('digital_twin.infrastructure.composition.outcomes.build_hypothesis_lifecycle_service'))
+            stack.enter_context(patch('digital_twin.infrastructure.event_bus.default_event_bus'))
+            recorder = stack.enter_context(patch('digital_twin.infrastructure.ontology_projection.PortfolioOntologyProjectionRecorder'))
+            for enabled in [False, True]:
+                engine = reasoning.build_v2_reasoning_engine(configured, persistent_graph_cache_enabled=enabled)
+                port = recorder.call_args.kwargs['graph_assembly_cache_store']
+                self.assertIs(stores.ontology_graph_assembly_cache_store.return_value if enabled else None, port)
+                self.assertEqual(configured, recorder.call_args.kwargs['settings'])
+                self.assertEqual(configured, engine.settings)
+                self.assertEqual(int(enabled), stores.ontology_graph_assembly_cache_store.call_count)
+                self.assertEqual('frozen', engine.release_identity()['releaseFingerprint'])
+
+    def test_ready_delivery_burst_removes_sleeps_and_retains_candidate_writer_turns(self):
+        with tempfile.TemporaryDirectory() as directory:
+            guard = LocalGraphWriterGuard('live', 'delivery', Path(directory))
+            candidate = LocalGraphWriterGuard('candidate', 'candidate', Path(directory))
+            turns, sleeps = [], []
+
+            def next_lane(deployment_id):
+                self.assertEqual(descriptor().deployment_id, deployment_id)
+                self.assertFalse(guard.status()['acquired'])
+                self.assertFalse(guard.status()['deliveryIntent'])
+                return 'CONTEXT'
+
+            runner = IndependentReasoningJobRunner(
+                SimpleNamespace(next_lane=next_lane), SimpleNamespace(descriptor=descriptor),
+                SimpleNamespace(), deployment_role='delivery', graph_writer_guard=guard,
+            )
+            runner.worker_liveness_loop = lambda *_: None
+            runner.prepare_queue_turn = lambda: {'status': 'ready'}
+
+            def run(_preparation):
+                self.assertTrue(guard.status()['acquired'])
+                turns.append(len(turns) + 1)
+                return {'status': 'completed', 'processedCount': 1}
+
+            def sleep(seconds):
+                sleeps.append((len(turns), seconds))
+                self.assertTrue(candidate.acquire()['acquired'])
+                self.assertFalse(guard.acquire()['acquired'])
+                guard.release()
+                candidate.release()
+
+            runner._run_once = run
+            with patch('digital_twin.modules.reasoning.application.independent_reasoning_engine.time.sleep', side_effect=sleep):
+                runner.watch(should_retire=lambda: len(turns) == 7)
+            self.assertEqual([(3, 5), (6, 5)], sleeps)
+            self.assertEqual(list(range(1, 8)), turns)
+            self.assertFalse(guard.status()['acquired'])
+            self.assertTrue(candidate.acquire()['acquired'])
+            candidate.release()
+
+    def test_watch_fast_path_requires_progress_and_due_work_and_never_bypasses_backoff(self):
+        completed = {'status': 'completed', 'processedCount': 1}
+        queue = SimpleNamespace(next_lane=Mock(return_value='REALTIME'))
+        runner = IndependentReasoningJobRunner(
+            queue, SimpleNamespace(descriptor=descriptor), SimpleNamespace(), deployment_role='delivery',
+        )
+        for role, result in [
+            ('candidate', completed), ('configured', completed),
+            *[('delivery', {'status': status, 'processedCount': 1}) for status in
+              ['idle', 'retry', 'failed', 'excluded', 'deferred', 'lease-lost', 'inactive-control-binding']],
+            ('delivery', {'status': 'completed', 'processedCount': 0}),
+            ('delivery', {**completed, 'retryAfterSeconds': 12}),
+            ('delivery', {**completed, 'graphWriterBackoff': {'retryAfterSeconds': 12}}),
+            ('delivery', {**completed, 'result': {'retryable': True}}),
+        ]:
+            with self.subTest(role=role, result=result):
+                runner.deployment_role = role
+                queue.next_lane.reset_mock()
+                runner._consecutive_delivery_turns = 2
+                self.assertEqual(5, runner.watch_delay_seconds(result, 5))
+                self.assertEqual(0, runner._consecutive_delivery_turns)
+                queue.next_lane.assert_not_called()
+        runner.deployment_role = 'active'
+        for response in ['', RuntimeError('queue unavailable')]:
+            queue.next_lane.side_effect = response if isinstance(response, Exception) else None
+            queue.next_lane.return_value = response
+            self.assertEqual(5, runner.watch_delay_seconds(completed, 5))
+        queue.next_lane.side_effect = None
+        queue.next_lane.return_value = 'CONTEXT'
+        self.assertEqual([0, 0, 5, 0], [runner.watch_delay_seconds(completed, 5) for _ in range(4)])
+        runner.queue = SimpleNamespace()
+        self.assertEqual(5, runner.watch_delay_seconds(completed, 5))
+        runner.worker_liveness_loop = lambda *_: None
+        runner.run_watch_turn = Mock(return_value=completed)
+        with patch('digital_twin.modules.reasoning.application.independent_reasoning_engine.time.sleep') as sleep:
+            runner.watch(should_retire=lambda: True)
+            sleep.assert_not_called()
+            runner.run_watch_turn.assert_called_once()
+
+    def test_optional_database_cache_omission_preserves_graphs_memory_hits_and_source_identity(self):
+        from digital_twin.infrastructure import ontology_projection as api
+        from projection_input_fixture import PersistentCache, RULES, clear_caches, recorder, source_snapshot
+
+        clear_caches(api)
+        self.addCleanup(clear_caches, api)
+        source = source_snapshot()
+        persistent = PersistentCache()
+        replay = recorder(api, source, cache=True, persistent=persistent)
+        expected = replay.build_graph_assembly(deepcopy(source), RULES)
+        self.assertEqual(['get', 'put'], persistent.calls)
+        clear_caches(api)
+        live = recorder(api, source, cache=True, persistent=persistent)
+        # Match delivery composition: omit the optional port, not source settings.
+        live.graph_assembly_cache_store = None
+        before = deepcopy(live.settings)
+        actual = live.build_graph_assembly(deepcopy(source), RULES)
+        self.assertEqual(asdict(expected[0]), asdict(actual[0]))
+        self.assertEqual(asdict(expected[1]), asdict(actual[1]))
+        self.assertEqual(replay.last_runtime_contexts, live.last_runtime_contexts)
+        self.assertEqual(before, live.settings)
+        self.assertEqual(['get', 'put'], persistent.calls)
+        self.assertFalse(actual[2]['runtimeStages'].get('graphAssemblyPersistentCacheStored', 0))
+        actual[0].worldview['callerMutation'] = True
+        hit = live.build_graph_assembly(deepcopy(source), RULES)
+        self.assertEqual('hit', hit[2]['status'])
+        self.assertEqual('memory', hit[2]['cacheLayer'])
+        self.assertEqual(asdict(expected[0]), asdict(hit[0]))
+        changed = deepcopy(source)
+        changed.positions[0].current_price += 1
+        changed.positions[0].source_as_of = '2026-07-20T00:02:00Z'
+        changed.generated_at = changed.positions[0].source_as_of
+        self.assertNotEqual('hit', live.build_graph_assembly(changed, RULES)[2]['status'])
+        # A new replay process still reuses the persisted original input.
+        clear_caches(api)
+        restored = recorder(api, source, cache=True, persistent=persistent)
+        restored_result = restored.build_graph_assembly(deepcopy(source), RULES)
+        self.assertEqual('persistent', restored_result[2]['cacheLayer'])
+        self.assertEqual(asdict(expected[1]), asdict(restored_result[1]))
+
     def test_source_reads_release_writer_but_native_inference_rechecks_claim_and_control(self):
         with tempfile.TemporaryDirectory() as directory:
             guard = LocalGraphWriterGuard('live', 'delivery', Path(directory))

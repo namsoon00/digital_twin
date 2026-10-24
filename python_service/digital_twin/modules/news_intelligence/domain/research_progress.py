@@ -58,6 +58,8 @@ def task_contract(task: Dict[str, object]) -> Dict[str, object]:
         contract["requiresDocumentBody"] = task["requiresDocumentBody"]
     if "sourceFocus" in task:
         contract["sourceFocus"] = task["sourceFocus"]
+    if "sourceRequirements" in task:
+        contract["sourceRequirements"] = task["sourceRequirements"]
     return contract
 
 

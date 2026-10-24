@@ -100,7 +100,7 @@ def source_recovery_summary(audit, provider_statuses=()):
             add(code, row.get("step", 0), decision.get("candidateId", ""),
                 document.get("url") or row.get("sourceUrl", ""))
     if (audit.get("stopReason") == "execution-deferred" or audit.get("complete") and
-            audit.get("stopReason") in {"step-budget-exhausted", "time-budget-exhausted", "context-budget-exhausted"}):
+            audit.get("stopReason") in {"step-budget-exhausted", "time-budget-exhausted", "context-budget-exhausted", "tool-budget-exhausted"}):
         add(audit["stopReason"])
     measured = bool(audit.get("recoveryVersion"))
     progress = {key: audit[key] for key in ("searchCount", "readCount", "extractionCount") if key in audit}

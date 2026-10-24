@@ -2,7 +2,7 @@ import json
 from typing import Callable, Dict, Iterable, List
 
 from digital_twin.modules.model_registry.domain.hypothesis_compilation import ranked_authoring_rules, rule_design_context
-from digital_twin.modules.model_registry.domain.hypothesis_authoring import authoring_catalog
+from digital_twin.modules.model_registry.domain.hypothesis_authoring import authoring_catalog, authoring_readiness
 from .hypothesis_research_context import research_context
 from digital_twin.modules.reasoning.contracts import portfolio_world_id
 
@@ -107,8 +107,15 @@ class RuleChangeCandidateProposalService:
             "ruleCount": (context.get("ruleBox") or {}).get("ruleCount", 0),
             "inferenceRelationCount": (context.get("inferenceBox") or {}).get("relationCount"),
         }
+        readiness = authoring_readiness(context["authoringContract"]) if hypothesis_proposal else {}
+        if readiness:
+            context_summary["authoringReadiness"] = readiness
         if context_observer:
             context_observer(context_summary)
+        if readiness.get("status") == "blocked":
+            return {"status": "blocked-capability", "candidateCount": 0, "savedCount": 0,
+                    "contextSummary": context_summary, "modelCalled": False,
+                    "candidates": [{"proposedRule": None, "blockers": readiness["blockers"]}]}
         candidates = list(self.advisor.propose(context) or [])[: self.max_candidates()]
         persist_as_general_candidate = not bool(hypothesis_proposal) and not strategy_design
         save_result = self.ontology_repository.save_rule_change_candidates(candidates, {

@@ -95,7 +95,7 @@ def check_persistence(test):
     store = test.store
     original = dict(store.runtime_settings)
     try:
-        store.runtime_settings.update(aiTokenBudgetEnabled="true", aiDailyTokenBudget=100_000)
+        store.runtime_settings.update(aiTokenBudgetEnabled="true", aiDailyTokenBudget=100_000, aiTokenBudgetPolicy="legacy")
         other = type(store)(store.runtime_settings)
         barrier = threading.Barrier(2)
         def start(worker):
@@ -116,8 +116,22 @@ def check_persistence(test):
         test.assertEqual("ai-token-budget-exhausted", store.status()["observationScheduling"]["reason"])
         with test.assertRaises(AIControlBudgetWait):
             other.begin_call("model-review", "hash")
+        # Non-model work is still claimable. The actual model call remains
+        # blocked, and a higher allowance wakes its deferred task exactly once.
+        from test_ai_control import SUBJECT
+        store.seed(SUBJECT)
+        job = store.claim()
+        test.assertIsNotNone(job)
+        tomorrow = store.status()["tokenUsageToday"]["resetAt"]
+        test.assertTrue(store.defer_budget(job, AIControlBudgetWait("token", tomorrow)))
+        test.assertIsNone(store.claim())
         # A higher budget resumes without erasing previous usage.
         store.runtime_settings["aiDailyTokenBudget"] = 200_000
+        resumed = store.claim()
+        test.assertEqual(job["taskId"], resumed["taskId"])
+        test.assertEqual(1, resumed["budgetDeferrals"])
+        test.assertTrue(store.defer_budget(resumed, AIControlBudgetWait("token", tomorrow)))
+        test.assertIsNone(store.claim())  # no repeated early wake on each tick
         second = store.begin_call("model-review", "hash")
         store.finish_call(second, "TimeoutError")
         tokens = store.status()["tokenUsageToday"]
@@ -133,6 +147,24 @@ def check_persistence(test):
         test.assertEqual(15, next_day["reportedTokens"])
         test.assertEqual(100_000, store.status()["tokenUsageToday"]["reportedTokens"])
         test.assertEqual(0, next_day["reservedTokens"])
+        # With the paced policy, accounting survives concurrent admission and
+        # idempotent completion; author/review never share preparation's cap.
+        from digital_twin.modules.ai_orchestration.domain.token_budget import POLICY
+        store.runtime_settings.update(aiDailyTokenBudget=20_000_000, aiTokenBudgetPolicy=POLICY)
+        start = later.replace(hour=0)
+        with store.transaction() as connection:
+            for _ in range(7):
+                store.reserve_tokens(connection, "independent-observation", start.isoformat(), "retrieval")
+                store.settle_tokens(connection, {"started_at": start.isoformat(), "workload": "independent-observation"},
+                                    USAGE, start.isoformat(), pool="retrieval")
+        with test.assertRaises(AIControlBudgetWait) as blocked:
+            with store.transaction() as connection:
+                store.reserve_tokens(connection, "independent-observation", start.isoformat(), "retrieval")
+        test.assertEqual("ai-token-allocation-budget-exhausted", blocked.exception.code)
+        with store.transaction() as connection:
+            store.reserve_tokens(connection, "independent-observation", start.isoformat(), "completion")
+            tokens = store.token_usage(connection, start)
+        test.assertEqual(100_000, tokens["allocation"]["pools"]["completion"])
     finally:
         store.runtime_settings.clear()
         store.runtime_settings.update(original)

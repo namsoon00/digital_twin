@@ -68,6 +68,7 @@ _EXPORTS.update({
     'question_terms': ('digital_twin.modules.news_intelligence.domain.question_passages', 'question_terms'),
     'select_question_filings': ('digital_twin.modules.news_intelligence.domain.question_passages', 'select_question_filings'),
     'source_research_focus': ('digital_twin.modules.news_intelligence.domain.source_focus', 'source_research_focus'),
+    'source_requirements': ('digital_twin.modules.news_intelligence.domain.source_focus', 'source_requirements'),
     'needs_filing_history': ('digital_twin.modules.news_intelligence.domain.source_focus', 'needs_filing_history'),
     'build_filing_history': ('digital_twin.modules.news_intelligence.domain.filing_history', 'build_filing_history'),
     'filing_history_material': ('digital_twin.modules.news_intelligence.domain.filing_history', 'history_material'),

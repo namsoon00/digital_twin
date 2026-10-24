@@ -22,7 +22,7 @@ class AITaskDispatchPersistence:
                 params = (clock,)
                 order = "lease_until,available_at,task_id"
             else:
-                where = "status='pending' AND (available_at<=%s OR last_error IN ('ai-call-budget-exhausted','ai-token-budget-exhausted'))"
+                where = "status='pending' AND (available_at<=%s OR last_error='ai-call-budget-exhausted')"
                 params = (clock,)
                 if lane == "other":
                     where += " AND capability NOT IN (" + ",".join(["%s"] * len(CAPABILITIES)) + ")"
@@ -49,7 +49,7 @@ class AITaskDispatchPersistence:
         # With one call left, excluded observations still explain the wait.
         if excluded and eligible:
             pending = connection.execute("SELECT task_id FROM ai_control_tasks WHERE capability IN ('observe','market-observe') AND "
-                "((status='pending' AND (available_at<=%s OR last_error IN ('ai-call-budget-exhausted','ai-token-budget-exhausted'))) "
+                "((status='pending' AND (available_at<=%s OR last_error='ai-call-budget-exhausted')) "
                 "OR (status='processing' AND lease_until<%s)) LIMIT 1", (clock, clock)).fetchone()
             if pending:
                 raise admission_wait(budget, "observe")
@@ -60,7 +60,7 @@ class AITaskDispatchPersistence:
         clock = stamp(now)
         rows = connection.execute("SELECT /*+ MAX_EXECUTION_TIME(5000) */ capability,"
             "SUM(status='pending') AS pending,"
-            "SUM(status='pending' AND (available_at<=%s OR last_error IN ('ai-call-budget-exhausted','ai-token-budget-exhausted'))) AS due,"
+            "SUM(status='pending' AND (available_at<=%s OR last_error='ai-call-budget-exhausted')) AS due,"
             "MIN(CASE WHEN status='pending' AND available_at<=%s THEN available_at END) AS oldest_due,"
             "SUM(status='processing' AND lease_until>=%s) AS processing,"
             "SUM(status='processing' AND lease_until<%s) AS expired "

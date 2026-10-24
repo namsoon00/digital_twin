@@ -162,6 +162,8 @@ class BoundedEvidenceReadinessTests(unittest.TestCase):
         self.assertIn('read_report', {b['properties']['tool']['enum'][0] for b in branches})
 
     def test_new_frozen_author_repair_and_review_replay_and_reject_changed_schema(self):
+        from judgment_quality_checks import check_purpose_quality
+        check_purpose_quality(self)
         value = packet(); value['researchKnowledge'] = context(value)
         frozen = freeze_execution_input(value, [], [])
         self.assertEqual(evidence_readiness.PROMPT_VERSION, frozen['promptVersion'])
@@ -403,6 +405,8 @@ class SourceRenewalStorageTests(unittest.TestCase):
         self.assertEqual(self.job['taskId'], self.store.review_proof(save(reviewed))['taskId'])
         from compact_retrieval_checks import check_compact_storage
         check_compact_storage(self, value, save)
+        from judgment_quality_checks import check_quality_storage
+        check_quality_storage(self, value, save)
 
     def setUp(self):
         from test_ai_control import AIControlStorageTests, SUBJECT

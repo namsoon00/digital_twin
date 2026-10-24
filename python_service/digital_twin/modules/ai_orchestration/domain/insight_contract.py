@@ -15,7 +15,7 @@ from digital_twin.modules.ai_orchestration.domain.observation_wording import OBS
 
 
 INSIGHT_VERSION = "observation-insight-v1"
-CAUSAL_GUARD_VERSION = "observation-causality-v3"
+CAUSAL_GUARD_VERSION = "observation-causality-v4"
 SECTIONS = ("summary", "comparison", "hypothesis", "portfolioImpact", "counterEvidence", "notificationReason")
 METRICS = {
     "change24h": ("24시간 변동률", "%"), "change7d": ("7일 변동률", "%"),
@@ -167,7 +167,7 @@ def unsupported_cause_v2(sentence, section):
     return not limitation
 
 
-def unsupported_cause(sentence, section):
+def unsupported_cause_v3(sentence, section):
     # A future source confirmation is a test condition, not an already
     # established cause. Remove only that conditional attribution.
     conditional = re.sub(r"원인으로\s*(?:밝히|확인하|밝혀지|확인되)(?:면|는 경우)", "", sentence)
@@ -180,8 +180,21 @@ def unsupported_cause(sentence, section):
     return not bool(uncertain_past and not asserted_clause)
 
 
+def unsupported_cause(sentence, section):
+    # Remove only explicit uncertainty predicates attached to the cause. A
+    # separate disclaimer cannot excuse another affirmative attribution.
+    uncertain = re.sub(
+        r"원인(?:은|는|이|가|에\s*대해서는)?\s*(?:(?:아직|여전히|현재(?:로서는)?|정확히|명확히)\s*){0,3}"
+        r"(?:미확인|불명확|불분명|불확실|명확하지\s*않|확인되지\s*않|확인하지\s*못)", "", sentence)
+    # A comma within a reason ("부족하기 때문에, 판단을 보류") must not
+    # detach the predicate that makes it a limitation rather than causality.
+    clauses = re.split(r";|(?<=[다요]),|하지만|그러나|다만|(?<=[았었였됐했졌])(?:지만|으며|고)\s*", uncertain)
+    return any(unsupported_cause_v3(clause, section) for clause in clauses)
+
+
 def insight_errors(result, packet, *, causal_guard_version=CAUSAL_GUARD_VERSION):
-    guards = {CAUSAL_GUARD_VERSION: unsupported_cause, "observation-causality-v2": unsupported_cause_v2,
+    guards = {CAUSAL_GUARD_VERSION: unsupported_cause, "observation-causality-v3": unsupported_cause_v3,
+              "observation-causality-v2": unsupported_cause_v2,
               "observation-causality-v1": unsupported_cause_v1}
     if causal_guard_version not in guards:
         raise ValueError("unknown observation causality guard")
@@ -234,7 +247,8 @@ def insight_errors(result, packet, *, causal_guard_version=CAUSAL_GUARD_VERSION)
     comparisons = result.get("observations", [])
     business = result.get("businessResearch") or {}
     from .company_value import explains_value
-    minimum = 0 if business.get("theses") or business.get("reviews") or explains_value(result, packet) else 1
+    from .judgment_policy import documentary_review
+    minimum = 0 if business.get("theses") or business.get("reviews") or explains_value(result, packet) or documentary_review(result, packet) else 1
     if not isinstance(comparisons, list) or not minimum <= len(comparisons) <= 6:
         errors.append("확인 가능한 관측 비교가 필요합니다.")
     else:
@@ -306,4 +320,6 @@ def narrative_digest(result):
         content["companyValuePresentationVersion"] = result["companyValuePresentationVersion"]
     if "questionResolutions" in result:
         content["questionResolutions"] = result["questionResolutions"]
+    if "documentaryReview" in result:
+        content["documentaryReview"] = result["documentaryReview"]
     return content_hash(content)

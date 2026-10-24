@@ -115,7 +115,9 @@ class InsightGroundingTests(unittest.TestCase):
         new = local_quality(result)
         self.assertTrue(any('원인으로 단정' in error for error in old['errors']))
         self.assertFalse(new['errors'])
-        self.assertEqual('observation-causality-v3', new['causalGuardVersion'])
+        self.assertEqual('observation-causality-v4', new['causalGuardVersion'])
+        from judgment_quality_checks import check_causality
+        check_causality(self)
         for text in ('제품 구성이나 원가 부담 때문에 이익으로 연결되지 않았을 수 있습니다.',
                      '공식 원문이 일회성 요인을 주된 원인으로 밝히면 이 설명은 약해집니다.'):
             result['hypothesis'] = text

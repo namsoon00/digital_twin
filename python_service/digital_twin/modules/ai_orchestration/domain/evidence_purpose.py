@@ -41,14 +41,23 @@ def validate(packet):
 
 
 def author_version(packet):
+    from . import judgment_policy
+    if judgment_policy.enabled(packet):
+        return judgment_policy.PROMPT_VERSION
     return company_value.PROMPT_VERSION if company_value.enabled(packet) else PROMPT_VERSION
 
 
 def repair_version(packet):
+    from . import judgment_policy
+    if judgment_policy.enabled(packet):
+        return judgment_policy.REPAIR_VERSION
     return company_value.REPAIR_VERSION if company_value.enabled(packet) else REPAIR_VERSION
 
 
 def review_version(packet):
+    from . import judgment_policy
+    if judgment_policy.enabled(packet):
+        return judgment_policy.REVIEW_VERSION
     return company_value.REVIEW_VERSION if company_value.enabled(packet) else REVIEW_VERSION
 
 

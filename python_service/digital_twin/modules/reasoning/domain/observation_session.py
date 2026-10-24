@@ -155,10 +155,10 @@ class ObservationEvidenceSession:
         value["evidenceCategory"] = self._facts[fact_id]["evidenceCategory"]
         return {"facts": [value], "nextCursor": None, "sourceSnapshots": deepcopy(self._packet["sourceSnapshots"])}
 
-    def select(self, fact_ids, views=None):
+    def select(self, fact_ids, views=None, *, macro_baseline=True):
         """Keep quote and the v2 bounded macro baseline alongside requested facts."""
         selected = set(fact_ids) | {row["id"] for row in self._packet["facts"] if row["kind"] in OBSERVATION_QUOTE_KINDS
-            or (self._packet["profile"] in {EVIDENCE_PROFILE, CRYPTO_EVIDENCE_PROFILE} and row["evidenceCategory"] == "macro")}
+            or (macro_baseline and self._packet["profile"] in {EVIDENCE_PROFILE, CRYPTO_EVIDENCE_PROFILE} and row["evidenceCategory"] == "macro")}
         if selected - self._facts.keys():
             raise EvidenceContractError("unknown selected evidence")
         packet = self.packet()

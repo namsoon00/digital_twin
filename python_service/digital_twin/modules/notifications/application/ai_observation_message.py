@@ -161,6 +161,9 @@ def render_ai_observation(result, *, sent_at="", debug_number=""):
     if business.get("reviews"):
         lines += ["", "이전 사업 가설 재검토", *["• " + review["reason"] for review in business["reviews"]]]
     checks = result.get("followUpConditions", [])
+    if result.get("documentaryReview"):
+        lines += ["", "다음 자료에서 확인할 내용", *["• " + question for question in result["documentaryReview"]["questions"]],
+                  "새 원문이나 다음 실적이 들어오면 다시 확인합니다. 가격 전망의 적중 조건은 아닙니다."]
     if checks:
         lines += ["", "다음 관찰에서 확인할 조건"]
         for row in checks:

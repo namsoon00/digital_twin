@@ -353,7 +353,9 @@ class HypothesisClosedLoopTests(unittest.TestCase):
         self.assertEqual("fixture", prompt_context["ruleDesign"]["examples"][0]["conditions"][0]["target_property_filters"]["field"])
         self.assertIn(RULE_DESIGN_VERSION, prompt)
         self.assertEqual([], rule_design_context(context, max_bytes=1)["examples"])
-        repository = SimpleNamespace(rulebox_snapshot=Mock(return_value=context["ruleBox"]),
+        from digital_twin.modules.model_registry.domain.ontology_rulebox_catalog import default_graph_inference_rules
+        runnable = {**context["ruleBox"], "rules": [rule, *[r.to_dict() for r in default_graph_inference_rules()]]}
+        repository = SimpleNamespace(rulebox_snapshot=Mock(return_value=runnable),
                                      inferencebox_snapshot=Mock(side_effect=TimeoutError("unneeded live detail")))
         advisor = SimpleNamespace(propose=Mock(return_value=[]))
         service = RuleChangeCandidateProposalService(repository, advisor)
@@ -487,7 +489,12 @@ class HypothesisClosedLoopTests(unittest.TestCase):
         self.assertEqual(["event-response"], assessment["failedConditionIds"])
         model_store.latest.assert_called_once_with("main", subject_id="MSTR", model_release_id="event-v2")
         repository.inferencebox_snapshot.assert_not_called()
-        supplied = advisor.propose.call_args.args[0]
+        # This minimal receipt fixture has no registered executable baseline;
+        # preflight keeps the receipt but must not spend an authoring call.
+        advisor.propose.assert_not_called()
+        self.assertEqual("blocked-capability", result["status"])
+        supplied = {**service.build_context(["MSTR"], "fixture", read_inference=False),
+                    "hypothesisProposal": hypothesis().to_dict(), "modelAssessmentContext": receipt}
         self.assertIn('"failedConditionIds"', build_rule_change_candidate_prompt(supplied))
         model_store.latest.return_value["accountId"] = "other"
         rejected = service.model_assessment_context(supplied, "main")

@@ -55,6 +55,8 @@ def build_ai_control_service(settings=None):
     configured["aiObservationLanePolicy"] = lane_policy
     from digital_twin.modules.ai_orchestration.domain.evidence_readiness import VERSION as read_policy
     configured["aiEvidenceReadPolicy"] = read_policy
+    from digital_twin.modules.ai_orchestration.domain.judgment_policy import VERSION as judgment_policy
+    configured["aiJudgmentQualityPolicy"] = judgment_policy
     store = MySQLAIControlStore(configured)
     def projection_status(job):
         from digital_twin.modules.reasoning.public import observation_projection_status

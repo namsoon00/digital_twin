@@ -103,9 +103,12 @@ class SourceExplorationService:
             if (audit["readCount"] < 3 and audit.get("extractionCount", 0) < 1 and read_documents
                     and callable(getattr(self.tools, "extract", None))):
                 allowed.append("extract")
+            if allowed == ["finish"] and not pending_step:
+                audit["stopReason"] = "tool-budget-exhausted"
+                break  # No paid planning call solely to acknowledge an empty tool budget.
             context = {"version": VERSION, "subject": {"symbol": target.normalized_symbol(), "name": target.name},
                 "publicSourcePolicy": "registered-public-documents-v1",
-                "tasks": [{key: row.get(key) for key in ("taskId", "question", "purpose", "sourceTypes", "queryTerms", "maxAgeMinutes", "requiredPeriodEnds", "requiredMetrics")}
+                "tasks": [{key: row.get(key) for key in ("taskId", "question", "purpose", "sourceTypes", "queryTerms", "maxAgeMinutes", "requiredPeriodEnds", "requiredMetrics", "sourceFocus", "sourceRequirements")}
                           for row in tasks],
                 "assessments": assessments, "existingEvidence": packets[:6],
                 "candidates": list(candidates.values()), "documents": documents,
@@ -197,6 +200,9 @@ class SourceExplorationService:
                 # A failed source may have an alternative. Never interpret a
                 # transport/parser/model failure as proof that data is absent.
                 step.update(status="failed", errorKind=str(error)[:120] if isinstance(error, ValueError) else type(error).__name__)
+                if isinstance(error, ValueError) and str(error) == "duplicate-exploration-operation":
+                    audit["stopReason"] = "operation-repeated"
+                    break  # A second identical operation cannot buy four more planning attempts.
                 if "decision" not in step:
                     audit["stopReason"] = "exploration-model-failed"
                     break

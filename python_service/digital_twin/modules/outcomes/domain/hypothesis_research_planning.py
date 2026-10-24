@@ -124,10 +124,11 @@ def research_planner_input(
             "planId": str(plan.get("planId") or ""),
             "unresolvedQuestions": list(plan.get("unresolvedQuestions") or []),
             "taskCount": len(plan.get("tasks") or []),
-            "tasks": [{key: item.get(key) for key in (
+            "tasks": [{**{key: item.get(key) for key in (
                 "taskId", "question", "purpose", "requiredEvidenceTypes", "sourceTypes",
                 "requiredPeriodEnds", "requiredMetrics", "maxAgeMinutes", "evidenceAssessment",
-            )} for item in (plan.get("tasks") or [])[:16] if isinstance(item, dict)],
+            )}, **{key: item[key] for key in ("sourceFocus", "sourceRequirements") if key in item}}
+                for item in (plan.get("tasks") or [])[:16] if isinstance(item, dict)],
         },
         "researchProgress": dict(plan.get("evidenceAssessment") or {}),
         "dataCoverageMap": {

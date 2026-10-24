@@ -64,6 +64,9 @@ function run(mode) {
     ORBIT_INFRASTRUCTURE_OVERRIDE_ENABLED: "1",
     MYSQL_DATABASE: "orbit_alpha_test",
     MYSQL_TEST_DATABASE: "orbit_alpha_test",
+    // General fixtures test hard admission separately from wall-clock pacing.
+    // The allocation regressions inject paced-completion-v1 with a fixed clock.
+    AI_TOKEN_BUDGET_POLICY: "legacy",
     TYPEDB_ADDRESS: "127.0.0.1:1739",
     TYPEDB_HTTP_ADDRESS: "127.0.0.1:8010",
     TYPEDB_DATA_PATH: path.join(rootDir, "data", "test-runtime", "typedb-data"),

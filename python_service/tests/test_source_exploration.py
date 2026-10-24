@@ -353,6 +353,8 @@ class SourceExplorationTests(unittest.TestCase):
         self.assertEqual(4, evidence_packets(accepted, claims)[0]["documentPassages"][0]["page"])
 
     def test_ai_missing_requirements_prevent_false_completion(self):
+        from judgment_quality_checks import check_source_requirements
+        check_source_requirements(self)
         evidence = tools_for().read(TARGET, {"url": URL}, [TASK], 10)["evidence"]
         accepted, claims, _ = governed_evidence([evidence], TARGET, 1440)
         packets = evidence_packets(accepted, claims)
@@ -370,7 +372,9 @@ class SourceExplorationTests(unittest.TestCase):
         advisor = Mock(); advisor.choose.return_value = {"action": "search", "query": "NVIDIA same query", "reason": "find data"}
         _, audit = SourceExplorationService(advisor, tools).explore(TARGET, [TASK], [], [])
         self.assertEqual(1, tools.search_provider.search.call_count)
-        self.assertEqual(6, len(audit["steps"]))
+        self.assertEqual(2, len(audit["steps"]))
+        self.assertEqual("operation-repeated", audit["stopReason"])
+        self.assertEqual(2, advisor.choose.call_count)
         self.assertIn("duplicate-exploration-operation", str(audit))
         for value in ({"action": "read", "candidateId": "invented", "reason": "read"},
                       {"action": "search", "query": "private-account data", "reason": "search"},

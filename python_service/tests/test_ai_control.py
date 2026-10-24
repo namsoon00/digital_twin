@@ -183,6 +183,8 @@ class AIControlTests(unittest.TestCase):
         from ai_token_budget_checks import check_usage_and_budget, check_quota_backoff
         check_usage_and_budget(self)
         check_quota_backoff(self)
+        from judgment_quality_checks import check_paced_budget
+        check_paced_budget(self)
         from ai_observation_resume_checks import ResumeChecks
         ResumeChecks().workflow()
         ResumeChecks().coverage()
@@ -490,6 +492,8 @@ class AIControlStorageTests(unittest.TestCase):
     def test_budgets_survive_new_store_and_failed_calls_consume_admission(self):
         from ai_token_budget_checks import check_persistence
         check_persistence(self)
+        from judgment_quality_checks import check_metrics
+        check_metrics(self)
         from datetime import datetime, timezone
         reset = budget_state({}, 0, 24, datetime(2026, 10, 1, 23, 59, tzinfo=timezone.utc))["budgetResetAt"]
         self.assertEqual("2026-10-02T00:00:00Z", reset)
@@ -499,7 +503,8 @@ class AIControlStorageTests(unittest.TestCase):
         with self.store.connect() as connection:
             import json
             metrics = json.loads(connection.execute("SELECT metrics_json FROM ai_control_call_metrics WHERE call_id=%s", (call,)).fetchone()["metrics_json"])
-        self.assertEqual({"modelProcessMs": 240001, "terminationReason": "timeout", "usage": None, "usageStatus": "unknown"}, metrics)
+        self.assertEqual({"modelProcessMs": 240001, "terminationReason": "timeout", "usage": None, "usageStatus": "unknown",
+                          "tokenReservation":100000, "tokenPool":"preparation", "promptVersion":""}, metrics)
         # One call remains, but a draft must leave room for its critique. The
         # wait must not claim work, use task budget or exhaust failure retries.
         for _ in range(3):

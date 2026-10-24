@@ -67,7 +67,6 @@ class AIControlService:
             with self.store.keep_alive(job):
                 if job["capability"] in lanes.OBSERVATIONS:
                     stage = "evidence-capture"
-                    self.store.execution_wait()
                     capture = self.evidence({**job, "marketWorldId": current_subject.get("marketWorldId", "")})
                     session = capture if isinstance(capture, ObservationEvidenceSession) else None
                     packet = session.packet() if session else capture
@@ -87,6 +86,9 @@ class AIControlService:
                     stage = "memory-and-followup"
                     history = [row for row in history if not row.get("worldId") or row["worldId"] == job["worldId"]]
                     packet = company_value.annotate(packet, history)
+                    from ..domain import judgment_policy
+                    if self.settings.get("aiJudgmentQualityPolicy") == judgment_policy.VERSION and evidence_purpose.enabled(packet):
+                        packet["judgmentQualityPolicy"] = judgment_policy.VERSION
                     brain_reader = (self.market_brain_memory or self.brain_memory) if lanes.market(packet) else self.brain_memory
                     research = list(brain_reader(job["accountId"], job["symbol"], job["worldId"]))
                     research.extend(self.research_memory(job["accountId"], job["symbol"]))
@@ -242,6 +244,7 @@ class AIControlService:
                             result["repair"]["inputId"] = repair_id
                             repaired = validate_plan(self.planner(correction, repair_id), packet, correction["researchResults"], require_research=True, require_resolution=True)
                             result.pop("conditionValidation", None)
+                            result.pop("documentaryReview", None)
                             result.update(repaired, executionInputId=repair_id, observedAt=stamp(), memoryCoverage=correction["memoryCoverage"],
                                           judgmentContinuity=judgment_continuity(correction),
                                           comparisonFacts=historical_facts(correction["previousAnalyses"]))
@@ -276,6 +279,8 @@ class AIControlService:
                     if result.get("conditionValidation", {}).get("reasonCode") == "condition-baseline-unusable":
                         result["dataRecovery"] = {"status": "awaiting-next-observation", "reasonCode": "condition-baseline-unusable",
                                                   "sameSnapshotRepairSkipped": True}
+                    if judgment_policy.enabled(packet):
+                        result["judgmentLinks"] = judgment_policy.judgment_links(result)
                     from ..domain.scoped_research import research_disposition
                     result["processingOutcome"] = disposition(packet, retry_identity,
                         research_disposition(result) or (evidence_purpose.authored_status(result) if evidence_purpose.enabled(packet) else "data-wait" if result.get("dataRecovery") else "output-invalid" if result["quality"]["status"] == "rejected" else "ready"),

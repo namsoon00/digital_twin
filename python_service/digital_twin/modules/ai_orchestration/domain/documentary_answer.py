@@ -47,7 +47,7 @@ def documentary_answer(run, task_id):
     exploration = (run.get("executedPlan") or {}).get("sourceExploration") or {}
     if not complete and exploration:
         stop = exploration.get("stopReason")
-        if stop in {"step-budget-exhausted", "time-budget-exhausted", "context-budget-exhausted"}:
+        if stop in {"step-budget-exhausted", "time-budget-exhausted", "context-budget-exhausted", "tool-budget-exhausted"}:
             blockers.append("추가 탐색 예산을 사용했지만 필요한 근거를 모두 확인하지 못했습니다.")
         elif stop == "exploration-model-failed":
             blockers.append("다음 조사 방법을 선택하는 AI 실행에 실패했습니다.")

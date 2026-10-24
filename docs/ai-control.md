@@ -848,6 +848,69 @@ changing this presentation does not force an otherwise unchanged judgment to run
 Token budgets, independent publication review and receipt-based delivery controls
 are unchanged.
 
+### Purpose-specific quality and paced completion
+
+New inputs use `independent-observation-retrieval-v12-purpose-quality`, author
+`independent-observation-v24-purpose-quality`, repair V20 and review V13. Frozen
+V11 routing and older authored contracts remain replayable. The quality policy
+participates in the material-change key once; polling that same policy is not
+new evidence and does not authorize repeated paid reviews.
+
+The `paced-completion-v1` token policy releases cumulative capacity each UTC hour
+with a bounded initial burst. Preparation can use at most 60% of released capacity,
+and retrieval at most 40%. The remaining 40% is protected for final authoring,
+repair and independent reviews. Retrieval admission also leaves two call
+reservations for completion. Actual usage can exceed a reservation, so this does
+not guarantee that every in-flight draft completes. The daily admission ceiling,
+provider quota and capacity guards still apply independently. `AI_DAILY_TOKEN_BUDGET`
+sets the local ceiling; `AI_TOKEN_BUDGET_POLICY=legacy` selects the former daily-only
+policy. General test fixtures use legacy pacing; fixed-clock tests exercise hourly
+allocation, protected completion, settlement and increased-budget wakeup explicitly.
+
+Task claims may perform source checks, retirements and repeat suppression during a
+token wait. Model calls still require a transactionally reserved allowance. A
+budget increase or hourly release wakes only token-deferred tasks, in batches,
+without clearing their usage, failure counters or source-research checkpoints.
+Call metrics retain the prompt version and charged pool; cached input and reasoning
+tokens remain subsets of input and output.
+
+Macro data remains in the readable catalog but is no longer automatically inserted
+into every final judgment under the new policy. Required memory and evidence
+provenance remain frozen. A source-dated explanation may omit numerical price
+conditions only when both core claims cite usable, dated documentary facts and
+it leaves a concrete question for the next source review. The plan is derived and
+hash-checked; it is not a price prediction or proof that a hypothesis succeeded.
+Current-price explanations retain their existing checks. Causality guard V4 accepts
+explicit unknown-cause statements without accepting an adjacent affirmative causal
+claim; V1–V3 remain available for historical replay.
+
+Question research carries `original-source-requirements-v1`: original target,
+period and completion criterion, stable identifiers for remaining evidence gaps,
+and issuer/date/period/passage checks. Numeric material additionally needs units,
+currency, consolidated scope and quarter/cumulative-period checks. These are
+collection requirements, never an answer approval. Existing partial answers and
+resume checkpoints remain intact. Repeating the same source operation stops the
+exploration, and exhausting useful tool actions no longer spends an extra model
+call just to finish. Hypothesis authoring checks that registered predictive models
+and additional conditions exist before calling the author; semantic fit and all
+subsequent validation remain required.
+
+`judgmentLinks` records the authored evidence hashes, question impacts, thesis
+reviews and follow-up observations together. Its authority is audit lineage only.
+An accepted review, a partial/answered source question, an observed price condition
+and an empirically qualified hypothesis remain distinct states. Company valuation
+uses the existing governed calculations and explicit portfolio/alternative limits;
+this change does not manufacture fair prices or introduce automatic trading.
+
+Use `python3 scripts/audit-ai-judgment-quality.py --since <ISO-time> --output <private-path>`
+for an explicit read-only snapshot. It selects bounded IDs through time indexes,
+reads necessary result paths and call metadata by key, and joins delivery receipts
+even when queue jobs have been removed. Authored cohorts use the result-root prompt
+version. Tokens per authored task are reported only for retained central calls with
+complete usage coverage; separate source jobs and deleted history are excluded.
+Unmeasured calls, billing and investment accuracy are explicit. The tool never
+initializes stores, changes queues, invokes models or schedules another report.
+
 Replay private captures without model calls, database writes or notifications:
 
 ```bash

@@ -104,8 +104,12 @@ def validate_plan(value, packet, research=(), require_research=False, require_re
             business = value.get("businessResearch") or {}
             from .scoped_research import research_only
             from .company_value import explains_value
+            from .judgment_policy import documentary_review
+            documentary = documentary_review(value, packet)
+            if documentary:
+                result["documentaryReview"] = documentary
             internal = research_only(packet) and notification["send"] is False
-            result["followUpConditions"] = [] if value.get("followUpConditions") == [] and (internal or business.get("theses") or business.get("reviews") or explains_value(value, packet)) else prepare_observation_conditions(value.get("followUpConditions"), packet)
+            result["followUpConditions"] = [] if value.get("followUpConditions") == [] and (internal or business.get("theses") or business.get("reviews") or explains_value(value, packet) or documentary) else prepare_observation_conditions(value.get("followUpConditions"), packet)
         except (ValueError, KeyError, TypeError) as error:
             result["followUpConditions"] = []
             result["conditionValidation"] = error.diagnostic if isinstance(error, ObservationConditionError) else {

@@ -13,6 +13,25 @@ from .ontology_evolution import comparison_measurement
 AUTHORING_CONTRACT = "registered-hypothesis-design-v2"
 
 
+def authoring_readiness(catalog):
+    """Reject an empty executable vocabulary before paying for a design.
+
+    This checks registered capability only. Whether the original hypothesis
+    matches a particular model still requires the bounded design and review.
+    """
+    blockers = []
+    for field, requirement in (
+        ("baselines", "원래 질문과 비교할 결과 지표·기간이 고정된 예측 모델 계약을 등록해야 합니다."),
+        ("conditions", "기존 예측과 비교할 추가 조건 계약을 등록해야 합니다."),
+    ):
+        if not catalog.get(field):
+            blockers.append({"kind": "unsupported-capability", "requirement": requirement,
+                             "dependencyKey": "registered-authoring-" + field})
+    return {"version": "registered-authoring-preflight-v1", "status": "blocked" if blockers else "ready",
+            "catalogFingerprint": catalog.get("catalogFingerprint"), "blockers": blockers,
+            "scope": "registered-capability-only-not-hypothesis-validation"}
+
+
 def _rules(context):
     return {row["rule_id"]: GraphInferenceRule.from_dict(row).to_dict()
             for row in (context.get("ruleBox") or {}).get("rules") or []

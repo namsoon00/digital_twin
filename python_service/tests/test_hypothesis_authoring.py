@@ -38,6 +38,8 @@ class RegisteredHypothesisAuthoringTests(unittest.TestCase):
         }}
 
     def test_assembly_preserves_registered_measurement_actions_and_unique_claim_identity(self):
+        from judgment_quality_checks import check_authoring_preflight
+        check_authoring_preflight(self)
         context = self.context()
         original = copy.deepcopy(context)
         assembled = assemble_hypothesis_design(self.candidate(), context)

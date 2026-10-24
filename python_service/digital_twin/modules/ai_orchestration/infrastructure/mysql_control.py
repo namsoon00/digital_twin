@@ -16,7 +16,7 @@ from digital_twin.modules.ai_orchestration.domain.execution_input import validat
 from digital_twin.modules.ai_orchestration.domain.budget import AIControlBudgetWait, admission_wait, budget_state, budgets_enabled
 from digital_twin.modules.ai_orchestration.domain.recovery import retry_delays
 from digital_twin.modules.ai_orchestration.domain.retrieval import RETRIEVAL_PROMPT_VERSION, validate_trace
-from ..domain import working_retrieval, scoped_retrieval, indexed_retrieval, question_retrieval, lane_retrieval, bounded_retrieval, purpose_retrieval, compact_retrieval, retrieval_view, evidence_readiness, evidence_purpose
+from ..domain import working_retrieval, scoped_retrieval, indexed_retrieval, question_retrieval, lane_retrieval, bounded_retrieval, purpose_retrieval, compact_retrieval, quality_retrieval, judgment_policy, retrieval_view, evidence_readiness, evidence_purpose
 from digital_twin.modules.reasoning.contracts import content_hash
 from digital_twin.modules.ai_orchestration.infrastructure.mysql_execution import AIExecutionPersistence, EXECUTION_SCHEMA
 from digital_twin.modules.ai_orchestration.domain.execution_resilience import safe_diagnostic
@@ -27,7 +27,7 @@ from ..domain.task_dispatch import SCOPE as DISPATCH_SCOPE, dispatched
 from .mysql_task_dispatch import AITaskDispatchPersistence
 from .mysql_diagnostic_progress import DiagnosticProgressPersistence, SCHEMA as DIAGNOSTIC_SCHEMA
 from .mysql_token_usage import AITokenUsagePersistence
-from ..domain.token_budget import usage_counts, RESERVATION
+from ..domain.token_budget import usage_counts, RESERVATION, execution_pool
 
 
 STATUS_INDEXES = (
@@ -120,9 +120,10 @@ class MySQLAIControlStore(AITokenUsagePersistence, DiagnosticProgressPersistence
         clock = datetime.fromisoformat(now.replace("Z", "+00:00"))
         day = now[:10]
         with self.transaction() as connection:
-            tokens = self.token_usage(connection, clock)
-            if tokens["exhausted"]:
-                raise AIControlBudgetWait("token", tokens["resetAt"])
+            # Claiming a task also performs retirement, repeat suppression,
+            # cached source checks and follow-up accounting without a model.
+            # The locked begin_call reservation remains the model admission gate.
+            self.wake_token_waiters(connection, clock)
             cursor = self._locked_execution_state(connection, DISPATCH_SCOPE, clock)
             connection.execute("INSERT INTO ai_control_budget (day_key,used_count) VALUES (%s,0) "
                                "ON DUPLICATE KEY UPDATE day_key=VALUES(day_key)", (day,))
@@ -391,9 +392,10 @@ class MySQLAIControlStore(AITokenUsagePersistence, DiagnosticProgressPersistence
                 raise ValueError("retrieval audit requires owned frozen input")
             envelope = json.loads(gzip.decompress(frozen["artifact_gzip"]))
             validate_execution_input(envelope)
-            if envelope["promptVersion"] not in {compact_retrieval.VERSION, *purpose_retrieval.SUPPORTED_VERSIONS, bounded_retrieval.VERSION, lane_retrieval.VERSION, RETRIEVAL_PROMPT_VERSION, working_retrieval.VERSION, scoped_retrieval.VERSION, indexed_retrieval.VERSION, question_retrieval.VERSION}:
+            if envelope["promptVersion"] not in {quality_retrieval.VERSION, compact_retrieval.VERSION, *purpose_retrieval.SUPPORTED_VERSIONS, bounded_retrieval.VERSION, lane_retrieval.VERSION, RETRIEVAL_PROMPT_VERSION, working_retrieval.VERSION, scoped_retrieval.VERSION, indexed_retrieval.VERSION, question_retrieval.VERSION}:
                 raise ValueError("retrieval audit requires retrieval input")
-            validator = (compact_retrieval.validate_trace if envelope["promptVersion"] == compact_retrieval.VERSION else
+            validator = (quality_retrieval.validate_trace if envelope["promptVersion"] == quality_retrieval.VERSION else
+                         compact_retrieval.validate_trace if envelope["promptVersion"] == compact_retrieval.VERSION else
                          purpose_retrieval.validate_trace if envelope["promptVersion"] in purpose_retrieval.SUPPORTED_VERSIONS else
                          bounded_retrieval.validate_trace if envelope["promptVersion"] == bounded_retrieval.VERSION else
                          lane_retrieval.validate_trace if envelope["promptVersion"] == lane_retrieval.VERSION else
@@ -403,7 +405,7 @@ class MySQLAIControlStore(AITokenUsagePersistence, DiagnosticProgressPersistence
                          working_retrieval.validate_trace if envelope["promptVersion"] == working_retrieval.VERSION else validate_trace)
             full_trace = [*envelope["retrievalContext"].get("trace", []), step]
             validator(full_trace)
-            if envelope["promptVersion"] == compact_retrieval.VERSION:
+            if envelope["promptVersion"] in {compact_retrieval.VERSION, quality_retrieval.VERSION}:
                 retrieval_view.paths(envelope["current"], {**envelope["retrievalContext"], "trace": full_trace})
             connection.execute("INSERT IGNORE INTO ai_control_retrieval_rounds "
                 "(input_id,task_id,attempt,round_status,artifact_hash,artifact_gzip,created_at) VALUES (%s,%s,%s,%s,%s,%s,%s)",
@@ -418,12 +420,14 @@ class MySQLAIControlStore(AITokenUsagePersistence, DiagnosticProgressPersistence
         now = stamp()
         workload = workload[:64]
         with self.transaction() as connection:
+            prompt_version = ""
             if workload == "independent-observation":
-                frozen = connection.execute("SELECT i.task_id,i.prompt_hash FROM ai_control_inputs i "
+                frozen = connection.execute("SELECT i.task_id,i.prompt_hash,i.artifact_gzip FROM ai_control_inputs i "
                     "JOIN ai_control_tasks t ON t.task_id=i.task_id AND t.attempts=i.attempt "
                     "WHERE i.input_id=%s AND t.status='processing' AND t.lease_until>=%s", (input_id, stamp())).fetchone()
                 if not frozen or frozen["task_id"] != task_id or frozen["prompt_hash"] != prompt_hash:
                     raise ValueError("independent AI call requires exact persisted input")
+                prompt_version = json.loads(gzip.decompress(frozen["artifact_gzip"]))["promptVersion"]
             if task_id:
                 day = "calls:" + now[:10]
                 maximum = bounded(self.runtime_settings.get("aiControlDailyCallBudget"), 24, 0, 300)
@@ -433,10 +437,12 @@ class MySQLAIControlStore(AITokenUsagePersistence, DiagnosticProgressPersistence
                     reset = budget_state(self.runtime_settings, 0, row["used_count"], datetime.fromisoformat(now.replace("Z", "+00:00")))["budgetResetAt"]
                     raise AIControlBudgetWait("call", reset)
                 connection.execute("UPDATE ai_control_budget SET used_count=used_count+1 WHERE day_key=%s", (day,))
-            self.reserve_tokens(connection, workload, now)
+            pool = execution_pool(workload, prompt_version)
+            self.reserve_tokens(connection, workload, now, pool)
             connection.execute("INSERT INTO ai_control_calls (call_id,workload,status,task_id,prompt_hash,started_at) VALUES (%s,%s,'running',%s,%s,%s)", (call_id, workload, task_id[:64], prompt_hash, now))
             connection.execute("INSERT INTO ai_control_call_metrics (call_id,metrics_json) VALUES (%s,%s)",
-                               (call_id, json.dumps({"tokenReservation": RESERVATION})))
+                               (call_id, json.dumps({"tokenReservation": RESERVATION, "tokenPool": pool,
+                                                    "promptVersion": prompt_version})))
             if input_id:
                 connection.execute("INSERT INTO ai_control_input_calls (call_id,input_id) VALUES (%s,%s)", (call_id, input_id))
         return call_id
@@ -456,15 +462,17 @@ class MySQLAIControlStore(AITokenUsagePersistence, DiagnosticProgressPersistence
             if not call or call["status"] != "running":
                 return
             saved = connection.execute("SELECT metrics_json FROM ai_control_call_metrics WHERE call_id=%s", (call_id,)).fetchone()
-            reserved = json.loads(saved["metrics_json"]).get("tokenReservation") if saved else None
+            admission = json.loads(saved["metrics_json"]) if saved else {}
+            reserved = admission.get("tokenReservation")
             usage = usage_counts((metrics or {}).get("usage"))
             not_started = (metrics or {}).get("processNotStarted") is True
             if reserved == RESERVATION:
-                self.settle_tokens(connection, call, usage, stamp(), not_started)
-            metrics = {**(metrics or {}), "usage": usage, "usageStatus": "not-started" if not_started else "reported" if usage is not None else "unknown"}
+                self.settle_tokens(connection, call, usage, stamp(), not_started, admission.get("tokenPool"))
+            metrics = {**(metrics or {}), **admission, "usage": usage, "usageStatus": "not-started" if not_started else "reported" if usage is not None else "unknown"}
             if metrics:
                 safe = {key: metrics[key] for key in ("stage", "configuredTimeoutSeconds", "promptBytes",
-                    "capacityWaitMs", "modelProcessMs", "totalMs", "returnCode", "terminationReason", "failure", "usage", "usageStatus") if key in metrics}
+                    "capacityWaitMs", "modelProcessMs", "totalMs", "returnCode", "terminationReason", "failure", "usage", "usageStatus",
+                    "tokenReservation", "tokenPool", "promptVersion") if key in metrics}
                 if "failure" in safe:
                     safe["failure"] = safe_diagnostic(safe["failure"])
                 connection.execute("INSERT INTO ai_control_call_metrics (call_id,metrics_json) VALUES (%s,%s) "
@@ -533,6 +541,6 @@ class MySQLAIControlStore(AITokenUsagePersistence, DiagnosticProgressPersistence
                            "attempts": row["attempts"], "lastError": row["last_error"], "updatedAt": row["updated_at"],
                            "result": json.loads(row["result_json"])} for row in rows],
                 "callsToday": list(calls), "tokenUsageToday": tokens, **state,
-                "observationScheduling": wait.result() if wait else {"status": "ready"},
+                "observationScheduling": {**wait.result(), "scope": "model-calls-only", "nonModelChecksAllowed": True} if wait else {"status": "ready"},
                 "activeTaskCount": int(active["count"]), "executionHealth": health, "taskScheduling": scheduling,
                 "executionLanes": lanes}

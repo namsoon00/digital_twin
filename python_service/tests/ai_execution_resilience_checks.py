@@ -102,13 +102,13 @@ class ExecutionResilienceChecks(unittest.TestCase):
     def check_recovery_wait_defers_before_graph_capture_and_does_not_fail_task(self):
         import test_ai_control as helpers
         service, store, planner = helpers.AIControlTests().runner()
-        store.execution_wait.side_effect = AIExecutionDeferred("2026-10-07T06:15:00Z", "quota")
+        planner.side_effect = AIExecutionDeferred("2026-10-07T06:15:00Z", "quota")
         self.assertEqual("recovery-wait", service.run_once()["status"])
-        service.evidence.assert_not_called(); planner.assert_not_called(); store.fail.assert_not_called()
+        service.evidence.assert_called_once(); planner.assert_called_once(); store.fail.assert_not_called()
         store.defer_execution.assert_called_once()
-        store.execution_wait.side_effect = None
+        planner.side_effect = None
         self.assertEqual("completed", service.run_once()["status"])
-        service.evidence.assert_called_once()
+        self.assertEqual(2, service.evidence.call_count)
 
     def check_health_separates_active_process_from_success_and_backlog(self):
         failed = [{"workload": "independent-observation", "status": "failed", "count": 155}]

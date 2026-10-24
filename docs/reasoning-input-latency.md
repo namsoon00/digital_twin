@@ -1,5 +1,51 @@
 # Reasoning Input Latency
 
+## Reuse transaction preparation and exact source packets (2026-10-24)
+
+The monitor now serializes each final account state once for the current row,
+historical row and canonical ingress comparison. Sorted-key normalization remains
+mandatory, including corporate-action maps whose insertion order previously
+created false deltas. The value is scoped to the current transaction and discarded
+after the account's ingress comparison. The already prepared previous-state
+projection in the immutable source packet is also reused for scoped input rows.
+Current/history/source/input/mailbox writes retain their SQL, order and shared
+commit/rollback boundary; mutable outcome and performance history is still read
+independently by the reasoning worker.
+
+Each source repository has a cache of serialized immutable packets, bounded to
+four entries and 64 MiB of retained string storage. It rechecks the durable row's
+existence and fingerprint on every hit. Deleted sources return missing, changed
+fingerprints reload payload and fingerprint together, and DB failures do not
+grant cached authority. Different repository instances never share this cache.
+Each subject decodes its own object, avoiding another full deep copy after JSON
+decoding. Rehydrated account metadata is already isolated and needs only a
+top-level copy for replay labels. Source timestamps, settings, target selection,
+freshness rules and release identities are unchanged; no cross-subject decision
+or mutable outcome is cached here.
+
+A frozen operational current/previous pair (15.02 MB current JSON, 10.55 MB source
+packet) was compared against `ff4aaac36` four times in alternating order. All SQL
+strings/parameters, normalized state and ingress payloads were exactly equal.
+Local median preparation, including the unchanged ingress gate, fell from
+9.193s to 7.744s. This used a recording DB port and excludes database writes.
+A separate read-only real-MySQL comparison of the same immutable packet returned
+identical data in four reads: median read/decoding/isolation time was 0.589s before
+and 0.175s after. Full-payload reads decreased from four to one, with three fresh
+fingerprint checks. These are component measurements on one historical pair,
+not full native-inference replay, a trading-accuracy test, or an end-to-end SLO.
+The complete rehydrated account snapshot, including replay metadata, also matched
+the original reader exactly in a separate real-MySQL read-only comparison.
+Native execution and waiting for the previous subject still need their own
+operating measurements.
+
+`test_reasoning_source_preparation` covers byte-for-byte persistence/delta parity,
+previous/future/missing baselines, caller and repository isolation, source repair,
+deletion, malformed data and DB failures, LRU/byte budgets, the actual live reader
+constructor, and real MySQL rollback of source plus failed ingress. The existing
+replay, writer, projection and runtime-wiring suites remain applicable. Benchmarks
+use private temporary captures; no account data or fabricated investment alert is
+committed or sent.
+
 ## Bounded delivery bursts and optional cache storage (2026-10-24)
 
 The managed delivery/active V2 worker now immediately checks its next turn after

@@ -48,6 +48,7 @@ def upsert_reasoning_snapshot_inputs(
     previous_state: Dict[str, object],
     *,
     _runtime_settings: Any,
+    previous_projection: Dict[str, object] = None,
 ):
     """Persist target-scoped TypeDB input beside its verified source row.
 
@@ -69,7 +70,7 @@ def upsert_reasoning_snapshot_inputs(
     )
     base["accountId"] = str(base.get("accountId") or normalized_account_id)
     base["generatedAt"] = str(base.get("generatedAt") or source_generated_at)
-    compact_previous = (
+    compact_previous = previous_projection if previous_projection is not None else (
         compact_monitor_state_for_ontology(
             previous_state,
             settings=_runtime_settings,

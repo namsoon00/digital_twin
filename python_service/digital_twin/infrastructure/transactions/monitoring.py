@@ -30,6 +30,7 @@ from digital_twin.modules.market_data.domain.price_observation_diagnostics impor
 from digital_twin.modules.reasoning.domain.ontology_projection_input import compact_monitor_state_for_ontology, compact_monitor_state_for_reasoning_base, compact_monitor_state_for_reasoning_symbol, reasoning_snapshot_symbols
 from digital_twin.modules.portfolio.domain.portfolio import AccountSnapshot, AlertEvent, account_snapshot_from_monitor_state, monitor_state_has_live_account_data
 from digital_twin.modules.reasoning.domain.reasoning_source_snapshot import build_reasoning_source_snapshot
+from digital_twin.modules.reasoning.infrastructure.source_packet_cache import SourcePacketCache
 from digital_twin.modules.portfolio.contracts import MonitoringCycleRecordResult
 from digital_twin.modules.reasoning.domain.verified_snapshot_reasoning import verified_monitor_snapshot_reasoning_event
 from digital_twin.infrastructure.operational_common import json_dumps
@@ -95,6 +96,8 @@ def snapshot_state_for_persistence(snapshot: AccountSnapshot, previous: Dict[str
 def reasoning_snapshot_for_persisted_boundary(
     snapshot: AccountSnapshot,
     persisted_state: Dict[str, object],
+    *,
+    payload_json: str = None,
 ) -> AccountSnapshot:
     """Rehydrate the exact normalized source boundary used by TypeDB.
 
@@ -109,7 +112,7 @@ def reasoning_snapshot_for_persisted_boundary(
     # gate; otherwise a bounded map can select different rows solely because a
     # provider returned the same object in another insertion order.
     canonical_state = (
-        json.loads(json_dumps(persisted_state))
+        json.loads(payload_json if payload_json is not None else json_dumps(persisted_state))
         if isinstance(persisted_state, dict)
         else {}
     )
@@ -556,6 +559,7 @@ class MySQLMarketObservationReasoningAnchorStore(MySQLOperationalConnection):
 class MySQLMonitorStore(MySQLOperationalConnection):
     def __init__(self, settings: Dict[str, str] = None):
         super().__init__(settings)
+        self._source_packet_cache = SourcePacketCache()
         self.payload = {"previous": self.load_previous(), "sent": self.load_sent()}
 
     def load_previous(self) -> Dict[str, object]:
@@ -734,18 +738,43 @@ class MySQLMonitorStore(MySQLOperationalConnection):
         """Read one immutable, queue-owned reasoning source packet."""
 
         del target_symbols  # The packet is already bounded and replayable.
+        payload = _json_loads(self.reasoning_source_snapshot_json(snapshot_id), {})
+        return payload if isinstance(payload, dict) else {}
+
+    def reasoning_source_snapshot_json(self, snapshot_id: str) -> str:
+        """Read an exact packet, rechecking durable authority on every cache hit.
+
+        Missing rows and DB failures never fall back to cached data. Corrections
+        load both fingerprint and payload from the same new row read. The cache
+        belongs to this repository/database instance, not a process global.
+        """
+        snapshot_id = str(snapshot_id or "")
+        cached = self._source_packet_cache.get(snapshot_id)
         with self.connect() as connection:
+            if cached is not None:
+                row = connection.execute(
+                    "SELECT fingerprint FROM verified_reasoning_source_snapshots "
+                    "WHERE snapshot_id = %s LIMIT 1",
+                    (snapshot_id,),
+                ).fetchone() or {}
+                if not row:
+                    self._source_packet_cache.discard(snapshot_id)
+                    return ""
+                if str(row.get("fingerprint") or "") == cached[0]:
+                    return cached[1]
+                self._source_packet_cache.discard(snapshot_id)
             row = connection.execute(
                 """
-                SELECT payload_json
+                SELECT fingerprint, payload_json
                 FROM verified_reasoning_source_snapshots
                 WHERE snapshot_id = %s
                 LIMIT 1
                 """,
-                (str(snapshot_id or ""),),
+                (snapshot_id,),
             ).fetchone() or {}
-        payload = _json_loads(row.get("payload_json"), {})
-        return dict(payload or {}) if isinstance(payload, dict) else {}
+        payload_json = row.get("payload_json") or ""
+        self._source_packet_cache.put(snapshot_id, str(row.get("fingerprint") or ""), payload_json)
+        return payload_json
 
     def reasoning_source_snapshot_metadata(self, snapshot_id: str) -> Dict[str, object]:
         with self.connect() as connection:
@@ -805,7 +834,7 @@ class MySQLMonitorStore(MySQLOperationalConnection):
         state: Dict[str, object],
         stamp: str = "",
         previous_state: Dict[str, object] = None,
-    ) -> None:
+    ) -> str:
         updated_at = stamp or utc_now()
         generated_at = str(state.get("generatedAt") or updated_at)
         reasoning_state = dict(state or {})
@@ -820,12 +849,20 @@ class MySQLMonitorStore(MySQLOperationalConnection):
             previous_state=previous_state,
             settings=self.runtime_settings,
         )
+        # Reuse only values prepared from this transaction's final state and
+        # locked previous state. Never carry these across monitor cycles.
+        payload_json = json_dumps(state)
+        previous_projection = (
+            (source_snapshot["payload"].get("metadata") or {}).get("previousMonitorState") or {}
+            if isinstance(previous_state, dict) and previous_state else {}
+        )
         market_data_writes.upsert_monitor_snapshot(
             connection=connection,
             account_id=account_id,
             generated_at=generated_at,
             state=state,
             updated_at=updated_at,
+            payload_json=payload_json,
         )
         self.upsert_reasoning_snapshot_inputs_with_connection(
             connection,
@@ -834,6 +871,7 @@ class MySQLMonitorStore(MySQLOperationalConnection):
             generated_at=generated_at,
             stamp=updated_at,
             previous_state=previous_state,
+            previous_projection=previous_projection,
         )
         market_data_writes.upsert_monitor_snapshot_history(
             connection=connection,
@@ -842,12 +880,14 @@ class MySQLMonitorStore(MySQLOperationalConnection):
             state=state,
             temporal_projection=temporal_projection,
             updated_at=updated_at,
+            payload_json=payload_json,
         )
         reasoning_writes.insert_verified_source_snapshot(
             connection=connection,
             source_snapshot=source_snapshot,
             updated_at=updated_at,
         )
+        return payload_json
 
     def upsert_reasoning_snapshot_inputs_with_connection(
         self,
@@ -858,6 +898,7 @@ class MySQLMonitorStore(MySQLOperationalConnection):
         generated_at: str = "",
         stamp: str = "",
         previous_state: Dict[str, object] = None,
+        previous_projection: Dict[str, object] = None,
     ) -> None:
         return reasoning_writes.upsert_reasoning_snapshot_inputs(
             connection=connection,
@@ -867,6 +908,7 @@ class MySQLMonitorStore(MySQLOperationalConnection):
             stamp=stamp,
             previous_state=previous_state,
             _runtime_settings=self.runtime_settings,
+            previous_projection=previous_projection,
         )
 
     def upsert_snapshot_state(
@@ -991,6 +1033,7 @@ class MySQLOntologyReasoningMonitorStore(MySQLMonitorStore):
         # deserialize every raw monitor snapshot.  A persistent sidecar must
         # start without that cost even before it knows which symbol is next.
         MySQLOperationalConnection.__init__(self, settings)
+        self._source_packet_cache = SourcePacketCache()
         self.payload = {"previous": {}, "sent": self.load_sent()}
         self._reasoning_state_cache = {}
 
@@ -1377,17 +1420,20 @@ class MySQLMonitoringCycleRecorder(MySQLOperationalConnection):
             # Persist the source snapshot before publishing its replayable
             # TypeDB work. The two writes share this transaction, so a worker
             # can never see a barrier without the exact snapshot it names.
+            snapshot_payloads = {}
             for account_id, state in snapshot_states.items():
                 state = record_candidates(state, alert_events or [], outboxed_events,
                                           market_observation_guard_result.get("exclusionCountsByAccount") or {})
                 snapshot_states[account_id] = state
-                self.monitor_store.upsert_snapshot_state_with_connection(
+                payload_json = self.monitor_store.upsert_snapshot_state_with_connection(
                     connection,
                     account_id,
                     state,
                     stamp,
                     previous_state=previous_states.get(account_id),
                 )
+                if isinstance(payload_json, str):
+                    snapshot_payloads[account_id] = payload_json
             for snapshot in live_snapshots:
                 # A material quote candidate is TypeDB-first even when raw
                 # delivery is deferred. The old path only forwarded an
@@ -1407,6 +1453,7 @@ class MySQLMonitoringCycleRecorder(MySQLOperationalConnection):
                 reasoning_snapshot = reasoning_snapshot_for_persisted_boundary(
                     snapshot,
                     snapshot_states.get(snapshot.account_id) or {},
+                    payload_json=snapshot_payloads.pop(snapshot.account_id, None),
                 )
                 reasoning_event = verified_monitor_snapshot_reasoning_event(
                     reasoning_snapshot,

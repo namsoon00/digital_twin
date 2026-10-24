@@ -410,7 +410,9 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # Four bounded delivery burst, backoff, cache parity and runtime-wiring regressions.
         # Twelve event lineage, observation freshness and deployment-bound diagnostic regressions.
         # Nine complementary-source scheduling, lease/backoff and transport regressions.
-        self.assertLessEqual(total, 2572)
+        # Seven source-preparation regressions cover SQL/delta parity, exact
+        # authority, copy/namespace isolation, memory bounds and atomic rollback.
+        self.assertLessEqual(total, 2579)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

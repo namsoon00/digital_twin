@@ -70,6 +70,8 @@ def upsert_monitor_snapshot(
     generated_at: Any,
     state: Any,
     updated_at: Any,
+    *,
+    payload_json: str = None,
 ):
     return connection.execute(
         """
@@ -88,7 +90,7 @@ def upsert_monitor_snapshot(
             str(state.get("mode") or ""),
             str(state.get("status") or ""),
             generated_at,
-            json_dumps(state),
+            payload_json if payload_json is not None else json_dumps(state),
             updated_at,
         ),
     )
@@ -101,6 +103,8 @@ def upsert_monitor_snapshot_history(
     state: Any,
     temporal_projection: Any,
     updated_at: Any,
+    *,
+    payload_json: str = None,
 ):
     return connection.execute(
         """
@@ -114,7 +118,7 @@ def upsert_monitor_snapshot_history(
         (
             account_id,
             generated_at,
-            json_dumps(state),
+            payload_json if payload_json is not None else json_dumps(state),
             json_dumps(temporal_projection),
             updated_at,
         ),

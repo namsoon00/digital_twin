@@ -1,6 +1,7 @@
 """Read the latest verified monitor snapshot for bounded ontology replay."""
 
 import copy
+import json
 from datetime import datetime, timezone
 from typing import Dict
 
@@ -100,6 +101,15 @@ class LatestMonitorSnapshotReasoningSource:
     ) -> Dict[str, object]:
         boundary = self.source_snapshot_boundary(account_id, reasoning_context)
         boundary_snapshot_id = str(boundary.get("snapshotId") or "").strip()
+        serialized_reader = getattr(self.monitor_store, "reasoning_source_snapshot_json", None)
+        if boundary_snapshot_id and callable(serialized_reader):
+            try:
+                # Decoding an immutable string already gives this caller its
+                # own mutable state. Avoid another full provider-archive copy.
+                state = json.loads(serialized_reader(boundary_snapshot_id) or "{}")
+            except Exception:
+                return {}
+            return state if isinstance(state, dict) else {}
         source_packet_reader = getattr(
             self.monitor_store,
             "reasoning_source_snapshot_state",
@@ -369,7 +379,9 @@ class LatestMonitorSnapshotReasoningSource:
         freshness = self.snapshot_freshness(snapshot, reasoning_context)
         if str(freshness.get("status") or "") != "ready":
             return self.unavailable_snapshot(account, freshness)
-        metadata = copy.deepcopy(snapshot.metadata or {})
+        # The rehydrator already owns a deep copy. Only these top-level replay
+        # fields are replaced; do not copy the frozen previous-state tree again.
+        metadata = dict(snapshot.metadata or {})
         account_context = getattr(account, "ontology_account_context", None)
         if callable(account_context):
             metadata["accountContext"] = dict(account_context() or {})

@@ -327,7 +327,8 @@
         "account_id",
         "generated_at",
         "state",
-        "updated_at"
+        "updated_at",
+        "payload_json"
       ]
     },
     "upsert_monitor_snapshot_history": {
@@ -343,7 +344,8 @@
         "generated_at",
         "state",
         "temporal_projection",
-        "updated_at"
+        "updated_at",
+        "payload_json"
       ]
     },
     "insert_verified_source_snapshot": {
@@ -374,7 +376,8 @@
         "state",
         "generated_at",
         "stamp",
-        "previous_state"
+        "previous_state",
+        "previous_projection"
       ],
       "docstring": "Persist target-scoped TypeDB input beside its verified source row.\n\n        The durable mailbox event is inserted in the same monitoring-cycle\n        transaction.  Writing this cache here gives the reasoning worker a\n        small, revision-aligned input without asking it to decode the source\n        provider archive after it has already claimed live queue work.\n        "
     },

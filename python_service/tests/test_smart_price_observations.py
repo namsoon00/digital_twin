@@ -46,8 +46,212 @@ def falling():
     return state, events[0]
 
 
-class SmartPriceObservationTests(unittest.TestCase):
+class PriceContextAssertions:
+    def assert_repeated_reference_merges_preserve_actual_price_proof(self):
+        from digital_twin.infrastructure.kis_market_signals import KISMarketSignalProvider
+        from digital_twin.modules.market_data.domain.price_observation_windows import source_point
+        provider = object.__new__(KISMarketSignalProvider)
+        selected = snapshot(0, 100).positions[0]
+        reference = {"currentPrice": 90, "dataQuality": "mixed", "marketSignalCoverage": {
+            "price": {"freshnessStatus": "last-close"}}}
+        for _ in range(4):
+            selected = provider.merge_position(selected, reference)
+            self.assertEqual(100, selected.current_price)
+            self.assertEqual("available", source_point(selected.to_dict(), snapshot(0, 100).generated_at)[1])
+            self.assertEqual("actual", selected.market_signal_coverage["selectedPrice"]["dataQuality"])
+        selected.market_signal_coverage["selectedPrice"]["values"]["currentPrice"] = 99
+        selected = provider.merge_position(selected, reference)
+        self.assertIsNone(source_point(selected.to_dict(), snapshot(0, 100).generated_at)[0])
+
+    def assert_invalid_first_socket_tick_preserves_account_quote_and_proven_cache(self):
+        from digital_twin.infrastructure.kis_market_signals import KISMarketSignalProvider
+        from digital_twin.infrastructure.kis_realtime_ws import merge_realtime_signal, KIS_TR_CCN_PRICE
+        provider = object.__new__(KISMarketSignalProvider)
+        position = snapshot(0, 100).positions[0]
+        position.symbol = "005930"
+        for stamp in ("", "2026-10-15T02:00:00Z"):
+            signal = merge_realtime_signal({}, {"symbol": position.symbol, "currentPrice": 105,
+                "wireFieldCount": 46, "priceSourceAsOf": stamp}, "ccnl", KIS_TR_CCN_PRICE, "2026-10-15T01:00:05Z")
+            merged = provider.merge_position(position, signal)
+            self.assertEqual((100, "provider", position.source_as_of),
+                             (merged.current_price, merged.source_timestamp_state, merged.source_as_of))
+        verified = merge_realtime_signal({}, {"symbol": position.symbol, "currentPrice": 101,
+            "wireFieldCount": 46, "priceSourceAsOf": "2026-10-15T01:00:04Z"}, "ccnl", KIS_TR_CCN_PRICE, "2026-10-15T01:00:05Z")
+        self.assertEqual(101, provider.merge_position(position, verified).current_price)
+        mixed = {**verified, "sourceTimestampState": "queried-at-fallback"}
+        bad = merge_realtime_signal(mixed, {"symbol": position.symbol, "currentPrice": 110},
+                                    "ccnl", KIS_TR_CCN_PRICE, "2026-10-15T01:00:06Z")
+        self.assertEqual(mixed, bad)
+
+    def assert_session_context_uses_matching_provider_facts_and_multiplicative_gaps(self):
+        from digital_twin.modules.market_data.domain.price_observation_context import advance_price_context
+        from digital_twin.modules.notifications.domain.price_movement_presentation import price_context_lines
+        snap = snapshot(0, 105, previous_close=100)
+        item = snap.positions[0]
+        item.market_signal_coverage = {"ccnl": {"dataQuality": "actual", "sourceTimestampState": "provider",
+            "sourceAsOf": snap.generated_at, "marketSession": "regular",
+            "values": {"symbol": "TEST", "currentPrice": 105, "changeRate": 5}, "sessionPrices": {"open": 104, "high": 108, "low": 102}}}
+        context_state, facts = advance_price_context(snap.to_monitor_state(), {}, {})
+        daily = facts["TEST"]["daily"]
+        self.assertEqual("provider-session", daily["basis"])
+        self.assertAlmostEqual(4, daily["gapPct"])
+        self.assertAlmostEqual(1.05, (1 + daily["gapPct"] / 100) * (1 + daily["sinceOpenPct"] / 100))
+        self.assertIn("개장 갭 +4.00%", '\n'.join(price_context_lines(facts["TEST"], "KRW")))
+        for rate in (None, 2):
+            inconsistent = deepcopy(snap)
+            inconsistent.positions[0].market_signal_coverage['ccnl']['values']['changeRate'] = rate
+            _, limited = advance_price_context(inconsistent.to_monitor_state(), {}, {})
+            self.assertIn('sinceOpenPct', limited['TEST']['daily'])
+            self.assertNotIn('gapPct', limited['TEST']['daily'])
+        prior = snap.to_monitor_state()
+        prior['metadata']['marketPriceContext'] = context_state
+        newer = deepcopy(snap)
+        newer.generated_at = '2026-10-15T01:01:00Z'
+        newer.positions[0].source_as_of = newer.generated_at
+        newer.positions[0].market_signal_coverage['ccnl']['sourceAsOf'] = newer.generated_at
+        newer.positions[0].market_signal_coverage['ccnl']['sessionPrices']['high'] = 109
+        _, later = advance_price_context(newer.to_monitor_state(), prior, {})
+        self.assertTrue(later['TEST']['daily']['newHigh'])
+        self.assertEqual(105, later['TEST']['currentPrice'])
+        for field, value in (("sourceAsOf", "2026-10-14T01:00:00Z"), ("values", {"symbol": "OTHER", "currentPrice": 105})):
+            altered = deepcopy(snap)
+            altered.positions[0].market_signal_coverage["ccnl"][field] = value
+            _, facts = advance_price_context(altered.to_monitor_state(), {}, {})
+            self.assertEqual("observed-session", facts["TEST"]["daily"]["basis"])
+            self.assertNotIn("gapPct", facts["TEST"]["daily"])
+
+    def assert_partial_day_range_and_new_day_never_invent_open_or_full_day_extrema(self):
+        from digital_twin.modules.market_data.domain.price_observation_context import advance_price_context, STATE_KEY as CONTEXT
+        first = snapshot(0, 100).to_monitor_state()
+        state, _ = advance_price_context(first, {}, {})
+        first["metadata"][CONTEXT] = state
+        second = snapshot(1, 105).to_monitor_state()
+        after, facts = advance_price_context(second, first, {})
+        self.assertEqual(100, facts["TEST"]["daily"]["low"])
+        self.assertTrue(facts["TEST"]["daily"]["newHigh"])
+        self.assertNotIn("open", facts["TEST"]["daily"])
+        second["metadata"][CONTEXT] = after
+        _, facts = advance_price_context(snapshot(1440, 90).to_monitor_state(), second, {})
+        self.assertEqual(90, facts["TEST"]["daily"]["high"])
+        self.assertNotIn("newLow", facts["TEST"]["daily"])
+        other = snapshot(2, 80).to_monitor_state()
+        other["accountId"] = "different"
+        _, facts = advance_price_context(other, second, {})
+        self.assertEqual(80, facts["TEST"]["daily"]["high"])
+
+    def assert_historical_comparison_excludes_overlap_future_wrong_length_and_warmup(self):
+        from digital_twin.modules.market_data.domain.price_observation_context import window_context
+        state = {}
+        for minute in range(16):
+            state, events = cycle(state, minute, 100 if minute < 15 else 104)
+        path = state["metadata"][PATHS]["TEST"]
+        current = snapshot(15, 104)
+        history = []
+        for index in range(24):
+            clock = START - timedelta(days=1 + index // 8, hours=(index % 8) * 3)
+            history.append([clock.isoformat(), 900.0, 1.0, clock.strftime('%Y-%m-%d') + ':' + str(clock.hour // 3)])
+        history.sort()
+        history.extend([[START.isoformat(), 900, 500, '2026-10-15:0'],
+                        [(START + timedelta(days=1)).isoformat(), 900, 500, '2026-10-16:0'],
+                        [(START - timedelta(days=1)).isoformat(), 1000, 500, '2026-10-14:0']])
+        before = deepcopy(history)
+        _, comparisons = window_context(path, {"15": history}, current.positions[0].to_dict())
+        comparison = next(row for row in comparisons if row['windowMinutes'] == 15)
+        # A sample ending at this interval's start is disjoint and may be used.
+        self.assertEqual(25, comparison['sampleCount'])
+        self.assertEqual("available", comparison['status'])
+        self.assertAlmostEqual(4, comparison['medianMultiple'])
+        self.assertEqual(before, history)
+        _, comparisons = window_context(path, {"15": history[:10]}, current.positions[0].to_dict())
+        self.assertEqual('insufficient-history', next(row for row in comparisons if row['windowMinutes'] == 15)['status'])
+
+    def assert_new_context_is_frozen_in_price_event_and_persisted_with_diagnostics(self):
+        state = {}
+        for minute in range(16):
+            state, events = cycle(state, minute, 100 if minute < 15 else 104)
+        event = events[0]
+        context = alert_context(event)
+        self.assertEqual('above', context['priceContext']['priorRange']['break'])
+        self.assertIn('금일 관측 구간', '\n'.join(event.lines))
+        self.assertIn('자료 축적 중', '\n'.join(event.lines))
+        self.assertEqual(16, state['metadata']['marketPriceDiagnostics']['evaluationCounts']['available'])
+        repeated = persist_price_state(snapshot(15, 104).to_monitor_state(), state, SETTINGS)
+        self.assertEqual(state['metadata']['marketPriceDiagnostics'], repeated['metadata']['marketPriceDiagnostics'])
+        missing = snapshot(16, 110, source_timestamp_state='websocket-received')
+        rejected = persist_price_state(missing.to_monitor_state(), state, SETTINGS)
+        self.assertEqual(1, rejected['metadata']['marketPriceDiagnostics']['evaluationCounts']['unverified-source-clock'])
+
+    def assert_comparable_history_survives_session_changes_without_mixing_sessions(self):
+        from digital_twin.modules.market_data.domain.price_observation_context import (
+            advance_price_context, window_context, STATE_KEY as CONTEXT)
+        previous = snapshot(0, 100).to_monitor_state()
+        states, _ = advance_price_context(previous, {}, {})
+        history = []
+        for index in range(24):
+            clock = START - timedelta(days=1 + index // 8, hours=index % 8)
+            history.append([clock.isoformat(), 900 + (index % 3 - 1) * 30, 1,
+                            clock.date().isoformat() + ':' + str(clock.hour), 'regular'])
+        history.append([(START - timedelta(days=4)).isoformat(), 900, 500, '2026-10-11:1', 'after-hours'])
+        history.sort()
+        states['TEST']['samples'] = {'15': history}
+        previous['metadata'][CONTEXT] = states
+        extended = snapshot(1, 200, market_session='after-hours').to_monitor_state()
+        states, _ = advance_price_context(extended, previous, {})
+        extended['metadata'][CONTEXT] = states
+        regular = snapshot(2, 100).to_monitor_state()
+        states, facts = advance_price_context(regular, extended, {})
+        self.assertEqual(history, states['TEST']['samples']['15'])
+        self.assertEqual(100, facts['TEST']['daily']['high'])
+        path = {'status': 'available', 'points': [{'at': (START + timedelta(minutes=m)).isoformat(),
+                 'price': 100 if m < 15 else 104} for m in range(16)]}
+        _, comparisons = window_context(path, states['TEST']['samples'], snapshot(15, 104).positions[0].to_dict())
+        result = next(row for row in comparisons if row['windowMinutes'] == 15)
+        self.assertEqual((24, 'available'), (result['sampleCount'], result['status']))
+        self.assertEqual((870, 930), (result['historicalMinSeconds'], result['historicalMaxSeconds']))
+        self.assertAlmostEqual(4, result['medianMultiple'])
+        from digital_twin.modules.notifications.domain.price_movement_presentation import price_context_lines
+        presentation = '\n'.join(price_context_lines({**facts['TEST'], 'comparisons': [result]}, 'KRW'))
+        self.assertIn('현재 15.0분 변동 비교 (과거 14.5~15.5분)', presentation)
+        self.assertNotIn('자료 축적 중', presentation)
+        regular['metadata'][CONTEXT] = states
+        changed = snapshot(3, 100, quote_source='other-provider').to_monitor_state()
+        states, _ = advance_price_context(changed, regular, {})
+        self.assertEqual({}, states['TEST']['samples'])
+
+    def assert_context_history_is_bounded_and_not_projected_into_ai_input(self):
+        from digital_twin.modules.market_data.domain.price_observation_context import advance_price_context, STATE_KEY as CONTEXT, VERSION
+        from digital_twin.modules.reasoning.domain.ontology_projection_input import compact_monitor_runtime_metadata_for_ontology
+        snap = snapshot(0, 100)
+        rows = [[(START - timedelta(minutes=index + 1)).isoformat(), 180, 1, '2026-10-15:0'] for index in reversed(range(120))]
+        previous = snap.to_monitor_state()
+        previous['metadata'][CONTEXT] = {'TEST': {'version': VERSION,
+            'scope': ['KRW', 'test-source', 'regular', 'adjusted'], 'samples': {'3': rows},
+            'lastAt': (START - timedelta(minutes=1)).isoformat()}}
+        states, _ = advance_price_context(snap.to_monitor_state(), previous, {})
+        self.assertEqual(96, len(states['TEST']['samples']['3']))
+        self.assertNotIn(CONTEXT, compact_monitor_runtime_metadata_for_ontology(previous['metadata']))
+        future = snapshot(21 * 1440, 100).to_monitor_state()
+        states, _ = advance_price_context(future, previous, {})
+        self.assertEqual([], states['TEST']['samples']['3'])
+
+    def assert_diagnostic_summary_keeps_observation_dates_and_excludes_account_identifiers(self):
+        from digital_twin.modules.market_data.domain.price_observation_diagnostics import price_observation_diagnostics
+        state, _ = cycle({}, 0, 100)
+        result = price_observation_diagnostics([state])
+        self.assertEqual({'available': 1}, result['days'][0]['evaluationCounts'])
+        self.assertEqual('2026-10-15', result['days'][0]['dayKst'])
+        self.assertNotIn('price-test', str(result))
+        previous_day = snapshot(-1440, 100).to_monitor_state()
+        stale = persist_price_state(previous_day, state, SETTINGS)
+        self.assertEqual(state['metadata']['marketPriceDiagnostics'], stale['metadata']['marketPriceDiagnostics'])
+
+
+class SmartPriceObservationTests(PriceContextAssertions, unittest.TestCase):
     def test_source_clock_gap_and_reference_are_not_fast_moves(self):
+        with self.subTest(price_context="repeated_reference_merges_preserve_actual_price_proof"):
+            self.assert_repeated_reference_merges_preserve_actual_price_proof()
+        with self.subTest(price_context="invalid_first_socket_tick_preserves_account_quote_and_proven_cache"):
+            self.assert_invalid_first_socket_tick_preserves_account_quote_and_proven_cache()
         state, _ = cycle({}, 0, 100)
         for change in ({"source_as_of": ""}, {"source_timestamp_state": "queried-at-fallback"},
                        {"freshness_status": "last-close"}, {"data_quality": "reference"},
@@ -111,6 +315,8 @@ class SmartPriceObservationTests(unittest.TestCase):
         self.assertEqual(1, len(state["metadata"][PATHS]["TEST"]["points"]))
 
     def test_same_quote_is_not_new_observation_or_recovery(self):
+        with self.subTest(price_context="diagnostic_summary_keeps_observation_dates_and_excludes_account_identifiers"):
+            self.assert_diagnostic_summary_keeps_observation_dates_and_excludes_account_identifiers()
         state, _ = falling()
         snap = snapshot(4, 98, source_as_of="2026-10-15T01:03:00Z")
         paths = advance_paths(snap.to_monitor_state(), state)
@@ -182,6 +388,10 @@ class SmartPriceObservationTests(unittest.TestCase):
         self.assertFalse(accepted)
 
     def test_paths_are_scoped_bounded_and_preserve_real_duration(self):
+        with self.subTest(price_context="partial_day_range_and_new_day_never_invent_open_or_full_day_extrema"):
+            self.assert_partial_day_range_and_new_day_never_invent_open_or_full_day_extrema()
+        with self.subTest(price_context="comparable_history_survives_session_changes_without_mixing_sessions"):
+            self.assert_comparable_history_survives_session_changes_without_mixing_sessions()
         state = {}
         for m in range(0, 100, 2):
             state, _ = cycle(state, m, 100)
@@ -202,6 +412,8 @@ class SmartPriceObservationTests(unittest.TestCase):
         self.assertFalse(price_windows(reset))
 
     def test_hour_window_and_incomplete_windows(self):
+        with self.subTest(price_context="historical_comparison_excludes_overlap_future_wrong_length_and_warmup"):
+            self.assert_historical_comparison_excludes_overlap_future_wrong_length_and_warmup()
         state = {}
         for m in range(60):
             state, _ = cycle(state, m, 100 - 4.1 * m / 60)
@@ -213,6 +425,12 @@ class SmartPriceObservationTests(unittest.TestCase):
         self.assertEqual(60, events[0].metadata["priceMovement"]["trigger"]["windowMinutes"])
 
     def test_persistence_wiring_and_presentation(self):
+        with self.subTest(price_context="session_context_uses_matching_provider_facts_and_multiplicative_gaps"):
+            self.assert_session_context_uses_matching_provider_facts_and_multiplicative_gaps()
+        with self.subTest(price_context="new_context_is_frozen_in_price_event_and_persisted_with_diagnostics"):
+            self.assert_new_context_is_frozen_in_price_event_and_persisted_with_diagnostics()
+        with self.subTest(price_context="context_history_is_bounded_and_not_projected_into_ai_input"):
+            self.assert_context_history_is_bounded_and_not_projected_into_ai_input()
         state, event = falling()
         snap = snapshot(4, 96)
         persisted = snapshot_state_for_persistence(snap, state, SETTINGS)

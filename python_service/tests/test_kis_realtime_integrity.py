@@ -33,6 +33,7 @@ def tick_values(**overrides):
     values = {
         "MKSC_SHRN_ISCD": "000680", "STCK_CNTG_HOUR": "134338",
         "STCK_PRPR": "2975", "PRDY_CTRT": "-0.83",
+        "STCK_OPRC": "2990",
         "STCK_HGPR": "3000", "STCK_LWPR": "2900",
         "ACML_VOL": "9062", "ACML_TR_PBMN": "26814638",
         "CTTR": "47.83", "SELN_CNTG_SMTN": "4000",
@@ -226,12 +227,17 @@ class KISRealtimeIntegrityTests(unittest.TestCase):
         self.assertEqual("provider-execution", fresh["sourceTimestampState"])
         self.assertEqual("2026-09-14T04:43:38+00:00", fresh["sourceAsOf"])
         self.assertEqual("2026-09-14T04:43:40Z", fresh["sourceFetchedAt"])
+        from digital_twin.modules.market_data.domain.price_observation_context import provider_session_prices
         provider = object.__new__(KISMarketSignalProvider)
         account_quote = Position("000680", "Fixture", market="KR", currency="KRW", current_price=2900,
             data_quality="actual", freshness_status="stale", source_timestamp_state="provider",
             source_as_of="2026-09-14T04:40:00Z")
         merged = provider.merge_position(account_quote, fresh)
         self.assertEqual("available", source_point(merged.to_dict(), "2026-09-14T04:43:40Z")[1])
+        session = provider_session_prices(merged.to_dict(), {"at": fresh["sourceAsOf"], "price": 2975})
+        raw = dict(zip(CCNL_COLUMNS, tick_values()))
+        self.assertEqual(float(raw['STCK_OPRC']), session['open'])
+        self.assertEqual(float(raw['STCK_HGPR']), session['high'])
         # A proven execution stage wins over a REST closing-reference stage;
         # unrelated mixed evidence does not erase the execution's provenance.
         mixed_price = {**fresh, "dataQuality": "mixed", "marketSignalCoverage": {

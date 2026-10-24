@@ -163,6 +163,8 @@ def normalize_ws_ccnl(row: Dict[str, object]) -> Dict[str, object]:
         "volume": volume,
         "volumeSourceAsOf": volume_source_time(row),
         "priceSourceAsOf": volume_source_time(row),
+        "sessionPrices": {"open": number(row.get("stck_oprc")),
+                          "high": number(row.get("stck_hgpr")), "low": number(row.get("stck_lwpr"))},
         "volumeRatio": (number(row.get("prdy_vol_vrss_acml_vol_rate")) or 0) / 100 if row.get("prdy_vol_vrss_acml_vol_rate") not in (None, "") else None,
         "tradingValue": trading_value,
         "tradeStrength": number(row.get("cttr")),
@@ -227,7 +229,7 @@ def merge_realtime_signal(previous: Dict[str, object], update: Dict[str, object]
     old_clock = parse_timestamp(old_execution.get("sourceAsOf")) if old_execution.get("sourceTimestampState") == "provider-execution" else None
     if stage == "ccnl" and old_clock and (
             (execution_at and execution_at < old_clock)
-            or (not verified_clock and merged.get("sourceTimestampState") == "provider-execution")):
+            or not verified_clock):
         return merged  # Delayed/unverifiable frames cannot rewind a proven trade.
     for key, value in (update or {}).items():
         if value not in (None, ""):
@@ -270,6 +272,7 @@ def merge_realtime_signal(previous: Dict[str, object], update: Dict[str, object]
             merged.update(clock_fields)
             coverage[stage].update(clock_fields)
             coverage[stage]["dataQuality"] = "actual"
+            coverage[stage]["sessionPrices"] = dict(update.get("sessionPrices") or {})
         coverage[stage].update(trade_strength_quality_snapshot(
             trade_strength=merged.get("tradeStrength"),
             coverage=coverage[stage],

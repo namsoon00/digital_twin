@@ -26,6 +26,7 @@ from digital_twin.modules.market_data.domain.market_observations import apply_ma
 from digital_twin.modules.market_data.domain.market_signal_transitions import prepare_market_signal_transition_metadata
 from digital_twin.modules.market_data.domain.price_observation_episodes import persist_price_state, acknowledge_transitions
 from digital_twin.modules.market_data.domain.smart_price_observations import movement_cadence
+from digital_twin.modules.market_data.domain.price_observation_diagnostics import record_candidates
 from digital_twin.modules.reasoning.domain.ontology_projection_input import compact_monitor_state_for_ontology, compact_monitor_state_for_reasoning_base, compact_monitor_state_for_reasoning_symbol, reasoning_snapshot_symbols
 from digital_twin.modules.portfolio.domain.portfolio import AccountSnapshot, AlertEvent, account_snapshot_from_monitor_state, monitor_state_has_live_account_data
 from digital_twin.modules.reasoning.domain.reasoning_source_snapshot import build_reasoning_source_snapshot
@@ -1175,6 +1176,7 @@ class MySQLMonitoringCycleRecorder(MySQLOperationalConnection):
         cadence_minutes = market_observation_delivery_cadence_minutes(self.runtime_settings)
         accepted: List[AlertEvent] = []
         suppressed: List[Dict[str, object]] = []
+        exclusions = {}
         for event in source_events:
             if str(getattr(event, "rule", "") or "") != MARKET_OBSERVATION:
                 accepted.append(event)
@@ -1183,6 +1185,7 @@ class MySQLMonitoringCycleRecorder(MySQLOperationalConnection):
                 event,
                 previous_states.get(str(getattr(event, "account_id", "") or "")) or {},
             )
+            admission["accountId"] = event.account_id
             if not bool(admission.get("accepted")):
                 suppressed.append(admission)
                 continue
@@ -1217,6 +1220,10 @@ class MySQLMonitoringCycleRecorder(MySQLOperationalConnection):
                 })
                 continue
             accepted.append(event)
+        for item in suppressed:
+            counts = exclusions.setdefault(item["accountId"], {})
+            reason = item["reasonCode"]
+            counts[reason] = counts.get(reason, 0) + 1
         return accepted, {
             "status": "applied",
             "inputCount": len(source_events),
@@ -1224,6 +1231,7 @@ class MySQLMonitoringCycleRecorder(MySQLOperationalConnection):
             "suppressedCount": len(suppressed),
             "cadenceMinutes": cadence_minutes,
             "suppressions": suppressed[:20],
+            "exclusionCountsByAccount": exclusions,
         }
 
     def record_cycle(
@@ -1370,6 +1378,9 @@ class MySQLMonitoringCycleRecorder(MySQLOperationalConnection):
             # TypeDB work. The two writes share this transaction, so a worker
             # can never see a barrier without the exact snapshot it names.
             for account_id, state in snapshot_states.items():
+                state = record_candidates(state, alert_events or [], outboxed_events,
+                                          market_observation_guard_result.get("exclusionCountsByAccount") or {})
+                snapshot_states[account_id] = state
                 self.monitor_store.upsert_snapshot_state_with_connection(
                     connection,
                     account_id,

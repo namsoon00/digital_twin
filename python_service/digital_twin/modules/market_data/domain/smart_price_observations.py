@@ -1,11 +1,12 @@
 """Compose the first smart quote-alert policy with the legacy cumulative lane."""
 from copy import deepcopy
 
-from digital_twin.modules.notifications.contracts import price_movement_lines, position_price_lines
+from digital_twin.modules.notifications.contracts import price_movement_lines, position_price_lines, price_context_lines
 from digital_twin.modules.portfolio.contracts import AlertEvent
 from .price_observation_episodes import enabled, policy, advance_episodes, VERSION
 from .price_observation_windows import finite, positions
 from .market_observations import quote_witness
+from .price_observation_context import advance_price_context
 
 
 def position_effect(item, role, portfolio, start_price):
@@ -37,10 +38,15 @@ def smart_market_observations(snapshot, previous, legacy_events, settings):
     subjects = positions(snapshot.to_monitor_state())
     legacy_events = [event for event in legacy_events
                      if quote_witness(subjects.get(event.symbol, ({}, ""))[0], snapshot.generated_at)]
-    if not enabled(settings):
-        return legacy_events
     current = snapshot.to_monitor_state()
     paths, states, proposals = advance_episodes(current, previous, settings)
+    _, contexts = advance_price_context(current, previous, paths)
+    for event in legacy_events:
+        context = contexts.get(event.symbol) or {}
+        event.metadata["priceContext"] = deepcopy(context)
+        event.lines.extend(price_context_lines(context, str(subjects.get(event.symbol, ({}, ""))[0].get("currency") or "")))
+    if not enabled(settings):
+        return legacy_events
     mode = str(settings.get("marketObservationRawDeliveryMode") or "critical-only")
     subjects = positions(current)
     # Existing ordinary candidates still request the normal graph follow-up.
@@ -87,10 +93,11 @@ def smart_market_observations(snapshot, previous, legacy_events, settings):
         result.append(AlertEvent(snapshot.account_id, snapshot.account_label, "WATCH", "marketObservation",
             ":".join([snapshot.account_id, "price-movement", movement["episodeId"], str(movement["sequence"])]),
             item.get("name") or symbol,
-            price_movement_lines(movement, currency, source, item.get("market_session_label") or item.get("market_session"), effect), symbol,
+            price_movement_lines(movement, currency, source, item.get("market_session_label") or item.get("market_session"), effect)
+                + price_context_lines(contexts.get(symbol) or {}, currency), symbol,
             criteria=["설정: " + str(movement["trigger"]["windowMinutes"]) + "분 기준 변동률 " +
                       format(movement["trigger"]["thresholdPct"], ".2f") + "% · 실제 관측 시간으로 보정"],
-            metadata={"marketObservation": observation, "priceMovement": movement,
+            metadata={"marketObservation": observation, "priceMovement": movement, "priceContext": contexts.get(symbol) or {},
                 "observationOnly": True, "investmentJudgement": False, "deliveryDeferred": False,
                 "reasoningFollowupRequired": True,
                 "deliveryMode": "deterministic-outbox-before-typedb", "reasoningFollowup": "queued-from-persisted-snapshot"},

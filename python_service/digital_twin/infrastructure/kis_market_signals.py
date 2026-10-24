@@ -671,6 +671,21 @@ def price_stage_is_reference(signal: Dict[str, object]) -> bool:
     )
 
 
+def selected_price_provenance(position: Position) -> Dict[str, object]:
+    """Preserve the proven price, including across repeated mixed-field merges."""
+    quality = position.data_quality
+    for name in ("selectedPrice", "ccnl"):
+        proof = (position.market_signal_coverage or {}).get(name) or {}
+        if (quality == "mixed" and proof.get("dataQuality") == "actual"
+                and proof.get("sourceTimestampState") == position.source_timestamp_state
+                and parse_iso(proof.get("sourceAsOf")) == parse_iso(position.source_as_of)
+                and number((proof.get("values") or {}).get("currentPrice")) == position.current_price):
+            quality = "actual"
+    return {"dataQuality": quality, "sourceAsOf": position.source_as_of,
+            "sourceTimestampState": position.source_timestamp_state,
+            "values": {"currentPrice": position.current_price}}
+
+
 def keep_fresh_position_quote(position: Position, signal: Dict[str, object]) -> bool:
     """Prefer the account quote unless KIS has a genuine WebSocket price tick."""
     if not position.current_price:
@@ -684,6 +699,14 @@ def keep_fresh_position_quote(position: Position, signal: Dict[str, object]) -> 
     execution = (signal.get("marketSignalCoverage") or {}).get("ccnl") or {}
     incoming_clock = parse_iso(execution.get("sourceAsOf"))
     current_clock = parse_iso(position.source_as_of)
+    received_clock = parse_iso(execution.get("fetchedAt"))
+    if ("currentPrice" in (execution.get("fields") or [])
+            and (execution.get("transport") == "websocket" or execution.get("cadence") == "websocket")
+            and not (execution.get("sourceTimestampState") == "provider-execution"
+                     and incoming_clock and received_clock and incoming_clock <= received_clock)
+            and current_clock and position.source_timestamp_state in {"provider", "exchange", "provider-timestamp", "provider-execution"}
+            and selected_price_provenance(position)["dataQuality"] in {"actual", "live", "real"}):
+        return True
     if incoming_clock and current_clock and incoming_clock < current_clock:
         return True
     freshness = str(position.freshness_status or "").strip().lower()
@@ -2123,12 +2146,7 @@ class KISMarketSignalProvider:
             # Preserve price-specific provenance without labelling unrelated
             # mixed REST evidence as actual data for the whole position.
             market_signal_coverage = dict(market_signal_coverage or {})
-            market_signal_coverage["selectedPrice"] = {
-                "dataQuality": position.data_quality,
-                "sourceAsOf": position.source_as_of,
-                "sourceTimestampState": position.source_timestamp_state,
-                "values": {"currentPrice": position.current_price},
-            }
+            market_signal_coverage["selectedPrice"] = selected_price_provenance(position)
         ma5_distance = pct_distance(merged_price, position.ma5) if merged_price and position.ma5 else position.ma5_distance
         ma20_distance = pct_distance(merged_price, position.ma20) if merged_price and position.ma20 else position.ma20_distance
         ma60_distance = pct_distance(merged_price, position.ma60) if merged_price and position.ma60 else position.ma60_distance

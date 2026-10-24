@@ -21,6 +21,7 @@ _EXPORTS['COMPANY_VALUE_PRESENTATION_VERSION'] = ('digital_twin.modules.notifica
 _EXPORTS['management_observation_assessment'] = ('digital_twin.modules.notifications.domain.management_observation', 'management_observation_assessment')
 _EXPORTS['price_movement_lines'] = ('digital_twin.modules.notifications.domain.price_movement_presentation', 'price_movement_lines')
 _EXPORTS['position_price_lines'] = ('digital_twin.modules.notifications.domain.price_movement_presentation', 'position_price_lines')
+_EXPORTS['price_context_lines'] = ('digital_twin.modules.notifications.domain.price_movement_presentation', 'price_context_lines')
 _EXPORTS['delivery_progress'] = ('digital_twin.modules.notifications.domain.delivery_recovery', 'delivery_progress')
 _EXPORTS['DEFAULT_QUIET_HOURS_ENABLED'] = ('digital_twin.modules.notifications.domain.account_preferences', 'DEFAULT_QUIET_HOURS_ENABLED')
 _EXPORTS['DEFAULT_QUIET_HOURS_START'] = ('digital_twin.modules.notifications.domain.account_preferences', 'DEFAULT_QUIET_HOURS_START')

@@ -2,7 +2,7 @@ import unittest
 from datetime import datetime, timezone
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from unittest.mock import patch
+from unittest.mock import patch, MagicMock
 
 from digital_twin import service_manager
 from digital_twin.modules.market_data.domain.market_observations import market_observation_delivery_admission, QUOTE_BASELINE_VERSION, quote_witness
@@ -75,7 +75,67 @@ class SentRowConnection:
 
 
 class MarketObservationDeliveryTests(unittest.TestCase):
+    def assert_price_latency_counts_only_actual_verified_account_receipts(self):
+        from digital_twin.modules.notifications.domain.price_delivery_metrics import summarize_price_delivery
+        job = {"job_id": "a", "status": "done", "data_quality": "actual", "is_mock": 0,
+               "created_at": "2026-10-23T01:00:10Z", "source_at": "2026-10-23T01:00:00Z"}
+        receipt = {"job_id": "a", "status": "delivered", "audience": "accountNotification",
+                   "metadata": {"receiptVerified": True}, "completed_at": "2026-10-23T01:00:40Z"}
+        jobs = [job, {**job, "job_id": "mock", "is_mock": 1}, {**job, "job_id": "b", "status": "pending"}]
+        attempts = [receipt, {**receipt, "job_id": "mock"},
+                    {**receipt, "job_id": "b", "metadata": {"receiptVerified": False}},
+                    {**receipt, "job_id": "b", "audience": "diagnostic"},
+                    {**receipt, "completed_at": "2026-10-23T01:00:50Z"}]
+        result = summarize_price_delivery(jobs, attempts)
+        self.assertEqual(1, result["verifiedDeliveredJobs"])
+        self.assertEqual(30, result["queueToReceipt"]["medianSeconds"])
+        self.assertEqual(40, result["sourceToReceipt"]["p95Seconds"])
+        self.assertEqual({"sampleCount": 0}, summarize_price_delivery(jobs, [])['queueToReceipt'])
+        invalid = summarize_price_delivery([{**job, 'source_at': '2026-10-23T02:00:00Z'}], [receipt])
+        self.assertEqual(1, invalid['missingOrInvalidClockCount'])
+        self.assertEqual(0, invalid['sourceToReceipt']['sampleCount'])
+
+    def assert_price_metrics_bounds_ids_before_reading_json(self):
+        from digital_twin.modules.notifications.infrastructure.price_metrics import PriceMetricsStore
+        store = PriceMetricsStore()
+        connection = MagicMock()
+        store.connect = MagicMock()
+        store.connect.return_value.__enter__.return_value = connection
+        connection.execute.return_value.fetchall.side_effect = [
+            [{'job_id': 'fixture'}],
+            [{'job_id': 'fixture', 'status': 'done', 'data_quality': 'actual', 'is_mock': 0,
+              'created_at': '2026-10-23T01:00:10Z', 'source_at': '2026-10-23T01:00:00Z'}],
+            [{'job_id': 'fixture', 'status': 'delivered', 'audience': 'accountNotification',
+              'completed_at': '2026-10-23T01:00:40Z', 'metadata': '{"receiptVerified":true}'}]]
+        result = store.price_observation_metrics(500)
+        calls = connection.execute.call_args_list
+        self.assertNotIn('JSON', calls[0].args[0])
+        self.assertEqual((100,), calls[0].args[1])
+        self.assertIn('WHERE job_id IN', calls[1].args[0])
+        self.assertEqual(('fixture',), calls[1].args[1])
+        self.assertEqual(1, result['verifiedDeliveredJobs'])
+
+    def assert_guard_exclusion_counts_cover_all_candidates_and_account_scope(self):
+        from digital_twin.modules.market_data.domain.price_observation_diagnostics import record_candidates
+        recorder = object.__new__(MySQLMonitoringCycleRecorder)
+        recorder.runtime_settings = {}
+        events = [market_event() for _ in range(25)]
+        accepted, result = recorder.guard_market_observation_delivery_with_connection(
+            SentRowConnection(), events, {'default': state_with_outbox_anchor(1_729_000)})
+        self.assertEqual([], accepted)
+        self.assertEqual(20, len(result['suppressions']))
+        self.assertEqual(25, result['exclusionCountsByAccount']['default']['stale-outbox-anchor'])
+        state = {'accountId': 'default', 'generatedAt': '2026-10-23T01:00:00Z', 'metadata': {
+            'marketPriceDiagnostics': {'evaluationCounts': {}, 'candidateCounts': {}, 'exclusionCounts': {}}}}
+        saved = record_candidates(state, events, [], result['exclusionCountsByAccount'])
+        counters = saved['metadata']['marketPriceDiagnostics']
+        self.assertEqual(25, counters['candidateCounts']['candidates'])
+        self.assertEqual({'stale-outbox-anchor': 25}, counters['exclusionCounts'])
+        self.assertEqual(saved, record_candidates(saved, events, [], result['exclusionCountsByAccount']))
+
     def test_concurrent_candidate_with_old_outbox_anchor_is_suppressed(self):
+        with self.subTest(delivery_diagnostics="guard_exclusion_counts_cover_all_candidates_and_account_scope"):
+            self.assert_guard_exclusion_counts_cover_all_candidates_and_account_scope()
         event = market_event(anchor=1_676_500, current=1_728_000)
 
         result = market_observation_delivery_admission(
@@ -88,6 +148,10 @@ class MarketObservationDeliveryTests(unittest.TestCase):
         self.assertEqual(1_729_000, result["authoritativeAnchorPrice"])
 
     def test_new_material_move_from_current_outbox_anchor_is_accepted(self):
+        with self.subTest(delivery_diagnostics="price_latency_counts_only_actual_verified_account_receipts"):
+            self.assert_price_latency_counts_only_actual_verified_account_receipts()
+        with self.subTest(delivery_diagnostics="price_metrics_bounds_ids_before_reading_json"):
+            self.assert_price_metrics_bounds_ids_before_reading_json()
         event = market_event(anchor=1_729_000, current=1_781_000)
 
         result = market_observation_delivery_admission(

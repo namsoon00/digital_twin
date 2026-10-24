@@ -129,10 +129,14 @@ def advance_episodes(current, previous, settings):
 
 
 def persist_price_state(current, previous, settings):
-    if not enabled(settings):
-        return current
+    from .price_observation_context import advance_price_context, STATE_KEY as CONTEXT
+    from .price_observation_diagnostics import record_observations
     paths, states, _ = advance_episodes(current, previous, settings)
-    return {**current, "metadata": {**current.get("metadata", {}), PATHS: paths, STATE_KEY: states}}
+    context, _ = advance_price_context(current, previous, paths)
+    metadata = {**current.get("metadata", {}), PATHS: paths, CONTEXT: context}
+    if enabled(settings):
+        metadata[STATE_KEY] = states
+    return record_observations({**current, "metadata": metadata}, previous, paths)
 
 
 def admit_transition(event, previous):

@@ -303,12 +303,14 @@ def monitor_command(args) -> int:
     registry = stores.account_reader(settings)
     accounts = registry.load()
     if args.monitor_action == "status":
+        from digital_twin.modules.market_data.contracts import price_observation_diagnostics
         store = stores.monitor_store(settings)
         print("Accounts: " + str(len(accounts)))
         for account in accounts:
             previous = store.previous.get(account.account_id)
             print(account.account_id + " · " + account.label + " · previous=" + ("yes" if previous else "no"))
         print("Sent cadence keys: " + str(len([key for key in store.sent.keys() if str(key).startswith("cadence:")])))
+        print("Price observations: " + json.dumps(price_observation_diagnostics(store.previous.values()), ensure_ascii=False))
         job_store = monitor_account_job_store_from_settings(settings)
         if job_store:
             print("Account monitor jobs: " + json.dumps(job_store.summary(), ensure_ascii=False))

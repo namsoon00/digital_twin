@@ -64,3 +64,43 @@ def price_movement_lines(movement, currency, source, session, effect):
         result.append("관심 종목의 가격 변화입니다. 사업·가치 조건 충족 여부는 별도 검토합니다.")
     result.extend(["시세 출처: " + source, "가격 변동 사실이며 원인이나 매수·매도 판단을 뜻하지 않습니다."])
     return result
+
+
+def price_context_lines(context, currency):
+    """Render only frozen facts, without reconstructing old alerts from live quotes."""
+    if context.get("version") != "price-context-v1" or context.get("status") != "available":
+        return []
+    daily = context.get("daily") or {}
+    provider = daily.get("basis") == "provider-session"
+    label = "정규장" if provider else "금일 관측 구간"
+    result = []
+    if daily:
+        result.append(label + " 고가 " + amount_text(daily["high"], currency) + " · 저가 " + amount_text(daily["low"], currency)
+                      + " · 고가 대비 " + format(daily["fromHighPct"], "+.2f") + "%")
+        if not provider:
+            result.append("관측 시작: " + kst_timestamp(daily["startAt"], "%H:%M:%S KST") + " · 관측 사이의 고저점은 미확인")
+        if daily.get("newHigh") or daily.get("newLow"):
+            result.append(label + (" 고가 갱신" if daily.get("newHigh") else " 저가 갱신"))
+        if "sinceOpenPct" in daily:
+            result.append("정규장 시가: " + amount_text(daily["open"], currency) + " · 시가 이후 " + format(daily["sinceOpenPct"], "+.2f") + "%")
+        if "gapPct" in daily:
+            result.append("전일 종가 대비 개장 갭 " + format(daily["gapPct"], "+.2f")
+                          + "% · 현재 전일 대비 " + format(daily["sinceClosePct"], "+.2f") + "%")
+    prior = context.get("priorRange") or {}
+    if prior and prior.get("break") in {"above", "below"}:
+        result.append("직전 관측 가격 범위 " + amount_text(prior["low"], currency) + "~" + amount_text(prior["high"], currency)
+                      + (" 위로 이동" if prior["break"] == "above" else " 아래로 이동")
+                      + " (" + kst_timestamp(prior["startAt"], "%H:%M") + "~" + kst_timestamp(prior["endAt"], "%H:%M KST") + ")")
+    available = [row for row in context.get("comparisons") or [] if row.get("status") == "available"]
+    for row in available:
+        text = ("현재 " + format(row["elapsedSeconds"] / 60, ".1f") + "분 변동 비교 (과거 "
+                + format(row["historicalMinSeconds"] / 60, ".1f") + "~"
+                + format(row["historicalMaxSeconds"] / 60, ".1f") + "분): 보관한 "
+                + str(row["sessionDays"]) + "일·" + str(row["sampleCount"]) + "개 구간의 "
+                + format(row["largerThanPct"], ".0f") + "%보다 큰 변동폭")
+        if "medianMultiple" in row:
+            text += " · 중앙값의 " + format(row["medianMultiple"], ".1f") + "배"
+        result.append(text)
+    if not available:
+        result.append("평소 변동 비교: 자료 축적 중 (길이 차이 10% 이내 20개 구간·3일 이상 필요)")
+    return result

@@ -62,7 +62,10 @@ from .investment_conversations import InvestmentConversationStore
 from .diagnostic_threads import DiagnosticThreadStore
 
 
-class MySQLNotificationJobStore(DiagnosticThreadStore, InvestmentConversationStore, ResearchThreadStore, MySQLOperationalConnection):
+from .price_metrics import PriceMetricsStore
+
+
+class MySQLNotificationJobStore(PriceMetricsStore, DiagnosticThreadStore, InvestmentConversationStore, ResearchThreadStore, MySQLOperationalConnection):
     _article_delivery_ledger_backfill_lock = Lock()
     _article_delivery_ledger_backfill_ready = set()
 
@@ -2645,6 +2648,10 @@ class MySQLNotificationJobStore(DiagnosticThreadStore, InvestmentConversationSto
             str(row.get("category") or "other_policy"): int(row.get("count") or 0)
             for row in suppression_rows or []
         }
+        try:
+            price_delivery = self.price_observation_metrics()
+        except Exception as error:  # A metrics read failure is not a delivery failure.
+            price_delivery = {"status": "unavailable", "errorType": type(error).__name__}
         result.update({
             "actionable_failed": int((active_failure_row or {}).get("count") or 0),
             "historical_failed": int(result.get("failed") or 0),
@@ -2654,5 +2661,6 @@ class MySQLNotificationJobStore(DiagnosticThreadStore, InvestmentConversationSto
             ),
             "intentional_suppressed": int(result.get("suppressed") or 0),
             "suppression_categories": suppression_categories,
+            "price_observation_delivery": price_delivery,
         })
         return result

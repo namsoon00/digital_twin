@@ -19,6 +19,7 @@ _EXPORTS['ExternalCallDeferred'] = ('digital_twin.modules.market_data.domain.ext
 _EXPORTS['issuer_ir_source'] = ('digital_twin.modules.market_data.domain.issuer_ir', 'issuer_ir_source')
 _EXPORTS['MarketTimeSeriesRepository'] = ('digital_twin.modules.market_data.domain.repositories', 'MarketTimeSeriesRepository')
 _EXPORTS['MarketDataProvider'] = ('digital_twin.modules.market_data.domain.repositories', 'MarketDataProvider')
+_EXPORTS['price_observation_diagnostics'] = ('digital_twin.modules.market_data.domain.price_observation_diagnostics', 'price_observation_diagnostics')
 
 _EXPORTS['MarketDataProviderFactory'] = ('digital_twin.modules.market_data.domain.repositories', 'MarketDataProviderFactory')
 

@@ -47,6 +47,41 @@ def falling():
 
 
 class PriceContextAssertions:
+    def assert_minute_extremes_survive_retracement_without_inventing_ticks(self):
+        from digital_twin.modules.market_data.domain.price_observation_windows import observed_range
+        state = {}
+        for minute, price in ((0, 100), (.25, 110), (.5, 90), (.75, 101)):
+            state, _ = cycle(state, minute, price)
+        point = state['metadata'][PATHS]['TEST']['points'][-1]
+        band = point['minuteRange']
+        self.assertEqual((101, 110, 90, 4), (point['price'], band['high'], band['low'], band['observationCount']))
+        self.assertEqual('2026-10-15T01:00:15Z', band['highAt'])
+        self.assertEqual('2026-10-15T01:00:30Z', band['lowAt'])
+        # The price at the anchor remains the denominator; earlier extremes are excluded.
+        anchored = observed_range([point], point['at'], point['at'])
+        self.assertEqual((101, 101), (anchored['high'], anchored['low']))
+        repeated, events = cycle(state, .75, 101)
+        self.assertFalse(events)
+        self.assertEqual([point], repeated['metadata'][PATHS]['TEST']['points'])
+        revision = advance_paths(snapshot(.75, 102).to_monitor_state(), state)['TEST']
+        self.assertEqual('source-revision-without-new-clock', revision['status'])
+        self.assertEqual([point], revision['points'])
+        for minute, price in ((1, 101), (1.25, 110), (1.5, 90), (1.75, 101), (2.75, 101), (3.75, 103)):
+            state, events = cycle(state, minute, price)
+        window = price_windows(state['metadata'][PATHS]['TEST'])[0]
+        self.assertAlmostEqual((103 / 101 - 1) * 100, window['changePct'])
+        self.assertEqual((110, 90), (window['observedRange']['high'], window['observedRange']['low']))
+        self.assertEqual('2026-10-15T01:01:30Z', window['observedRange']['lowAt'])
+        self.assertIn('고가 110원', '\n'.join(events[0].lines))
+        gap = advance_paths(snapshot(8, 102).to_monitor_state(), state)['TEST']
+        self.assertEqual(1, len(gap['points']))
+        self.assertEqual(102, gap['points'][0]['minuteRange']['low'])
+        for minute in range(4, 16):
+            state, events = cycle(state, minute + .75, 106 if minute == 15 else 101)
+        prior = events[0].metadata['priceContext']['priorRange']
+        self.assertEqual((110, 90, 'inside'), (prior['high'], prior['low'], prior['break']))
+        self.assertEqual(840, prior['elapsedSeconds'])
+
     def assert_repeated_reference_merges_preserve_actual_price_proof(self):
         from digital_twin.infrastructure.kis_market_signals import KISMarketSignalProvider
         from digital_twin.modules.market_data.domain.price_observation_windows import source_point
@@ -110,8 +145,13 @@ class PriceContextAssertions:
         newer.positions[0].source_as_of = newer.generated_at
         newer.positions[0].market_signal_coverage['ccnl']['sourceAsOf'] = newer.generated_at
         newer.positions[0].market_signal_coverage['ccnl']['sessionPrices']['high'] = 109
+        newer.positions[0].market_signal_coverage['ccnl']['sessionPrices']['low'] = 101
         _, later = advance_price_context(newer.to_monitor_state(), prior, {})
         self.assertTrue(later['TEST']['daily']['newHigh'])
+        self.assertTrue(later['TEST']['daily']['newLow'])
+        self.assertIn('고가·저가 갱신', '\n'.join(price_context_lines(later['TEST'], 'KRW')))
+        self.assertIn('저가 대비', '\n'.join(price_context_lines(later['TEST'], 'KRW')))
+        self.assertEqual(['정규장 고가·저가 갱신'], price_context_lines(later['TEST'], 'KRW', compact=True))
         self.assertEqual(105, later['TEST']['currentPrice'])
         for field, value in (("sourceAsOf", "2026-10-14T01:00:00Z"), ("values", {"symbol": "OTHER", "currentPrice": 105})):
             altered = deepcopy(snap)
@@ -140,30 +180,37 @@ class PriceContextAssertions:
         self.assertEqual(80, facts["TEST"]["daily"]["high"])
 
     def assert_historical_comparison_excludes_overlap_future_wrong_length_and_warmup(self):
-        from digital_twin.modules.market_data.domain.price_observation_context import window_context
+        from digital_twin.modules.market_data.domain.price_observation_context import window_context, local_time_band
+        from zoneinfo import ZoneInfo
         state = {}
-        for minute in range(16):
-            state, events = cycle(state, minute, 100 if minute < 15 else 104)
+        for minute in range(30, 46):
+            state, events = cycle(state, minute, 100 if minute < 45 else 104)
         path = state["metadata"][PATHS]["TEST"]
-        current = snapshot(15, 104)
+        current = snapshot(45, 104)
         history = []
         for index in range(24):
-            clock = START - timedelta(days=1 + index // 8, hours=(index % 8) * 3)
-            history.append([clock.isoformat(), 900.0, 1.0, clock.strftime('%Y-%m-%d') + ':' + str(clock.hour // 3)])
+            clock = START + timedelta(minutes=45) - timedelta(days=1 + index)
+            history.append([clock.isoformat(), 900.0, 1.0, clock.strftime('%Y-%m-%d') + ':10', 'regular'])
         history.sort()
-        history.extend([[START.isoformat(), 900, 500, '2026-10-15:0'],
-                        [(START + timedelta(days=1)).isoformat(), 900, 500, '2026-10-16:0'],
-                        [(START - timedelta(days=1)).isoformat(), 1000, 500, '2026-10-14:0']])
+        history.extend([[(START + timedelta(minutes=30)).isoformat(), 900, 500, '2026-10-15:10', 'regular'],
+                        [(START + timedelta(days=1)).isoformat(), 900, 500, '2026-10-16:10', 'regular'],
+                        [(START - timedelta(days=1)).isoformat(), 1000, 500, '2026-10-14:10', 'regular'],
+                        [(START - timedelta(days=1, hours=4)).isoformat(), 900, 500, '2026-10-14:6', 'regular']])
         before = deepcopy(history)
         _, comparisons = window_context(path, {"15": history}, current.positions[0].to_dict())
         comparison = next(row for row in comparisons if row['windowMinutes'] == 15)
         # A sample ending at this interval's start is disjoint and may be used.
         self.assertEqual(25, comparison['sampleCount'])
         self.assertEqual("available", comparison['status'])
+        self.assertEqual('10:00–12:00', comparison['localTimeBand'])
+        self.assertEqual('Asia/Seoul', comparison['timeZone'])
         self.assertAlmostEqual(4, comparison['medianMultiple'])
         self.assertEqual(before, history)
         _, comparisons = window_context(path, {"15": history[:10]}, current.positions[0].to_dict())
         self.assertEqual('insufficient-history', next(row for row in comparisons if row['windowMinutes'] == 15)['status'])
+        # Wall-clock bands stay stable across the US daylight-saving transition.
+        for clock in ('2026-10-15T14:45:00Z', '2026-11-05T15:45:00Z'):
+            self.assertEqual('10:00–12:00', local_time_band(clock, 900, ZoneInfo('America/New_York')))
 
     def assert_new_context_is_frozen_in_price_event_and_persisted_with_diagnostics(self):
         state = {}
@@ -188,7 +235,7 @@ class PriceContextAssertions:
         states, _ = advance_price_context(previous, {}, {})
         history = []
         for index in range(24):
-            clock = START - timedelta(days=1 + index // 8, hours=index % 8)
+            clock = START + timedelta(minutes=30) - timedelta(days=1 + index)
             history.append([clock.isoformat(), 900 + (index % 3 - 1) * 30, 1,
                             clock.date().isoformat() + ':' + str(clock.hour), 'regular'])
         history.append([(START - timedelta(days=4)).isoformat(), 900, 500, '2026-10-11:1', 'after-hours'])
@@ -219,18 +266,18 @@ class PriceContextAssertions:
         self.assertEqual({}, states['TEST']['samples'])
 
     def assert_context_history_is_bounded_and_not_projected_into_ai_input(self):
-        from digital_twin.modules.market_data.domain.price_observation_context import advance_price_context, STATE_KEY as CONTEXT, VERSION
+        from digital_twin.modules.market_data.domain.price_observation_context import advance_price_context, STATE_KEY as CONTEXT, VERSION, MAX_SAMPLES
         from digital_twin.modules.reasoning.domain.ontology_projection_input import compact_monitor_runtime_metadata_for_ontology
         snap = snapshot(0, 100)
-        rows = [[(START - timedelta(minutes=index + 1)).isoformat(), 180, 1, '2026-10-15:0'] for index in reversed(range(120))]
+        rows = [[(START - timedelta(minutes=index + 1)).isoformat(), 180, 1, '2026-10-15:0'] for index in reversed(range(320))]
         previous = snap.to_monitor_state()
         previous['metadata'][CONTEXT] = {'TEST': {'version': VERSION,
             'scope': ['KRW', 'test-source', 'regular', 'adjusted'], 'samples': {'3': rows},
             'lastAt': (START - timedelta(minutes=1)).isoformat()}}
         states, _ = advance_price_context(snap.to_monitor_state(), previous, {})
-        self.assertEqual(96, len(states['TEST']['samples']['3']))
+        self.assertEqual(MAX_SAMPLES, len(states['TEST']['samples']['3']))
         self.assertNotIn(CONTEXT, compact_monitor_runtime_metadata_for_ontology(previous['metadata']))
-        future = snapshot(21 * 1440, 100).to_monitor_state()
+        future = snapshot(46 * 1440, 100).to_monitor_state()
         states, _ = advance_price_context(future, previous, {})
         self.assertEqual([], states['TEST']['samples']['3'])
 
@@ -388,6 +435,8 @@ class SmartPriceObservationTests(PriceContextAssertions, unittest.TestCase):
         self.assertFalse(accepted)
 
     def test_paths_are_scoped_bounded_and_preserve_real_duration(self):
+        with self.subTest(price_context='minute_extremes_survive_retracement_without_inventing_ticks'):
+            self.assert_minute_extremes_survive_retracement_without_inventing_ticks()
         with self.subTest(price_context="partial_day_range_and_new_day_never_invent_open_or_full_day_extrema"):
             self.assert_partial_day_range_and_new_day_never_invent_open_or_full_day_extrema()
         with self.subTest(price_context="comparable_history_survives_session_changes_without_mixing_sessions"):
@@ -437,6 +486,8 @@ class SmartPriceObservationTests(PriceContextAssertions, unittest.TestCase):
         self.assertEqual("2026-10-15T01:04:00Z", persisted["metadata"][PATHS]["TEST"]["points"][-1]["at"])
         context = alert_context(event)
         self.assertIn("보유", context["titleHeadline"])
+        for summary in ('최근 3분', '현재가', '이번 가격 변동분'):
+            self.assertLess(context['telegramMessage'].index(summary), context['telegramMessage'].index('시세 시각'))
         self.assertIn("KST", "\n".join(event.lines))
         self.assertNotIn("매도 권장", "\n".join(event.lines))
         job = NotificationIngressService().job_from_alert(event)
@@ -445,6 +496,14 @@ class SmartPriceObservationTests(PriceContextAssertions, unittest.TestCase):
         actual = RealtimeMonitor(SETTINGS).market_observation_events(snap, state)
         self.assertEqual(1, len(actual))
         self.assertEqual("expanded", actual[0].metadata["priceMovement"]["stage"])
+        self.assertTrue(event.lines[0].startswith('최근 3분:'))
+        self.assertTrue(event.lines[1].startswith('현재가:'))
+        self.assertTrue(event.lines[2].startswith('이번 가격 변동분:'))
+        self.assertTrue(actual[0].lines[0].startswith('이번 변동 시작 대비:'))
+        self.assertNotIn('자료 축적 중', '\n'.join(actual[0].lines))
+        self.assertNotIn('평균매입가 미확인', '\n'.join(actual[0].lines))
+        self.assertLess(len(actual[0].lines), len(event.lines))
+        self.assertIn('comparisons', actual[0].metadata['priceContext'])
         self.assertEqual(1, RealtimeMonitor(SETTINGS).dispatch_cadence_minutes(actual[0]))
 
     def test_cumulative_watchlist_threshold_and_modes_preserve_legacy(self):
@@ -496,7 +555,10 @@ class SmartPriceObservationTests(PriceContextAssertions, unittest.TestCase):
         self.assertNotIn("보유분 가격 효과", text)
         legacy = market_event(21950, 22650)
         legacy.symbol = "TEST"
+        legacy.lines = ['현재가: 22,650원', '기준 대비: +3.19%']
         event = smart_market_observations(snapshot(5, 22650, quantity=17, average_price=30000), {}, [legacy], SETTINGS)[0]
+        self.assertEqual(['기준 대비:', '현재가:', '이번 가격 변동분:'],
+                         [line.split(':')[0] + ':' for line in event.lines[:3]])
         self.assertIn("매입가 대비 평가손익: -124,950원", "\n".join(event.lines))
         for average in (None, 0, -1, float("nan")):
             with self.subTest(average=average):

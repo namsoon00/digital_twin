@@ -73,6 +73,9 @@ def smart_market_observations(snapshot, previous, legacy_events, settings):
         if effect:
             event.metadata["positionPriceEffect"] = effect
             event.lines.extend(position_price_lines(effect, str(item.get("currency") or ""), "알림 기준가 대비"))
+        summary = [line for prefix in ("기준 대비:", "현재가:", "이번 가격 변동분:")
+                   for line in event.lines if line.startswith(prefix)]
+        event.lines = summary + [line for line in event.lines if line not in summary]
         result.append(event)
     if mode in {"disabled", "typedb-first"}:
         return result
@@ -94,7 +97,9 @@ def smart_market_observations(snapshot, previous, legacy_events, settings):
             ":".join([snapshot.account_id, "price-movement", movement["episodeId"], str(movement["sequence"])]),
             item.get("name") or symbol,
             price_movement_lines(movement, currency, source, item.get("market_session_label") or item.get("market_session"), effect)
-                + price_context_lines(contexts.get(symbol) or {}, currency), symbol,
+                + price_context_lines(contexts.get(symbol) or {}, currency,
+                                      compact=movement["stage"] in {"expanded", "recovery"},
+                                      window_minutes=movement["trigger"]["windowMinutes"]), symbol,
             criteria=["설정: " + str(movement["trigger"]["windowMinutes"]) + "분 기준 변동률 " +
                       format(movement["trigger"]["thresholdPct"], ".2f") + "% · 실제 관측 시간으로 보정"],
             metadata={"marketObservation": observation, "priceMovement": movement, "priceContext": contexts.get(symbol) or {},

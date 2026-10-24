@@ -30,10 +30,11 @@ class PriceMetricsStore:
                     "JSON_UNQUOTE(JSON_EXTRACT(payload_json, '$.context.marketObservation.quoteWitness.source_as_of')) AS source_at "
                     "FROM notification_jobs WHERE job_id IN (" + placeholders + ")", tuple(batch)).fetchall())
                 rows = connection.execute(
-                    "SELECT job_id, status, audience, completed_at, "
+                    "SELECT job_id, status, audience, channel, completed_at, "
                     "JSON_OBJECT('receiptVerified', JSON_EXTRACT(metadata_json, '$.receiptVerified')) AS metadata "
                     "FROM notification_delivery_attempts WHERE job_id IN (" + placeholders + ") "
-                    "AND audience='accountNotification' AND status='delivered' ORDER BY completed_at LIMIT 1001",
+                    "AND audience='account' AND channel='accountNotification' "
+                    "AND status='delivered' ORDER BY completed_at LIMIT 1001",
                     tuple(batch)).fetchall()
                 truncated = truncated or len(rows) >= 1001
                 attempts.extend(rows)

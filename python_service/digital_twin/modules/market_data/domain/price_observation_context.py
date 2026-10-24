@@ -5,12 +5,20 @@ from statistics import median
 
 from .market_time_series import parse_timestamp, market_timezone
 from .market_hours import source_session_observation
-from .price_observation_windows import finite, positions, source_point, price_windows
+from .price_observation_windows import finite, positions, source_point, price_windows, observed_range
 
 STATE_KEY = "marketPriceContext"
 VERSION = "price-context-v1"
-MAX_SAMPLES = 96  # Per window: at most one non-overlapping sample per session/hour.
+MAX_SAMPLES = 288  # Per window, still at most one disjoint sample per session/hour.
 MIN_SAMPLES = 20
+HISTORY_DAYS = 45
+
+
+def local_time_band(end_at, seconds, zone):
+    """Match the interval's start in a fixed two-hour local-clock band."""
+    local = (parse_timestamp(end_at) - timedelta(seconds=seconds)).astimezone(zone)
+    hour = local.hour // 2 * 2
+    return f"{hour:02d}:00–{hour + 2:02d}:00"
 
 
 def change(price, anchor):
@@ -71,27 +79,31 @@ def day_context(item, point, old, scope):
 
 
 def window_context(path, old_samples, item):
-    """Compare older disjoint intervals within 10% of the actual duration."""
+    """Compare disjoint, similar-length intervals starting in the same local band."""
     windows = price_windows(path)
     samples = deepcopy(old_samples)
     comparisons = []
     if not windows:
         return samples, comparisons
-    cutoff = parse_timestamp(windows[0]["endAt"]) - timedelta(days=20)
+    zone = market_timezone(item.get("market"), item.get("currency"))
+    cutoff = parse_timestamp(windows[0]["endAt"]) - timedelta(days=HISTORY_DAYS)
     for key in list(samples):
         samples[key] = [row for row in samples[key] if parse_timestamp(row[0]) >= cutoff][-MAX_SAMPLES:]
     for window in windows:
         key = str(window["windowMinutes"])
         history = samples.get(key, [])
         session = str(item.get("market_session") or "")
+        band = local_time_band(window["endAt"], window["elapsedSeconds"], zone)
         # Samples: end time, actual seconds, absolute change, local hour, session.
         older = [row for row in history if parse_timestamp(row[0]) <= parse_timestamp(window["startAt"])
-                 and (len(row) < 5 or row[4] == session)
+                 and len(row) >= 5 and row[4] == session
+                 and local_time_band(row[0], row[1], zone) == band
                  and abs(row[1] - window["elapsedSeconds"]) <= window["elapsedSeconds"] * .1]
-        dates = {row[3][:10] for row in older}
+        dates = {parse_timestamp(row[0]).astimezone(zone).date() for row in older}
         comparison = {"windowMinutes": window["windowMinutes"], "elapsedSeconds": window["elapsedSeconds"],
                       "sampleCount": len(older), "sessionDays": len(dates), "minimumSamples": MIN_SAMPLES,
-                      "durationTolerancePct": 10, "basis": "retained-disjoint-comparable-duration",
+                      "durationTolerancePct": 10, "basis": "retained-disjoint-local-time-band-v2",
+                      "localTimeBand": band, "timeZone": str(zone), "historyDays": HISTORY_DAYS,
                       "status": "insufficient-history"}
         if len(older) >= MIN_SAMPLES and len(dates) >= 3:
             absolute = abs(window["changePct"])
@@ -141,7 +153,7 @@ def advance_price_context(current, previous, paths):
             continue
         day, daily = day_context(item, point, old, scope)
         path = paths.get(symbol) or {}
-        cutoff = parse_timestamp(point["at"]) - timedelta(days=20)
+        cutoff = parse_timestamp(point["at"]) - timedelta(days=HISTORY_DAYS)
         retained = {key: [row for row in rows if cutoff <= parse_timestamp(row[0]) < parse_timestamp(point["at"])][-MAX_SAMPLES:]
                     for key, rows in (old.get("samples") or {}).items()}
         samples, comparisons = window_context(path, retained, item)
@@ -150,11 +162,12 @@ def advance_price_context(current, previous, paths):
         interval = {}
         if ranges:
             window = ranges[0]
-            values = [row["price"] for row in window["points"][:-1]]
-            interval = {"startAt": window["startAt"], "endAt": window["points"][-2]["at"],
-                        "elapsedSeconds": window["elapsedSeconds"], "high": max(values), "low": min(values),
-                        "sampleCount": len(values), "break": "above" if point["price"] > max(values) else
-                        "below" if point["price"] < min(values) else "inside"}
+            prior = window["points"][:-1]
+            interval = observed_range(prior, window["startAt"], prior[-1]["at"])
+            interval.update(elapsedSeconds=(parse_timestamp(prior[-1]["at"]) - parse_timestamp(window["startAt"])).total_seconds(),
+                            sampleCount=len(prior),
+                            **{"break": "above" if point["price"] > interval["high"] else
+                               "below" if point["price"] < interval["low"] else "inside"})
         facts[symbol] = {"version": VERSION, "status": "available", "symbol": symbol,
                          "sourceAsOf": point["at"], "currentPrice": point["price"],
                          "daily": daily, "priorRange": interval, "comparisons": comparisons}

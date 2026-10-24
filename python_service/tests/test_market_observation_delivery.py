@@ -77,20 +77,38 @@ class SentRowConnection:
 class MarketObservationDeliveryTests(unittest.TestCase):
     def assert_price_latency_counts_only_actual_verified_account_receipts(self):
         from digital_twin.modules.notifications.domain.price_delivery_metrics import summarize_price_delivery
+        from digital_twin.modules.notifications.application.notification.dispatch import NotificationDispatchService
+        from digital_twin.modules.notifications.domain.notifications import NotificationJob
+        from types import SimpleNamespace
+        # Exercise the actual writer's channel/audience contract, not a handwritten alias.
+        queue = MagicMock(spec=['start_delivery_attempt', 'complete_delivery_attempt'])
+        queue.start_delivery_attempt.return_value = 'fixture-attempt'
+        notifier = SimpleNamespace(send=lambda message: SimpleNamespace(
+            delivered=True, label='fixture', metadata={'receiptVerified': True}))
+        dispatch = NotificationDispatchService(queue, lambda account: notifier)
+        dispatch.deliver(NotificationJob.create('fixture', account_id='fixture', message_type='marketObservation'),
+                         {'fixture': object()}, 'fixture')
+        _job, channel, audience, _audit = queue.start_delivery_attempt.call_args.args
+        self.assertEqual(('accountNotification', 'account'), (channel, audience))
         job = {"job_id": "a", "status": "done", "data_quality": "actual", "is_mock": 0,
                "created_at": "2026-10-23T01:00:10Z", "source_at": "2026-10-23T01:00:00Z"}
-        receipt = {"job_id": "a", "status": "delivered", "audience": "accountNotification",
-                   "metadata": {"receiptVerified": True}, "completed_at": "2026-10-23T01:00:40Z"}
+        receipt = {"job_id": "a", "status": "delivered", "audience": audience, 'channel': channel,
+                   "metadata": queue.complete_delivery_attempt.call_args.kwargs['metadata'],
+                   "completed_at": "2026-10-23T01:00:40Z"}
         jobs = [job, {**job, "job_id": "mock", "is_mock": 1}, {**job, "job_id": "b", "status": "pending"}]
         attempts = [receipt, {**receipt, "job_id": "mock"},
                     {**receipt, "job_id": "b", "metadata": {"receiptVerified": False}},
                     {**receipt, "job_id": "b", "audience": "diagnostic"},
+                    {**receipt, "job_id": "b", "channel": "operationsTelegram"},
+                    {**receipt, "job_id": "b", "status": "failed"},
                     {**receipt, "completed_at": "2026-10-23T01:00:50Z"}]
         result = summarize_price_delivery(jobs, attempts)
         self.assertEqual(1, result["verifiedDeliveredJobs"])
         self.assertEqual(30, result["queueToReceipt"]["medianSeconds"])
         self.assertEqual(40, result["sourceToReceipt"]["p95Seconds"])
         self.assertEqual({"sampleCount": 0}, summarize_price_delivery(jobs, [])['queueToReceipt'])
+        self.assertEqual(1, summarize_price_delivery(jobs, [])['doneWithoutVerifiedReceiptJobs'])
+        self.assertEqual(0, result['doneWithoutVerifiedReceiptJobs'])
         invalid = summarize_price_delivery([{**job, 'source_at': '2026-10-23T02:00:00Z'}], [receipt])
         self.assertEqual(1, invalid['missingOrInvalidClockCount'])
         self.assertEqual(0, invalid['sourceToReceipt']['sampleCount'])
@@ -105,7 +123,7 @@ class MarketObservationDeliveryTests(unittest.TestCase):
             [{'job_id': 'fixture'}],
             [{'job_id': 'fixture', 'status': 'done', 'data_quality': 'actual', 'is_mock': 0,
               'created_at': '2026-10-23T01:00:10Z', 'source_at': '2026-10-23T01:00:00Z'}],
-            [{'job_id': 'fixture', 'status': 'delivered', 'audience': 'accountNotification',
+            [{'job_id': 'fixture', 'status': 'delivered', 'audience': 'account', 'channel': 'accountNotification',
               'completed_at': '2026-10-23T01:00:40Z', 'metadata': '{"receiptVerified":true}'}]]
         result = store.price_observation_metrics(500)
         calls = connection.execute.call_args_list
@@ -113,6 +131,7 @@ class MarketObservationDeliveryTests(unittest.TestCase):
         self.assertEqual((100,), calls[0].args[1])
         self.assertIn('WHERE job_id IN', calls[1].args[0])
         self.assertEqual(('fixture',), calls[1].args[1])
+        self.assertIn("audience='account' AND channel='accountNotification'", calls[2].args[0])
         self.assertEqual(1, result['verifiedDeliveredJobs'])
 
     def assert_guard_exclusion_counts_cover_all_candidates_and_account_scope(self):

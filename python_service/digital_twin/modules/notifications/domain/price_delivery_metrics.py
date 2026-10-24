@@ -28,7 +28,8 @@ def summarize_price_delivery(jobs, attempts):
         meta = row.get("metadata") or {}
         clock = timestamp(row.get("completed_at"))
         if (row.get("job_id") not in actual or row.get("status") != "delivered"
-                or row.get("audience") != "accountNotification" or meta.get("receiptVerified") is not True or not clock):
+                or row.get("audience") != "account" or row.get("channel") != "accountNotification"
+                or meta.get("receiptVerified") is not True or not clock):
             continue
         previous = receipts.get(row["job_id"])
         if previous is None or clock < previous:
@@ -45,6 +46,10 @@ def summarize_price_delivery(jobs, attempts):
                 invalid += 1
     return {"scope": "recent-retained-price-jobs", "jobSampleCount": len(jobs),
             "actualJobCount": len(actual), "verifiedDeliveredJobs": len(receipts),
+            "doneWithoutVerifiedReceiptJobs": sum(row.get("status") == "done" and key not in receipts
+                                                  for key, row in actual.items()),
+            "receiptContract": {"audience": "account", "channel": "accountNotification",
+                                "status": "delivered", "receiptVerified": True},
             "jobStatusCounts": dict(Counter(str(row.get("status") or "unknown") for row in jobs)),
             "queueToReceipt": latency_summary(queue), "sourceToReceipt": latency_summary(source),
             "missingOrInvalidClockCount": invalid}

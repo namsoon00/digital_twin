@@ -62,6 +62,36 @@ def scope_for(item, point):
         market_session_date(point["at"], item.get("market"), item.get("currency")), finite(item.get("previous_close"))]
 
 
+def minute_observation(point, previous=None):
+    """Retain only observed extremes and their clocks, never invent minute OHLC."""
+    previous = previous or point
+    band = deepcopy(previous.get("minuteRange") or {
+        "firstAt": previous["at"], "high": previous["price"], "highAt": previous["at"],
+        "low": previous["price"], "lowAt": previous["at"], "observationCount": 1})
+    if point["at"] != previous["at"]:
+        band["observationCount"] += 1
+    for side, compare in (("high", max), ("low", min)):
+        if compare(point["price"], band[side]) != band[side]:
+            band[side], band[side + "At"] = point["price"], point["at"]
+    return {**point, "minuteRange": band}
+
+
+def observed_range(points, start_at, end_at):
+    """Exclude first-minute extremes outside the actual comparison interval."""
+    observations = []
+    start, end = parse_timestamp(start_at), parse_timestamp(end_at)
+    for point in points:
+        observations.append((point["price"], point["at"]))
+        band = point.get("minuteRange") or {}
+        observations.extend((band[side], band[side + "At"]) for side in ("high", "low") if side in band)
+    observations = [(price, at) for price, at in observations if start <= parse_timestamp(at) <= end]
+    if not observations:
+        return {}
+    high, low = max(observations, key=lambda row: row[0]), min(observations, key=lambda row: row[0])
+    return {"basis": "collected-quotes", "high": high[0], "highAt": high[1],
+            "low": low[0], "lowAt": low[1], "startAt": start_at, "endAt": end_at}
+
+
 def advance_paths(current, previous):
     """Save at most 90 source minute observations per current subject (75m)."""
     if current.get("accountId") != previous.get("accountId"):
@@ -86,16 +116,16 @@ def advance_paths(current, previous):
             result[symbol] = {**old, "status": "out-of-order-source"}
             continue
         if rows and point["at"] == rows[-1]["at"]:
-            result[symbol] = {**old, "status": "unchanged-source" if point == rows[-1] else "source-revision-without-new-clock"}
+            result[symbol] = {**old, "status": "unchanged-source" if point["price"] == rows[-1]["price"] else "source-revision-without-new-clock"}
             continue
         if rows and (parse_timestamp(point["at"]) - parse_timestamp(rows[-1]["at"])).total_seconds() > MAX_GAP_SECONDS:
             rows = []  # No short-window claim across missing observations or reopening.
         cutoff = parse_timestamp(point["at"]) - timedelta(minutes=75)
         rows = [r for r in rows if parse_timestamp(r["at"]) >= cutoff]
         if rows and rows[-1]["at"][:16] == point["at"][:16]:
-            rows[-1] = point
+            rows[-1] = minute_observation(point, rows[-1])
         else:
-            rows.append(point)
+            rows.append(minute_observation(point))
         result[symbol] = {"version": VERSION, "status": "available", "scope": scope, "points": rows[-90:]}
     return result
 
@@ -123,5 +153,6 @@ def price_windows(path):
         result.append({"windowMinutes": minutes, "elapsedSeconds": elapsed, "startAt": start["at"], "endAt": last["at"],
             "startPrice": start["price"], "endPrice": last["price"],
             "changePct": (last["price"] / start["price"] - 1) * 100,
-            "sampleCount": len(points), "points": deepcopy(points), "maxGapSeconds": MAX_GAP_SECONDS})
+            "sampleCount": len(points), "points": deepcopy(points), "maxGapSeconds": MAX_GAP_SECONDS,
+            "observedRange": observed_range(points, start["at"], last["at"])})
     return result

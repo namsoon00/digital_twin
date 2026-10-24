@@ -244,6 +244,11 @@ def reset_mysql_test_database(seed=None):
     MySQLOperationalConnection._schema_ready.discard(schema_key)
     MySQLOperationalConnection._retention_last_run.pop(schema_key, None)
     MySQLOperationalConnection._retention_last_warning.pop(schema_key, None)
+    monitor_schema_key = (
+        os.getpid(), str(config.get("host") or ""), int(config.get("port") or 3306),
+        str(config.get("database") or ""), str(config.get("unix_socket") or ""),
+    )
+    MySQLMonitorAccountJobStore._schema_ready.discard(monitor_schema_key)
     ensure_mysql_database_exists(config)
     register_mysql_test_database(config)
     return settings

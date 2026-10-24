@@ -96,6 +96,11 @@ class ModuleAccountMutationTests(unittest.TestCase):
         self.assertEqual([], self.stored(account.account_id).watchlist_symbols)
 
     def test_module_watchlist_runtime_injects_owner_repository_and_read_only_account_access(self):
+        # A previous module may have initialized the monitor queue before the
+        # shared test DB was dropped. Reproduce that order even in isolation.
+        operational_store.monitor_account_job_store(self.registry.settings)
+        reset_mysql_test_database(self.temp.name)
+        self.registry = TestAccountRegistry(test_store_seed(self.temp.name))
         account = self.account("module-owner-watchlist")
         bus = EventBus()
         refreshes = []

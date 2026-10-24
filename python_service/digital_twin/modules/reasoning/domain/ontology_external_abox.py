@@ -4,7 +4,7 @@ from typing import Dict, Iterable, List
 from digital_twin.modules.market_data.contracts import crypto_market_observation_events
 from digital_twin.modules.news_intelligence.contracts import disclosure_reasoning_eligibility
 from digital_twin.modules.news_intelligence.contracts import configured_event_max_age_minutes, event_time_contract
-from digital_twin.modules.market_data.contracts import number
+from digital_twin.modules.market_data.contracts import number, parse_datetime
 from digital_twin.modules.instruments.contracts import instrument_profile_for_position
 from digital_twin.modules.reasoning.domain.ontology_contracts import PortfolioOntology, entity_id
 from digital_twin.modules.reasoning.domain.ontology_decision_state import data_state_from_evidence
@@ -125,11 +125,33 @@ def external_observation_profile(
         or external_signals.get("fetchedAt")
         or ""
     )
+    status = str(item.get("freshnessStatus") or "unknown")
+    age = item.get("ageMinutes")
+    if domain == "crypto" and not item.get("freshnessStatus"):
+        # CoinGecko stores collection quality on the batch, not each coin.
+        # Bind it to this item's provider and exact collection clock; never
+        # borrow another coin's observation time or a newer batch's status.
+        captured = parse_datetime(item.get("sourceFetchedAt") or item.get("fetchedAt"))
+        batch_time = parse_datetime(freshness.get("fetchedAt"))
+        observed = parse_datetime(source_as_of)
+        provider = str(item.get("provider") or "").casefold()
+        batch_provider = str(freshness.get("provider") or "CoinGecko").casefold()
+        if provider == batch_provider == "coingecko" and captured and captured == batch_time and observed:
+            age = (captured - observed).total_seconds() / 60
+            status = str(freshness.get("status") or "unknown")
+            if age < 0:
+                status = "future"
+            elif age > max_age_minutes:
+                status = "stale"
+        # This is quality at capture. Downstream evidence admission still
+        # checks sourceAsOf against its current or frozen replay cutoff.
     return {
         "observationDomain": domain,
         "freshnessRequired": True,
-        "freshnessStatus": str(item.get("freshnessStatus") or "unknown"),
-        "freshnessAgeMinutes": item.get("ageMinutes"),
+        "freshnessStatus": status,
+        "freshnessAgeMinutes": age,
+        **({"judgementEvidenceUsable": status == "fresh" and item.get("judgementEvidenceUsable") is not False}
+           if domain == "crypto" else {}),
         "sourceAsOf": source_as_of,
         "sourceFetchedAt": source_fetched_at,
         "sourceTimestampPresent": bool(source_as_of),

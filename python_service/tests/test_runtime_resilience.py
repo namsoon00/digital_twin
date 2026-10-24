@@ -13,7 +13,7 @@ from digital_twin.modules.market_data.domain.external_signal_quality import atta
 from digital_twin.modules.market_data.domain.event_types import MARKET_DATA_COLLECTED
 from digital_twin.modules.reasoning.domain.event_types import ONTOLOGY_REASONING_REQUESTED
 from digital_twin.modules.reasoning.domain.ontology_contracts import OntologyEntity, PortfolioOntology
-from digital_twin.modules.reasoning.domain.ontology_external_abox import add_external_signal_concepts, external_quality_data_state
+from digital_twin.modules.reasoning.domain.ontology_external_abox import add_external_signal_concepts, external_quality_data_state, external_observation_profile
 from digital_twin.modules.reasoning.domain.ontology_inference_materializer import observation_metadata
 from digital_twin.modules.reasoning.domain.ontology_relation_facts import _external_quality_facts
 from digital_twin.modules.portfolio.domain.portfolio import Position
@@ -85,6 +85,27 @@ class RuntimeResilienceTests(unittest.TestCase):
         evidence = observation_metadata(event.properties, event.properties["state"])
         self.assertEqual("fresh", evidence["freshnessStatus"])
         self.assertTrue(evidence["judgementEvidenceUsable"])
+
+        item = signals["cryptoMarkets"]["ethereum"]
+        cases = [
+            ({"lastUpdated": ""}, "unknown"),
+            ({"lastUpdated": "invalid"}, "unknown"),
+            ({"lastUpdated": (now - timedelta(minutes=26)).isoformat()}, "stale"),
+            ({"lastUpdated": (now + timedelta(minutes=1)).isoformat()}, "future"),
+            ({"fetchedAt": (now - timedelta(minutes=1)).isoformat()}, "unknown"),
+            ({"fetchedAt": ""}, "unknown"),
+            ({"provider": "Other provider"}, "unknown"),
+            ({"freshnessStatus": "partial"}, "partial"),
+        ]
+        for changes, expected in cases:
+            with self.subTest(changes=changes):
+                profile = external_observation_profile(signals, {**item, **changes}, "crypto", 25)
+                self.assertEqual(expected, profile["freshnessStatus"])
+                self.assertFalse(observation_metadata(profile, "watch")["judgementEvidenceUsable"])
+        for status in ("stale", "partial", "unavailable"):
+            limited = {**signals, "cryptoFreshness": {**signals["cryptoFreshness"], "status": status}}
+            self.assertEqual(status, external_observation_profile(limited, item, "crypto", 25)["freshnessStatus"])
+        self.assertEqual("unknown", external_observation_profile(signals, item, "macro")["freshnessStatus"])
 
     def test_market_data_event_waits_for_the_verified_monitor_snapshot_before_reasoning(self):
         events = EventBus()

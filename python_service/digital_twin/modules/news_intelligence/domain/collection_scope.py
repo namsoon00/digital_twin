@@ -25,9 +25,9 @@ def required_report_periods(tasks):
                 day = date.fromisoformat(value)
             except ValueError:
                 continue
-            # Skip an explicit range start; fiscal quarters may end on any
-            # day, so a standalone ISO period must not require month end.
-            if not re.match(r"\s*(?:부터|에서|[~–—]|to\b|-\s*\d{4}-)", text[match.end():], re.I):
+            # Skip a range/discovery start (including a correction search
+            # "이후" date); fiscal quarters may end on any day, not just month end.
+            if not re.match(r"\s*(?:부터|에서|이후|[~–—]|to\b|-\s*\d{4}-)", text[match.end():], re.I):
                 periods.add(value)
     if len(periods) > 8:
         raise ValueError("reporting period scope exceeds collection bounds")

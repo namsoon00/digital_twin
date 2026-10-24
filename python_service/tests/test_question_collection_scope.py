@@ -207,6 +207,11 @@ class QuestionCollectionScopeTests(unittest.TestCase):
         self.assertEqual(["2025-06-30"], required_report_periods([task]))
         task["sourceRequirements"]["originalContract"]["period"] = "2026-01-26 to 2026-07-26"
         self.assertEqual(["2026-07-26"], required_report_periods([task]))
+        task["sourceRequirements"]["originalContract"]["period"] = (
+            "2026-07-01~2026-09-30 및 2026-01-01~2026-09-30, 비교기간 "
+            "2026-04-01~2026-06-30·2025-07-01~2025-09-30·2025-01-01~2025-09-30, "
+            "정정 여부는 2026-10-07 이후")
+        self.assertEqual(["2025-09-30", "2026-06-30", "2026-09-30"], required_report_periods([task]))
         task["sourceRequirements"]["originalContract"]["period"] = "2025-07-27 및 2026-07-26"
         self.assertEqual(["2025-07-27", "2026-07-26"], required_report_periods([task]))
         self.assertEqual(PERIODS, collection_scope([scoped_task()], [], [])['unselectedPeriodEnds'])

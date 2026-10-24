@@ -149,9 +149,10 @@ class LocalGraphWriterGuard:
         os.fsync(handle.fileno())
         return {**payload, "acquired": True, "status": "acquired"}
 
-    def release(self) -> Dict[str, object]:
+    def release(self, keep_priority: bool = False) -> Dict[str, object]:
         if self._handle is None:
-            self._release_priority()
+            if not keep_priority:
+                self._release_priority()
             return {"status": "not-owner", "released": False}
         self._depth = max(0, self._depth - 1)
         if self._depth:
@@ -175,7 +176,8 @@ class LocalGraphWriterGuard:
             fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
         finally:
             handle.close()
-            self._release_priority()
+            if not keep_priority:
+                self._release_priority()
         self._acquired_at = ""
         return {**payload, "status": "released", "released": True}
 

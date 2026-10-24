@@ -1,6 +1,7 @@
 {
   "tests": [
     {"file": "test_evidence_completion.py", "tier": "contract", "core": true},
+    {"file": "test_rule_delivery_latency.py", "tier": "integration", "core": true},
     {"file": "test_rule_notification_repair.py", "tier": "contract", "core": true},
     {"file": "test_rule_notice_delivery_value.py", "tier": "contract", "core": true},
     {"file": "test_outcome_recovery_reads.py", "tier": "integration", "core": true},

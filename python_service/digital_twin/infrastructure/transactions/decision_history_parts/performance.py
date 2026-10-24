@@ -8,6 +8,7 @@ from digital_twin.infrastructure.mysql_operational_helpers import _json_loads
 from .ports import ConnectionFactory
 from digital_twin.modules.outcomes.domain.decision_calibration_input import DECISION_CALIBRATION_INPUT_VERSION
 from digital_twin.modules.outcomes.domain.decision_calibration_input import calibration_ai_judgment
+from digital_twin.modules.outcomes.infrastructure.performance_report_cache import PERFORMANCE_REPORT_CACHE
 
 
 def performance(
@@ -34,9 +35,10 @@ def performance(
         limit=max(1, min(2000, int(limit or 500))),
         as_of=as_of,
     )
-    result = evaluate_decision_performance(
+    result = PERFORMANCE_REPORT_CACHE.evaluate(
         episodes,
         minimum_sample_count=max(2, min(100, minimum_samples)),
+        evaluator=evaluate_decision_performance,
     )
     archive_count = _performance_archive_episode_count(account_id, symbol, as_of=as_of)
     evaluated_count = int(result.get("episodeCount") or 0)
@@ -437,11 +439,19 @@ def shadow_performance_episodes(
             "SELECT outcomes.observation_episode_id AS episode_id, "
             "outcomes.observed_at, outcomes.payload_json AS outcome_json, "
             "episodes.payload_json AS episode_json "
+            "FROM (SELECT outcomes.outcome_id, outcomes.observed_at "
             "FROM investment_hypothesis_observation_outcomes AS outcomes "
             "JOIN investment_hypothesis_observation_episodes AS episodes "
             "ON episodes.episode_id = outcomes.observation_episode_id"
             + where
-            + " ORDER BY outcomes.observed_at DESC, outcomes.outcome_id DESC LIMIT %s",
+            # Limit only the small identities before fetching off-page evidence.
+            # Keep the original episode scope, orphan exclusion and tie order.
+            + " ORDER BY outcomes.observed_at DESC, outcomes.outcome_id DESC LIMIT %s"
+            ") AS selected STRAIGHT_JOIN investment_hypothesis_observation_outcomes AS outcomes FORCE INDEX (PRIMARY) "
+            "ON outcomes.outcome_id = selected.outcome_id "
+            "STRAIGHT_JOIN investment_hypothesis_observation_episodes AS episodes FORCE INDEX (PRIMARY) "
+            "ON episodes.episode_id = outcomes.observation_episode_id "
+            "ORDER BY selected.observed_at DESC, selected.outcome_id DESC",
             tuple(params),
         ).fetchall()
     grouped: Dict[str, Dict[str, object]] = {}

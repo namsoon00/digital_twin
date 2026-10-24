@@ -2328,7 +2328,14 @@ class MySQLNotificationJobStore(PriceMetricsStore, DiagnosticThreadStore, Invest
 
     def enqueue(self, job: NotificationJob) -> bool:
         with self.transaction() as connection:
-            return self.enqueue_with_connection(connection, job)
+            accepted = self.enqueue_with_connection(connection, job)
+        if accepted:
+            self.delivery_wakeup().notify()
+        return accepted
+
+    def delivery_wakeup(self):
+        from .notification.wakeup import NotificationWakeSignal
+        return NotificationWakeSignal(self.runtime_settings)
 
     def enqueue_request(self, request) -> bool:
         from digital_twin.modules.notifications.public import NotificationIngressService

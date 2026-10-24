@@ -1,5 +1,60 @@
 # Reasoning Input Latency
 
+## Rule delivery preparation and wakeup (2026-10-24)
+
+Six recent delivery jobs showed 0.7–77.4 seconds in the queue, 5.4–17.6
+seconds in runtime-context preparation, 5.6–11.7 seconds in ABox persistence
+and 3.5–7.6 seconds in native inference. These components overlap; they must
+not be added to graph-build totals or presented as end-to-end delivery time.
+
+Shadow performance history now limits the same ordered, account/symbol/cutoff
+identities before reading large episode/outcome JSON. A read-only repeatable-read
+comparison of 1,102 shadow episodes preserved every returned value and order:
+the old query took 1.42/1.46 seconds and the revised query 1.22/1.24 seconds.
+No historical observations, qualification criteria or source clocks are omitted.
+
+Pure performance evaluation selects independent observations once per metric
+slice. A bounded process-local cache reuses a report only after the full
+authoritative episode read produces an identical key, including repairs,
+qualification receipts, ordering, account, cutoff-visible contents and the
+minimum-sample setting. Archive counts and coverage are still read anew. Cached
+reports are copied, never exposed as shared mutable state. A frozen 1,761-episode
+replay produced exactly equal reports: original calculation 1.81 seconds,
+revised calculation 1.31 seconds, first cached evaluation 1.61 seconds and an
+identical-input hit 0.32 seconds. These are local component benchmarks, not a
+promise that later market snapshots will hit the cache.
+
+The independent runner retains its existing writer fence when claiming jobs,
+then releases the TypeDB writer only for immutable MySQL source assembly.
+Delivery retains its existing priority reservation during this read, so candidate
+or maintenance work cannot overtake it. A candidate's preparation can yield to
+live delivery, and the normal turn exit releases both reservations and ownership.
+Before graph preparation it reacquires the writer, verifies the exact durable
+claim tokens, rechecks control deployment and execution readiness. Busy writers
+defer the original source; lost or unverifiable claims cannot reach inference.
+Source-read failures leave the writer released. Graph-dependent runtime context,
+effectful outcome observation, ABox publication and native inference remain in
+the writer boundary. This does not add parallel native writers or change frozen
+release identity. Small scoped ABox patches now use the existing bounded union
+delete, reducing round trips inside the same atomic activation transaction.
+
+Direct notification enqueue emits a local wake hint only after its transaction
+commits. The existing notification worker checks it at most one second apart,
+including hints emitted during delivery. The hint contains no account or message
+data and cannot authorize a send. Missing hints fall back to ordinary polling;
+transaction-bound producers without a post-commit hook also retain polling.
+Deduplication, leases, cadence, send-time freshness and successful-receipt rules
+are unchanged. An already busy worker and external transport can still delay
+delivery. No synthetic investment alert is sent to measure this change.
+
+Regressions: `test_rule_delivery_latency`, `test_abox_persistence`,
+`test_independent_reasoning_engine`, `test_graph_writer_guard` and
+`test_rule_notification_repair`. Tests exercise cross-process wake hints,
+rollback, real MySQL history selection and loss of writer/claim/control authority.
+Steady-state latency still requires observation from source time through the
+successful transport receipt; these changes alone do not establish a 60-second
+delivery guarantee.
+
 ## Indexed outcome recovery reads (2026-10-23)
 
 Recent delivery traces spent a median 12.6 seconds preparing runtime context

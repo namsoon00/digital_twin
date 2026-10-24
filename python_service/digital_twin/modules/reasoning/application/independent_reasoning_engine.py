@@ -4,6 +4,7 @@ import inspect
 import json
 import threading
 import time
+from contextlib import contextmanager, nullcontext
 from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 from typing import Dict, Iterable, Mapping
@@ -27,6 +28,14 @@ NO_CHANGE_PROJECTION_STATUSES = {
 }
 
 MAX_PERSISTED_RULE_EVALUATIONS = 160
+
+
+class InputPreparationDeferred(RuntimeError):
+    """The immutable source was read, but native execution lost its authority."""
+
+    def __init__(self, reason, reason_code="typedb-graph-writer-owned"):
+        super().__init__(reason)
+        self.reason_code = reason_code
 
 
 def utc_now_iso() -> str:
@@ -1392,19 +1401,24 @@ class V2ReasoningEngine:
         self,
         source_events: Iterable[Mapping[str, object]],
         progress_callback=None,
+        input_assembly_scope=None,
     ) -> Dict[str, object]:
         request = independent_reasoning_request(
             self._descriptor.deployment_id,
             source_events,
             self.release_manifest(),
         )
-        return self.execute(request, progress_callback=progress_callback).to_dict()
+        return self.execute(
+            request, progress_callback=progress_callback,
+            input_assembly_scope=input_assembly_scope,
+        ).to_dict()
 
     def execute(
         self,
         request: IndependentReasoningRequest,
         force: bool = False,
         progress_callback=None,
+        input_assembly_scope=None,
     ) -> IndependentReasoningResult:
         started_at = utc_now_iso()
         started = time.perf_counter()
@@ -1425,7 +1439,14 @@ class V2ReasoningEngine:
             else None
         )
         input_started = time.perf_counter()
-        assembled = self.input_assembler.assemble(request)
+        try:
+            with input_assembly_scope() if callable(input_assembly_scope) else nullcontext():
+                assembled = self.input_assembler.assemble(request)
+        except InputPreparationDeferred as error:
+            assembled = {"status": "deferred", "snapshots": [], "preflight": {
+                "ready": False, "permanent": False, "status": error.reason_code,
+                "retryAfterSeconds": 5, "reason": str(error),
+            }}
         stages["inputAssemblyMs"] = int((time.perf_counter() - input_started) * 1000)
         progress(
             "input_assembly.completed",
@@ -1971,6 +1992,7 @@ class IndependentReasoningJobRunner:
         self.route_reconciler = route_reconciler
         self.deployment_role = str(deployment_role or "configured").strip().lower()
         self.graph_writer_guard = graph_writer_guard
+        self._input_preparation_released_writer = False
         self.market_observation_completion_recorder = market_observation_completion_recorder
         self.market_observation_completion_reconciler = market_observation_completion_reconciler
         self.comparison_reconciler = comparison_reconciler
@@ -2218,8 +2240,10 @@ class IndependentReasoningJobRunner:
                 "queuePreparation": preparation,
             }
         try:
+            self._input_preparation_released_writer = False
             result = self._run_once(preparation)
-            self.record_graph_writer_result(result)
+            if not self._input_preparation_released_writer:
+                self.record_graph_writer_result(result)
             return result
         finally:
             self.release_graph_writer_ownership()
@@ -2525,10 +2549,14 @@ class IndependentReasoningJobRunner:
             try:
                 consume = self.engine.consume
                 parameters = inspect.signature(consume).parameters
+                preparation_kwargs = (
+                    {"input_assembly_scope": lambda: self.unlocked_input_assembly(job_ids, lease_lost)}
+                    if "input_assembly_scope" in parameters else {}
+                )
                 if "progress_callback" in parameters:
-                    result = consume(events, progress_callback=self.record_progress)
+                    result = consume(events, progress_callback=self.record_progress, **preparation_kwargs)
                 else:
-                    result = consume(events)
+                    result = consume(events, **preparation_kwargs)
             finally:
                 stop_heartbeat.set()
                 heartbeat.join(timeout=max(1, self.heartbeat_seconds() + 1))
@@ -3301,6 +3329,59 @@ class IndependentReasoningJobRunner:
         while not stop_event.wait(interval):
             self.publish_worker_heartbeat(deployment_id)
 
+    @contextmanager
+    def unlocked_input_assembly(self, job_ids, lease_lost):
+        """Only immutable MySQL source reads may run outside the native writer.
+
+        Claims retain their existing writer fence and heartbeat. No graph read,
+        projection or publication begins until all execution fences are checked
+        again. A busy writer defers normally instead of waiting while holding it.
+        """
+        if self.graph_writer_guard is None:
+            yield
+            return
+        self._input_preparation_released_writer = True
+        # Retain delivery's existing priority reservation: background work must
+        # not overtake a live job merely because its source read takes seconds.
+        released = self.release_graph_writer_ownership(keep_priority=True)
+        if not released.get("released"):
+            raise InputPreparationDeferred("Could not release the graph writer for source preparation.")
+        self.publish_released_writer_state()
+        yield
+        if lease_lost.is_set():
+            raise InputPreparationDeferred("Reasoning claim was lost during source preparation.", "reasoning-claim-lost")
+        ownership = self.acquire_graph_writer_ownership()
+        if not ownership.get("acquired"):
+            raise InputPreparationDeferred("Graph writer is busy after source preparation; retain the original source for retry.")
+        self._input_preparation_released_writer = False
+        self.confirm_input_assembly_claims(job_ids, lease_lost)
+        deployment = self.engine.descriptor().deployment_id
+        if not self.control_binding_status(deployment).get("selected"):
+            raise InputPreparationDeferred("Deployment changed during source preparation.", "inactive-control-binding")
+        if not self.execution_readiness().get("ready", True):
+            raise InputPreparationDeferred("Native execution is not ready after source preparation.", "execution-not-ready")
+
+    def confirm_input_assembly_claims(self, job_ids, lease_lost):
+        """Recheck the durable attempt before entering TypeDB, between heartbeats."""
+        callback = getattr(self.queue, "heartbeat", None)
+        if not callable(callback):
+            return
+        parameters = inspect.signature(callback).parameters
+        kwargs = {}
+        if "progress" in parameters:
+            kwargs["progress"] = self.current_progress()
+        if "claimed_tokens" in parameters:
+            kwargs["claimed_tokens"] = dict(self.job_transitions.tokens)
+        try:
+            alive = callback(job_ids, self.worker_id, _int_setting(
+                self.settings, "reasoningEngineV2LeaseSeconds", 600, 60, 3600,
+            ), **kwargs)
+        except Exception as error:
+            raise InputPreparationDeferred("Could not verify reasoning claim after source preparation.", "reasoning-claim-unverified") from error
+        if not alive:
+            lease_lost.set()
+            raise InputPreparationDeferred("Reasoning claim was lost during source preparation.", "reasoning-claim-lost")
+
     def acquire_graph_writer_ownership(self) -> Dict[str, object]:
         guard = self.graph_writer_guard
         acquire = getattr(guard, "acquire", None)
@@ -3327,12 +3408,13 @@ class IndependentReasoningJobRunner:
             result["graphWriterBackoff"] = backoff
         return backoff
 
-    def release_graph_writer_ownership(self) -> Dict[str, object]:
+    def release_graph_writer_ownership(self, keep_priority: bool = False) -> Dict[str, object]:
         release = getattr(self.graph_writer_guard, "release", None)
         if not callable(release):
             return {"status": "not-configured", "released": False}
         try:
-            return dict(release() or {})
+            kwargs = {"keep_priority": keep_priority} if "keep_priority" in inspect.signature(release).parameters else {}
+            return dict(release(**kwargs) or {})
         except Exception as error:  # noqa: BLE001 - process exit remains the final local lock release.
             return {"status": "error", "released": False, "reason": str(error)[:240]}
 

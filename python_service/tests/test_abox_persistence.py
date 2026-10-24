@@ -197,6 +197,8 @@ for name in sys.modules:
                     )
                 self.assertEqual(1, store.commits)
                 self.assertTrue(result["atomic"])
+                if not full:
+                    self.assertLess(result["queryCount"], result["unbatchedQueryCount"])
                 self.assertEqual(["scope:a", "scope:removed"], result["replacedScopeIds"])
                 self.assertEqual({k: v for k, v in before.items() if k[0] == OTHER_WORLD},
                                  {k: v for k, v in store.controls.items() if k[0] == OTHER_WORLD})
@@ -281,14 +283,14 @@ for name in sys.modules:
         store = RecordingABoxStore(api.TypeDBOntologyGraphRepository)
         store.stage_candidate()
         before = store.state()
-        scopes = ["scope:" + str(i) for i in range(5)]
+        scopes = ["scope:" + str(i) for i in range(128)]
         with patch.object(api, "runtime_settings", return_value={"typedbScopedControlWriteTransactionQueryCount": 8}), patch.object(
             store, "scoped_manifest_control_delta", return_value={"changedScopeIds": scopes, "replacedScopeIds": scopes},
         ):
             result = store.prepare_pending_abox_activation_for_inference(WORLD)
         self.assertEqual("error", result["status"])
         self.assertEqual("typedbAtomicControlPatchLimit", result["reasonCode"])
-        self.assertEqual(10, result["requiredControlQueryCount"])
+        self.assertEqual(140, result["requiredControlQueryCount"])
         self.assertEqual(8, result["atomicControlQueryLimit"])
         self.assertTrue(result["preservedPreviousAbox"])
         self.assertEqual(before, store.state())

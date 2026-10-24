@@ -278,7 +278,8 @@ def metric_slice(
     minimum_sample_count: int = 5,
 ) -> Dict[str, object]:
     rows = list(observations or [])
-    independent_rows = latest_independent_observations(rows)
+    selection = select_independent_observations(rows)
+    independent_rows = selection["selected"]
     eligible_rows = [item for item in independent_rows if item.get("calibrationEligible")]
     decisive = [item for item in eligible_rows if item.get("decisive")]
     corroborated = [item for item in decisive if item.get("corroborated")]
@@ -303,7 +304,7 @@ def metric_slice(
         "key": str(key or "all"),
         "label": str(label or key or "전체"),
         "outcomeCount": len(rows),
-        "observationSelection": {key: value for key, value in select_independent_observations(rows).items() if key != "selected"},
+        "observationSelection": {key: value for key, value in selection.items() if key != "selected"},
         "independentEpisodeCount": len(independent_rows),
         "calibrationEligibleOutcomeCount": len(eligible_rows),
         "calibrationEligibleEpisodeCount": len(eligible_rows),

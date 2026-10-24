@@ -78,9 +78,10 @@ def replace_scoped_abox_control_graph(
     transaction_limit = int(raw_limit) if raw_limit is not None else 256
     transaction_limit = max(8, min(512, transaction_limit))
     unbatched_query_count = len(queries)
-    if len(queries) > transaction_limit and not replace_all_scope_pointers:
-        # A disjunction selects the union of scope pointers without joining
-        # independent nodes. Keep the world boundary outside every branch.
+    if len(clean_scope_ids) > 1 and not replace_all_scope_pointers:
+        # Use the bounded union on small live patches too. It avoids one DB
+        # round trip per scope without joining independent nodes or changing
+        # the atomic publication/journal boundary.
         delete_queries = delete_queries[:2] + scoped_pointer_delete_batches(
             clean_scope_ids, world_id,
         )

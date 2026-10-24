@@ -686,7 +686,7 @@ class HistoricalReplayScheduler:
 
 
 class NotificationQueueScheduler:
-    def __init__(self, runner, interval_seconds: int, error_reporter=None, lifetime=None):
+    def __init__(self, runner, interval_seconds: int, error_reporter=None, lifetime=None, wakeup=None):
         from .worker_lifetime import managed_worker_lifetime
 
         self.runner = runner
@@ -694,6 +694,11 @@ class NotificationQueueScheduler:
         self.interval_seconds = max(5, int(interval_seconds or 30))
         self.error_reporter = error_reporter or operational_error_reporter()
         self.running = True
+        queue_store = getattr(runner, "queue", None)
+        wake_factory = getattr(type(queue_store), "delivery_wakeup", None)
+        self.wakeup = wakeup if wakeup is not None else (
+            wake_factory(queue_store) if callable(wake_factory) else None
+        )
 
     def stop(self, *_args) -> None:
         self.running = False
@@ -702,6 +707,7 @@ class NotificationQueueScheduler:
         install_stop_handlers(self.stop)
         print("Python notification worker started. interval=" + str(self.interval_seconds) + "s")
         while self.running:
+            wake_version = self.wakeup.version() if self.wakeup is not None else None
             started = time.monotonic()
             try:
                 processed = self.runner.run_once(limit=limit)
@@ -717,7 +723,10 @@ class NotificationQueueScheduler:
             if self.lifetime is not None and self.lifetime.should_retire():
                 return
             end_at = time.monotonic() + max(1.0, self.interval_seconds - (time.monotonic() - started))
-            wait_until_running(lambda: self.running, end_at)
+            if self.wakeup is not None:
+                self.wakeup.wait(wake_version, lambda: self.running, end_at)
+            else:
+                wait_until_running(lambda: self.running, end_at)
 
 
 class AIInferenceQueueScheduler:

@@ -20,7 +20,7 @@ from digital_twin.modules.news_intelligence.domain.news_ai_analysis import local
 from digital_twin.modules.news_intelligence.domain.news_ai_analysis import news_ai_analysis_is_current
 from digital_twin.modules.news_intelligence.public import ResearchEvidenceGovernanceService
 from digital_twin.modules.news_intelligence.public import evidence_eligibility
-from digital_twin.modules.news_intelligence.public import build_information_brief
+from digital_twin.modules.news_intelligence.public import build_information_brief, build_event_history
 from digital_twin.platform.domain.event_types import APP_ITEM_REMOVED
 from digital_twin.platform.domain.event_types import APP_ITEM_UPDATED
 from typing import Dict
@@ -514,7 +514,7 @@ def research_evidence_detail_payload(evidence_id: str) -> Dict[str, object]:
         observed_at=projected.observed_at,
     ).to_dict()
     payload["analysisSource"] = analysis_source
-    if payload.get("informationBrief", {}).get("state") == "source-linked":
+    if (payload.get("informationBrief") or {}).get("state") == "source-linked":
         from digital_twin.modules.market_data.public import InformationObservationService
         payload["informationBrief"]["marketReaction"] = InformationObservationService(stores.market_time_series_store()).observe(
             projected.published_at, [projected.symbol],
@@ -524,18 +524,8 @@ def research_evidence_detail_payload(evidence_id: str) -> Dict[str, object]:
         if tracking:
             payload["informationBrief"]["marketReaction"] = tracking
     if hasattr(repository, "story_history"):
-        payload["storyTimeline"] = [
-            {
-                "evidenceId": peer.evidence_id,
-                "title": str((peer.raw_payload or {}).get("translatedTitleKo") or peer.title),
-                "publishedAt": peer.published_at,
-                "source": peer.source,
-                "url": peer.url,
-                "state": str(peer.lifecycle_state or "active"),
-                "relationship": str((peer.raw_payload or {}).get("evidenceRelationship") or ""),
-            }
-            for peer in repository.story_history(item, limit=12)
-        ]
+        payload["eventHistory"] = build_event_history(item, repository.story_history(item, limit=20))
+        payload["storyTimeline"] = payload["eventHistory"]["entries"]
     return {"item": payload}
 
 

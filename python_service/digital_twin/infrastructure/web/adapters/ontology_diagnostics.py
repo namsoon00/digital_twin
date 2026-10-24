@@ -6,11 +6,13 @@ from digital_twin.infrastructure.runtime_identity import runtime_identity
 from digital_twin.infrastructure.service_factory import build_investment_strategy_proposal_service
 from digital_twin.infrastructure.settings import runtime_settings
 from digital_twin.infrastructure.stale_read_model import StaleReadModelCache
+from digital_twin.infrastructure.mysql_operational_connection import MySQLOperationalConnection
+from digital_twin.modules.reasoning.infrastructure.observation_binding import active_observation_binding
 from digital_twin.infrastructure.web.adapters.ontology_access import ontology_world_id_from_query
 from digital_twin.infrastructure.web.common import first_query
 from digital_twin.infrastructure.web.common import now
 from digital_twin.infrastructure.web.common import request_bool
-from digital_twin.modules.read_models.public import OntologyDiagnosticsService
+from digital_twin.modules.read_models.public import OntologyDiagnosticsService, diagnostics_observation
 from typing import Dict
 from typing import List
 import json
@@ -27,9 +29,10 @@ def ontology_diagnostics_source_payload(
     symbols: List[str],
     limit: int,
     world_id: str,
+    binding: Dict[str, object],
 ) -> Dict[str, object]:
-    settings = runtime_settings()
-    return OntologyDiagnosticsService(
+    settings = {**runtime_settings(), "typedbDatabase": str(binding["selectedGraphStoreBinding"])}
+    result = OntologyDiagnosticsService(
         ontology_repository=ontology_repository_from_settings(settings),
         settings=settings,
         event_log=stores.event_log(settings),
@@ -43,13 +46,17 @@ def ontology_diagnostics_source_payload(
         runtime_identity_provider=runtime_identity,
         alert_coverage_provider=lambda: stores.investment_alert_coverage_store(settings).summary(),
     ).status(symbols=symbols, limit=limit, world_id=world_id)
+    result["observationBinding"] = dict(binding)
+    return result
 
 
-def ontology_diagnostics_cache_key(symbols: List[str], limit: int, world_id: str) -> str:
+def ontology_diagnostics_cache_key(symbols: List[str], limit: int, world_id: str, binding=None) -> str:
     return json.dumps({
+        "version": "world-diagnostics-v2",
         "symbols": sorted(str(item or "").upper() for item in symbols or []),
         "limit": int(limit or 0),
         "worldId": str(world_id or ""),
+        "binding": dict(binding or {}),
     }, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
 
@@ -70,14 +77,28 @@ def ontology_diagnostics_payload(query: Dict[str, List[str]]) -> Dict[str, objec
     ]
     limit = max(1, min(500, int(first_query(query, "limit") or 80)))
     world_id = ontology_world_id_from_query(query)
-    key = ontology_diagnostics_cache_key(symbols, limit, world_id)
+    try:
+        settings = runtime_settings(fast_operational_read=True)
+        connection_store = MySQLOperationalConnection({**settings, "_skipOperationalSchemaBootstrap": "1"})
+        with connection_store.connect() as connection:
+            binding = active_observation_binding(connection)
+        shared = world_id.startswith(("market:", "knowledge:", "premise:"))
+        binding["selectedGraphStoreBinding"] = binding["sharedGraphStoreBinding" if shared else "graphStoreBinding"]
+    except Exception:
+        return {
+            "contract": "typedb-ontology-diagnostics-v1", "status": "unavailable",
+            "worldId": world_id,
+            "reason": "현재 운영 배포와 그래프 연결을 확인하지 못했습니다. 이전 배포의 진단은 현재 상태로 표시하지 않습니다.",
+            "observation": diagnostics_observation({}, {}),
+        }
+    key = ontology_diagnostics_cache_key(symbols, limit, world_id, binding)
     cached = ONTOLOGY_DIAGNOSTICS_READ_MODEL.snapshot(key)
     refresh_requested = request_bool(first_query(query, "refresh"), False)
     refresh_started = False
     if refresh_requested or cached.get("stale") or not cached.get("hasData"):
         refresh_started = ONTOLOGY_DIAGNOSTICS_READ_MODEL.refresh_async(
             key,
-            lambda: ontology_diagnostics_source_payload(symbols, limit, world_id),
+            lambda: ontology_diagnostics_source_payload(symbols, limit, world_id, binding),
         )
     refreshing = bool(cached.get("refreshing") or refresh_started)
     cache_payload = {
@@ -92,6 +113,7 @@ def ontology_diagnostics_payload(query: Dict[str, List[str]]) -> Dict[str, objec
     if cached.get("hasData"):
         payload = dict(cached.get("payload") or {})
         payload["cache"] = cache_payload
+        payload["observation"] = diagnostics_observation(payload, cache_payload)
         return payload
     return {
         "contract": "typedb-ontology-diagnostics-v1",

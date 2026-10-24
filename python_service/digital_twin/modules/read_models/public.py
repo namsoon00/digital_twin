@@ -24,6 +24,7 @@ _EXPORTS = {'ConsoleReadModelService': ('digital_twin.modules.read_models.applic
                                    'enrich_symbol_display_records')}
 
 _EXPORTS['CompanyReportInsightQueryService'] = ('digital_twin.modules.read_models.application.company_report_insight_query_service', 'CompanyReportInsightQueryService')
+_EXPORTS['diagnostics_observation'] = ('digital_twin.modules.read_models.domain.world_diagnostics', 'diagnostics_observation')
 
 __all__ = list(_EXPORTS)
 

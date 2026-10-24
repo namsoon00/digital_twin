@@ -7,6 +7,7 @@ from digital_twin.modules.reasoning.contracts import inference_trace_ledger_payl
 from digital_twin.modules.portfolio.contracts import utc_now_iso
 from digital_twin.modules.reasoning.contracts import CATEGORY_LABELS, CATEGORY_RELATIONS
 from digital_twin.modules.reasoning.contracts import scoped_abox_maintenance_health, scoped_abox_maintenance_policy, scoped_abox_maintenance_yield_status
+from ..domain.world_diagnostics import world_inventory
 
 
 class OntologyDiagnosticsService:
@@ -191,13 +192,16 @@ class OntologyDiagnosticsService:
                 ])
             if runtime_scope:
                 inference_summary["runtimeScope"] = runtime_scope
+        worlds = self.safe_list_call("list_ontology_worlds")
+        inventory = self.world_inventory_boundary(worlds)
         return {
             "contract": "typedb-ontology-diagnostics-v1",
             "generatedAt": utc_now_iso(),
             "runtimeIdentity": self.runtime_identity(),
             "activeGraphStore": "typedb",
             "worldId": clean_world_id,
-            "worlds": self.safe_list_call("list_ontology_worlds"),
+            "worlds": worlds,
+            "worldInventory": inventory,
             "typedb": self.typedb_settings(),
             "tbox": self.tbox_summary(tbox),
             "rulebox": self.rulebox_summary(rulebox),
@@ -218,6 +222,23 @@ class OntologyDiagnosticsService:
             "decisionPerformanceBoundary": decision_performance,
             "serviceStatus": self.service_status(),
         }
+
+    def world_inventory_boundary(self, worlds):
+        metadata = {}
+        for world in worlds:
+            wid = str(world.get("worldId") or "")
+            if not wid:
+                continue
+            try:
+                row = self.ontology_repository.active_abox_metadata(world_id=wid)
+                metadata[wid] = row if isinstance(row, dict) else {}
+            except Exception:
+                # Never retry without the world boundary: that could attribute
+                # another account's latest generation to this world.
+                metadata[wid] = {"status": "unknown"}
+        return world_inventory(worlds, metadata, incremental=str(
+            self.settings.get("ontologyIncrementalCurrentStateReasoningEnabled") or ""
+        ).lower() in {"1", "true", "yes", "on"})
 
     def runtime_identity(self) -> Dict[str, object]:
         if not self.runtime_identity_provider:

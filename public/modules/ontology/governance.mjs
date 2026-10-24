@@ -1,4 +1,5 @@
 import { renderLabStat } from "./graphs.mjs";
+import { renderWorldStatus } from "./world-status.mjs";
 import { ontologyAccountOptions } from "./requests.mjs";
 import { defaultSettings } from "../settings/defaults.mjs";
 import { settingValue } from "../settings/fields.mjs";
@@ -96,12 +97,14 @@ function renderTypeDBDiagnosticsPanel() {
   })).filter(function (check) {
     return check && (check.title || check.name || check.id || check.message || check.detail || check.description || check.status);
   });
-  var status = diagnostics.status || reasoningBoundary.status || inferenceBox.status || rulebox.status || aboxCoverage.status || (ontologyState.ontologyDiagnosticsError ? "error" : checks.length ? "ok" : "idle");
+  var observationStatus = (diagnostics.observation || {}).status;
+  var status = (observationStatus && observationStatus !== "recent" ? observationStatus : "") || diagnostics.status || reasoningBoundary.status || inferenceBox.status || rulebox.status || aboxCoverage.status || (ontologyState.ontologyDiagnosticsError ? "error" : checks.length ? "ok" : "idle");
   return [
     '<div class="model-section typedb-diagnostics-panel">',
     '<div class="flow-title"><div><strong>TypeDB 진단</strong><span>스키마, RuleBox, 추론 실행 상태를 실제 저장소 기준으로 확인합니다.</span></div><span class="tone-chip ' + escapeHtml(status === "ok" ? "watch" : status === "error" ? "danger" : "hold") + '">' + escapeHtml(status) + '</span></div>',
     ontologyState.ontologyDiagnosticsLoading ? '<p class="lab-message">TypeDB 진단을 읽는 중입니다.</p>' : '',
     ontologyState.ontologyDiagnosticsError ? '<p class="form-error">' + escapeHtml(ontologyState.ontologyDiagnosticsError) + '</p>' : '',
+    renderWorldStatus(diagnostics),
     '<div class="lab-stats-grid model-stats-grid">',
     renderLabStat("엔티티", aboxCoverage.entityCount || inferenceBox.entityCount || 0, "개"),
     renderLabStat("관계", aboxCoverage.relationCount || inferenceBox.relationCount || 0, "개"),

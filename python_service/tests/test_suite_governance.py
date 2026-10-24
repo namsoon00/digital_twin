@@ -408,7 +408,8 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # Seven exact-history/cache, commit/wakeup and writer/claim-fence latency regressions.
         # Six input admission, receipt restoration and valuation-stage contracts.
         # Four bounded delivery burst, backoff, cache parity and runtime-wiring regressions.
-        self.assertLessEqual(total, 2551)
+        # Twelve event lineage, observation freshness and deployment-bound diagnostic regressions.
+        self.assertLessEqual(total, 2563)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

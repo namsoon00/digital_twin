@@ -1571,15 +1571,15 @@ class MySQLResearchEvidenceStore(MySQLOperationalConnection):
 
     def story_history(self, item: ResearchEvidence, limit: int = 12) -> List[ResearchEvidence]:
         """Same-subject history; never infer a story from title similarity."""
-        payload = dict(item.raw_payload or {})
-        identity = str(payload.get("storyClusterId") or "")
-        if not identity:
+        from ..domain.event_history import event_history_identity
+        key, identity = event_history_identity(item)
+        if key == "evidenceId":
             return [item]
         with self.connect() as connection:
             rows = connection.execute(
                 "SELECT * FROM research_evidence WHERE symbol = %s AND kind = %s "
-                "AND JSON_UNQUOTE(JSON_EXTRACT(payload_json, '$.storyClusterId')) = %s "
-                "ORDER BY published_at DESC LIMIT %s",
+                "AND JSON_UNQUOTE(JSON_EXTRACT(payload_json, '$." + key + "')) = %s "
+                "ORDER BY published_at DESC, evidence_id DESC LIMIT %s",
                 (item.symbol, item.kind, identity, max(1, min(20, int(limit)))),
             ).fetchall()
         return [research_evidence_from_row(row) for row in reversed(rows)]

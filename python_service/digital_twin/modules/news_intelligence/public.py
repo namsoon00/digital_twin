@@ -52,6 +52,7 @@ _EXPORTS = {'HypothesisResearchPlanningService': ('digital_twin.modules.news_int
  'story_identity': ('digital_twin.modules.news_intelligence.domain.story', 'story_identity')}
 
 _EXPORTS['build_information_brief'] = ('digital_twin.modules.news_intelligence.domain.information_brief', 'build_information_brief')
+_EXPORTS['build_event_history'] = ('digital_twin.modules.news_intelligence.domain.event_history', 'build_event_history')
 _EXPORTS['financial_repair_plan'] = ('digital_twin.modules.news_intelligence.application.financial_evidence_repair_service', 'financial_repair_plan')
 _EXPORTS['financial_input_requires_revalidation'] = ('digital_twin.modules.news_intelligence.application.financial_evidence_repair_service', 'financial_input_requires_revalidation')
 _EXPORTS['financial_input_revalidation_assessment'] = ('digital_twin.modules.news_intelligence.application.financial_evidence_repair_service', 'financial_input_revalidation_assessment')

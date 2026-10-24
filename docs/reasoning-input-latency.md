@@ -1,5 +1,60 @@
 # Reasoning Input Latency
 
+## Share execution for complete sibling source shards (2026-10-24)
+
+The queue and runner can execute complete sibling shards from one verified
+monitor event together. Previously, the compatibility key included the exact
+symbol list, so two subjects from the same source repeated account preparation,
+graph construction and the TypeDB publication pipeline. The second subject also
+waited for the entire first execution. This change removes that repeated work
+within one execution; it does not cache mutable performance or outcome history
+across source snapshots.
+
+Eligibility requires the same parent event, account, immutable snapshot and
+source clock, a ready fact-change contract, complete captured source facts, and
+matching remaining payload fields. Validation, reconciliation, coalesced,
+non-fungible and governance/research requests keep their existing boundary.
+Different source facts and per-symbol dependencies/revisions remain in the
+combined request. Native symbol limits and the 1,200-fact request limit apply
+before jobs are leased and again before execution. Duplicate symbols, shard
+indices or fact identities are kept separate; facts are never truncated to make
+a batch fit. Unknown payload differences also prevent sharing.
+
+Every source keeps its durable job, lineage, claim token and completion result.
+A subject absent from native coverage cannot be completed by another subject's
+result. Writer ownership, control/release checks, native generation activation,
+per-subject decisions, freshness and notification eligibility stay authoritative.
+There is still one TypeDB writer. The result's `execution_batch` records whether
+source preparation was shared and how many jobs/subjects were included. This can
+increase the first subject's wait within a pair, so acceptance must compare the
+whole source-to-completion path as well as individual durations.
+
+Sharding now also updates same-source `verifiedSourceSnapshots` aliases with
+the shard's actual source-fact counts. Otherwise durable ingress could restore
+the parent's count over the corrected primary boundary. Explicitly incomplete
+aliases and other account/source identities are preserved, and an absent legacy
+alias is not introduced.
+
+`test_reasoning_sibling_batch` covers exact request lineage and dependencies,
+boundary exclusions, fact/symbol limits, single preparation, isolated real-MySQL
+claims, untouched overflow jobs, partial subject coverage and writer release.
+Historical native replay uses task-owned temporary TypeDB databases and sends no
+investment notifications. Runtime observations must distinguish queue removal
+from native processing time and from a successful external transport receipt.
+
+A historical same-source pair was replayed into two independent temporary
+TypeDB databases, each restored from the same frozen release artifact. Serial
+projection took 142.933s in total (122.368s initial construction + 20.565s second
+subject); combined projection took 116.940s. Both modes completed native
+execution and generation alignment. The same three portfolio rule/subject
+matches were preserved, as were ten exact comparisons of the two subjects'
+source identities, properties, relation kinds and evidence. This fixture has no
+stock entry/exit match; `native_strategy_smoke.py` separately checks positive,
+incomplete and stale stock strategy subjects together and individually. The
+historical timing includes initial ABox construction but excludes release
+seeding, live source/history reads and notification transport. It is one local
+replay under concurrent worker load, not a steady-state or tail-latency SLO.
+
 ## Reuse transaction preparation and exact source packets (2026-10-24)
 
 The monitor now serializes each final account state once for the current row,

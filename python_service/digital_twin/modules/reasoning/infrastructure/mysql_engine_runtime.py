@@ -1,5 +1,5 @@
 from .job_ownership import lock_job_claim
-from digital_twin.modules.reasoning.domain.reasoning_batch import reasoning_batch_key
+from digital_twin.modules.reasoning.domain.reasoning_batch import reasoning_batch_key, reasoning_batch_fits
 from .job_receipts import publish_job_receipts
 import os
 import socket
@@ -2040,7 +2040,28 @@ class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
                     lane = FactDelta.from_request(independent_reasoning_request(deployment_id, [event])).lane
                     return reasoning_batch_key(event.to_dict(), lane)
                 anchor_key = compatible_key(rows[0])
-                rows = [row for row in rows if compatible_key(row) == anchor_key][:bounded]
+                try:
+                    symbol_limit = max(1, min(200, int(float(
+                        self.runtime_settings.get("typedbNativeRuleTargetSymbolLimit") or 4
+                    ))))
+                except (TypeError, ValueError):
+                    symbol_limit = 4
+                selected = []
+                selected_events = []
+                for row in rows:
+                    if compatible_key(row) != anchor_key:
+                        continue
+                    event = self.stored_source_event(row)
+                    source = event.to_dict() if event is not None else {}
+                    # An oversized anchor still reaches the existing durable
+                    # resharding path; additional jobs must fit before claim.
+                    if selected and not reasoning_batch_fits([*selected_events, source], symbol_limit):
+                        continue
+                    selected.append(row)
+                    selected_events.append(source)
+                    if len(selected) >= bounded:
+                        break
+                rows = selected
             job_ids = [str(row.get("job_id") or "") for row in rows or []]
             if not job_ids:
                 return []

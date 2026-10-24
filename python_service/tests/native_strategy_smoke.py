@@ -76,6 +76,7 @@ def run():
     driver = repo.create_driver(imported)
     created = False
     results = {}
+    profiles = {}
     try:
         driver.databases.create(database)
         created = True
@@ -84,9 +85,10 @@ def run():
             tx.commit()
         for scenario, expected in scenarios.items():
             source_id = scenario + ":source"
+            symbol = "STRATEGY_" + scenario.upper().replace("-", "_")
             clauses = ["$source isa ontology-class-stock, " + has({"ontology-id": source_id,
                 "ontology-storage-id": source_id, "ontology-kind": "stock", "ontology-label": "Synthetic",
-                "ontology-symbol": "STRATEGY_TEST"}) + ";"]
+                "ontology-symbol": symbol}) + ";"]
             market_relation = scenario + ":market-relation"
             clauses.append("$market isa " + market_type + ", " + has({"ontology-id": entity_id("market", "US" if scenario == "wrong-market" else "KR"), "ontology-kind": "market"}) + ";")
             clauses.append("$marketRelation isa " + market_relation_type + ", links (source: $source, target: $market), "
@@ -121,7 +123,7 @@ def run():
                 tx.commit()
             actual = []
             for rule in rules:
-                plan = typedb_native_match_query(rule.to_dict(), ["STRATEGY_TEST"],
+                plan = typedb_native_match_query(rule.to_dict(), [symbol],
                     active_source_storage_ids=[source_id], active_relation_storage_ids_by_condition={
                         c.condition_id: ([market_relation] if c.relation_type == "TRADED_IN" else
                                          [relation_ids[c.target_property_filters["hypothesisContractId"]]])
@@ -130,7 +132,32 @@ def run():
                     actual.append(len(list(tx.query(plan["query"]).resolve())))
             assert actual == expected, (scenario, actual, expected)
             results[scenario] = actual
-        return {"status": "passed", "cases": results, "nativeQueryCount": len(scenarios) * len(rules),
+            profiles[scenario] = (symbol, source_id, market_relation, relation_ids)
+        # A combined execution must neither borrow a missing premise from the
+        # other subject nor grant a fresh subject's eligibility to stale data.
+        combined_results = {}
+        groups = [("fresh", "missing-entry-member"), ("fresh", "stale"),
+                  ("fresh", "persisted-source")]
+        for group in groups:
+            actual = []
+            for index, rule in enumerate(rules):
+                selected = [profiles[scenario] for scenario in group]
+                plan = typedb_native_match_query(rule.to_dict(), [p[0] for p in selected],
+                    active_source_storage_ids=[p[1] for p in selected],
+                    active_relation_storage_ids_by_condition={
+                        c.condition_id: [p[2] if c.relation_type == "TRADED_IN" else
+                                         p[3][c.target_property_filters["hypothesisContractId"]]
+                                         for p in selected]
+                        for c in rule.conditions})
+                with driver.transaction(database, transaction_type.READ) as tx:
+                    rows = repo.read_rows_in_transaction(tx, plan["query"], ["sourceId"])
+                sources = sorted({row["sourceId"] for row in rows})
+                expected_sources = sorted(profiles[s][1] for s in group if scenarios[s][index])
+                assert sources == expected_sources, (group, rule.rule_id, sources, expected_sources)
+                actual.append(sources)
+            combined_results["+".join(group)] = actual
+        return {"status": "passed", "cases": results, "combinedCases": combined_results,
+                "nativeQueryCount": (len(scenarios) + len(groups)) * len(rules),
                 "sourceIngestionChecked": True,
                 "operationalGraphMutated": False}
     finally:

@@ -290,6 +290,22 @@ def shard_reasoning_event(event: object, max_symbols: int) -> Tuple[DomainEvent,
                 snapshot_boundary["sourceFactCoverageComplete"] = False
                 snapshot_boundary["sourceFactCoverageInheritedIncomplete"] = True
             payload["verifiedSourceSnapshot"] = snapshot_boundary
+            # Durable ingress can recover the source boundary from either
+            # representation. Keep a same-account alias at the shard's
+            # actual coverage rather than restoring the parent fact count.
+            if "verifiedSourceSnapshots" in payload:
+                payload["verifiedSourceSnapshots"] = [
+                    {**value, **{
+                        key: snapshot_boundary[key]
+                        for key in ("capturedSourceFactCount", "expectedSourceFactCount", "sourceFactCoverageComplete", "sourceFactCoverageInheritedIncomplete")
+                        if key in snapshot_boundary
+                    }}
+                    if isinstance(value, Mapping)
+                    and all(value.get(key) == snapshot_boundary.get(key) for key in ("accountId", "snapshotId", "generatedAt"))
+                    and value.get("sourceFactCoverageComplete") is not False
+                    else value
+                    for value in payload.get("verifiedSourceSnapshots") or []
+                ]
         for key in ("affectedSymbols", "symbols", "targetSymbols"):
             if key in payload:
                 payload[key] = list(chunk)

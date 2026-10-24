@@ -37,7 +37,7 @@
 4. 기존 전략 제안 상세 API에서 동결된 전체 계약을 확인하고, `/validate`로 네 단계의 현재 TypeDB 조건을 함께 검증한다. `strategyPhaseEvaluation`이 각 단계의 실제 쿼리 실행 여부와 누락 사유를 구분한다. 근거가 없어 쿼리가 생략된 경우 `not-evaluated`이며 조건 불충족이나 검증 성공으로 해석하지 않는다. 운영 RuleBox/InferenceBox는 수정하지 않는다.
 5. 중앙 AI의 기존 RuleChangeCandidateProposalService에 trigger=short-term-strategy-design을 전달하면 같은 선택 계약으로 제안한다. 현재 추론 완료 여부에 종속되지 않으며 무거운 InferenceBox 조회도 하지 않는다. AI가 실행 규칙·새 임계값·성공 확률을 작성할 수 없다. 네 단계 묶음은 전략 제안 저장소에 보존하며, 진입 규칙 하나를 일반 후보로 배포하지 않는다. 일반 가설 연구와 별도 요청이다. 이 기능을 주기적으로 호출하는 새 스케줄러는 추가하지 않았다.
 
-재현 가능한 네이티브 검증: `PYTHONPATH=python_service:python_service/tests python3 python_service/tests/native_strategy_smoke.py`. 임시 TypeDB에서 정상·오래된 자료·장외·부적격·다른 릴리스·진입 근거 일부 누락·다른 시장과 저장된 원천 입력 3개 사례를 포함한 총 10개 사례의 40개 실제 쿼리를 실행하고 임시 DB를 삭제한다. 운영 그래프와 알림을 변경하지 않는다.
+재현 가능한 네이티브 검증: `PYTHONPATH=python_service:python_service/tests python3 python_service/tests/native_strategy_smoke.py`. 임시 TypeDB에서 정상·오래된 자료·장외·부적격·다른 릴리스·진입 근거 일부 누락·다른 시장과 저장된 원천 입력 3개 사례를 포함한 개별 10개 사례와 두 종목을 함께 조회하는 3개 사례의 총 52개 실제 쿼리를 실행하고 임시 DB를 삭제한다. 통합 조회에서는 종목별 결과가 개별 조회와 같고 다른 종목의 누락 근거·신선도를 빌려 쓰지 않는지도 검증한다. 운영 그래프와 알림을 변경하지 않는다.
 
 ## V1의 사용 범위
 

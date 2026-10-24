@@ -10,7 +10,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Dict, Iterable, Mapping
 
 from .job_transitions import ClaimedJobTransitions
-from digital_twin.modules.reasoning.domain.reasoning_batch import reasoning_batch_key
+from digital_twin.modules.reasoning.domain.reasoning_batch import reasoning_batch_key, reasoning_batch_fits, SIBLING_EXECUTION_BATCH_VERSION
 
 from digital_twin.modules.notifications.contracts import is_typedb_context_observation_notification, typedb_review_observation_contract
 from digital_twin.shared_kernel.events import DomainEvent
@@ -2565,6 +2565,12 @@ class IndependentReasoningJobRunner:
                 raise RuntimeError("The V2 reasoning lease was lost during TypeDB execution.")
             result["batch_job_count"] = len(selected_jobs)
             result["batch_job_ids"] = job_ids
+            result["execution_batch"] = {
+                "contractVersion": SIBLING_EXECUTION_BATCH_VERSION,
+                "sharedSourcePreparation": len(selected_jobs) > 1 and batch_key[0] == SIBLING_EXECUTION_BATCH_VERSION,
+                "sourceJobCount": len(selected_jobs),
+                "targetSymbolCount": len({symbol for job in selected_jobs for symbol in self.job_symbols(job)}),
+            }
             result["reasoning_lane"] = reasoning_lane
             result["release_identity"] = release_identity
             result["native_target_symbol_limit"] = self.native_target_symbol_limit()
@@ -3051,6 +3057,7 @@ class IndependentReasoningJobRunner:
         selected = []
         deferred = []
         selected_symbols = set()
+        selected_events = []
         limit = self.native_target_symbol_limit()
         for job in jobs or []:
             symbols = set(self.job_symbols(job))
@@ -3058,10 +3065,12 @@ class IndependentReasoningJobRunner:
                 deferred.append(job)
                 continue
             combined = selected_symbols | symbols
-            if selected and symbols and len(combined) > limit:
+            source = dict(job.get("sourceEvent") or {})
+            if selected and (len(combined) > limit or not reasoning_batch_fits([*selected_events, source], limit)):
                 deferred.append(job)
                 continue
             selected.append(job)
+            selected_events.append(source)
             selected_symbols = combined
         return selected, deferred
 

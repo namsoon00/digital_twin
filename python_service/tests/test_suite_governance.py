@@ -413,7 +413,9 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # Seven source-preparation regressions cover SQL/delta parity, exact
         # authority, copy/namespace isolation, memory bounds and atomic rollback.
         # Twelve original-period/statement collection, dated-source and finite recovery contracts.
-        self.assertLessEqual(total, 2591)
+        # Seven sibling-execution regressions cover immutable boundaries,
+        # source coverage, native budgets and independently fenced subjects.
+        self.assertLessEqual(total, 2598)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

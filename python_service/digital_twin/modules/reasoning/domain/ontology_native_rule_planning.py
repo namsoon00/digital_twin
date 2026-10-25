@@ -232,7 +232,10 @@ def _planner_filtered_properties(
     if isinstance(nested, Mapping):
         properties.update(dict(nested))
     result: Dict[str, object] = {}
-    for field in sorted(allowed_fields):
+    # Missing fields normalize to None and never enter the result. A sparse
+    # evidence row should inspect its present fields, not every field in the
+    # entire RuleBox vocabulary on each validation pass.
+    for field in sorted(allowed_fields.intersection(properties)):
         normalized = _planner_property_value(properties.get(field))
         if normalized is not None:
             result[field] = normalized

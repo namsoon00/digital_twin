@@ -3,6 +3,7 @@
     {"file": "test_question_answer_parts.py", "tier": "contract", "core": true},
     {"file": "test_strategy_scenarios.py", "tier": "contract", "core": true},
     {"file": "test_projection_computation_parity.py", "tier": "contract", "core": true},
+    {"file": "test_reasoning_critical_path.py", "tier": "contract", "core": true},
     {"file": "test_central_work_attention.py", "tier": "contract", "core": true},
     {"file": "test_world_information_read_models.py", "tier": "contract", "core": true},
     {"file": "test_evidence_completion.py", "tier": "contract", "core": true},

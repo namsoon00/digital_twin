@@ -206,8 +206,9 @@ def insert_queries(
 def graph_persistence_rows(
     _store: GraphWritePort, graph: PortfolioOntology
 ) -> Tuple[List[Dict[str, object]], List[Dict[str, object]]]:
-    node_rows = _store.node_rows(graph)
     endpoint_rows = _store.node_rows(graph, include_external_relation_endpoints=True)
+    external_ids = _store.external_relation_endpoint_ids(graph)
+    node_rows = [row for row in endpoint_rows if str(row.get("id") or "") not in external_ids]
     node_rows_by_id = {
         str(row.get("id") or ""): row
         for row in endpoint_rows

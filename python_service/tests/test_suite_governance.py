@@ -427,7 +427,10 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # exact digests, copy isolation, early rejection, wire/readback parity,
         # envelope accounting and the combined graph/context budget.
         # Seven cited answer/gap, completion authority, legacy replay and bounded exhibit-recovery contracts.
-        self.assertLessEqual(total, 2676)
+        # Seven execution-preparation regressions preserve exhaustive dependency
+        # matching, downstream/cyclic invalidation, scoped routing, sparse
+        # evidence normalization and external endpoint persistence.
+        self.assertLessEqual(total, 2683)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

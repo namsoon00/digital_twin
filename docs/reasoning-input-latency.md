@@ -1,5 +1,74 @@
 # Reasoning Input Latency
 
+## Indexed execution preparation and the acceptance boundary (2026-10-26)
+
+The execution profiler found 5.29 million structural dependency comparisons in
+one frozen initial projection. This happened while selecting affected rules,
+before TypeDB evaluated their predicates. The planner now indexes exact,
+colon-delimited ancestor/descendant keys and uses an inverse consumer index for
+the transitive rule closure. Direct triggers, invalidation consumers, cycles,
+per-symbol boundaries and shared dependencies retain the same semantics. An
+index belongs to one plan; it cannot retain an old observation or rule release.
+
+Native evidence normalization now visits only fields present in each evidence
+row, preserving nested overrides, the allowed vocabulary and the complete
+fingerprint validation. Persistence preparation builds node rows once and
+derives the insertable subset while retaining external relation endpoints.
+These are reductions in actual preparation work. They do not omit conditions,
+skip persistence verification, move required work into an untracked background
+task, or add another investment-rule evaluator.
+
+The acceptance goal for a future realtime path is **P95 receipt-to-durable-decision
+within 10 seconds**, including preparation, writer/queue wait and publication.
+This is separate from notification transport and provider observation age.
+The existing deployment health/promotion limits do not certify this goal.
+Do not add separate stage percentiles to claim a complete-path percentile.
+Cold rebuilds and warm incremental executions must be reported separately;
+unchanged-source replays cannot stand in for new market observations.
+
+Frozen replay compares the same source, runtime context, model releases and
+RuleBox in independently seeded temporary TypeDB databases. Graph caches are
+disabled; release seeding is outside the projection timer. Full input/topology,
+scope/impact plans, rule/subject matches, native completion and generation
+alignment must agree. Frozen context omits live history/source reads, queueing,
+decision publication and notification transport, so this replay alone cannot
+establish the 10-second goal or trading accuracy. The fixture has no stock
+entry/exit decision. Temporary databases are deleted and no customer message is
+sent. `test_reasoning_critical_path` additionally checks exhaustive dependency
+equivalence, downstream/cyclic invalidation, boundary/value changes and external
+endpoint persistence; it is included in `npm test`.
+
+The unprofiled before/after replay against `0c498627e` measured:
+
+| Projection | Before | After |
+| --- | ---: | ---: |
+| Initial complete projection | 107.284s | 93.054s |
+| Next subject from the same frozen source | 20.817s | 15.589s |
+
+All 30 complete-payload comparisons passed: source/material identity, native
+planner topology, logical scopes, impact plan, incoming/persisted comparison
+scope, request context, RuleBox identity, executed/matched counts, exact native
+matches and the resulting InferenceBox collections. Both generations aligned.
+The second projection contains no new physical fact rows; it measures switching
+subjects on an already persisted source, not a fresh-price update. These are one
+paired local run under normal worker load, not a statistically established P95.
+
+**Decision: retain the verified preparation reduction, but do not accept it as
+a solution to the 10-second realtime goal.** Even the reduced second projection
+takes 15.589s before live queue/source reads and decision publication. Its native
+rule-query stage is 2.497s, while ABox persistence is 3.497s, including 2.218s of
+manifest/control writes, and the complete native inference path is 6.299s,
+including those queries. These nested measurements must not be added together.
+Query tuning alone cannot remove the remaining preparation/publication cost.
+
+The next structural experiment must consume a versioned, subject-bounded fact
+packet and an immutable release dependency plan without re-preparing the complete
+manifest for every request. It must prove the same source, downstream-rule and
+counter-evidence closure, then use native TypeQL and an atomic durable result.
+The complete graph/audit projection can follow only through a durable outbox
+with replayable proofs. This requires a new projection contract and full-path
+comparison; the current change does not implement or activate that replacement.
+
 ## Bound discarded cache serialization and repeated assertion encoding (2026-10-25)
 
 The r13 candidate's slow paired runs spent 11–15 seconds constructing an

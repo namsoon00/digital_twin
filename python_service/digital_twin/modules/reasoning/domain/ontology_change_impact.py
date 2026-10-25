@@ -16,6 +16,7 @@ import zlib
 from typing import Dict, Iterable, List, Mapping, Optional, Sequence, Set
 
 from digital_twin.modules.reasoning.domain.fact_changes import scope_families_for_fact_types
+from digital_twin.modules.reasoning.domain.dependency_index import StructuralDependencyIndex
 
 
 # v12 keeps the v6 global quality/value distinction, makes dependency
@@ -846,6 +847,18 @@ def expand_rule_dependency_closure(
     direct_candidates = set(selected)
     pending = list(selected)
     edges: Dict[str, Set[str]] = defaultdict(set)
+    consumers_by_key: Dict[str, Set[str]] = defaultdict(set)
+    for consumer_id, consumer in by_rule_id.items():
+        for key in {
+            _lower(value)
+            for item in list(consumer.get("conditionProfiles") or [])
+            + list(consumer.get("derivedConditionProfiles") or [])
+            if isinstance(item, Mapping)
+            for value in item.get("dependencyKeys") or []
+            if _clean(value)
+        }:
+            consumers_by_key[key].add(consumer_id)
+    consumer_index = StructuralDependencyIndex(consumers_by_key)
     for producer_id, producer in by_rule_id.items():
         output_keys = {
             _lower(value)
@@ -854,23 +867,9 @@ def expand_rule_dependency_closure(
         }
         if not output_keys:
             continue
-        for consumer_id, consumer in by_rule_id.items():
-            if producer_id == consumer_id:
-                continue
-            consumer_keys = {
-                _lower(value)
-                for item in list(consumer.get("conditionProfiles") or [])
-                + list(consumer.get("derivedConditionProfiles") or [])
-                if isinstance(item, Mapping)
-                for value in item.get("dependencyKeys") or []
-                if _clean(value)
-            }
-            if any(
-                _dependency_key_matches(output_key, consumer_key)
-                for output_key in output_keys
-                for consumer_key in consumer_keys
-            ):
-                edges[producer_id].add(consumer_id)
+        for output_key in output_keys:
+            for matching_key in consumer_index.related_keys(output_key):
+                edges[producer_id].update(consumers_by_key[matching_key] - {producer_id})
     while pending:
         producer_id = pending.pop()
         for consumer_id in edges.get(producer_id, set()):
@@ -1184,16 +1183,7 @@ def _matching_changed_dependency_keys(
 ) -> Set[str]:
     """Return changed keys covered by an event or rule dependency boundary."""
 
-    changed = {_lower(value) for value in changed_keys or [] if _clean(value)}
-    requested = {_lower(value) for value in requested_keys or [] if _clean(value)}
-    return {
-        changed_key
-        for changed_key in changed
-        if any(
-            _dependency_key_matches(changed_key, requested_key)
-            for requested_key in requested
-        )
-    }
+    return StructuralDependencyIndex(requested_keys).matching(changed_keys)
 
 
 def _rule_may_depend_on(
@@ -1202,6 +1192,7 @@ def _rule_may_depend_on(
     changed_dependency_keys: Set[str] = None,
     dependency_fingerprint_coverage_complete: bool = False,
     capability: str = "either",
+    changed_dependency_index: Optional[StructuralDependencyIndex] = None,
 ) -> bool:
     families = {
         str(value or "")
@@ -1213,8 +1204,8 @@ def _rule_may_depend_on(
     family_intersects = _families_intersect(families, changed_families)
     if not dependency_fingerprint_coverage_complete:
         return family_intersects
-    changed_keys = {_lower(value) for value in changed_dependency_keys or [] if _clean(value)}
-    if not changed_keys:
+    changed_index = changed_dependency_index or StructuralDependencyIndex(changed_dependency_keys)
+    if not changed_index.keys:
         return False
 
     # A complete dependency boundary is more precise than its coarse fact
@@ -1252,7 +1243,7 @@ def _rule_may_depend_on(
             for value in condition.get("dependencyKeys") or []
             if _clean(value)
         }
-        if _matching_changed_dependency_keys(changed_keys, dependency_keys):
+        if changed_index.intersects(dependency_keys):
             return True
         if not dependency_keys and condition_family_intersects:
             return True
@@ -1641,6 +1632,9 @@ def event_scoped_routing_inputs(
     deferred_shared_families: Set[str] = set()
     native_source_scope_ids: Set[str] = set()
     target_scope_narrowed = False
+    # Most scopes share the same event boundary. Compile it once per target
+    # combination instead of scanning every requested key for every scope.
+    dependency_indexes = {}
 
     for scope_id in direct_scope_ids:
         semantic = {
@@ -1667,20 +1661,21 @@ def event_scoped_routing_inputs(
             for symbol in scope_targets
             for family in requested_by_symbol.get(symbol, requested)
         } or set(requested)
-        scope_requested_dependency_keys = {
-            key
-            for symbol in scope_targets
-            for key in requested_keys_by_symbol.get(symbol, requested_keys)
-        } or set(requested_keys)
+        target_key = frozenset(scope_targets)
+        if target_key not in dependency_indexes:
+            keys = {
+                key for symbol in scope_targets
+                for key in requested_keys_by_symbol.get(symbol, requested_keys)
+            } or requested_keys
+            dependency_indexes[target_key] = StructuralDependencyIndex(keys)
+        dependency_index = dependency_indexes[target_key]
+        scope_requested_dependency_keys = dependency_index.keys
         scope_dependency_keys = {
             _lower(key)
             for key in dependency_by_scope.get(scope_id, []) or []
             if _clean(key)
         }
-        dependency_matches = _matching_changed_dependency_keys(
-            scope_dependency_keys,
-            scope_requested_dependency_keys,
-        )
+        dependency_matches = dependency_index.matching(scope_dependency_keys)
         dependency_match = bool(
             dependency_boundary_authoritative
             and scope_requested_dependency_keys
@@ -2082,6 +2077,7 @@ def build_inference_impact_plan(
         if event_scoped_rule_selection
         else changed_dependency_keys
     )
+    routing_dependency_index = StructuralDependencyIndex(routing_dependency_keys)
     trigger_profiles = [
         profile for profile in enabled_profiles
         if _rule_may_depend_on(
@@ -2090,6 +2086,7 @@ def build_inference_impact_plan(
             routing_dependency_keys,
             routing_dependency_fingerprint_coverage_complete,
             capability="trigger",
+            changed_dependency_index=routing_dependency_index,
         )
     ]
     invalidation_profiles = [
@@ -2100,6 +2097,7 @@ def build_inference_impact_plan(
             routing_dependency_keys,
             routing_dependency_fingerprint_coverage_complete,
             capability="invalidation",
+            changed_dependency_index=routing_dependency_index,
         )
     ]
     trigger_rule_ids = {

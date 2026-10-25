@@ -1,15 +1,20 @@
 """Select complete report observations, never splice numbers across sources."""
 from collections import defaultdict
 from copy import deepcopy
+import re
 
 from .financial_reporting import bind_financial_report_contract, financial_report_contract_assessment, reporting_period_end
 
 
 def report_family(row):
     report = row.get("reportContract") or {}
+    # Report contracts also retain count units such as SHARES. Their presence
+    # in newer filings must not split an otherwise identical currency series.
+    currencies = {str(value).strip().upper() for value in report.get("currencies") or []
+                  if re.fullmatch(r"[A-Za-z]{3}", str(value).strip())}
     return (str(report.get("provider") or row.get("provider") or "").lower(),
             str(row.get("frequency") or ""), tuple(sorted(report.get("scope") or [])),
-            tuple(sorted(report.get("currencies") or [])))
+            tuple(sorted(currencies)))
 
 
 def report_authority(row):

@@ -82,6 +82,20 @@ class FinancialSourceRecoveryTests(unittest.TestCase):
             self.assertEqual(merged, merge_company_knowledge_rows(merged))
         self.assertEqual(frozen, sources)
 
+        counted = deepcopy(detailed)
+        counted['weightedAverageSharesDiluted'] = 10
+        counted['metricProvenance']['weightedAverageSharesDiluted'] = {
+            **counted['metricProvenance']['revenue'], 'currency': 'SHARES'}
+        counted = bind_financial_report_contract(counted, detailed['reportContract']['sourceReferences'])
+        prior = report('OpenDART', '2024-12-31', 'opendart.company_facts', revenue=90)
+        mixed_currency = deepcopy(prior)
+        mixed_currency['metricProvenance']['revenue']['currency'] = 'KRW'
+        mixed_currency = bind_financial_report_contract(mixed_currency, prior['reportContract']['sourceReferences'])
+        merged = merge_company_knowledge_rows({'financials': {'annual': [counted, prior, mixed_currency]}})
+        self.assertEqual(['2025-12-31', '2024-12-31'], [r['periodEnd'] for r in merged['financials']['annual']])
+        self.assertEqual(3, len(merged['financialReportCandidates']))
+        self.assertTrue(all('USD' in r['reportContract']['currencies'] for r in merged['financials']['annual']))
+
     def test_vendor_month_end_cannot_displace_exact_fiscal_report(self):
         primary = report('SEC EDGAR', '2026-01-25', 'sec.company_facts', revenue=120, operatingCashFlow=20)
         vendor = report('yfinance', '2026-01-31', 'yfinance.fundamental', revenue=119)

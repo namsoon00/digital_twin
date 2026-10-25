@@ -8,6 +8,9 @@ precedence over government summaries and vendor calendar-period approximations.
 Bounded alternative reports remain in `financialReportCandidates`; they do not
 independently trigger material-change notifications. No numbers are spliced
 between reports. The shared cache uses `company-knowledge-cache-v6-source-series`.
+Share-count units retained in report contracts do not split a monetary currency
+series when only newer filings include share-count metrics; different monetary
+currencies remain separate.
 
 OpenDART cash-flow normalization accepts the explicitly labelled prior interim
 `frmtrm_q_amount`/`frmtrm_q_nm` pair while continuing to reject prior full-year

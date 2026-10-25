@@ -52,7 +52,7 @@ class AIControlService:
         self.brain_waker(subjects)
         self.evidence_waker(subjects)
         try:
-            job = self.store.claim()
+            job = self.store.claim(subjects=subjects)
         except AIControlBudgetWait as wait:
             return wait.result()
         if not job:

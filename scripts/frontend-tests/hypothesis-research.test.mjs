@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { renderHypothesisStudyReadiness, renderHypothesisQualityReport } from '../../public/modules/experiments/evolution.mjs';
-import { questionAssessmentView } from '../../public/modules/research/question-assessment.mjs';
+import { questionAssessmentView, questionPerformanceView } from '../../public/modules/research/question-assessment.mjs';
 
 test('question progress distinguishes provider quota and internal budget without claiming delivery', () => {
   const workflow = {stages:[{label:'자료 확보',detail:'질문에 연결된 근거 1건'},
@@ -51,4 +51,14 @@ test('question progress shows the original answer, missing evidence and authored
   assert.match(html, /https:\/\/www.sec.gov\/filing/);
   assert.match(html, /TSLA &lt;연간 구조화 보고&gt; · 보고 기간 말 2025-12-31 · 원문 링크 미제공/);
   assert.doesNotMatch(html, /javascript:|unsafe/);
+});
+
+test('question closure and sample outcomes explain remaining work without claiming accuracy', () => {
+  const html = questionAssessmentView({workflow:{closure:{nextStep:'기존 작업에서 이어서 처리',
+    resumeWhen:'공식 보고서 갱신', missingRequirements:['현금흐름 <script>']}}});
+  assert.match(html, /재개 조건/); assert.match(html, /현금흐름 &lt;script&gt;/);
+  const metrics = questionPerformanceView({sampleCount:11,finalAnswers:0,reviewedJudgmentLinks:0,
+    partialAnswersRetained:8,judgmentSupported:0,judgmentChanged:0,judgmentUnchanged:0,
+    judgmentInsufficient:0,providerWaiting:11,receiptVerifiedNotifications:0});
+  assert.match(metrics, /부분 답변 보존 8건/); assert.match(metrics, /정확도·수익률은 미측정/);
 });

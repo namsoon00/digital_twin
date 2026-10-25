@@ -32,11 +32,13 @@ def ai_control_subjects(configured):
             result[(account_id, symbol)] = {"accountId": account_id, "symbol": symbol,
                 "name": name, "worldId": world.world_id,
                 "marketWorldId": market_world(world.market_id, configured.get("ontologySharedMarketTenantId") or "shared").world_id}
-        for position in snapshot.positions + watchlist:
+        from digital_twin.modules.ai_orchestration.domain.work_attention import subject_context
+        for position in watchlist + snapshot.positions:
             symbol = str(position.symbol or "").upper().strip()
             if symbol:
                 result[(account_id, symbol)] = {"accountId": account_id, "symbol": symbol,
                     "name": position.name, "worldId": world.world_id,
+                    "workContext": subject_context(position, snapshot.portfolio.total, snapshot.generated_at),
                     "marketWorldId": market_world(world.market_id, configured.get("ontologySharedMarketTenantId") or "shared").world_id}
     return list(result.values())
 
@@ -267,6 +269,8 @@ def ai_control_status(settings=None, account_id=""):
     from datetime import datetime, timezone
     for task in status["tasks"]:
         task["executionWait"] = task_wait(task, status["executionHealth"].get("sharedExecution") or {}, datetime.now(timezone.utc))
+    from digital_twin.modules.ai_orchestration.domain.question_closure import summarize
+    status["brain"]["questionPerformance"] = summarize(status["brain"]["cases"])
     results = [task["result"] for task in status["tasks"] if task["result"].get("summary")]
     return {"notificationRoute": "ai-control", "legacyInvestmentNotifications": "retired",
             "qualitySummary": {"scope": "최근 관찰 기록", "reviewed": sum(bool(row.get("quality", {}).get("reviewInputId")) for row in results),

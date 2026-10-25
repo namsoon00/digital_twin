@@ -108,7 +108,7 @@ class RuntimeStabilityTests(unittest.TestCase):
                                                        "scopeGenerationIds": {"report-scope": "active"}}
         quote = {"id": "quote", "kind": "stock", "label": "quote", "json": json.dumps({"symbol": "TEST", "currentPrice": 100})}
         report = {"id": "report", "kind": "evidence:filing", "label": "report", "json": "{}", "scopeId": "report-scope", "generationId": "active"}
-        repository.read_rows.side_effect = [[quote], [], [{"id": "quote", "storageId": "physical-quote"}],
+        repository.read_rows.side_effect = [[quote], [], [], [{"id": "quote", "storageId": "physical-quote"}],
             [{"storageId": "physical-report"}, {"storageId": "retired-report"}], [], [report, {**report, "id": "retired", "generationId": "retired"}]]
         facts = TypeDBObservationEvidenceSource(repository).candidates(SUBJECT["worldId"], "TEST")
         self.assertEqual({"quote", "report"}, {row["id"] for row in facts})
@@ -124,15 +124,15 @@ class RuntimeStabilityTests(unittest.TestCase):
         quote = row("quote", "stock", symbol="TEST", currentPrice=100)
         linked = row("report", "evidence:filing", sourceAsOf="2026-10-01")
         other = row("other", "stock", symbol="OTHER", currentPrice=10)
-        repository.read_rows.side_effect = [[quote], [], [{"id": "quote", "storageId": "current-quote"}],
+        repository.read_rows.side_effect = [[quote], [], [], [{"id": "quote", "storageId": "current-quote"}],
             [{"storageId": "current-report"}], [{"storageId": "current-report"}, {"storageId": "current-other"}], [linked, other]]
         source = TypeDBObservationEvidenceSource(repository)
         self.assertEqual({"quote", "report"}, {item["id"] for item in source.candidates(SUBJECT["worldId"], "TEST")})
         queries = [call.args[0] for call in repository.read_rows.call_args_list]
-        self.assertIn('ontology-storage-id "current-quote"', queries[3])
-        self.assertIn("source: $n, target: $s", queries[4])
+        self.assertIn('ontology-storage-id "current-quote"', queries[4])
+        self.assertIn("source: $n, target: $s", queries[5])
         self.assertTrue(all(len(call.args[0]) == 1 for call in repository.active_abox_members_clause.call_args_list))
-        repository.read_rows.side_effect = [[quote], [], []]
+        repository.read_rows.side_effect = [[quote], [], [], []]
         with self.assertRaisesRegex(EvidenceContractError, "storage identity incomplete"):
             source.candidates(SUBJECT["worldId"], "TEST")
 
@@ -152,13 +152,13 @@ class RuntimeStabilityTests(unittest.TestCase):
         retired = {**row("retired", "evidence:filing"), "generationId": "retired"}
         other = row("other", "stock", symbol="OTHER", currentPrice=200)
         compact = lambda value: {key: value[key] for key in ("id", "storageId", "kind")}
-        repository.read_rows.side_effect = [[compact(quote), compact(macro)], [compact(macro)],
+        repository.read_rows.side_effect = [[compact(quote), compact(macro)], [compact(macro)], [],
             [{"storageId": "report"}, {"storageId": "quote"}],
             [{"storageId": "report"}, {"storageId": "retired"}, {"storageId": "other"}],
             [macro, other, quote, report, retired]]
         result = TypeDBObservationEvidenceSource(repository).candidates(SUBJECT["worldId"], "TEST")
         self.assertEqual({"quote", "macro", "report"}, {value["id"] for value in result})
-        self.assertEqual(5, repository.read_rows.call_count)
+        self.assertEqual(6, repository.read_rows.call_count)
         self.assertNotIn("ontology-json", repository.read_rows.call_args_list[0].args[0])
         self.assertNotIn("ontology-json", repository.read_rows.call_args_list[1].args[0])
         repository.active_abox_members_clause.assert_not_called()
@@ -170,7 +170,7 @@ class RuntimeStabilityTests(unittest.TestCase):
         for rows in ([], [{**fact, "generationId": "retired"}], [{**fact, "id": "wrong"}],
                      [fact, fact], [{**fact, "storageId": "unsolicited"}]):
             repository = Mock()
-            repository.read_rows.side_effect = [[identity], [], [], [], rows]
+            repository.read_rows.side_effect = [[identity], [], [], [], [], rows]
             with self.subTest(rows=rows), self.assertRaises(EvidenceContractError):
                 scoped_candidates(repository, SUBJECT["worldId"], "TEST", {"scopeGenerationIds": {"scope": "active"}})
 

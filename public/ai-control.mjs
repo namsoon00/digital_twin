@@ -1,4 +1,4 @@
-import { questionAssessmentView } from "./modules/research/question-assessment.mjs?v=1d2d09904b12aa62";
+import { questionAssessmentView, questionPerformanceView } from "./modules/research/question-assessment.mjs?v=af06227d66015e3b";
 
 const $ = (id) => document.getElementById(id);
 const escape = (value) => String(value ?? "").replace(/[&<>"']/g, (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
@@ -92,7 +92,7 @@ function brainView(brain = {}) {
       </div>`;
   }).join("");
   const metrics = brain.researchMetrics;
-  return `${metrics ? `<p>전체 질문 ${escape(metrics.questions)}건 · 최종 AI 답변 ${metrics.finalAnswered == null ? "집계 대기" : `${escape(metrics.finalAnswered)}건`} · 최종 부분 답변 ${metrics.finalPartial == null ? "집계 대기" : `${escape(metrics.finalPartial)}건`}<br>자료 조사 평가: 답변 확보 ${escape(metrics.sourceAnswered)}건 · 부분 확보 ${escape(metrics.sourcePartial)}건 · 미확보 ${escape(metrics.sourceUnavailable)}건 · 추가 조사 계획 ${escape(metrics.planned)}건</p><p class="muted">자료 조사자의 답변 확보와 원래 질문의 최종 답변은 별도 상태입니다. 가설 검증 성과와 구분합니다.</p>` : ""}<p class="muted">${(brain.goals || []).map(escape).join(" · ")}</p>${cards || '<p class="panel">아직 등록된 지속 질문이나 개선 제안이 없습니다. 새 관찰에서 근거가 있는 질문과 제안을 등록합니다.</p>'}`;
+  return `${questionPerformanceView(brain.questionPerformance)}${metrics ? `<p>전체 질문 ${escape(metrics.questions)}건 · 최종 AI 답변 ${metrics.finalAnswered == null ? "집계 대기" : `${escape(metrics.finalAnswered)}건`} · 최종 부분 답변 ${metrics.finalPartial == null ? "집계 대기" : `${escape(metrics.finalPartial)}건`}<br>자료 조사 평가: 답변 확보 ${escape(metrics.sourceAnswered)}건 · 부분 확보 ${escape(metrics.sourcePartial)}건 · 미확보 ${escape(metrics.sourceUnavailable)}건 · 추가 조사 계획 ${escape(metrics.planned)}건</p><p class="muted">자료 조사자의 답변 확보와 원래 질문의 최종 답변은 별도 상태입니다. 가설 검증 성과와 구분합니다.</p>` : ""}<p class="muted">${(brain.goals || []).map(escape).join(" · ")}</p>${cards || '<p class="panel">아직 등록된 지속 질문이나 개선 제안이 없습니다. 새 관찰에서 근거가 있는 질문과 제안을 등록합니다.</p>'}`;
 }
 function researchWorkView(row) {
   const answer = row.answerResolution;
@@ -145,6 +145,7 @@ function card(task, scheduling = {}) {
   ${r.followUpEvaluations?.length ? `<details><summary>이전 설명의 확인 결과</summary>${r.followUpEvaluations.map((row) => `<p>${escape(row.description)} · ${escape(followUpLabels[row.status] || row.status)}<br><small>${escape(row.reason)}</small></p>`).join("")}</details>` : ""}
   ${r.publication?.receipt ? `<details><summary>실제 발송 원문 · ${escape(date(r.publication.receipt.deliveredAt))}</summary><pre>${escape(r.publication.receipt.body || "원문 보존 기간이 지나 본문을 표시할 수 없습니다.")}</pre></details>` : ""}
   ${diagnostic?.receipt ? `<details><summary>운영 채널로 보낸 미검증 원문 · ${escape(date(diagnostic.receipt.deliveredAt))}</summary><pre>${escape(diagnostic.receipt.body || "원문 보존 기간이 지나 본문을 표시할 수 없습니다.")}</pre></details>` : ""}
+  ${task.workAttention?.reasons?.length ? `<p class="muted">작업 선택 근거: ${task.workAttention.reasons.map(escape).join(" · ")} · ${task.workAttention.selection === "oldest-fair-turn" ? "대기 순서 보장 차례" : "중요도 반영 차례"}. 투자 등급과는 별도입니다.</p>` : ""}
   ${r.claimEvidence ? `<details><summary>문장별 인용과 검토 기록</summary><pre>${escape(JSON.stringify({claims:r.claimEvidence,review:r.quality?.review},null,2))}</pre></details>` : ""}
   ${task.status === "pending" ? `<p class="muted">다음 확인 ${escape(date(scheduling.status === "budget-wait" && Date.parse(scheduling.nextCheckAt) > Date.parse(task.nextCheckAt) ? scheduling.nextCheckAt : task.nextCheckAt))}</p>` : ""}
   ${facts.length ? `<details><summary>사용한 사실 ${facts.length}개 · 시점과 출처 보기</summary><pre>${escape(JSON.stringify(r.input,null,2))}</pre></details>` : ""}</article>`;
@@ -155,7 +156,7 @@ function queueView(scheduling) {
   const names = {recovery:"중단 작업 복구","market-observe":"시장 관찰",observe:"질문 연구",research:"자료 수집","research-plan":"조사 계획"};
   const queues = scheduling.queues || [];
   const expired = queues.reduce((sum, row) => sum + Number(row.expiredLeases || 0), 0);
-  return `<p>실행 차례: ${(scheduling.cycle || []).map(lane => escape(names[lane] || lane)).join(" → ")}. 준비된 작업이 없는 차례는 건너뜁니다.<br>${queues.map(row => `${escape(names[row.capability] || row.capability)}: 실행 시각 도래 ${escape(row.due)}건 · 진행 ${escape(row.processing)}건`).join(" / ")}<br><strong>실행 기한이 지나 복구할 작업 ${escape(expired)}건</strong><br><small>호출 한도와 자료 재수집 대기 시간은 유지됩니다. 순서는 작업 시작 차례이며, 각 작업의 소요 시간에 따라 대기 시간이 달라집니다.</small></p>`;
+  return `<p>실행 차례: ${(scheduling.cycle || []).map(lane => escape(names[lane] || lane)).join(" → ")}. 준비된 작업이 없는 차례는 건너뜁니다.<br>${queues.map(row => `${escape(names[row.capability] || row.capability)}: 실행 시각 도래 ${escape(row.due)}건 · 진행 ${escape(row.processing)}건`).join(" / ")}<br><strong>실행 기한이 지나 복구할 작업 ${escape(expired)}건</strong><br><small>각 작업 종류에서 대기 순서와 중요도를 번갈아 반영합니다. 한 번에 대기 작업 최대 20건을 비교하며, 보유 노출과 기존 답변 진행 상태를 사용합니다. 호출 한도와 자료 재수집 대기 시간은 유지됩니다. 순서는 작업 시작 차례이며, 각 작업의 소요 시간에 따라 대기 시간이 달라집니다.</small></p>`;
 }
 function lanesView(value) {
   if (!value?.lanes) return "";

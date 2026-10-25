@@ -1,7 +1,7 @@
 """Read-only question milestones; reservations and retries are never answers."""
 from copy import deepcopy
 
-from .execution_resilience import recovery_wait, FAILURE_MESSAGES
+from .execution_resilience import recovery_wait, FAILURE_MESSAGES, instant
 from .question_assessment import VERSION as ASSESSMENT_VERSION
 
 
@@ -13,6 +13,12 @@ def task_wait(task, execution, now):
     if shared:
         return {**shared.result(), "label": "AI 제공처 사용 한도 대기" if shared.category == "quota" else "AI 제공처 실행 대기"}
     error = task.get("lastError", "")
+    success, failure = instant(execution.get("lastSuccessAt")), instant(execution.get("lastFailureAt"))
+    if error.startswith("ai-execution:") and success and failure and success > failure:
+        return {"status": "resuming", "scope": "task-queue", "reason": "model-execution-recovered",
+            "label": "AI 실행 복구 · 기존 작업 이어가기",
+            "explanation": "최근 모델 호출 성공을 확인했습니다. 보존된 작업을 예약 순서와 실행 여건에 따라 이어갑니다.",
+            "nextCheckAt": task.get("nextCheckAt", ""), "lastSuccessAt": execution["lastSuccessAt"], "retryIsReset": False}
     if error in {"ai-token-budget-exhausted", "ai-token-allocation-budget-exhausted"}:
         return {"status": "budget-wait", "scope": "project-budget", "reason": error,
             "label": "서비스 내부 토큰 예산 대기", "explanation": "내부 사용 예산이 배정되면 같은 작업을 이어갑니다.",
@@ -67,7 +73,8 @@ def question_progress(case, tasks, execution, now):
         {"key": "judgment", "label": "AI 판단 반영", "status": "recorded" if assessed else "pending",
          "detail": (assessment.get("judgmentImpact") or {}).get("reason", "") if assessed else "검토를 통과한 판단 연결이 아직 없습니다."},
     ]
-    return {"version": "question-progress-v1", "checkedAt": now.isoformat(), "stages": stages,
+    from .question_closure import closure
+    return {"closure": closure(case, answer, assessment, assessed, active, wait), "version": "question-progress-v1", "checkedAt": now.isoformat(), "stages": stages,
         "activeTaskId": active.get("taskId", ""), "wait": wait,
         "publication": deepcopy(judgment.get("publication") or {}) if assessed else {},
         "judgmentTaskId": judgment.get("taskId", "") if assessed else "",

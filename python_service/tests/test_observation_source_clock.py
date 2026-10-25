@@ -212,7 +212,7 @@ class ObservationSourceClockTests(unittest.TestCase):
         repository = Mock()
         repository.active_abox_members_clause.return_value = ""
         quote = {"id": "quote", "kind": "stock", "label": "quote", "json": json.dumps({"symbol": "TEST", "currentPrice": 100})}
-        repository.read_rows.side_effect = [[quote], [], [{"id": "quote", "storageId": "active-quote"}], TimeoutError("secret credential / private query")]
+        repository.read_rows.side_effect = [[quote], [], [], [{"id": "quote", "storageId": "active-quote"}], TimeoutError("secret credential / private query")]
         source = TypeDBObservationEvidenceSource(repository)
         with self.assertRaises(EvidenceReadError) as failure:
             source.candidates(SUBJECT["worldId"], "TEST")
@@ -232,12 +232,12 @@ class ObservationSourceClockTests(unittest.TestCase):
         repository.active_abox_members_clause.return_value = ""
         quote = {"id": "quote", "kind": "stock", "label": "quote", "json": json.dumps({"currentPrice": 100, "symbol": "TEST"})}
         macro = {"id": "macro", "kind": "interest-rate", "label": "rate", "json": json.dumps({"rate": 4})}
-        repository.read_rows.side_effect = [[quote, macro], [macro], [{"id": "quote", "storageId": "active-quote"}],
+        repository.read_rows.side_effect = [[quote, macro], [macro], [], [{"id": "quote", "storageId": "active-quote"}],
                                            [{"storageId": "active-quote"}], [], [quote]]
         source = TypeDBObservationEvidenceSource(repository)
         result = source.candidates(SUBJECT["worldId"], "TEST")
         self.assertEqual({"quote", "macro"}, {row["id"] for row in result})
-        self.assertEqual(6, repository.read_rows.call_count)
+        self.assertEqual(7, repository.read_rows.call_count)
         repository.read_rows.side_effect = [[macro], [{**macro, "json": json.dumps({"rate": 5})}]]
         with self.assertRaisesRegex(ValueError, "conflicting observation inventory"):
             source.candidates(SUBJECT["worldId"], "TEST")

@@ -9,7 +9,7 @@ from ..domain.task_dispatch import AGING_MINUTES, CAPABILITIES, CYCLE, SCOPE, VE
 
 class AITaskDispatchPersistence:
     @staticmethod
-    def select_dispatch(connection, cursor, budget, now):
+    def select_dispatch(connection, cursor, budget, now, subjects=()):
         wait = None
         # An observation needs two calls; source work can use the final call.
         eligible = [capability for capability in CAPABILITIES if not admission_wait(budget, capability)]
@@ -36,9 +36,33 @@ class AITaskDispatchPersistence:
                 params += (cutoff, cutoff)
             # Only exclude observations when another capability is admissible.
             # Otherwise inspect the candidate and raise the original budget wait.
-            row = connection.execute("SELECT * FROM ai_control_tasks WHERE " + where
+            from ..domain.work_attention import WINDOW, select
+            limit = WINDOW if subjects and lane not in {"recovery", "other"} else 1
+            rows = connection.execute("SELECT task_id,account_id,symbol,capability,status,priority,available_at,"
+                "lease_until,attempts,last_error,payload_json FROM ai_control_tasks WHERE " + where
                 + (excluded if eligible else "") + " ORDER BY " + order
-                + " LIMIT 1 FOR UPDATE SKIP LOCKED", params).fetchone()
+                + f" LIMIT {limit} FOR UPDATE SKIP LOCKED", params).fetchall()
+            row = rows[0] if rows else None
+            if rows and limit > 1:
+                jobs = [{**json.loads(r["payload_json"]), "taskId": r["task_id"], "accountId": r["account_id"],
+                         "symbol": r["symbol"], "capability": r["capability"]} for r in rows]
+                ids = sorted({j.get("brainCaseId") for j in jobs} - {None, ""})
+                cases = {}
+                if ids:
+                    found = connection.execute("SELECT case_id,account_id,symbol,status,"
+                        "JSON_UNQUOTE(JSON_EXTRACT(payload_json,'$.worldId')) AS world_id,"
+                        "JSON_UNQUOTE(JSON_EXTRACT(payload_json,'$.latestSourceAnswer.status')) AS answer_status,"
+                        "JSON_UNQUOTE(JSON_EXTRACT(payload_json,'$.questionAssessment.status')) AS review_status,"
+                        "JSON_UNQUOTE(JSON_EXTRACT(payload_json,'$.questionAssessment.researchReviewInputId')) AS review_input,"
+                        "JSON_UNQUOTE(JSON_EXTRACT(payload_json,'$.questionAssessment.judgmentImpact.effect')) AS effect "
+                        "FROM ai_brain_cases FORCE INDEX(PRIMARY) WHERE kind='question' AND case_id IN ("
+                        + ",".join(["%s"] * len(ids)) + ") LIMIT 20", tuple(ids)).fetchall()
+                    cases = {r["case_id"]: {"caseId": r["case_id"], "accountId": r["account_id"], "symbol": r["symbol"],
+                        "worldId": r["world_id"], "status": r["status"], "latestSourceAnswer": {"status": r["answer_status"]},
+                        "questionAssessment": {"status": r["review_status"], "researchReviewInputId": r["review_input"],
+                                               "judgmentImpact": {"effect": r["effect"]}}} for r in found}
+                index, attention = select(jobs, subjects, cases, cursor, lane, now)
+                row = {**rows[index], "work_attention": attention}
             if row:
                 blocked = admission_wait(budget, row["capability"])
                 if not blocked:

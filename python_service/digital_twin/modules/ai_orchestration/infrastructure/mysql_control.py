@@ -99,6 +99,7 @@ class MySQLAIControlStore(AITokenUsagePersistence, DiagnosticProgressPersistence
         )
 
     def seed(self, subject):
+        subject = {k: v for k, v in subject.items() if k != "workContext"}
         if not all(subject.get(key) for key in ("accountId", "symbol", "worldId")):
             return
         # A persistent root identity prevents periodic worker ticks from creating new work.
@@ -115,7 +116,7 @@ class MySQLAIControlStore(AITokenUsagePersistence, DiagnosticProgressPersistence
             if latest and latest["status"] == "completed" and json.loads(latest["result_json"]).get("status") == "retired":
                 self.insert(connection, {**job, "taskId": identity(latest["task_id"], subject["worldId"], "rejoin")})
 
-    def claim(self):
+    def claim(self, subjects=()):
         now = stamp()
         clock = datetime.fromisoformat(now.replace("Z", "+00:00"))
         day = now[:10]
@@ -130,13 +131,15 @@ class MySQLAIControlStore(AITokenUsagePersistence, DiagnosticProgressPersistence
             budget = connection.execute("SELECT used_count FROM ai_control_budget WHERE day_key=%s FOR UPDATE", (day,)).fetchone()
             calls = connection.execute("SELECT used_count FROM ai_control_budget WHERE day_key=%s", ("calls:" + day,)).fetchone()
             state = budget_state(self.runtime_settings, budget["used_count"], (calls or {}).get("used_count", 0), clock)
-            row, slot, lane = self.select_dispatch(connection, cursor, state, clock)
+            row, slot, lane = self.select_dispatch(connection, cursor, state, clock, subjects)
             if not row:
                 return None
             token = uuid.uuid4().hex
             until = (clock + timedelta(minutes=15)).isoformat().replace("+00:00", "Z")
             cursor, receipt = dispatched(cursor, slot, lane, row["task_id"], row["capability"], now,
                                          row["lease_until"] if lane == "recovery" else "")
+            if row.get("work_attention"):
+                receipt["workAttention"] = row["work_attention"]
             connection.execute("UPDATE ai_control_tasks SET status='processing',lease_token=%s,lease_until=%s,"
                 "attempts=attempts+1,updated_at=%s,payload_json=JSON_SET(payload_json,'$.taskDispatch',CAST(%s AS JSON)) "
                 "WHERE task_id=%s", (token, until, now, json.dumps(receipt), row["task_id"]))
@@ -523,7 +526,8 @@ class MySQLAIControlStore(AITokenUsagePersistence, DiagnosticProgressPersistence
                 ids = [row["task_id"] for row in recent]
                 fetched = connection.execute("SELECT /*+ MAX_EXECUTION_TIME(5000) */ task_id,account_id,symbol,"
                     "capability,status,available_at,attempts,last_error,updated_at,result_json,"
-                    "JSON_UNQUOTE(JSON_EXTRACT(payload_json,'$.name')) AS name "
+                    "JSON_UNQUOTE(JSON_EXTRACT(payload_json,'$.name')) AS name,"
+                    "JSON_EXTRACT(payload_json,'$.taskDispatch.workAttention') AS work_attention "
                     "FROM ai_control_tasks FORCE INDEX (PRIMARY) WHERE task_id IN (" + ",".join(["%s"] * len(ids)) + ")" + where.replace(" WHERE ", " AND "),
                     tuple(ids) + params).fetchall()
                 by_id = {row["task_id"]: row for row in fetched}
@@ -546,6 +550,7 @@ class MySQLAIControlStore(AITokenUsagePersistence, DiagnosticProgressPersistence
                            "name": row["name"] if row["name"] is not None else row["symbol"],
                            "capability": row["capability"], "status": row["status"], "nextCheckAt": row["available_at"],
                            "attempts": row["attempts"], "lastError": row["last_error"], "updatedAt": row["updated_at"],
+                           "workAttention": json.loads(row["work_attention"] or "null") or {},
                            "result": json.loads(row["result_json"])} for row in rows],
                 "callsToday": list(calls), "tokenUsageToday": tokens, **state,
                 "observationScheduling": {**wait.result(), "scope": "model-calls-only", "nonModelChecksAllowed": True} if wait else {"status": "ready"},

@@ -3,7 +3,7 @@
 import json
 
 from digital_twin.modules.reasoning.application.observation_evidence.reads import read_evidence_stage
-from digital_twin.modules.reasoning.domain.observation_evidence import EvidenceContractError, MACRO_KINDS, OBSERVATION_QUOTE_KINDS
+from digital_twin.modules.reasoning.domain.observation_evidence import EvidenceContractError, MACRO_KINDS, OBSERVATION_QUOTE_KINDS, PORTFOLIO_CONTEXT_KINDS
 from digital_twin.modules.reasoning.infrastructure.typeql.literals import typedb_string, typedb_value_match
 from digital_twin.modules.reasoning.infrastructure.typeql.scope_clauses import typedb_active_scoped_abox_member_clause
 
@@ -14,6 +14,8 @@ def scoped_candidates(repository, world_id, symbol, metadata):
     members = typedb_active_scoped_abox_member_clause("$n", "observationEvidence", world_id=world_id)
     selectors = (("subject", "$n has ontology-symbol " + typedb_string(symbol) + ";"),
                  ("macro", typedb_value_match("$n", "ontology-kind", MACRO_KINDS, "==", "observationMacroKind")))
+    if world_id.startswith("portfolio:"):
+        selectors += (("portfolio", typedb_value_match("$n", "ontology-kind", PORTFOLIO_CONTEXT_KINDS, "==", "observationPortfolioKind")),)
     inventory, logical = {}, {}
     for stage, selector in selectors:
         rows = read_evidence_stage("inventory-" + stage, lambda: repository.read_rows(

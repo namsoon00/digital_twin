@@ -1,6 +1,7 @@
 {
   "tests": [
     {"file": "test_projection_computation_parity.py", "tier": "contract", "core": true},
+    {"file": "test_central_work_attention.py", "tier": "contract", "core": true},
     {"file": "test_world_information_read_models.py", "tier": "contract", "core": true},
     {"file": "test_evidence_completion.py", "tier": "contract", "core": true},
     {"file": "test_business_insight_progress.py", "tier": "contract", "core": true},

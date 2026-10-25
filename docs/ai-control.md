@@ -2013,3 +2013,33 @@ notice suppression, actual MySQL settlement idempotence, read-only progress and
 lease-fenced waits. Frontend regression verifies explicit provider/local waits,
 partial answers, escaped text and receipt-only delivery claims. Live provider
 recovery and new answers must be verified separately from these tests.
+
+## Bounded work attention and question completion (2026-10-25)
+
+`central-task-fairness-v3-work-attention` preserves the capability cycle, recovery
+leases, provider gate and all retry/budget limits. Within each capability it
+alternates the existing oldest/priority order with an importance turn over at
+most 20 eligible rows. Importance uses an owned pending question's existing
+source answer/partial answer and reviewed counter-evidence, plus current subject
+holding status and account weight from the monitor snapshot. Holding hints older
+than 72 hours, future clocks and different account/world identities are ignored.
+These hints authorize work ordering only: they never enter the AI evidence
+packet or create an investment action. The bounded window is not a global scan
+or a claim that the globally most important question was selected. The per-lane
+cursor and the selection reasons survive restart and are stored with the task
+lease. Watchlist and older tasks retain alternating fair turns.
+
+Question workflows expose `question-closure-v1`: the preserved answer, original
+missing requirements, existing next action and resumption condition. This is a
+read model; it cannot reopen research, create a new question, exhaust another
+call or replace the original contract. `question-performance-v1` aggregates only
+the visible question sample. Reviewed answer links, supports/weakens/unchanged/
+insufficient effects and actual transport receipts are separate counts; shared
+notification jobs count once. Historical rows whose linked task is no longer
+retained do not become verified completions. Accuracy and investment returns
+remain unmeasured.
+
+Validation adds six Python regressions for alternating fairness, scoped/fresh
+holding hints, owned question progress, lease-persisted selection reasons,
+receipt deduplication, and frozen native portfolio evidence. The suite ceiling
+increases by six, from 2626 to 2632, with no tests removed or disabled.

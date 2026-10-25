@@ -270,3 +270,19 @@ DB의 과거 계좌 그래프로 대체하지 않는다.
 본문 일부를 요약·잘라 답변 기준을 충족시킨 것처럼 취급하지 않는다. 구조화된
 보고 수치에는 공시 전문·주석·정정 이력이 없다는 한계를 함께 유지한다.
 질문의 부분 평가, 최종 답변 및 가설·판단 영향은 별도 상태로 저장한다.
+
+### Portfolio context read coverage (2026-10-25)
+
+The `independent-observation-v5-portfolio-context` profile retains the existing
+category/tool grammar and historical profile replay. In the same active native
+PortfolioWorld, a bounded additional kind query reads existing `portfolio`,
+`portfolio-risk-snapshot`, `sector-exposure`, `currency-exposure` and
+`cash-exposure` ABox facts. Subject `position-risk-metric` facts are also admitted
+under the `company` context category. All remain exact graph facts with source
+snapshot identity, partial-data state and byte-budget coverage; this does not
+compute a new risk score, correlation, allocation or trade. No other subject is
+traversed and no portfolio kind query runs against the shared MarketWorld.
+Unavailable facts remain unavailable, and omitted facts stay in the model's
+bounded inventory for explicit reads. Existing numeric, provenance, novelty and
+publication guards still apply. Account observations are not real-time prices;
+their source clock and data state must be retained when cited.

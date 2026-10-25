@@ -420,7 +420,8 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # Six failed-usage, scoped question progress, fenced wait and cross-plan notice contracts.
         # Six computation parity regressions preserve digests, source lifetime,
         # quality output and endpoint validation while bounding repeated work.
-        self.assertLessEqual(total, 2626)
+        # Six work-order/closure/native-evidence regressions.
+        self.assertLessEqual(total, 2632)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

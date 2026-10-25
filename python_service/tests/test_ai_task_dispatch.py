@@ -64,6 +64,42 @@ class AITaskDispatchTests(unittest.TestCase):
         from execution_lane_checks import check_native_lanes
         check_native_lanes(self)
 
+    def test_work_attention_changes_order_but_keeps_oldest_turn_and_lease_audit(self):
+        from test_central_work_attention import subject
+        from digital_twin.modules.ai_orchestration.infrastructure.mysql_brain_agenda import MySQLBrainAgendaStore
+        MySQLBrainAgendaStore(self.store.runtime_settings)
+        now = datetime.now(timezone.utc)
+        symbols = ["WATCH", "LOW", "HIGH", "ANSWER"]
+        subjects = [subject(symbol, symbol in {"LOW", "HIGH"}, i * 30) for i, symbol in enumerate(symbols)]
+        case_id = "attention-answer-case"
+        def remove_case():
+            with self.store.connect() as c:
+                c.execute("DELETE FROM ai_brain_cases WHERE case_id=%s", (case_id,))
+        self.addCleanup(remove_case)
+        for i, value in enumerate(subjects):
+            value["workContext"]["observedAt"] = clock_stamp(now)
+            task = {**value, "taskId": symbols[i], "capability": "research", "availableAt": clock_stamp(now - timedelta(minutes=40-i))}
+            with self.store.transaction() as c:
+                if symbols[i] == "ANSWER":
+                    task["brainCaseId"] = case_id
+                    case = {**value, "caseId": case_id, "latestSourceAnswer": {"status": "answered"}}
+                    c.execute("INSERT INTO ai_brain_cases (case_id,account_id,symbol,kind,status,next_check_at,payload_json,created_at,updated_at) "
+                        "VALUES (%s,%s,%s,'question','waiting','',%s,%s,%s)",
+                        (case_id, value["accountId"], value["symbol"], json.dumps(case), stamp(), stamp()))
+                self.store.insert(c, task)
+        first = self.store.claim(subjects=subjects)
+        self.assertEqual("WATCH", first["taskId"])
+        self.assertEqual("oldest-fair-turn", first["taskDispatch"]["workAttention"]["selection"])
+        second = self.store_type(self.store.runtime_settings).claim(subjects=subjects)
+        self.assertEqual("ANSWER", second["taskId"])
+        self.assertTrue(second["taskDispatch"]["workAttention"]["sourceAnswerReady"])
+        self.assertEqual("importance-turn", second["taskDispatch"]["workAttention"]["selection"])
+        self.assertEqual("LOW", self.store.claim(subjects=subjects)["taskId"])
+        self.assertEqual("HIGH", self.store.claim(subjects=subjects)["taskId"])
+        with self.store.connect() as c:
+            row = c.execute("SELECT payload_json FROM ai_control_tasks WHERE task_id='ANSWER'").fetchone()
+        self.assertEqual(second["taskDispatch"], json.loads(row["payload_json"])["taskDispatch"])
+
     def test_expired_plan_lease_recovers_amid_backlog_without_reviving_stale_writer(self):
         self.insert("expired-plan", "research-plan")
         previous = self.store.claim()

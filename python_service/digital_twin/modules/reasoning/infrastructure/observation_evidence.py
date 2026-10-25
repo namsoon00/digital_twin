@@ -3,7 +3,7 @@ import json
 from contextlib import nullcontext, contextmanager, ExitStack
 from contextvars import ContextVar
 
-from digital_twin.modules.reasoning.domain.observation_evidence import EvidenceContractError, MACRO_KINDS, OBSERVATION_QUOTE_KINDS
+from digital_twin.modules.reasoning.domain.observation_evidence import EvidenceContractError, MACRO_KINDS, OBSERVATION_QUOTE_KINDS, PORTFOLIO_CONTEXT_KINDS
 from digital_twin.modules.reasoning.domain.ontology_scopes import SCOPED_ABOX_MANIFEST_VERSION
 from digital_twin.modules.reasoning.application.observation_evidence.reads import read_evidence_stage
 from digital_twin.modules.reasoning.infrastructure.typeql.literals import typedb_string, typedb_value_match
@@ -120,6 +120,8 @@ class TypeDBObservationEvidenceSource:
         # two bounded reads; the reader fences the snapshot before and after.
         selectors = (("subject", "$n has ontology-symbol " + typedb_string(symbol) + ";"),
                      ("macro", typedb_value_match("$n", "ontology-kind", MACRO_KINDS, "==", "observationMacroKind")))
+        if world_id.startswith("portfolio:"):
+            selectors += (("portfolio", typedb_value_match("$n", "ontology-kind", PORTFOLIO_CONTEXT_KINDS, "==", "observationPortfolioKind")),)
         rows = {}
         for stage, selector in selectors:
             raw = read_evidence_stage("inventory-" + stage, lambda: repository.read_rows(

@@ -426,7 +426,8 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # Seven scope-encoding/policy and optional-cache byte-budget regressions:
         # exact digests, copy isolation, early rejection, wire/readback parity,
         # envelope accounting and the combined graph/context budget.
-        self.assertLessEqual(total, 2669)
+        # Seven cited answer/gap, completion authority, legacy replay and bounded exhibit-recovery contracts.
+        self.assertLessEqual(total, 2676)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

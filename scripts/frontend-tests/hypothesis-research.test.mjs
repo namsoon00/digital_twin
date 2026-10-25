@@ -62,3 +62,27 @@ test('question closure and sample outcomes explain remaining work without claimi
     judgmentInsufficient:0,providerWaiting:11,receiptVerifiedNotifications:0});
   assert.match(metrics, /부분 답변 보존 8건/); assert.match(metrics, /정확도·수익률은 미측정/);
 });
+
+test('confirmed answer and missing original remain visible while repeat research is stopped', () => {
+  const html = questionAssessmentView({workflow:{judgmentTaskId:'reviewed',stages:[],closure:{
+    answerState:'confirmed-parts',execution:{code:'limit-reached',label:'자동 조사 한도 도달'},
+    confirmedParts:[{text:'해당 기간의 매출을 원문에서 확인했습니다. <script>'}],
+    gapDetails:[{requirement:'현금흐름표',role:'essential',causeLabel:'필요한 원문 미확보',nextAction:'같은 보고기간의 원문 표를 읽습니다.'},
+      {requirement:'추가 산업 비교',role:'supplementary',causeLabel:'공개 자료에서 확인하지 못함',nextAction:'업종 보고서가 갱신되면 확인합니다.'}],
+    nextStep:'자동 조사 한도 도달 · 조사 범위 검토 필요'}},questionAssessment:{taskId:'reviewed',status:'partial',
+      answer:'기존 AI 검토 기록',sources:[],missingRequirements:['현금흐름표']}});
+  for (const phrase of ['확인한 답변','자동 조사 한도 도달','답변 완료에 필요한 항목','필요한 원문 미확보','보강 조사 항목','다음 확인:']) assert.ok(html.includes(phrase),phrase);
+  assert.match(html,/&lt;script&gt;/); assert.doesNotMatch(html,/<script>/);
+  assert.equal(html.split('현금흐름표').length - 1,1);
+  assert.doesNotMatch(html,/원래 질문에 대한 AI 답변/);
+});
+
+test('unverified final assessment cannot replace retained source answer in the workflow', () => {
+  const html = questionAssessmentView({workflow:{closure:{recordedAnswer:'앞서 확보한 답변입니다.',answerAuthority:'source-answer',
+    execution:{code:'blocked',label:'조사 진행 불가 · 원인 확인 필요'}}},
+    questionAssessment:{status:'answered',answer:'연결이 검증되지 않은 완료 주장'}});
+  assert.match(html,/앞서 확보한 답변입니다/);
+  assert.match(html,/최종 검토 전/);
+  assert.match(html,/조사 진행 불가/);
+  assert.doesNotMatch(html,/연결이 검증되지 않은 완료 주장/);
+});

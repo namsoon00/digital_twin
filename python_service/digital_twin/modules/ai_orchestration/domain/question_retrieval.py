@@ -94,7 +94,8 @@ def research_scope(trace, status):
 
 
 def prompt(current, context):
-    return question_assessment.INSTRUCTIONS + ("read_document(factId)는 questionDocumentIndex의 원문과 출처·검증 정보를 손실 없이 읽고 중복 분석 필드를 제외합니다. "
+    from .question_answer import read_instructions
+    return read_instructions(current) + question_assessment.INSTRUCTIONS + ("read_document(factId)는 questionDocumentIndex의 원문과 출처·검증 정보를 손실 없이 읽고 중복 분석 필드를 제외합니다. "
         "structured-report는 출처에 기록된 보고 수치와 단위·기간·계보이며 공시 전문·주석·정정 이력이 아닙니다. "
         "부분 근거가 있으면 assess로 원래 질문의 부분 답변과 부족분을 기록하고, 같은 자료의 반복 연구를 멈추세요.\n") + previous.prompt(current, context)
 

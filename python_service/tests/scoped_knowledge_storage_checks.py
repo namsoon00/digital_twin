@@ -77,8 +77,8 @@ def check_partial_controller(test):
         import json
         job = {**json.loads(row["payload_json"]), "attempts": row["attempts"], "leaseToken": row["lease_token"]}
         completed_call(test, envelope, job, input_id)
-        if envelope["promptVersion"] == research_review.VERSION:
-            return {"version": research_review.VERSION, "accepted": True,
+        if envelope["promptVersion"] in research_review.SUPPORTED_VERSIONS:
+            return {"version": envelope["promptVersion"], "accepted": True,
                     "reason": "선택 근거와 미확인 조건을 분리한 잠정 가설이며 반론과 반증 조건이 보존됐습니다."}
         if envelope["promptVersion"].startswith("independent-observation-retrieval"):
             return scoped_decision("research", [row["factId"] for row in envelope["retrievalContext"]["knownFacts"]],

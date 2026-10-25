@@ -4,7 +4,7 @@ import re
 from datetime import date
 
 
-VERSION = 'question-passages-v4'
+VERSION = 'question-passages-v5-event-originals'
 _TOPICS = (
     (r'순손실|적자|손실|net loss', ('net loss', 'operating loss', 'losses')),
     (r'순이익|수익성|profitability', ('net income', 'profitability', 'operating income')),
@@ -93,6 +93,9 @@ def select_question_filings(filings, tasks, cutoff):
                     for t in tasks if isinstance(t, dict))
     annual = bool(re.search(r'연간|연차|annual|10-K|20-F', text, re.I))
     preferred = {'10-K', '20-F', '40-F'} if annual else {'10-Q'}
+    events = {form for form in ('8-K', '6-K') if re.search(r'(?<![a-z0-9])' + form.replace('-', r'[-\s]?') + r'(?![a-z0-9])', text, re.I)}
+    if events and not annual and not re.search(r'10[-\s]?Q', text, re.I):
+        preferred = events
     allowed = preferred | {'10-K', '10-Q', '20-F', '40-F', '8-K', '6-K'}
     selected = {}
     for row in filings:

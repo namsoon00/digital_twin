@@ -132,6 +132,8 @@ class AIControlService:
                         packet["memoryReadPolicy"] = memory_policy
                         from ..domain.question_assessment import VERSION as question_policy
                         packet["questionWorkPolicy"] = question_policy
+                        from ..domain.question_answer import VERSION as answer_policy
+                        packet["questionAnswerPolicy"] = answer_policy
                         from ..domain.question_assessment import prepare
                         research = prepare(research, session.question_work_inventory())
                         packet["questionWorkPending"] = sorted(row["questionWorkKey"] for row in research

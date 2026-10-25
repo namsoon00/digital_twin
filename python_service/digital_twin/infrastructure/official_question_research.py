@@ -31,21 +31,42 @@ class _Exhibits(HTMLParser):
     def __init__(self):
         super().__init__(convert_charrefs=True)
         self.href, self.text, self.links = '', [], []
+        self.row_links, self.row_text, self.document_text = [], [], []
+        self.in_row = False
 
     def handle_starttag(self, tag, attrs):
+        if tag == 'tr':
+            self.in_row, self.row_links, self.row_text = True, [], []
         if tag == 'a':
             self.href = dict(attrs).get('href', '')
             self.text = []
 
     def handle_data(self, data):
+        self.document_text.append(data)
+        if self.in_row:
+            self.row_text.append(data)
         if self.href:
             self.text.append(data)
 
     def handle_endtag(self, tag):
         if tag == 'a' and self.href:
+            if self.in_row:
+                self.row_links.append(self.href)
             if re.search(r'ex(?:hibit)?[\s_-]*99|earnings|press.?release|results', self.href + ' ' + ' '.join(self.text), re.I):
                 self.links.append(self.href)
             self.href = ''
+        if tag == 'tr':
+            # Filing indexes often put EX-99.1 in a sibling cell while the
+            # anchor is an opaque document filename. Stay within that row.
+            if re.search(r'\bex(?:hibit)?[\s_-]*99\b|(?:^|\s)99\.\d+(?:\s|$)', ' '.join(self.row_text), re.I):
+                self.links.extend(self.row_links)
+            self.in_row = False
+
+
+def _exhibit_candidates(raw, url, cik, accession):
+    parser = _Exhibits(); parser.feed(str(raw))
+    links = [urljoin(url, href) for href in parser.links]
+    return parser, [link for link in dict.fromkeys(links) if official_document_url(link, cik, accession)]
 
 
 def collect_question_documents(provider, target, signals, tasks):
@@ -67,7 +88,7 @@ def collect_question_documents(provider, target, signals, tasks):
     filings = [*(sec.get('reportFilings') or []), sec.get('latestFiling') or {}, *(sec.get('recentFilings') or [])]
     candidates = [(row, str(row.get('url') or ''), '') for row in select_question_filings(filings, tasks, now)]
     required = required_report_periods(tasks)
-    seen, evidence, statuses, fetched = set(), [], [], 0
+    seen, evidence, statuses, fetched, index_reads = set(), [], [], 0, 0
     history = {}
     try:
         from .question_filing_history import collect_filing_history
@@ -107,6 +128,8 @@ def collect_question_documents(provider, target, signals, tasks):
             statuses.append({**base, 'ok': False, 'status': 'invalid-document-identity'})
             continue
         fetched += 1
+        if metadata.get('_questionFilingIndex'):
+            index_reads += 1
         try:
             raw = provider.guarded_call('SEC EDGAR', 'question-document:' + hashlib.sha256(url.encode()).hexdigest(),
                                         lambda: provider.fetch_text(url, provider.sec_document_headers()))
@@ -114,16 +137,29 @@ def collect_question_documents(provider, target, signals, tasks):
                 raise ValueError('document-size-budget')
             if any(marker in str(raw).lower() for marker in ('undeclared automated tool', 'request rate threshold exceeded', 'access denied')):
                 raise ValueError('official-document-unavailable')
+            if metadata.get('_questionFilingIndex'):
+                _, links = _exhibit_candidates(raw, url, cik, accession)
+                candidates[0:0] = [({key: value for key, value in metadata.items() if key != '_questionFilingIndex'}, link, parent)
+                                   for link in links if link not in seen][:1]
+                statuses.append({**base, 'ok': True, 'status': 'exhibit-index-read' if links else 'exhibit-link-unavailable',
+                    'url': url, 'availableExhibitCount': len(links), 'authority': 'document-location-only'})
+                continue  # An index is a locator, never evidence of the answer.
             passages = select_question_passages(question_document_blocks(raw, include_context=True), tasks,
                                                 provider.sec_document_text_max_chars(), max_block_chars=14000)
             if not parent:
-                links = _Exhibits(); links.feed(str(raw))
-                exhibits = [urljoin(url, href) for href in links.links]
-                extra = [(metadata, link, url) for link in dict.fromkeys(exhibits)
-                         if official_document_url(link, cik, accession)][:1]
+                links, exhibits = _exhibit_candidates(raw, url, cik, accession)
+                extra = [(metadata, link, url) for link in exhibits if link not in seen][:1]
                 # For comparison reports keep the prior-year primary document
                 # ahead of exhibits; event filings still need their attachment.
                 if str(metadata.get('form') or '').upper() in {'8-K', '6-K'}:
+                    if not extra and re.search(r'\bex(?:hibit)?[\s_-]*99', ' '.join(links.document_text), re.I):
+                        index_url = urljoin(url, accession + '-index.html')
+                        if fetched <= 1 and index_url not in seen and official_document_url(index_url, cik, accession):
+                            # Index + attachment share the original three-call
+                            # budget. No guessed exhibit URLs or extra AI calls.
+                            extra = [({**metadata, '_questionFilingIndex': True}, index_url, url)]
+                        else:
+                            statuses.append({**base, 'ok': False, 'status': 'exhibit-read-budget', 'url': url})
                     candidates[0:0] = extra
                 else:
                     candidates.extend(extra)
@@ -153,9 +189,11 @@ def collect_question_documents(provider, target, signals, tasks):
             code = str(error) if isinstance(error, ValueError) and str(error) in {
                 'document-size-budget', 'official-document-unavailable'} else ''
             statuses.append({**base, 'ok': False, 'status': 'document-unavailable',
-                             'errorKind': type(error).__name__, 'reasonCode': code})
+                             'errorKind': type(error).__name__, 'reasonCode': code, 'url': url,
+                             'documentRole': 'filing-index' if metadata.get('_questionFilingIndex') else 'exhibit' if parent else 'primary'})
     statuses.append({**base, 'ok': True, 'status': 'passages-collected' if evidence else 'unresolved',
                      'count': len(evidence), 'documentsAttempted': fetched, 'remainingCandidates': len(candidates),
+                     'filingIndexReads': index_reads,
                      **({'collectionScope': question_collection_scope(tasks, selected_periods,
                          [row.raw_payload.get('reportPeriodEnd', '') for row in evidence])} if required else {})})
     return evidence, statuses

@@ -19,7 +19,8 @@ disposition=experiment이면 이번 questions 중 capability=develop-hypothesis�
 
 def resolution_prompt(packet, history, research):
     from .business_research import business_prompt
-    return reference_instructions(packet) + INSTRUCTIONS + business_prompt(packet, history, research)
+    from .question_answer import instructions
+    return instructions(packet) + reference_instructions(packet) + INSTRUCTIONS + business_prompt(packet, history, research)
 
 
 def resolution_schema(packet, research):
@@ -42,6 +43,10 @@ def resolution_schema(packet, research):
             "reason": {"type": "string", "minLength": 8, "maxLength": 500}})
         item["properties"]["missingRequirements"] = {**array({"type": "string", "minLength": 1, "maxLength": 600}), "maxItems": 8}
         item["required"] += ["judgmentImpact", "missingRequirements"]
+        from . import question_answer
+        if question_answer.enabled(packet):
+            item["properties"]["answerParts"] = question_answer.schema([row["id"] for row in packet.get("facts", [])])
+            item["required"].append("answerParts")
     return schema
 
 
@@ -58,10 +63,13 @@ def validate_resolutions(value, packet, research, result, required=False):
     accepted, seen = [], set()
     from .question_assessment import enabled, validate_impact
     current_policy = enabled(packet)
+    from . import question_answer
     for row in rows:
         fields = {"caseId", "disposition", "targetIndex", "reason", "evidenceIds"}
         if current_policy:
             fields |= {"judgmentImpact", "missingRequirements"}
+            if question_answer.enabled(packet):
+                fields.add("answerParts")
         if not isinstance(row, dict) or set(row) != fields:
             raise ValueError("invalid question resolution fields")
         key, disposition, index = row["caseId"], row["disposition"], row["targetIndex"]
@@ -100,6 +108,11 @@ def validate_resolutions(value, packet, research, result, required=False):
                 raise ValueError("question resolution must preserve unmet original requirements")
             if case.get("capability") == "research" and not set(ids).intersection(scope.get("selectedFactIds", [])):
                 raise ValueError("question resolution requires its own selected evidence")
+            if question_answer.enabled(packet):
+                if case.get("capability") == "research":
+                    question_answer.validate(row["answerParts"], row, reviews[key], scope, known)
+                elif row["answerParts"] != {"confirmed": [], "gaps": []}:
+                    raise ValueError("answer parts belong only to research questions")
         source = {"caseId": key, "revision": case["revision"], "question": case.get("question", ""),
                   "research": deepcopy(case.get("lastResearch", {}))}
         if current_policy:

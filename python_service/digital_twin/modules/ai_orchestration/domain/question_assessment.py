@@ -61,6 +61,9 @@ def assessment(case, job, result, review, resolution, now):
     if not selected.intersection(review["evidenceIds"]):
         raise ValueError("question assessment must cite its own selected source evidence")
     return {"version": VERSION, "status": review["action"] if review["action"] in {"answered", "dismissed"} else "partial",
+        "reviewAction": review["action"],
+        **({"answerParts": deepcopy(resolution["answerParts"]), "answerPartsVersion": packet["questionAnswerPolicy"]}
+           if "answerParts" in resolution else {}),
         "workKey": captured["questionWorkKey"], "questionContract": deepcopy(captured["questionContract"]),
         "answer": review["reason"], "missingRequirements": deepcopy(resolution["missingRequirements"]),
         "sourceIdentity": captured["sourceAnswer"]["sourceIdentity"],

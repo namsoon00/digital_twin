@@ -2029,6 +2029,54 @@ Missing calculations remain an explicit data/model gap. This release connects
 existing valuation capability to central AI; it does not guarantee every company
 has sufficient source material or an approved valuation model.
 
+### Confirmed answer parts and remaining work (2026-10-25)
+
+New question assessments carry `questionAnswerPolicy=question-answer-parts-v1`
+in the frozen input. `questionResolutions.answerParts.confirmed` contains at most
+three bounded answers with citations to usable facts selected for that exact
+question and cited by its review/resolution. `gaps` links each original missing
+requirement once by its array index, with essential/supplementary role, a cause
+and a concrete next action. This avoids copying long requirement prose again.
+Independent `research-assessment-review-v5-answer-parts` checks the answer against
+the original question and sources before persistence. It retains the existing
+quantitative research checks when that policy is enabled.
+
+Essential source identity, units, periods, accounting scope and explicit original
+criteria cannot be waived. Calling a gap supplementary does not permit `answered`
+while an original requirement remains. Partial answers cannot grant investment
+authority or customer delivery. An unread excerpt, inaccessible source or missing
+attachment is not evidence that the company never disclosed the information.
+The focused research planner v2 narrows newly created questions to one factual
+target and period; it never rewrites existing contracts to make them easier to
+complete. Legacy frozen planner inputs and assessments remain readable.
+
+`question-closure-v2` separates answer coverage from execution state. The web
+view shows retained source answers awaiting final review, independently reviewed
+confirmed parts, remaining essential/supplementary items, cause and next action.
+Queue waits, unchanged-material stops, collection blocks, review waits and attempt
+limits have separate labels. Old rows are read as recorded partial answers without
+inventing structured confirmed parts. These read models do not mutate cases,
+reset limits, trigger calls, change notification policy or count partials as final
+answers. A changed display or prompt policy does not renew question material.
+
+`question-passages-v5-event-originals` prioritizes an explicitly requested 8-K/6-K
+before unrelated quarterly reports, preserving the original reporting-period
+filters. For SEC event filings that mention Exhibit 99 but omit a usable attachment link,
+the collector can read the official index in that same issuer/accession directory.
+Index-row exhibit types resolve opaque filenames; all discovered URLs still pass
+the existing official-host and accession checks. Primary, index and attachment
+share the existing three-document transport budget and provider circuit. Index
+contents locate a document but never become answer evidence. Failures retain any
+usable primary passages and record the failed role; they do not claim absence of
+disclosure. Parked questions are not automatically replayed by this change.
+
+Validation covers the frozen read/author/review/assessment path, foreign and
+unusable citations, omitted/duplicated gaps, false completion via supplementary
+classification, source retention, independent execution labels, legacy replay,
+bounded exhibit recovery and failed/unsafe index reads. Frontend checks cover
+escaping and prevent an unverified assessment from replacing a source answer.
+These are execution-contract checks, not measured improvements in answer quality.
+
 ### Execution waits, failed usage and question completion (2026-10-25)
 
 `question-progress-v1` is a read-only operational view for the visible agenda,

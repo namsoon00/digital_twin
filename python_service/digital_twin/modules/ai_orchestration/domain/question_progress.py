@@ -68,13 +68,15 @@ def question_progress(case, tasks, execution, now):
                     "partial": "부분 답변 보존 · 남은 항목 확인 필요", "unavailable": "앞선 조사에서 답변 미확보",
                     "dismissed": "질문 검토 종료"}.get(answer_status, "답변 작성 대기")},
         {"key": "hypothesis", "label": "가설 평가", "status": "recorded" if disposition else "pending",
-         "detail": {"thesis": "사업 가설에 연결", "experiment": "검증 실험 제안", "defer": "평가 보류",
-                    "answer": "질문 답변으로 정리", "dismiss": "검토 종료"}.get(disposition, "평가 기록 확인 필요")},
+         "detail": {"business-thesis": "사업 가설에 연결", "thesis": "사업 가설에 연결", "experiment": "검증 실험 제안", "defer": "평가 보류",
+                    "not-applicable": "질문 답변으로 정리", "answer": "질문 답변으로 정리", "dismiss": "검토 종료"}.get(disposition, "평가 기록 확인 필요")},
         {"key": "judgment", "label": "AI 판단 반영", "status": "recorded" if assessed else "pending",
          "detail": (assessment.get("judgmentImpact") or {}).get("reason", "") if assessed else "검토를 통과한 판단 연결이 아직 없습니다."},
     ]
     from .question_closure import closure
-    return {"closure": closure(case, answer, assessment, assessed, active, wait), "version": "question-progress-v1", "checkedAt": now.isoformat(), "stages": stages,
+    answer_closure = closure(case, answer, assessment, assessed, active, wait)
+    stages[1]["detail"] = answer_closure["answerLabel"]
+    return {"closure": answer_closure, "version": "question-progress-v1", "checkedAt": now.isoformat(), "stages": stages,
         "activeTaskId": active.get("taskId", ""), "wait": wait,
         "publication": deepcopy(judgment.get("publication") or {}) if assessed else {},
         "judgmentTaskId": judgment.get("taskId", "") if assessed else "",

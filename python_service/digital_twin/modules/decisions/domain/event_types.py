@@ -19,3 +19,5 @@ INVESTMENT_DECISION_RECONCILED = "investment.decision_reconciled"
 INVESTMENT_DECISION_CHANGED = "investment.decision_changed"
 
 INVESTMENT_VALIDATION_CHANGED = "investment.validation_changed"
+
+INVESTMENT_STRATEGY_SCENARIO_CHANGED = "investment.strategy_scenario_changed"

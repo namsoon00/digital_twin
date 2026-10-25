@@ -1,4 +1,4 @@
-"""Explain only declared, additive context rules in a paired release replay.
+"""Explain only declared, actionless context migrations in a paired replay.
 
 Original investment predicates, ABox facts, action envelopes and candidate
 qualification must remain identical. Raw comparison failures are retained.
@@ -35,20 +35,29 @@ def declared_composition_additions(baseline, candidate, declaration):
     left = {r["rule_id"]: r for r in baseline["rules"]}
     right = {r["rule_id"]: r for r in candidate["rules"]}
     added = set(right) - set(left)
-    strategy_upgrade = declaration.get("version") == "native-strategy-phase-migration-v1"
+    scenario_upgrade = declaration.get("version") == "native-strategy-scenario-migration-v1"
+    strategy_upgrade = declaration.get("version") == "native-strategy-phase-migration-v1" or scenario_upgrade
+    retired = set(declaration.get("retiredRuleIds") or [])
     if (len(left) != len(baseline["rules"]) or len(right) != len(candidate["rules"])
             or added != set(declaration.get("addedRuleIds") or []) or len(added) != (8 if strategy_upgrade else 3)
-            or any(right.get(k) != v for k, v in left.items())):
+            or (retired and not scenario_upgrade)
+            or any(right.get(k) != ({**v, "enabled": False} if k in retired else v) for k, v in left.items())):
         raise ValueError("existing-rules-changed-or-additions-undeclared")
     if strategy_upgrade:
-        from digital_twin.modules.model_registry.contracts import operational_strategy_rules
+        from digital_twin.modules.model_registry.contracts import operational_strategy_rules, scenario_successor_rules
         binding = declaration.get("sourceDeployment") or {}
         if binding.get("deploymentId") != declaration.get("baselineDeploymentId") or not binding.get("graphStoreBinding"):
             raise ValueError("strategy-source-deployment-unbound")
-        authored = operational_strategy_rules(baseline["rules"], binding)
+        authored = scenario_successor_rules(baseline["rules"]) if scenario_upgrade else operational_strategy_rules(baseline["rules"], binding)
     else:
         authored = composition_rules([GraphInferenceRule.from_dict(r) for r in baseline["rules"]])
     expected = {r.rule_id: (r.to_dict() if strategy_upgrade else GraphInferenceRule.from_dict(r.to_dict()).to_dict()) for r in authored}
+    if scenario_upgrade:
+        predecessors = {r.resolved_claim_contract.strategy_contract["predecessorContractFingerprint"] for r in authored}
+        exact_retired = {rid for rid, row in left.items()
+            if (row.get("claim_contract") or {}).get("strategyContract", {}).get("contractFingerprint") in predecessors}
+        if retired != exact_retired or len(retired) != 8 or any(not left[rid]["enabled"] for rid in retired):
+            raise ValueError("scenario-predecessor-retirement-mismatch")
     if any(right[rid] != expected.get(rid) for rid in added):
         raise ValueError("composition-is-not-the-declared-native-contract")
     for rid in added:
@@ -68,7 +77,11 @@ def declared_composition_additions(baseline, candidate, declaration):
     new_graph = {n["id"]: n for n in candidate["graph"]["entities"]}
     old_edges = {json.dumps(e, sort_keys=True) for e in baseline["graph"]["relations"]}
     new_edges = {json.dumps(e, sort_keys=True) for e in candidate["graph"]["relations"]}
-    if (any(new_graph.get(k) != v for k, v in old_graph.items()) or not old_edges.issubset(new_edges)
+    expected_old_graph = deepcopy(old_graph)
+    for node in expected_old_graph.values():
+        if node["kind"] == "rule" and node["properties"].get("ruleId") in retired:
+            node["properties"]["enabled"] = False
+    if (any(new_graph.get(k) != v for k, v in expected_old_graph.items()) or not old_edges.issubset(new_edges)
             or any(e["source"] in old_graph and e["target"] in old_graph
                    for e in map(json.loads, new_edges - old_edges))):
         raise ValueError("existing-static-ontology-changed")
@@ -110,7 +123,7 @@ def review_composition_upgrade(baseline_job, candidate_job, comparison, baseline
                 raise ValueError("immutable-artifact-unverified")
         baseline, candidate = baseline_record["artifact"], candidate_record["artifact"]
         declaration = candidate.get("compositionUpgradeContract") or {}
-        if (declaration.get("version") not in {"native-composition-migration-v1", "native-strategy-phase-migration-v1"}
+        if (declaration.get("version") not in {"native-composition-migration-v1", "native-strategy-phase-migration-v1", "native-strategy-scenario-migration-v1"}
                 or declaration.get("baselineDeploymentId") != baseline_job.get("deploymentId")
                 or declaration.get("baselineArtifactFingerprint") != baseline_record["artifactFingerprint"]
                 or declaration.get("baselineRuleboxFingerprint") != baseline["ruleboxFingerprint"]
@@ -119,7 +132,7 @@ def review_composition_upgrade(baseline_job, candidate_job, comparison, baseline
         added = declared_composition_additions(baseline, candidate, declaration)
         from digital_twin.modules.reasoning.domain.reasoning_shadow import compare_engine_outcomes, independent_reasoning_outcome_packet
         original = [independent_reasoning_outcome_packet(j) for j in (baseline_job, candidate_job)]
-        normalized = [_without_context_references(p, added) for p in original]
+        normalized = [_without_context_references(p, added | set(declaration.get("retiredRuleIds") or [])) for p in original]
         if compare_engine_outcomes(*normalized, [source]).to_dict()["status"] != "equivalent":
             raise ValueError("investment-actions-or-original-evidence-changed")
         matched = added & {rid for p in original[1].get("projections") or [] for rid in p.get("nativeMatchedRuleIds") or []}

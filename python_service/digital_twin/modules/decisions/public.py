@@ -35,6 +35,8 @@ _EXPORTS = {'refresh_insight_delivery_comparison': ('digital_twin.modules.decisi
  'NotificationAIValidatedGateEnricher': ('digital_twin.modules.decisions.application.notification_ai_validated_gate',
                                          'NotificationAIValidatedGateEnricher')}
 
+_EXPORTS["StrategyScenarioService"] = ("digital_twin.modules.decisions.application.strategy_scenario_service", "StrategyScenarioService")
+
 __all__ = list(_EXPORTS)
 
 

@@ -147,8 +147,10 @@ class V2GraphDecisionCandidateBuilder:
         settings: Mapping[str, object],
         monitor_store,
         delivery_history_store=None,
+        strategy_scenario_service=None,
     ):
         self.settings = dict(settings or {})
+        self.strategy_scenario_service = strategy_scenario_service
         self.cadence = V2NotificationCadence(
             self.settings,
             monitor_store,
@@ -417,6 +419,12 @@ class V2GraphDecisionCandidateBuilder:
                 if not self._requested(request, symbol):
                     continue
                 synthesis = decision_synthesis_from_relation_context(account_id, relation)
+                if self.strategy_scenario_service is not None:
+                    scenarios = self.strategy_scenario_service.observe(
+                        synthesis.rulebox_judgment, getattr(snapshot, "generated_at", ""))
+                    if scenarios:
+                        synthesis.rulebox_judgment["strategyScenarios"] = scenarios
+                        relation["strategyScenarios"] = scenarios
                 syntheses.append(synthesis)
                 failure = _notification_contract_failure(relation, synthesis)
                 if failure:

@@ -167,6 +167,11 @@ def build_v2_reasoning_engine(
     ai_insight_handoff_service = reasoning_delivery.ai_insight_handoff_service
     insight_dispatch_service = reasoning_delivery.insight_dispatch_service
 
+    from digital_twin.modules.decisions.public import StrategyScenarioService
+    from digital_twin.modules.decisions.infrastructure.mysql_strategy_scenarios import MySQLStrategyScenarioStore
+    strategy_scenarios = StrategyScenarioService(MySQLStrategyScenarioStore(store_settings),
+        descriptor.deployment_id, candidate_rulebox.get("rules") or [])
+
     return V2ReasoningEngine(
         descriptor=descriptor,
         input_assembler=IndependentReasoningInputAssembler(
@@ -190,6 +195,7 @@ def build_v2_reasoning_engine(
             candidate_settings,
             monitor_store,
             delivery_history_store=stores.notification_job_store(store_settings),
+            strategy_scenario_service=strategy_scenarios,
         ),
         cycle_recorder=stores.monitoring_cycle_recorder(
             store_settings,

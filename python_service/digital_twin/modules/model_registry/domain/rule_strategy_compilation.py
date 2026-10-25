@@ -6,11 +6,12 @@ is introduced here. Missing phases mean unknown, never a cancellation or exit.
 from copy import deepcopy
 from dataclasses import replace
 
-from .rule_strategy_contract import VERSION, LIVE_VERSION, PHASES, parse_strategy_contract, strategy_from_design
+from .rule_strategy_contract import VERSION, LIVE_VERSION, SCENARIO_VERSION, PHASES, parse_strategy_contract, strategy_from_design
 
 
 def phase_rule_id(contract, phase):
-    return "graph.strategy." + contract["contractFingerprint"][:24] + "." + phase + (".v2" if contract["version"] == LIVE_VERSION else ".v1")
+    suffix = {VERSION: ".v1", LIVE_VERSION: ".v2", SCENARIO_VERSION: ".v3"}[contract["version"]]
+    return "graph.strategy." + contract["contractFingerprint"][:24] + "." + phase + suffix
 
 
 def phase_conditions(contract, phase):
@@ -20,7 +21,7 @@ def phase_conditions(contract, phase):
     # TRADED_IN relation binds the market's stable identity without schema edits.
     result = [GraphRuleCondition("strategy-market", "relation", "전략 대상 시장",
               relation_type="TRADED_IN", target_kind="market",
-              hypothesis_scope="market" if contract["version"] == LIVE_VERSION else "",
+              hypothesis_scope="market" if contract["version"] in {LIVE_VERSION, SCENARIO_VERSION} else "",
               target_property_filters={"entityId": entity_id("market", contract["market"])})]
     for index, rid in enumerate(contract["phases"][phase]):
         source = deepcopy(contract["models"][rid]["condition"])
@@ -49,7 +50,7 @@ def compile_strategy_rules(contract):
                     "sourceModelRuleIds": list(contract["phases"][phase]),
                     "maximumHoldingSessions": contract["maximumHoldingSessions"],
                     "signalValiditySeconds": contract["signalValiditySeconds"]}
-        live = contract["version"] == LIVE_VERSION
+        live = contract["version"] in {LIVE_VERSION, SCENARIO_VERSION}
         if live:
             response.update(strategyLabel=contract["label"], nextCheck={
                 "setup": "가격 회복과 장중 상승 전환이 함께 확인되는지 확인합니다.",

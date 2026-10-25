@@ -177,7 +177,13 @@ def rulebox_decision_brief(context):
             "executionEligible": h.get("hypothesisId") in execution_hypotheses}
             for h in hypotheses if entry["ruleId"] in strings(h.get("supportingRuleIds"))]
         excluded[(entry["ruleId"], entry["action"])] = entry
-    if not (candidates or restrictions or checks or excluded or management):
+    saved = mapping(case.get("ruleboxJudgment")) or mapping(mapping(case.get("synthesis")).get("rulebox_judgment"))
+    saved_verified = (saved.get("version") == "rulebox-judgment-v1" and saved.get("authority") == "typedb-materialized-synthesis"
+        and all(saved.get(k) == identity[k] for k in ("accountId", "symbol", "worldId", "inferenceGenerationId", "sourceAboxSnapshotId")))
+    # A strategy observation intentionally grants no market action. Its saved
+    # native history must survive even when every action list is empty.
+    if not (candidates or restrictions or checks or excluded or management
+            or (saved_verified and saved.get("strategyScenarios"))):
         return {}
     candidate_actions = strings([r["action"] for r in candidates])
     restricted_actions = strings([r["action"] for r in restrictions])
@@ -194,9 +200,7 @@ def rulebox_decision_brief(context):
             "executionDisposition": case.get("executionDisposition") or "",
             "validity": "same-account-subject-generation-abox"}
     from digital_twin.modules.decisions.domain.investment_reasoning.rulebox_judgment import judgment_from_frozen_brief
-    saved = mapping(case.get("ruleboxJudgment")) or mapping(mapping(case.get("synthesis")).get("rulebox_judgment"))
-    if (saved.get("version") == "rulebox-judgment-v1" and saved.get("authority") == "typedb-materialized-synthesis"
-            and all(saved.get(k) == identity[k] for k in ("accountId", "symbol", "worldId", "inferenceGenerationId", "sourceAboxSnapshotId"))):
+    if saved_verified:
         result["judgment"] = deepcopy(saved)
     else:
         result["judgment"] = judgment_from_frozen_brief(result, relation)

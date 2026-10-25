@@ -13,13 +13,17 @@ def strategy_phase_events(current, previous):
     if not current.get("proofIdentityVerified") or not all(scope.values()):
         return []
     groups = {}
+    successors = {(r.get("claimContract") or {}).get("strategyContract", {}).get("predecessorContractFingerprint")
+                  for r in rows(current.get("rules"))
+                  if (r.get("claimContract") or {}).get("strategyContract", {}).get("version") == "rule-strategy-contract-v3"}
     native_rules = {r.get("id"): r for r in rows(current.get("rules")) if r.get("nativeProof")}
     for rule in rows(current.get("rules")):
         claim = rule.get("claimContract") or {}
         contract = claim.get("strategyContract") or {}
         phase = claim.get("strategyPhase")
         intent = rule_notification_intent(claim)
-        if (contract.get("version") != "rule-strategy-contract-v2" or contract.get("mode") != "live-observation"
+        if (contract.get("version") not in {"rule-strategy-contract-v2", "rule-strategy-contract-v3"}
+                or contract.get("contractFingerprint") in successors or contract.get("mode") != "live-observation"
                 or contract.get("market") != current.get("market") or phase not in PHASE_LABELS
                 or not rule.get("nativeProof") or rule.get("matched") is not True
                 or not intent or intent.get("ruleId") != rule.get("id") or intent.get("purpose") != "context-evidence"):
@@ -56,6 +60,7 @@ def strategy_phase_events(current, previous):
         previous.get("receiptJobId") and previous.get("deliveredAt")
         and all(previous.get(k) == v for k, v in scope.items())) else {}
     result = []
+    saved_scenarios = ((current.get("decisionBrief") or {}).get("judgment") or {}).get("strategyScenarios") or []
     for key, group in groups.items():
         phase_rules, contract = group["rules"], group["contract"]
         phases = [p for p in PHASE_LABELS if p in phase_rules]
@@ -64,13 +69,27 @@ def strategy_phase_events(current, previous):
         added = [p for p in phases if p not in prior]
         # Missing/stale phase evidence is unknown. Its disappearance alone
         # cannot withdraw a prior cancellation or announce a new entry.
+        scenario = None
+        if contract["version"] == "rule-strategy-contract-v3":
+            scenario = next((s for s in saved_scenarios if s.get("version") == "strategy-scenario-observation-v1"
+                and s.get("contractFingerprint") == contract["contractFingerprint"]
+                and s.get("status") == "accepted" and s.get("notifyEligible") is True
+                and all(s.get(k) == current.get(k) for k in (*scope, "inferenceGenerationId", "sourceAboxSnapshotId"))
+                and set(s.get("confirmedPhases") or []) == set(phases)), None)
+            # The successor never falls back to delivery-derived sequencing.
+            if not scenario or not (scenario.get("transition") or {}).get("transitionId"):
+                continue
+            added = phases
         if not added:
             continue
-        signature = fingerprint({"contract": contract["contractFingerprint"], "phases": phases})
+        signature = (fingerprint(scenario["transition"]["transitionId"]) if scenario else
+                     fingerprint({"contract": contract["contractFingerprint"], "phases": phases}))
+        if scenario and old.get("fingerprint") == signature:
+            continue
         conditions = [{**deepcopy(c), "ruleId": rule["id"]}
                       for rule in group["proofRules"].values() for c in rule["conditions"]]
         next_checks = list(dict.fromkeys(text for rule in phase_rules.values() for text in rule.get("nextChecks") or []))
-        result.append({"version": VERSION, **scope,
+        event = {"version": VERSION, **scope,
             "eventId": "rule-strategy:" + fingerprint([key, signature])[:24], "intentKey": key,
             "intent": deepcopy(group["intent"]), "purpose": "context-evidence", "changeKind": "observed",
             "strategyId": contract["strategyId"], "strategyLabel": contract["label"],
@@ -87,7 +106,14 @@ def strategy_phase_events(current, previous):
             "nextCheck": {"condition": " ".join(next_checks), "nextChecks": next_checks,
                           "conditions": conditions, "trackingStatus": "strategy-phase-reevaluation", "tracking": []},
             "parentJobId": old.get("rootJobId") or "", "fingerprint": signature,
-            "eligible": True, "reasonCode": "verified-strategy-phase-change"})
+            "eligible": True, "reasonCode": "verified-strategy-phase-change"}
+        if scenario:
+            event.update(scenarioTransition=deepcopy(scenario["transition"]),
+                scenarioObservationId=scenario["observationId"], scenarioKey=scenario["scenarioKey"],
+                scenarioState=scenario["state"], contractFingerprint=contract["contractFingerprint"],
+                observationGapSeconds=scenario.get("observationGapSeconds", 0),
+                reasonCode="verified-strategy-scenario-change")
+        result.append(event)
     return result
 
 
@@ -96,6 +122,8 @@ def strategy_summary(packet, market_text, measurements):
     if not events:
         return None
     event = events[0]
+    if event.get("scenarioTransition"):
+        return scenario_summary(event, packet, market_text, measurements)
     labels = " · ".join(PHASE_LABELS[p] for p in event["addedStrategyPhases"])
     lead = ("진입 조건과 취소·종료 조건이 동시에 확인됐습니다." if event["conflictingConditions"]
             else labels + " 조건이 새로 확인됐습니다.")
@@ -117,3 +145,26 @@ def strategy_summary(packet, market_text, measurements):
                          ("decision-impact", "근거 수치", measurements.splitlines()[:4]),
                          ("current-snapshot", "현재", [market_text]),
                          ("next-check-contract", "다음 판단", [event["nextCheck"]["condition"], together.strip()])]}
+
+
+def scenario_summary(event, packet, market_text, measurements):
+    change = event["scenarioTransition"]
+    sequence = change["previousLabel"] + " → " + change["currentLabel"]
+    if event.get("observationGapSeconds", 0) > event["signalValiditySeconds"]:
+        sequence += ". 확인 사이에 공백이 있어 조건이 계속 유지됐는지는 알 수 없습니다."
+    brief = ((packet.get("current") or {}).get("decisionBrief") or {})
+    policies = ((brief.get("judgment") or {}).get("managementDecision") or {}).get("responses") or []
+    boundary = " ".join(r.get("label", "") for r in policies[:2])
+    if change["to"] == "reentry-review":
+        next_check = "이전 취소·종료 조건의 해제와 현재 회복 조건의 유지를 함께 확인해야 합니다."
+    else:
+        next_check = event["nextCheck"]["condition"]
+    claims = list(dict.fromkeys(s.split(":", 1)[0].replace("->", "→")
+        for phase in event["strategyPhases"] for s in event["phaseModelClaims"][phase]))
+    return {"version": "strategy-scenario-notice-v1", "title": change["currentLabel"], "lead": change["meaning"],
+        "sections": [("notification-purpose", "어떤 변화인가요", [sequence]),
+                     ("decision-basis", "함께 확인한 조건", claims[:3]),
+                     ("decision-impact", "확인된 수치", measurements.splitlines()[:3]),
+                     ("current-snapshot", "현재", [market_text]),
+                     ("next-check-contract", "다음 판단", [next_check,
+                        (boundary + " 조건의 연결을 확인한 것이며 매매 성과는 검증 중입니다.").strip()])]}

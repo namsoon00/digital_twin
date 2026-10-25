@@ -1,7 +1,7 @@
 """Frozen strategies owned by RuleBox, never by alert wording.
 
-V1 is research only; V2 permits operational phase notices. Neither claims
-empirical trading qualification or grants automatic order authority.
+V1 is research only; V2 permits operational phase notices and V3 connects
+their observation history. None grants trading qualification or order authority.
 """
 from copy import deepcopy
 import hashlib
@@ -14,6 +14,8 @@ VERSION = "rule-strategy-contract-v1"
 COMPILER_VERSION = "native-strategy-phase-v1"
 LIVE_VERSION = "rule-strategy-contract-v2"
 LIVE_COMPILER_VERSION = "native-strategy-phase-v2"
+SCENARIO_VERSION = "rule-strategy-contract-v3"
+SCENARIO_COMPILER_VERSION = "native-strategy-phase-v3"
 # graph_scoring supplies source age and session only from these family scorers.
 # Contract-only corporate/event/cross-asset evidence has no intraday source clock.
 INTRADAY_CLOCK_RELEASES = {DEFAULT_PRICE_SIGNAL_RELEASE_ID, DEFAULT_FLOW_SIGNAL_RELEASE_ID}
@@ -42,13 +44,23 @@ def strategy_contract_violations(contract):
     expected = {"version", "compilerVersion", "strategyId", "label", "mode", "sourceRuleboxFingerprint", "sourceDeployment", "market",
                 "session", "maximumHoldingSessions", "signalValiditySeconds", "phases", "models",
                 "validationRequirements", "missingDataPolicy", "costPolicy", "contractFingerprint"}
+    if isinstance(contract, dict) and contract.get("version") == SCENARIO_VERSION:
+        expected |= {"scenarioContract", "predecessorContractFingerprint"}
     if not isinstance(contract, dict) or set(contract) != expected:
         return ["complete strategy fields are required"]
     errors = []
     versions = ((VERSION, COMPILER_VERSION, "research-only"),
-                (LIVE_VERSION, LIVE_COMPILER_VERSION, "live-observation"))
+                (LIVE_VERSION, LIVE_COMPILER_VERSION, "live-observation"),
+                (SCENARIO_VERSION, SCENARIO_COMPILER_VERSION, "live-observation"))
     if (contract["version"], contract["compilerVersion"], contract["mode"]) not in versions:
         errors.append("unsupported strategy version, compiler or operating mode")
+    if contract["version"] == SCENARIO_VERSION:
+        from .strategy_scenario_contract import scenario_contract_valid
+        if not scenario_contract_valid(contract["scenarioContract"]):
+            errors.append("unreviewed scenario transition contract")
+        predecessor = contract["predecessorContractFingerprint"]
+        if not isinstance(predecessor, str) or len(predecessor) != 64 or any(c not in "0123456789abcdef" for c in predecessor):
+            errors.append("invalid predecessor strategy fingerprint")
     for key in ("strategyId", "label", "sourceRuleboxFingerprint"):
         if not isinstance(contract[key], str) or not 1 <= len(contract[key]) <= 240:
             errors.append("invalid " + key)

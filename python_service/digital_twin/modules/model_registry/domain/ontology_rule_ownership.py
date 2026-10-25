@@ -280,13 +280,13 @@ def validate_rule_ownership(rule_ids: Iterable[object], governed_rules=()) -> Di
     # Content-addressed strategy IDs cannot be enumerated in the static catalog.
     # Admit only complete, frozen native contracts; a matching name grants nothing.
     from .rule_strategy_compilation import strategy_rule_violations
-    from .rule_strategy_contract import LIVE_VERSION, parse_strategy_contract
+    from .rule_strategy_contract import LIVE_VERSION, SCENARIO_VERSION, parse_strategy_contract
     strategies = set()
     for rule in governed_rules:
         try:
             claim = rule.resolved_claim_contract
             contract = parse_strategy_contract(claim.strategy_contract)
-            if (contract["version"] == LIVE_VERSION and contract["mode"] == "live-observation"
+            if (contract["version"] in {LIVE_VERSION, SCENARIO_VERSION} and contract["mode"] == "live-observation"
                     and claim.claim_type == "causal-context" and claim.decision_authority == "reference-only"
                     and not strategy_rule_violations(rule)):
                 strategies.add(rule.rule_id)

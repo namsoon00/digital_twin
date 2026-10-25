@@ -421,7 +421,8 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # Six computation parity regressions preserve digests, source lifetime,
         # quality output and endpoint validation while bounding repeated work.
         # Six work-order/closure/native-evidence regressions.
-        self.assertLessEqual(total, 2632)
+        # Fifteen authored scenario, source-order, receipt, publication, quiet-candidate and atomic history contracts.
+        self.assertLessEqual(total, 2647)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

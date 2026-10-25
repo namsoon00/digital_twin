@@ -20,7 +20,7 @@ from digital_twin.modules.reasoning.infrastructure.typeql.literals import typedb
 from digital_twin.modules.reasoning.infrastructure.typeql.storage_schema import typedb_target_attribute, typedb_relation_storage_type
 
 
-def run():
+def run(contract_override=None):
     load_local_env()
     operational = investment_strategy_proposal_read_service().ontology_repository
     database = "orbit_strategy_smoke_" + uuid.uuid4().hex[:12]
@@ -32,7 +32,7 @@ def run():
         raise RuntimeError("TypeDB driver unavailable")
     transaction_type = imported[0][-1]
     from digital_twin.modules.model_registry.contracts import default_graph_inference_rules
-    contract = next(r.resolved_claim_contract.strategy_contract for r in default_graph_inference_rules()
+    contract = contract_override or next(r.resolved_claim_contract.strategy_contract for r in default_graph_inference_rules()
                     if r.resolved_claim_contract.strategy_contract and r.resolved_claim_contract.strategy_contract['market'] == 'KR')
     rules = compile_strategy_rules(contract)
     models = {rid: next(c for c in r.conditions if c.relation_type == "HAS_MODEL_SIGNAL"
@@ -61,6 +61,8 @@ def run():
                  "missing-entry-member": [1, 0, 1, 1], "wrong-market": [0, 0, 0, 0],
                  "persisted-source": [1, 1, 1, 1], "persisted-after-close": [0, 0, 0, 0],
                  "persisted-missing-clock": [0, 0, 0, 0]}
+    for i, phase in enumerate(("setup", "entry", "invalidation", "exit")):
+        scenarios["only-" + phase] = [int(j == i) for j in range(4)]
     # Session/age used to be injected from the rule itself, hiding a real
     # ingestion defect. Exercise Position -> persisted row -> model signal.
     source_packets = {
@@ -97,6 +99,8 @@ def run():
             for index, (rid, condition) in enumerate(models.items()):
                 rel_id = scenario + ":relation:" + str(index)
                 relation_ids[rid] = rel_id
+                if scenario.startswith("only-") and rid not in contract["phases"][scenario[5:]]:
+                    continue
                 if scenario == "missing-entry-member" and rid == contract["phases"]["entry"][0]:
                     continue
                 values = {}

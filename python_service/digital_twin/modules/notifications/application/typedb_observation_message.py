@@ -1018,6 +1018,7 @@ def typedb_observation_telegram_message(
         context["ruleboxNotificationSummary"] = compact
         normalized = normalized_customer_investment_document(replace(
             document, layout="compact-rulebox-v1", role_label="", target="", lead=compact["lead"], links=(),
+            headline=("🔗 " + compact["title"] + (" · " + target_name if target_name else "")) if compact.get("title") else document.headline,
             sections=tuple(CustomerInvestmentSection(key, title, tuple(rows)) for key, title, rows in compact["sections"]),
         ))
     context["customerInvestmentDocument"] = normalized.to_dict()

@@ -81,6 +81,11 @@ def _assemble(identity, management, candidates, restrictions, relation, checks, 
     strategies = native_strategy_observations(identity, relation)
     if strategies:
         result["strategyObservations"] = strategies
+    scenarios = [deepcopy(s) for s in relation.get("strategyScenarios") or []
+                 if s.get("version") == "strategy-scenario-observation-v1"
+                 and all(s.get(k) == identity[k] for k in SCOPE)]
+    if scenarios:
+        result["strategyScenarios"] = scenarios
     result["sourceRuleIds"] = sorted(set(result["sourceRuleIds"]) |
         {r["ruleId"] for r in composition["evidenceGroups"]} |
         {r["ruleId"] for r in composition["compositions"]})

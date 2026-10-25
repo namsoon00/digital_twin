@@ -2813,6 +2813,23 @@ MYSQL_SCHEMA = [
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     """,
     """
+    CREATE TABLE IF NOT EXISTS investment_strategy_scenario_heads (
+        scenario_key VARCHAR(96) PRIMARY KEY,
+        payload_json LONGTEXT NOT NULL,
+        updated_at VARCHAR(40) NOT NULL
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS investment_strategy_scenario_observations (
+        observation_id VARCHAR(96) PRIMARY KEY,
+        scenario_key VARCHAR(96) NOT NULL,
+        source_observed_at VARCHAR(40) NOT NULL,
+        payload_json LONGTEXT NOT NULL,
+        created_at VARCHAR(40) NOT NULL,
+        KEY idx_strategy_scenario_history (scenario_key, source_observed_at)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
+    """
     CREATE TABLE IF NOT EXISTS investment_hypothesis_lifecycle_states (
         lifecycle_key VARCHAR(255) PRIMARY KEY,
         lifecycle_id VARCHAR(191) NOT NULL DEFAULT '',

@@ -1,4 +1,4 @@
-import { questionAssessmentView, questionPerformanceView } from "./modules/research/question-assessment.mjs?v=af06227d66015e3b";
+import { questionAssessmentView, questionPerformanceView } from "./modules/research/question-assessment.mjs?v=23d0b6a90f317bbe";
 
 const $ = (id) => document.getElementById(id);
 const escape = (value) => String(value ?? "").replace(/[&<>"']/g, (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
@@ -81,8 +81,8 @@ function brainView(brain = {}) {
     const origin = row.origin || {};
     return `<div class="panel brain-card"><header><h3>${escape(subject)} · ${escape(feedback ? categoryLabels[row.category] : "지속 질문")}</h3><span>${escape(brainLabels[row.status] || row.status)}</span></header>
       <p><strong>${escape(feedback ? row.problem : row.question)}</strong></p>
-      ${researchAnswerView({...row.lastResearch?.result, documentaryAnswer:row.latestSourceAnswer || row.lastResearch?.result?.documentaryAnswer})}
       ${researchWorkView(row)}
+      ${row.workflow ? '<details><summary>자료 수집 당시의 답변과 실행 기록</summary>' : ''}${researchAnswerView({...row.lastResearch?.result, documentaryAnswer:row.latestSourceAnswer || row.lastResearch?.result?.documentaryAnswer})}${row.workflow ? '</details>' : ''}
       ${feedback ? `<p>${escape(row.proposal)}</p><p class="muted">개선 확인 기준: ${escape(row.verification)}</p>` : `<p>${escape(row.reason)}</p><p class="muted">완료 기준: ${escape(row.completionCriterion)}<br>다음 확인 ${escape(date(row.nextCheckAt))} · 연결된 조사 ${escape(row.researchAttempts || 0)}회</p>`}
       ${row.hypothesisResolution ? `<p><strong>가설로 이어진 판단: ${escape(({"business-thesis":"사업 가설 추적",experiment:"격리 실험 요청",defer:"추가 확인 후 판단","not-applicable":"가설 개발 대상 아님"})[row.hypothesisResolution.disposition] || "검토 필요")}</strong><br>${escape(row.hypothesisResolution.reason || "원래 개발 요청과 연결된 진행 상태를 확인합니다.")}</p>${row.hypothesisResolution.state === "deferred-daily-budget" ? '<p class="muted">오늘 먼저 접수된 다른 질문이 있어 이 질문의 실험 요청은 보류됐습니다.</p>' : ''}` : ''}
       ${row.developmentProgress ? `<p class="muted">연결된 개발 결과: ${escape(developmentLabels[row.developmentProgress.resultStatus || row.developmentProgress.status] || row.developmentProgress.resultStatus || row.developmentProgress.status)}</p>${(row.developmentProgress.cases || []).map(item => `<p>${escape(developmentLabels[item.status] || item.status)}${item.blockedReason ? ' · ' + escape(item.blockedReason) : ''}${item.dataShapeErrors?.length ? '<br>이전 인과경로 저장 형식에 오류가 있어 새 근거로 재검토가 필요합니다.' : ''}</p>`).join('')}<p class="muted">후보 생성과 실험 진행은 가설이 검증됐다는 뜻이 아닙니다.</p>` : ''}

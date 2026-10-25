@@ -356,10 +356,20 @@ class QuestionCollectionStorageTests(unittest.TestCase):
             completed = {"status": "research-planned", "executionInputId": input_id,
                          "researchPlan": work.validate_plan(raw, envelope)}
             self.assertFalse(fixture.control.complete({**task, "leaseToken": "lost"}, completed, []))
-            before = next(x for x in fixture.brain.status()["cases"] if x["caseId"] == source["brainCaseId"])
+
+            def stored_case_and_events():
+                # status() adds a new workflow.checkedAt on every read. Verify
+                # rollback against durable state and the full event history.
+                with fixture.brain.connect() as connection:
+                    case = fixture.brain.read(connection, source["brainCaseId"], source["accountId"], source["symbol"])
+                    events = connection.execute("SELECT payload_json FROM ai_brain_case_events WHERE case_id=%s ORDER BY event_id",
+                                                (source["brainCaseId"],)).fetchall()
+                    return {"case": case, "events": events}
+
+            before = stored_case_and_events()
             with patch.object(fixture.brain, "save", side_effect=RuntimeError("rollback after source enqueue")):
                 with self.assertRaises(RuntimeError): fixture.control.complete(task, completed, [])
-            self.assertEqual(before, next(x for x in fixture.brain.status()["cases"] if x["caseId"] == source["brainCaseId"]))
+            self.assertEqual(before, stored_case_and_events())
             self.assertTrue(fixture.control.complete(task, completed, []))
             self.assertFalse(fixture.control.complete(task, completed, []))
             queued = fixture.control.claim()

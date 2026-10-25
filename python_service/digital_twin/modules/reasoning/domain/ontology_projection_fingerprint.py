@@ -1,5 +1,6 @@
 import hashlib
 import json
+from functools import lru_cache
 from typing import Dict
 
 from digital_twin.modules.reasoning.domain.ontology_contracts import PortfolioOntology
@@ -164,6 +165,12 @@ def stable_value(value: object):
     return value
 
 
+@lru_cache(maxsize=4096)
+def _normalized_lifecycle_key(text: str) -> str:
+    # Cache vocabulary normalization only, never an observation or policy.
+    return "".join(character for character in text.lower() if character.isalnum())
+
+
 def is_volatile_lifecycle_key(key: object) -> bool:
     """Return whether a provider/runtime field is observation provenance.
 
@@ -176,7 +183,7 @@ def is_volatile_lifecycle_key(key: object) -> bool:
     text = str(key or "").strip()
     if text in VOLATILE_LIFECYCLE_KEYS:
         return True
-    normalized = "".join(character for character in text.lower() if character.isalnum())
+    normalized = _normalized_lifecycle_key(text)
     return normalized in _NORMALIZED_VOLATILE_LIFECYCLE_KEYS
 
 

@@ -1,5 +1,64 @@
 # Reasoning Input Latency
 
+## Reduce graph rebuild and quality-record computation (2026-10-25)
+
+Profiling a frozen operational source found repeated JSON hashing, field-name
+normalization and research-event parsing during complete graph construction.
+Quality recording also rendered the complete RuleBox/InferenceBox/AI presentation
+only to read its constant prompt version. Validation scanned every entity twice
+for each relation endpoint.
+
+Field-name normalization now uses bounded 4,096-entry vocabulary caches; policy
+membership and observed values are always evaluated anew. Semantic groups that
+contain the same immutable assertion objects share their digest only during one
+scope calculation. The exact spaced-JSON sort, compact-JSON hash, duplicate
+multiplicity and persisted scope identities remain unchanged. Overlapping temporal
+windows parse each exact research source once per subject build. No market value,
+outcome, judgement or parsed research result is cached between source builds.
+
+Quality records read the existing prompt-version constant directly and retain
+the complete validation report. Endpoint validation builds one entity lookup,
+preserving first-match behavior even for duplicate IDs and all missing/wrong-type
+endpoint errors. Quality recording remains synchronous and auditable; this does
+not move required records into an unprotected background thread.
+
+The complete-source repair remains mandatory when a retained relation's endpoint
+disappears from a partial source. Avoiding that rebuild requires a separately
+proven completeness/deletion contract. This change reduces the cost of that
+rebuild without granting partial evidence deletion authority or bypassing native
+rules, freshness, lease, generation or delivery checks. Shared-world preparation,
+native writes and waiting for another execution remain separate latency sources.
+
+`test_projection_computation_parity` covers exact persisted digests, local cache
+lifetime, bounded vocabulary caches, live policy membership, quality output,
+duplicate/missing endpoint validation and overlapping research windows. Existing
+fact-slot, ABox lifecycle, preflight and logical-input regressions also apply.
+Historical measurements use the same frozen source, runtime context and release
+artifact against commit `361ff8206`, with graph caches disabled. They do not
+replay current market data into old source clocks or send investment alerts.
+
+The frozen source at `2026-10-24T08:05:20.480934Z` produced 4,887 entities and
+9,939 relations. Six fresh-process constructions (three per revision) produced
+exactly equal complete graph and persistence payloads. Local median construction
+time fell from **24.121s to 19.489s** (19.2%). Six quality calculations per revision
+produced exactly equal records, including sample IDs and validation issues;
+median calculation fell from **6.398s to 0.197s**. These measurements exclude
+native execution, database writes, queue waits and notification transport; they
+are component measurements on one captured source, not an end-to-end SLO.
+
+Both revisions also replayed that source through actual TypeDB in separate
+temporary databases restored from the same release artifact. Both completed
+native inference with aligned generations and the same source manifest, five
+executed native rules and three portfolio rule/subject matches. All five subject
+input/evidence maps and the complete quality records matched exactly; MarketWorld
+and KnowledgeWorld material fingerprints also matched. Complete native match
+payloads and both shared-world payloads were exactly equal. This includes shared-world
+preparation/serialization and quality calculation, using recording sinks instead
+of operational MySQL writes or notifications. Both temporary databases were
+deleted. Native runs overlapped regression checks/local workers, so their elapsed
+times are audit data, not a controlled latency comparison. This source has no
+stock entry/exit match and establishes computational parity, not trading accuracy.
+
 ## Share execution for complete sibling source shards (2026-10-24)
 
 The queue and runner can execute complete sibling shards from one verified

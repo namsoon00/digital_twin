@@ -51,7 +51,12 @@ def _entity_classes(properties: Dict[str, object]) -> List[str]:
 
 def validate_ontology(graph: PortfolioOntology) -> OntologyValidationReport:
     issues: List[OntologyValidationIssue] = []
-    entity_ids = {item.entity_id for item in graph.entities or []}
+    # Preserve the former first-match lookup even for malformed duplicate IDs.
+    # Endpoint checks must not rescan the complete ABox for every relation.
+    entities_by_id = {}
+    for item in graph.entities or []:
+        entities_by_id.setdefault(item.entity_id, item)
+    entity_ids = set(entities_by_id)
     required_lifecycle_fields = ["accountId", "aboxSnapshotId", "tboxVersion"]
     worldview = dict(getattr(graph, "worldview", {}) or {})
     scoped_manifest = str(worldview.get("scopedAboxManifestVersion") or "").strip()
@@ -128,8 +133,8 @@ def validate_ontology(graph: PortfolioOntology) -> OntologyValidationReport:
             ))
             continue
         expected_source, expected_target = relation_endpoint_contract(relation.relation_type)
-        source_entity = next((item for item in graph.entities or [] if item.entity_id == relation.source), None)
-        target_entity = next((item for item in graph.entities or [] if item.entity_id == relation.target), None)
+        source_entity = entities_by_id.get(relation.source)
+        target_entity = entities_by_id.get(relation.target)
         # Only enforce a contract when both endpoints carry enough semantic
         # information. Legacy/imported rows can still be loaded and receive a
         # missing-class warning above, while a typed ABox cannot connect a

@@ -12,6 +12,7 @@ import json
 import re
 from collections import defaultdict
 from copy import deepcopy
+from functools import lru_cache
 from typing import Dict, Iterable, List, Mapping, MutableMapping, Set, Tuple
 
 from digital_twin.modules.reasoning.domain.abox_lifecycle import ABoxChangeSet, finalize_manifest_patch_plan
@@ -944,8 +945,14 @@ def _scope_fragment_payloads(
     }
 
 
+@lru_cache(maxsize=4096)
+def _normalized_semantic_field(text: str) -> str:
+    # Bound vocabulary work only; values and policy membership remain live.
+    return re.sub(r"[^a-z0-9]", "", text.lower())
+
+
 def _semantic_property_family(field: object, fallback_family: object) -> str:
-    normalized = re.sub(r"[^a-z0-9]", "", _clean(field).lower())
+    normalized = _normalized_semantic_field(_clean(field))
     if normalized in _QUALITY_TIMESTAMP_FIELDS:
         # Raw observation clocks are intentionally excluded from a scope
         # fingerprint. Freshness/data-state transitions remain material via
@@ -985,9 +992,9 @@ def _semantic_properties(values: Mapping[str, object]) -> Dict[str, object]:
     return {
         str(key): stable_value(value)
         for key, value in dict(values or {}).items()
-        if re.sub(r"[^a-z0-9]", "", str(key or "").lower()) not in _GENERATED_SCOPE_PROPERTY_KEYS
-        and re.sub(r"[^a-z0-9]", "", str(key or "").lower()) not in _IMMATERIAL_OBSERVATION_PROPERTY_KEYS
-        and re.sub(r"[^a-z0-9]", "", str(key or "").lower()) not in _SEMANTIC_METADATA_FIELDS
+        if _normalized_semantic_field(str(key or "")) not in _GENERATED_SCOPE_PROPERTY_KEYS
+        and _normalized_semantic_field(str(key or "")) not in _IMMATERIAL_OBSERVATION_PROPERTY_KEYS
+        and _normalized_semantic_field(str(key or "")) not in _SEMANTIC_METADATA_FIELDS
     }
 
 
@@ -1004,12 +1011,12 @@ def _semantic_dependency_token(value: object) -> str:
 
 
 def _semantic_dependency_field_key(field: object) -> str:
-    return "field:" + re.sub(r"[^a-z0-9]", "", _clean(field).lower())
+    return "field:" + _normalized_semantic_field(_clean(field))
 
 
 def _semantic_dependency_kind_field_key(kind: object, field: object) -> str:
     kind_token = _semantic_dependency_token(kind)
-    field_token = re.sub(r"[^a-z0-9]", "", _clean(field).lower())
+    field_token = _normalized_semantic_field(_clean(field))
     if not kind_token or not field_token:
         return ""
     return "kind:" + kind_token + ":field:" + field_token
@@ -1017,25 +1024,34 @@ def _semantic_dependency_kind_field_key(kind: object, field: object) -> str:
 
 def _semantic_dependency_relation_field_key(relation_type: object, field: object) -> str:
     relation_token = _semantic_dependency_token(relation_type)
-    field_token = re.sub(r"[^a-z0-9]", "", _clean(field).lower())
+    field_token = _normalized_semantic_field(_clean(field))
     if not relation_token or not field_token:
         return ""
     return "relation:" + relation_token + ":field:" + field_token
 
 
 def _fingerprint_semantic_groups(groups: Mapping[str, Iterable[Mapping[str, object]]]) -> Dict[str, str]:
-    return {
-        key: hashlib.sha256(
-            json.dumps(
-                sorted(items, key=lambda item: json.dumps(item, ensure_ascii=False, sort_keys=True)),
-                ensure_ascii=False,
-                sort_keys=True,
-                separators=(",", ":"),
-            ).encode("utf-8")
-        ).hexdigest()
-        for key, items in groups.items()
-        if key and items
-    }
+    # One field assertion participates in both field and kind/field groups.
+    # Reuse equal groups of those exact objects within this immutable view.
+    # Keep the spaced sorting key: compact JSON can order strings differently.
+    fingerprints = {}
+    result = {}
+    for key, items in groups.items():
+        if not key or not items:
+            continue
+        rows = list(items)
+        identity = tuple(sorted(id(item) for item in rows))
+        cached = fingerprints.get(identity)
+        if cached is None:
+            if len(rows) > 1:
+                rows.sort(key=lambda item: json.dumps(item, ensure_ascii=False, sort_keys=True))
+            payload = json.dumps(rows, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+            digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()
+            # Keep the rows alive: another iterable must never reuse their IDs.
+            cached = (rows, digest)
+            fingerprints[identity] = cached
+        result[key] = cached[1]
+    return result
 
 
 def _scope_semantic_fingerprints(
@@ -1271,9 +1287,9 @@ def _scope_fragment_payloads_with_semantic_fingerprints_and_dependencies(
         return {
             str(key): stable_values.get(str(key))
             for key in dict(raw_values or {})
-            if re.sub(r"[^a-z0-9]", "", str(key or "").lower()) not in _GENERATED_SCOPE_PROPERTY_KEYS
-            and re.sub(r"[^a-z0-9]", "", str(key or "").lower()) not in _IMMATERIAL_OBSERVATION_PROPERTY_KEYS
-            and re.sub(r"[^a-z0-9]", "", str(key or "").lower()) not in _SEMANTIC_METADATA_FIELDS
+            if _normalized_semantic_field(str(key or "")) not in _GENERATED_SCOPE_PROPERTY_KEYS
+            and _normalized_semantic_field(str(key or "")) not in _IMMATERIAL_OBSERVATION_PROPERTY_KEYS
+            and _normalized_semantic_field(str(key or "")) not in _SEMANTIC_METADATA_FIELDS
         }
 
     for entity in graph.entities:
@@ -1424,8 +1440,8 @@ def _scope_fragment_payloads_with_semantic_fingerprints_and_dependencies(
                 "value": value,
             }
             dependency_groups[field_key].append(field_dependency)
-            evidence_field_key = "evidence:" + evidence_token + ":field:" + re.sub(
-                r"[^a-z0-9]", "", _clean(field).lower()
+            evidence_field_key = "evidence:" + evidence_token + ":field:" + _normalized_semantic_field(
+                _clean(field)
             ) if evidence_token else ""
             if evidence_field_key:
                 dependency_groups[evidence_field_key].append(field_dependency)

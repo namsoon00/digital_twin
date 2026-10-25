@@ -418,7 +418,9 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # Six source-owner, lost-plan repair/rollback and scheduling-batch regressions.
         # Ten period-selection, judgment-progress, immutable prompt, original-question and message contracts.
         # Six failed-usage, scoped question progress, fenced wait and cross-plan notice contracts.
-        self.assertLessEqual(total, 2620)
+        # Six computation parity regressions preserve digests, source lifetime,
+        # quality output and endpoint validation while bounding repeated work.
+        self.assertLessEqual(total, 2626)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

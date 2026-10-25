@@ -501,10 +501,22 @@ def research_events_for_state(symbol: str, state: Dict[str, object]) -> List[Dic
     return [item.to_dict() for item in research_evidence_from_external_signals(symbol, signals)]
 
 
-def event_counts(symbol: str, rows: List[Dict[str, object]]) -> Dict[str, object]:
+def event_counts(symbol: str, rows: List[Dict[str, object]], *, event_cache=None) -> Dict[str, object]:
     by_key: Dict[str, Dict[str, object]] = {}
     for row in rows:
-        for item in research_events_for_state(symbol, row):
+        signals = row.get("externalSignals") if isinstance(row, dict) else None
+        # This cache exists only while building one subject's time windows.
+        # The exact immutable source object is shared by overlapping windows;
+        # its parsed evidence must not be rebuilt for every window.
+        cache_key = (symbol, id(signals))
+        cached = event_cache.get(cache_key) if event_cache is not None else None
+        if cached is None:
+            events = research_events_for_state(symbol, row)
+            if event_cache is not None:
+                event_cache[cache_key] = (signals, events)
+        else:
+            events = cached[1]
+        for item in events:
             key = str(item.get("evidenceId") or item.get("url") or item.get("title") or "")
             if key:
                 by_key[key] = item
@@ -936,6 +948,7 @@ def add_position_temporal_concepts(
             "0", "false", "no", "off", "disabled",
         }
 
+    event_cache = {}
     for definition in definitions:
         stored_rows = stored_temporal_window_rows(runtime_context, symbol, definition.key)
         if stored_rows is None:
@@ -953,7 +966,7 @@ def add_position_temporal_concepts(
             if isinstance(external_signals, dict) and selected:
                 selected[-1] = {**selected[-1], "externalSignals": temporal_signals}
         values = temporal_window_values(selected, definition)
-        values.update(event_counts(symbol, selected))
+        values.update(event_counts(symbol, selected, event_cache=event_cache))
         values["symbol"] = symbol
         values["source"] = str(values.get("observationSource") or "monitor-snapshot-history")
         values["retentionTier"] = str(values.get("observationGranularity") or "snapshot")

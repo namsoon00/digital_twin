@@ -4,6 +4,7 @@ from dataclasses import asdict, dataclass
 from typing import Dict, List
 
 from digital_twin.modules.reasoning.domain.ontology_contracts import PortfolioOntology
+from digital_twin.modules.reasoning.domain.ontology_prompting import ONTOLOGY_PROMPT_VERSION
 from digital_twin.modules.reasoning.domain.ontology_schema import ontology_abox
 from digital_twin.modules.reasoning.domain.ontology_validator import validate_ontology
 from digital_twin.modules.portfolio.contracts import utc_now_iso
@@ -107,7 +108,9 @@ def build_ontology_quality_sample(graph: PortfolioOntology, source: str = "runti
         "dataGaps": gaps,
         "validation": validation.to_dict(),
         "actionRequiredSymbols": [opinion.symbol for opinion in action_required],
-        "promptVersion": graph.to_dict().get("promptVersion"),
+        # This metadata is constant; rendering the complete graph here also
+        # rebuilds the RuleBox, InferenceBox and AI presentation packets.
+        "promptVersion": ONTOLOGY_PROMPT_VERSION,
     }
     stamp = created_at or utc_now_iso()
     sample_id = "ontology-quality:" + graph.portfolio_id + ":" + sample_hash({"createdAt": stamp, **payload})

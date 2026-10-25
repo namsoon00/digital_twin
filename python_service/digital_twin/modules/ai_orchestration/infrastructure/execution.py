@@ -26,22 +26,33 @@ def record_execution_usage(stdout):
     if metrics is None:
         return
     text = stdout.decode("utf-8", errors="replace") if isinstance(stdout, bytes) else str(stdout or "")
-    totals, turns, complete = {}, 0, True
+    totals, turns, open_turns, failed_turns, complete = {}, 0, 0, 0, True
     for line in text.splitlines():
         try:
             event = json.loads(line)
         except (ValueError, TypeError):
             continue
-        if not isinstance(event, dict) or event.get("type") != "turn.completed":
+        if not isinstance(event, dict) or not isinstance(event.get("type"), str):
+            continue
+        if event.get("type") == "turn.started":
+            open_turns += 1
+        if event.get("type") not in {"turn.completed", "turn.failed"}:
             continue
         turns += 1
+        open_turns = max(0, open_turns - 1)
+        failed_turns += event["type"] == "turn.failed"
         counts = usage_counts(event.get("usage"))
         if counts is None:
             complete = False
         else:
             for key, value in counts.items():
                 totals[key] = totals.get(key, 0) + value
-    metrics["usage"] = totals if turns and complete else None
+    complete = bool(turns and complete and not open_turns)
+    metrics["usage"] = totals if complete else None
+    # Explicit terminal zero usage is evidence. A quota error string is not.
+    # One unmeasured failed turn must not disappear behind earlier successes.
+    metrics["usageEvidence"] = {"version": "terminal-usage-v2", "terminalTurns": turns,
+        "failedTurns": failed_turns, "complete": complete}
 
 
 @lru_cache(maxsize=4)

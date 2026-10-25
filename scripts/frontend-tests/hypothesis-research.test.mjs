@@ -3,6 +3,23 @@ import assert from 'node:assert/strict';
 import { renderHypothesisStudyReadiness, renderHypothesisQualityReport } from '../../public/modules/experiments/evolution.mjs';
 import { questionAssessmentView } from '../../public/modules/research/question-assessment.mjs';
 
+test('question progress distinguishes provider quota and internal budget without claiming delivery', () => {
+  const workflow = {stages:[{label:'자료 확보',detail:'질문에 연결된 근거 1건'},
+    {label:'질문 답변',detail:'부분 답변 보존 · 남은 항목 확인 필요'}],
+    wait:{label:'AI 제공처 사용 한도 대기',scope:'model-provider',explanation:'제공처 한도 초과 <script>',nextCheckAt:'2026-10-25T10:00:00Z'},
+    publication:{status:'done',jobId:'job'}};
+  const html = questionAssessmentView({workflow});
+  for (const text of ['부분 답변 보존', 'AI 제공처 사용 한도', '한도 초기화 시각은 미확인', '발송 영수증 미확인', 'KST']) assert.ok(html.includes(text), text);
+  assert.match(html, /19(?:시|:)/);
+  assert.doesNotMatch(html, /실제 발송 확인|<script>/);
+  workflow.publication.receipt = {source:'transport-receipt',deliveredAt:'2026-10-25T10:00:00Z'};
+  assert.match(questionAssessmentView({workflow}), /실제 발송 확인/);
+  workflow.wait = {label:'서비스 내부 토큰 예산 대기',scope:'project-budget',explanation:'내부 배정 대기'};
+  const internal = questionAssessmentView({workflow});
+  assert.match(internal, /서비스 내부 토큰 예산/);
+  assert.doesNotMatch(internal, /AI 제공처 사용 한도|한도 초기화 시각은 미확인/);
+});
+
 test('research readiness distinguishes qualification, deployment, study window and missing data', () => {
   const html = renderHypothesisStudyReadiness({category:'validation-required', study:{minimumAcquisitionDays:1800, minimumIndependentObservations:20, minimumRetentionDays:3608, gaps:[{reason:'<missing evidence>'}]}});
   assert.match(html, /성과상 사용 자격/);

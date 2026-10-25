@@ -1965,3 +1965,51 @@ a target price, automatically approve an assumption, or select a trading action.
 Missing calculations remain an explicit data/model gap. This release connects
 existing valuation capability to central AI; it does not guarantee every company
 has sufficient source material or an approved valuation model.
+
+### Execution waits, failed usage and question completion (2026-10-25)
+
+`question-progress-v1` is a read-only operational view for the visible agenda,
+not investment evidence. It follows the exact source/planner/assessment task
+references in batches of at most 20 primary keys, checking account, symbol,
+world and source-question identity. Queue completion is never answer completion.
+Only a scoped completed authored task with the persisted independently reviewed
+original-question assessment can mark the final answer complete. Partial answers
+remain visible during source/execution waits. Hypothesis disposition is a research
+record, never empirical qualification. The linked AI observation publication is
+resolved through the existing transport-receipt reader; a queued/done job without
+its receipt is not confirmed delivery. Research notices and internal answers do
+not imply an AI observation was sent.
+
+The shared provider gate and the local token budget are separate. Question and
+task views label provider quota, other provider failures and local allocation
+waits separately. Provider retry times are probe schedules, not provider reset
+promises. Shared recovery still admits only one probe; this change never clears a
+quota block, forces a model call, increases the budget or creates recovery notices.
+Fenced task deferrals retain their safe category and preserve existing results.
+
+Usage accounting accepts explicit numeric usage on completed and failed terminal
+turns. Every terminal turn must have valid usage and no started turn may remain
+unaccounted for. A missing failed-turn receipt cannot be hidden behind an earlier
+successful turn. Explicit zero usage settles zero; quota text alone never proves
+zero usage. Unknown failures retain their conservative reservation and are broken
+out as `failedUnknownTokensAllowance`, a subset of `unknownTokensAllowance`, not
+an additional charge or measured provider billing. Older unknown allowances stay
+unclassified; their history is not rewritten. Repeated completion remains
+idempotent, and positive measured usage cannot be refunded by a conflicting
+process-not-started flag.
+
+Scheduling notice milestones now use the original question contract and source
+material fingerprints across planner tasks. A new task ID, route, clock or
+reworded missing requirement cannot create another notice on the same material.
+A newly changed source or question period may notify. Existing legacy milestones
+are seeded quietly, while answer notices keep their separate material-progress
+policy and per-question conversation. This suppresses only repeated scheduling
+notices; source tasks, case events, limits and independently verified answers are
+preserved.
+
+Validation: `test_research_execution_progress` covers complete/partial failed
+usage receipts, secret-free metrics, scoped question linkage, legacy and cross-plan
+notice suppression, actual MySQL settlement idempotence, read-only progress and
+lease-fenced waits. Frontend regression verifies explicit provider/local waits,
+partial answers, escaped text and receipt-only delivery claims. Live provider
+recovery and new answers must be verified separately from these tests.

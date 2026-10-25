@@ -63,9 +63,9 @@ class AIExecutionPersistence:
         now = stamp(datetime.now(timezone.utc))
         with self.transaction() as connection:
             return bool(connection.execute("UPDATE ai_control_tasks SET status='pending',last_error=%s,available_at=%s,"
-                "payload_json=JSON_SET(payload_json,'$.executionDeferrals',%s),updated_at=%s,lease_token='',lease_until='' "
+                "payload_json=JSON_SET(payload_json,'$.executionDeferrals',%s,'$.executionWait',CAST(%s AS JSON)),updated_at=%s,lease_token='',lease_until='' "
                 "WHERE task_id=%s AND status='processing' AND lease_token=%s AND lease_until>=%s",
-                (wait.code, wait.retry_at, int(job.get("executionDeferrals", 0)) + 1, now,
+                (wait.code, wait.retry_at, int(job.get("executionDeferrals", 0)) + 1, json.dumps(wait.result()), now,
                  job["taskId"], job["leaseToken"], now)).rowcount)
 
     def record_observation_progress(self, connection, job, result, now):

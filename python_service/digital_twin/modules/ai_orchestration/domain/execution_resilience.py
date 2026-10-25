@@ -69,7 +69,9 @@ class AIExecutionDeferred(RuntimeError):
 
     def result(self):
         return {"status": "recovery-wait", "reason": self.code,
-                "errorCategory": self.category, "nextCheckAt": self.retry_at}
+                "errorCategory": self.category, "nextCheckAt": self.retry_at,
+                "explanation": FAILURE_MESSAGES[self.category], "scope": "model-provider",
+                "providerResetAt": None, "retryIsReset": False}
 
 
 def process_diagnostic(result):
@@ -190,7 +192,8 @@ def execution_health(now, state, progress, calls, overdue, enabled=True, expired
     if not enabled:
         status, reason = "paused", "중앙 AI 관찰이 일시 중지돼 있습니다."
     elif wait:
-        status, reason = "recovering" if state.get("probeToken") else "unavailable", "AI 실행 오류로 재시도를 기다립니다."
+        status = "recovering" if state.get("probeToken") else "unavailable"
+        reason = FAILURE_MESSAGES[wait.category] + " 다음 확인 시각은 제공처 한도 초기화 시각이 아닙니다."
     elif expired_leases:
         status, reason = "delayed", "처리 권한이 만료된 관찰 작업의 복구를 기다립니다."
     elif overdue:

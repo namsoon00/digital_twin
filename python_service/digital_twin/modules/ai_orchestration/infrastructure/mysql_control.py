@@ -467,9 +467,10 @@ class MySQLAIControlStore(AITokenUsagePersistence, DiagnosticProgressPersistence
             admission = json.loads(saved["metrics_json"]) if saved else {}
             reserved = admission.get("tokenReservation")
             usage = usage_counts((metrics or {}).get("usage"))
-            not_started = (metrics or {}).get("processNotStarted") is True
+            not_started = ((metrics or {}).get("processNotStarted") is True
+                           and (usage is None or usage["input_tokens"] + usage["output_tokens"] == 0))
             if reserved == RESERVATION:
-                self.settle_tokens(connection, call, usage, stamp(), not_started, admission.get("tokenPool"))
+                self.settle_tokens(connection, call, usage, stamp(), not_started, admission.get("tokenPool"), bool(error_kind))
             metrics = {**(metrics or {}), **admission, "usage": usage, "usageStatus": "not-started" if not_started else "reported" if usage is not None else "unknown"}
             if metrics:
                 safe = {key: metrics[key] for key in ("stage", "configuredTimeoutSeconds", "promptBytes",
@@ -477,6 +478,10 @@ class MySQLAIControlStore(AITokenUsagePersistence, DiagnosticProgressPersistence
                     "tokenReservation", "tokenPool", "promptVersion") if key in metrics}
                 if "failure" in safe:
                     safe["failure"] = safe_diagnostic(safe["failure"])
+                proof = metrics.get("usageEvidence") or {}
+                if (proof.get("version") == "terminal-usage-v2" and type(proof.get("complete")) is bool
+                        and all(type(proof.get(k)) is int and 0 <= proof[k] <= 10000 for k in ("terminalTurns", "failedTurns"))):
+                    safe["usageEvidence"] = {k: proof[k] for k in ("version", "complete", "terminalTurns", "failedTurns")}
                 connection.execute("INSERT INTO ai_control_call_metrics (call_id,metrics_json) VALUES (%s,%s) "
                     "ON DUPLICATE KEY UPDATE metrics_json=VALUES(metrics_json)", (call_id, json.dumps(safe)))
             connection.execute("UPDATE ai_control_calls SET status=%s,completed_at=%s,error_kind=%s WHERE call_id=%s", ("failed" if error_kind else "completed", stamp(), error_kind[:100], call_id))

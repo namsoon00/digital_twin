@@ -226,6 +226,10 @@ def ai_control_status(settings=None, account_id=""):
             task["developmentProgress"] = development_records[subject].get(request_id, {"status": "unavailable"})
     from digital_twin.infrastructure.operational_store import notification_job_store
     publications = []
+    for case in status["brain"]["cases"]:
+        publication = (case.get("workflow") or {}).get("publication") or {}
+        if publication.get("jobId"):
+            publications.append(publication)
     for task in status["tasks"]:
         publication = task["result"].get("publication") or {}
         publications.extend(item for item in (publication, publication.get("diagnostic") or {}) if item.get("jobId"))
@@ -259,6 +263,10 @@ def ai_control_status(settings=None, account_id=""):
                                max_attempts=MAX_NOTIFICATION_DELIVERY_ATTEMPTS))
             if delivery.get("last_error") and not publication.get("receipt"):
                 publication["reason"] = delivery["last_error"]
+    from digital_twin.modules.ai_orchestration.domain.question_progress import task_wait
+    from datetime import datetime, timezone
+    for task in status["tasks"]:
+        task["executionWait"] = task_wait(task, status["executionHealth"].get("sharedExecution") or {}, datetime.now(timezone.utc))
     results = [task["result"] for task in status["tasks"] if task["result"].get("summary")]
     return {"notificationRoute": "ai-control", "legacyInvestmentNotifications": "retired",
             "qualitySummary": {"scope": "최근 관찰 기록", "reviewed": sum(bool(row.get("quality", {}).get("reviewInputId")) for row in results),

@@ -65,9 +65,12 @@ def usage_view(settings, state, now):
     measured = sum(row.get("input_tokens", 0) + row.get("output_tokens", 0) for row in rows.values())
     reserved = sum(row.get("reservedTokens", 0) for row in rows.values())
     unknown = sum(row.get("unknownTokensAllowance", 0) for row in rows.values())
+    failed_unknown = sum(row.get("failedUnknownTokensAllowance", 0) for row in rows.values())
     remaining = max(0, limit - measured - reserved - unknown) if enabled else None
     view = {"enabled": enabled, "dailyLimit": limit, "reportedTokens": measured,
             "reservedTokens": reserved, "unknownTokensAllowance": unknown,
+            "failedUnknownTokensAllowance": failed_unknown,
+            "otherUnknownTokensAllowance": max(0, unknown - failed_unknown),
             "remainingTokens": remaining, "reservationPerCall": RESERVATION,
             "exhausted": enabled and remaining < RESERVATION,
             "resetAt": budget_state(settings, 0, 0, now)["budgetResetAt"],
@@ -110,7 +113,7 @@ def reserve(settings, state, workload, now, pool=None):
     return state
 
 
-def settle(state, workload, usage, not_started=False, pool=None):
+def settle(state, workload, usage, not_started=False, pool=None, failed=False):
     state = deepcopy(state)
     row = state["workloads"][workload]
     rows = [row]
@@ -128,6 +131,8 @@ def settle(state, workload, usage, not_started=False, pool=None):
         elif counts is None:
             row["unknownUsageCalls"] = row.get("unknownUsageCalls", 0) + 1
             row["unknownTokensAllowance"] = row.get("unknownTokensAllowance", 0) + RESERVATION
+            if failed:
+                row["failedUnknownTokensAllowance"] = row.get("failedUnknownTokensAllowance", 0) + RESERVATION
         else:
             row["reportedUsageCalls"] = row.get("reportedUsageCalls", 0) + 1
             for key, value in counts.items():

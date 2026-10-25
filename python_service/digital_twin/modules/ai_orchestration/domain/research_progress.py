@@ -33,7 +33,20 @@ def research_progress(case, event):
         if (plan.get("action") != "research" or not task_id
                 or task_id != (case.get("lastResearch") or {}).get("taskId")):
             return None
-        category, state, label = "source-followup", task_id, "부족한 자료 추가 조사 예약"
+        from .research_repeat import materials
+        # A new planner/task/route is execution bookkeeping, not new research.
+        # Keep the last announced material set across plans and source outages.
+        markers = case.setdefault("researchProgressMarkers", {})
+        scope = identity(case.get("questionContract") or case.get("question", ""))
+        current = set(materials(case))
+        previous = markers.get("followupMaterial")
+        markers["followupMaterial"] = {"contract": scope,
+            "materials": sorted(current | set((previous or {}).get("materials", [])))[:256]}
+        if previous and previous["contract"] == scope and not current - set(previous["materials"]):
+            return None
+        if not previous and markers.get("source-followup"):
+            return None  # Seed legacy announcements without a migration notice.
+        category, state, label = "source-followup", [scope, sorted(current)], "부족한 자료 추가 조사 예약"
     elif stage == "research-returned":
         result = case.get("lastResearch", {}).get("result", {})
         answer = result.get("documentaryAnswer") or {}

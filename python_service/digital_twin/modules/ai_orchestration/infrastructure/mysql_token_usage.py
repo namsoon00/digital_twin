@@ -40,11 +40,11 @@ class AITokenUsagePersistence:
         state = token_budget.reserve(self.runtime_settings, state, workload, clock, pool)
         self._save_execution_state(connection, scope, state, clock)
 
-    def settle_tokens(self, connection, call, usage, now, not_started=False, pool=None):
+    def settle_tokens(self, connection, call, usage, now, not_started=False, pool=None, failed=False):
         clock = datetime.fromisoformat(now.replace("Z", "+00:00"))
         scope = "token-usage:" + call["started_at"][:10]
         state = self._locked_execution_state(connection, scope, clock)
-        state = token_budget.settle(state, call["workload"], usage, not_started, pool)
+        state = token_budget.settle(state, call["workload"], usage, not_started, pool, failed)
         self._save_execution_state(connection, scope, state, clock)
 
     def token_usage(self, connection, now):

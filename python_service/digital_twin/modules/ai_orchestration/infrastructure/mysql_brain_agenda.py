@@ -582,6 +582,8 @@ class MySQLBrainAgendaStore(MySQLOperationalConnection):
                 by_id = {row["case_id"]: json.loads(row["payload_json"]) for row in recent}
                 cases = ([by_id[key] for key in ids] + [row for row in cases if row["caseId"] not in by_id])[:40]
             fill_case_names(connection, cases)
+            from .mysql_question_progress import attach_question_progress
+            attach_question_progress(connection, cases)
             if cases:
                 ids = [row["caseId"] for row in cases]
                 events = connection.execute("SELECT /*+ MAX_EXECUTION_TIME(5000) */ case_id,payload_json FROM (SELECT case_id,payload_json,"

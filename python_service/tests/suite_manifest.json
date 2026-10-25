@@ -39,6 +39,7 @@
     {"file": "test_research_replies.py", "tier": "integration", "core": true},
     {"file": "test_research_progress.py", "tier": "contract", "core": true},
     {"file": "test_research_execution_ownership.py", "tier": "integration", "core": true},
+    {"file": "test_research_execution_progress.py", "tier": "integration", "core": true},
     {"file": "test_business_research.py", "tier": "contract", "core": true},
     {"file": "test_relation_market_tracking.py", "tier": "contract", "core": true},
     {"file": "test_ai_continuity_research.py", "tier": "contract", "core": true},

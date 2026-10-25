@@ -20,7 +20,7 @@ from digital_twin.modules.reasoning.infrastructure.typeql.literals import typedb
 from digital_twin.modules.reasoning.infrastructure.typeql.storage_schema import typedb_target_attribute, typedb_relation_storage_type
 
 
-def run(contract_override=None):
+def run(contract_override=None, source_evidence_cases=None):
     load_local_env()
     operational = investment_strategy_proposal_read_service().ontology_repository
     database = "orbit_strategy_smoke_" + uuid.uuid4().hex[:12]
@@ -56,13 +56,21 @@ def run(contract_override=None):
     market_relation_type = typedb_relation_storage_type('TRADED_IN')
     if market_relation_type != 'ontology-assertion':
         schema += "\nrelation " + market_relation_type + ", sub ontology-assertion;"
+    def phase_flags(present):
+        return [int(set(contract["phases"][p]).issubset(present))
+                for p in ("setup", "entry", "invalidation", "exit")]
+
     scenarios = {"fresh": [1, 1, 1, 1], "stale": [0, 0, 0, 0], "closed": [0, 0, 0, 0],
                  "ineligible": [0, 0, 0, 0], "wrong-release": [0, 0, 0, 0],
-                 "missing-entry-member": [1, 0, 1, 1], "wrong-market": [0, 0, 0, 0],
+                 "missing-entry-member": phase_flags(set(models) - {contract["phases"]["entry"][0]}), "wrong-market": [0, 0, 0, 0],
                  "persisted-source": [1, 1, 1, 1], "persisted-after-close": [0, 0, 0, 0],
                  "persisted-missing-clock": [0, 0, 0, 0]}
     for i, phase in enumerate(("setup", "entry", "invalidation", "exit")):
-        scenarios["only-" + phase] = [int(j == i) for j in range(4)]
+        scenarios["only-" + phase] = phase_flags(set(contract["phases"][phase]))
+    source_evidence_cases = source_evidence_cases or {}
+    if set(source_evidence_cases).intersection(scenarios):
+        raise ValueError("Source evidence case names must be distinct")
+    scenarios.update({name: case["expected"] for name, case in source_evidence_cases.items()})
     # Session/age used to be injected from the rule itself, hiding a real
     # ingestion defect. Exercise Position -> persisted row -> model signal.
     source_packets = {
@@ -103,8 +111,16 @@ def run(contract_override=None):
                     continue
                 if scenario == "missing-entry-member" and rid == contract["phases"]["entry"][0]:
                     continue
+                actual_source = source_evidence_cases.get(scenario)
+                if actual_source is not None and rid not in actual_source["evidence"]:
+                    continue
                 values = {}
                 for field, value in condition.target_property_filters.items():
+                    if actual_source is not None:
+                        value = actual_source["evidence"][rid].get(field)
+                        if value is not None:
+                            values[typedb_target_attribute(field)] = value
+                        continue
                     if isinstance(value, list): value = value[0]
                     if field == "sourceAgeSeconds": value = contract['signalValiditySeconds'] + 1 if scenario == "stale" else 30
                     if field == "marketSession" and scenario == "closed": value = "closed"

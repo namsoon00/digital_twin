@@ -58,7 +58,7 @@ def scenario_contract():
 
 def scenario_contract_valid(value):
     # V1 is a reviewed finite contract. A different policy needs a new version.
-    return value == scenario_contract()
+    return value == scenario_contract() or value == flow_scenario_contract()
 
 
 def scenario_successor_rules(source_rules):
@@ -83,3 +83,25 @@ def scenario_successor_rules(source_rules):
         contract["contractFingerprint"] = fingerprint(contract)
         result.extend(replace(r, enabled=True) for r in compile_strategy_rules(contract))
     return result
+
+
+def flow_scenario_contract():
+    """Separate authored language for flow confirmations; price V1 is frozen."""
+    contract = scenario_contract()
+    contract["version"] = "strategy-current-flow-continuity-v1"
+    replacements = {
+        "하락 둔화가 확인돼 회복 여부를 관찰하기 시작합니다.": "현재가는 5·20·60일 평균 중 적어도 하나 이상이며, 외국인·기관 합산 수급은 순매수로 추정됩니다. 체결·호가 확인을 기다립니다.",
+        "가격 회복과 장중 반전": "이동평균 가격 이상·추정 합산 순매수와 매수 체결·호가 우위",
+        "반등 실패": "가격 상승 중 외국인·기관 합산 순매도 추정",
+        "장중 하락 가속": "외국인·기관 동반 순매도 추정",
+    }
+    for row in contract["transitions"]:
+        for previous, updated in replacements.items():
+            row["meaning"] = row["meaning"].replace(previous, updated)
+    contract["nextChecks"] = {
+        "setup": "이동평균 가격 이상·추정 합산 순매수에 매수 체결·호가 우위가 함께 확인되는지 확인합니다.",
+        "entry": "가격 상승 중 합산 순매도나 외국인·기관 동반 순매도가 추정되면 진입 근거를 다시 검사합니다.",
+        "invalidation": "가격과 수급의 방향이 엇갈립니다. 새 수급·체결 자료와 평균 가격 조건을 다시 확인합니다.",
+        "exit": "외국인·기관 동반 순매도로 추정됩니다. 보유 중이면 기존 진입 근거와 손실·비중 기준을 함께 재검토합니다.",
+    }
+    return contract

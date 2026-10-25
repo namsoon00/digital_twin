@@ -317,6 +317,13 @@ def add_position_statistical_signal_concepts(
                 "empiricalSampleCount": _mapping(signal.get("inputFeatures")).get("empiricalSampleCount", 0),
                 **_feature_summary(signal),
             }
+            from digital_twin.modules.model_registry.contracts import CURRENT_FLOW_SIGNAL_RELEASE_ID
+            if signal.get("modelReleaseId") == CURRENT_FLOW_SIGNAL_RELEASE_ID:
+                # Keep each exact hypothesis's earliest provider expiry through
+                # native grounding and receipt-locked dispatch, not a new TTL.
+                validity = _mapping(exact_contract.get("sourceValidity"))
+                contract_properties.update({k: validity[k] for k in
+                    ("observedAt", "sourceAgeSeconds", "maxAgeMinutes", "validUntil") if k in validity})
             contract_node_id = add_entity(
                 graph,
                 "statistical-model-hypothesis-evidence",

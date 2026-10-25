@@ -7,7 +7,7 @@ from copy import deepcopy
 import hashlib
 import json
 
-from .statistical_signals.registry import DEFAULT_PRICE_SIGNAL_RELEASE_ID, DEFAULT_FLOW_SIGNAL_RELEASE_ID
+from .statistical_signals.registry import CURRENT_FLOW_SIGNAL_RELEASE_ID, DEFAULT_PRICE_SIGNAL_RELEASE_ID, DEFAULT_FLOW_SIGNAL_RELEASE_ID
 
 
 VERSION = "rule-strategy-contract-v1"
@@ -18,7 +18,7 @@ SCENARIO_VERSION = "rule-strategy-contract-v3"
 SCENARIO_COMPILER_VERSION = "native-strategy-phase-v3"
 # graph_scoring supplies source age and session only from these family scorers.
 # Contract-only corporate/event/cross-asset evidence has no intraday source clock.
-INTRADAY_CLOCK_RELEASES = {DEFAULT_PRICE_SIGNAL_RELEASE_ID, DEFAULT_FLOW_SIGNAL_RELEASE_ID}
+INTRADAY_CLOCK_RELEASES = {DEFAULT_PRICE_SIGNAL_RELEASE_ID, DEFAULT_FLOW_SIGNAL_RELEASE_ID, CURRENT_FLOW_SIGNAL_RELEASE_ID}
 PHASES = {"setup": "관찰 조건", "entry": "진입 검토 조건", "invalidation": "진입 판단 취소 조건", "exit": "보유 종료 검토 조건"}
 CHECKS = ["point-in-time-replay", "independent-out-of-sample", "cost-adjusted-returns",
           "market-regime-comparison", "forward-paper-trades", "trading-session-clock", "delivery-latency"]

@@ -341,6 +341,15 @@ def build_portfolio_ontology(
         add_instrument_identity_concepts(graph, stock_id, position, source)
         add_data_source_concept(graph, stock_id, position, source, observation_profiles)
         add_metric_concepts(graph, stock_id, position, source, observation_profiles)
+        from digital_twin.modules.market_data.contracts import verified_flow_measurements
+        for measurement in verified_flow_measurements(position, runtime_context.get("asOf"),
+                                                       quote_observation.get("marketSessionStatus"),
+                                                       runtime_context.get("settings")):
+            metric_id = add_entity(graph, "flow-metric", symbol + ":verified:" + measurement["field"],
+                measurement["field"], {"tboxClass": "TradeFlow", "tboxClasses": ["Observation", "TradeFlow"],
+                                      "symbol": symbol, **measurement})
+            add_relation(graph, stock_id, metric_id, "HAS_TRADE_FLOW", properties={
+                "source": measurement["provider"], "field": measurement["field"], "evidenceRole": "context"})
         add_market_evidence_profile_concepts(
             graph,
             stock_id,

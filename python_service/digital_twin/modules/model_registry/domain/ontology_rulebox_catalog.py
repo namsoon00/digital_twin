@@ -7854,7 +7854,8 @@ def governed_graph_inference_rules() -> List[GraphInferenceRule]:
             with_rulebox_execution_guidance(with_market_evidence_guards(rules))
         )
     )
-    return governed
+    from .current_flow_rules import current_flow_rules
+    return [*governed, *current_flow_rules(governed)]
 
 
 @lru_cache(maxsize=1)

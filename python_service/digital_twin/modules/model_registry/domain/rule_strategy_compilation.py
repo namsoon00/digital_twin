@@ -58,6 +58,9 @@ def compile_strategy_rules(contract):
                 "invalidation": "기존 진입 근거의 취소 조건입니다. 새 가격 회복과 장중 상승 전환을 기다립니다.",
                 "exit": "보유 중이면 단기 회복 전략의 종료를 검토할 조건입니다. 보유하지 않으면 하락 위험 참고입니다.",
             }[phase])
+            flow_next = (contract.get("scenarioContract") or {}).get("nextChecks") or {}
+            if phase in flow_next:
+                response["nextCheck"] = flow_next[phase]
         raw = GraphInferenceRule(rule_id=rid, label=contract["label"] + " · " + label, version=contract["version"],
             source_kind="stock", action_group="context", action_level="review", conditions=conditions,
             knowledge_basis=RuleKnowledgeBasis(rule_kind="context-observation", theory_family="strategy-phase-composition" if live else "strategy-research",

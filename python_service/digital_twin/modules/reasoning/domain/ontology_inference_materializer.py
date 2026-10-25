@@ -1162,6 +1162,8 @@ def observation_metadata(properties: Dict[str, object], observed_value: object, 
             legacy_reliability /= 100.0
         source_trust_state = "trusted" if legacy_reliability >= 0.8 else "standard" if legacy_reliability >= 0.6 else "limited" if legacy_reliability > 0 else "unknown"
     result["sourceTrustState"] = source_trust_state
+    if properties.get("validUntil"):
+        result["validUntil"] = str(properties["validUntil"])
     return result
 
 

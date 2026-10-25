@@ -23,7 +23,7 @@ def scenario_strategy_release_artifact(baseline_record, source_deployment):
         "native-strategy-scenario-migration-v1", retired)
 
 
-def _additive_strategy_artifact(baseline_record, source_deployment, rules, migration_version, retired=()):
+def _additive_strategy_artifact(baseline_record, source_deployment, rules, migration_version, retired=(), extend_model_bridges=False):
     if (baseline_record.get("valid") is not True or baseline_record.get("status") != "ready"
             or baseline_record.get("deploymentId") != source_deployment.get("deploymentId")
             or not source_deployment.get("graphStoreBinding")):
@@ -48,8 +48,21 @@ def _additive_strategy_artifact(baseline_record, source_deployment, rules, migra
         row = bound_row(entity)
         if row["id"] in existing and row["kind"] in shared_kinds:
             continue
+        if extend_model_bridges and row["id"] in existing and row["kind"] == "model-signal-bridge":
+            current = existing[row["id"]]
+            aggregates = {"policyIds", "lineageRuleIds", "policyCount"}
+            if ({k: v for k, v in current["properties"].items() if k not in aggregates}
+                    != {k: v for k, v in row["properties"].items() if k not in aggregates}
+                    or any(current.get(k) != v for k, v in row.items() if k != "properties")):
+                raise ValueError("flow addition changes native bridge semantics")
+            for key in ("policyIds", "lineageRuleIds"):
+                if set(current["properties"].get(key, [])) & set(row["properties"].get(key, [])):
+                    raise ValueError("flow addition repeats an existing bridge policy")
+                current["properties"][key] = sorted([*current["properties"].get(key, []), *row["properties"].get(key, [])])
+            current["properties"]["policyCount"] = len(current["properties"]["policyIds"])
+            continue
         if row["id"] in existing and existing[row["id"]] != row:
-            raise ValueError("strategy addition changes an existing static node")
+            raise ValueError("strategy addition changes an existing static node: " + row["id"])
         if row["id"] not in existing:
             artifact["graph"]["entities"].append(row)
     edges = {json.dumps(r, sort_keys=True) for r in artifact["graph"]["relations"]}
@@ -81,4 +94,18 @@ def _additive_strategy_artifact(baseline_record, source_deployment, rules, migra
     }
     if retired:
         artifact["compositionUpgradeContract"]["retiredRuleIds"] = sorted(retired)
+    return artifact
+
+
+def current_flow_release_artifact(baseline_record, source_deployment):
+    """Append reviewed current-source contracts without enabling legacy history."""
+    from digital_twin.modules.model_registry.contracts import default_graph_inference_rules, current_flow_strategy_rules
+    rules = [r for r in default_graph_inference_rules() if r.rule_id.endswith(".current-flow.v3")]
+    if len(rules) != 5 or not all(r.enabled for r in rules):
+        raise ValueError("complete current-flow cohort required")
+    baseline = baseline_record["artifact"]["rules"]
+    phases = current_flow_strategy_rules([*baseline, *(r.to_dict() for r in rules)], source_deployment)
+    artifact = _additive_strategy_artifact(baseline_record, source_deployment, [*rules, *phases],
+        "native-current-flow-migration-v1", extend_model_bridges=True)
+    artifact["currentFlowUpgradeContract"] = artifact.pop("compositionUpgradeContract")
     return artifact

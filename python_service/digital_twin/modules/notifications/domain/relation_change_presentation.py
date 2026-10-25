@@ -27,6 +27,7 @@ FIELDS = {
     "tradeStrength": ("체결강도", ""), "volumeRatio": ("거래량 비율", "배"),
     "timeAdjustedVolumeRatio": ("시간 보정 거래량", "배"),
     "foreignNetVolume": ("외국인 순매수", "주"), "institutionNetVolume": ("기관 순매수", "주"),
+    "smartMoneyNetVolume": ("외국인·기관 합산 순매수", "주"),
     "individualNetVolume": ("개인 순매수", "주"), "bidAskImbalance": ("매수·매도 대기 물량 차이", "%"),
     "beta": ("시장 민감도", ""), "correlation": ("시장 상관계수", ""),
     "instrumentReturnPct": ("확인 이후 주가 등락률", "%"),

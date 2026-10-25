@@ -433,7 +433,8 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # Seven collected-statement regressions cover canonical source selection,
         # retained alternatives, prior interim fields, original-period corroboration,
         # conflicting values, committed lineage and bounded paired-filing recovery.
-        self.assertLessEqual(total, 2690)
+        # Nine current-flow source, missing-data, legacy, phase and multi-strategy notice contracts.
+        self.assertLessEqual(total, 2699)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

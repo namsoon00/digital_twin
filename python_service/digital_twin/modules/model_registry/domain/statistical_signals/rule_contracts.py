@@ -6,10 +6,26 @@ TypeDB condition or changes the current action envelope.
 
 from typing import Dict, Iterable, Mapping
 
-from digital_twin.modules.model_registry.domain.statistical_signals.registry import DEFAULT_AUTHORED_THESIS_SIGNAL_RELEASE_ID, DEFAULT_CROSS_ASSET_SIGNAL_RELEASE_ID, DEFAULT_EVENT_SIGNAL_RELEASE_ID, DEFAULT_FLOW_SIGNAL_RELEASE_ID, DEFAULT_PRICE_SIGNAL_RELEASE_ID, DEFAULT_VALUATION_SIGNAL_RELEASE_ID, model_release, signal_hypothesis_family
+from digital_twin.modules.model_registry.domain.statistical_signals.registry import CURRENT_FLOW_SIGNAL_RELEASE_ID, DEFAULT_AUTHORED_THESIS_SIGNAL_RELEASE_ID, DEFAULT_CROSS_ASSET_SIGNAL_RELEASE_ID, DEFAULT_EVENT_SIGNAL_RELEASE_ID, DEFAULT_FLOW_SIGNAL_RELEASE_ID, DEFAULT_PRICE_SIGNAL_RELEASE_ID, DEFAULT_VALUATION_SIGNAL_RELEASE_ID, model_release, signal_hypothesis_family
 
 
 RULE_SIGNAL_CONTRACT_VERSION = "rule-statistical-signal-contract-v2"
+
+
+def required_statistical_model_releases(rules):
+    """Exact model releases referenced by enabled native RuleBox contracts."""
+    required = set()
+    for value in rules or []:
+        rule = value.to_dict() if hasattr(value, "to_dict") else value
+        if not bool(rule.get("enabled", True)):
+            continue
+        for condition in rule.get("conditions") or []:
+            if str(condition.get("relation_type") or condition.get("relationType") or "").strip() != "HAS_MODEL_SIGNAL":
+                continue
+            filters = condition.get("target_property_filters") or condition.get("targetPropertyFilters") or {}
+            releases = filters.get("releaseId") or filters.get("release_id") or []
+            required.update(str(r).strip() for r in (releases if isinstance(releases, (list, tuple)) else [releases]) if str(r).strip())
+    return tuple(sorted(required))
 
 # A production release may emit a broad signal family, but that does not prove
 # every historical rule in the same theory family. Keep this mapping explicit
@@ -152,6 +168,10 @@ def model_signal_type_for_rule(rule_id: object, theory_family: object) -> str:
 
 
 def _signal_mapping(rule_id: str, theory_family: str):
+    from digital_twin.modules.model_registry.domain.current_flow_rules import COHORT, SUFFIX
+    if rule_id.endswith(SUFFIX) and rule_id[:-len(SUFFIX)] in COHORT:
+        signal = model_signal_type_for_rule(rule_id[:-len(SUFFIX)], "market-microstructure-and-investor-flow")
+        return (signal,), "model-signal-production", (CURRENT_FLOW_SIGNAL_RELEASE_ID,), 3
     signal_type = model_signal_type_for_rule(rule_id, theory_family)
     if not signal_type:
         return (), "unmapped", (), 9

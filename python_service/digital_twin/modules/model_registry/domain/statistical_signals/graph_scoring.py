@@ -17,7 +17,7 @@ from digital_twin.modules.reasoning.contracts import OntologyEntity, OntologyRel
 from digital_twin.modules.model_registry.domain.ontology_rulebox_contracts import GraphInferenceRule, GraphRuleCondition
 from digital_twin.modules.market_data.contracts import TemporalFeatureSnapshot
 from digital_twin.modules.model_registry.domain.statistical_signals.contracts import ModelHypothesisAssessment, ModelSignal, ModelSignalSnapshot, SignalEligibility
-from digital_twin.modules.model_registry.domain.statistical_signals.registry import DEFAULT_FLOW_SIGNAL_RELEASE_ID, DEFAULT_PRICE_SIGNAL_RELEASE_ID, default_statistical_model_registry, model_release, signal_hypothesis_family
+from digital_twin.modules.model_registry.domain.statistical_signals.registry import CURRENT_FLOW_SIGNAL_RELEASE_ID, DEFAULT_FLOW_SIGNAL_RELEASE_ID, DEFAULT_PRICE_SIGNAL_RELEASE_ID, default_statistical_model_registry, model_release, signal_hypothesis_family
 from digital_twin.modules.model_registry.domain.statistical_signals.rule_contracts import rule_statistical_signal_contract
 from digital_twin.modules.model_registry.domain.statistical_signals.measurements import condition_measurements, measurement_packet
 
@@ -363,7 +363,7 @@ def score_graph_hypothesis_contracts(
     rules: Iterable[GraphInferenceRule],
     baseline_snapshots: Iterable[ModelSignalSnapshot] = (),
 ) -> Tuple[ModelSignalSnapshot, ...]:
-    """Return six release snapshots with exact matched hypothesis identities."""
+    """Return release snapshots with exact matched hypothesis identities."""
 
     baseline = {
         (item.model_release_id, signal.subject_id, signal.signal_type): signal
@@ -416,6 +416,10 @@ def score_graph_hypothesis_contracts(
             symbol = str((subject.properties or {}).get("symbol") or "").upper().strip()
             if not symbol:
                 continue
+            source_clock = None
+            if release_id == CURRENT_FLOW_SIGNAL_RELEASE_ID:
+                from .current_flow_evidence import current_flow_source_clock
+                source_clock = current_flow_source_clock(subject, market_conditions, match_index, feature_snapshot.as_of)
             result = evaluate_market_hypothesis_contract(
                 graph,
                 subject,
@@ -423,6 +427,12 @@ def score_graph_hypothesis_contracts(
                 match_index=match_index,
                 market_conditions=market_conditions,
             )
+            if source_clock is not None:
+                result["sourceClock"] = source_clock
+                if source_clock["reasons"]:
+                    result.update(status="incomplete", coverageRatio=0,
+                                  unknownConditionIds=source_clock["reasons"], failedConditionIds=[],
+                                  matchedConditionIds=[], evidenceIds=[], sourceMeasurements=[])
             result_status = str(result.get("status") or "incomplete")
             assessment_status = {
                 "matched": "supported",
@@ -507,6 +517,9 @@ def score_graph_hypothesis_contracts(
             "contractMatches": [
                 {
                     "ruleId": item.get("ruleId"),
+                    **({"sourceValidity": {k: item["sourceClock"][k] for k in
+                       ("observedAt", "sourceAgeSeconds", "maxAgeMinutes", "validUntil")}}
+                       if item.get("sourceClock") else {}),
                     "marketConditionCount": item.get("marketConditionCount"),
                     "matchedConditionIds": list(item.get("matchedConditionIds") or [])[:24],
                     "evidenceIds": list(item.get("evidenceIds") or [])[:24],
@@ -541,6 +554,11 @@ def score_graph_hypothesis_contracts(
             contract_features["familyScore"] = base.score
             contract_features["familyConfidence"] = base.confidence
             contract_features["familyInputFeatures"] = dict(base.input_features or {})
+        clocks = [r["sourceClock"] for r in rows if r.get("sourceClock")]
+        clock = max(clocks, key=lambda c: c["sourceAgeSeconds"]) if clocks else {}
+        if clocks:
+            contract_features["measurementBasis"] = "current-source-observation"
+            contract_features["independentSourceSampleCount"] = 1
         signal_score = base.score if base else coverage
         signal_confidence = min(
             1.0,
@@ -557,7 +575,7 @@ def score_graph_hypothesis_contracts(
             # eligible match instead of treating every exact match as 1.0.
             score=signal_score,
             confidence=signal_confidence,
-            observed_at=base.observed_at if base else feature_snapshot.as_of,
+            observed_at=base.observed_at if base else clock.get("observedAt", feature_snapshot.as_of),
             source_feature_snapshot_id=feature_snapshot.snapshot_id,
             feature_set_version=feature_snapshot.feature_set_version,
             model_release_id=release_id,
@@ -566,8 +584,8 @@ def score_graph_hypothesis_contracts(
             eligibility=eligibility,
             input_features=contract_features,
             contract_matched=True,
-            market_session=base.market_session if base else "",
-            source_age_seconds=base.source_age_seconds if base else None,
+            market_session=base.market_session if base else clock.get("marketSession", ""),
+            source_age_seconds=base.source_age_seconds if base else clock.get("sourceAgeSeconds"),
             freshness_compatible=base.freshness_compatible if base else True,
             probability=base.probability if base else None,
             probability_lower=base.probability_lower if base else None,

@@ -121,6 +121,8 @@ def strategy_summary(packet, market_text, measurements):
     events = [e for e in packet.get("customerEvents") or [] if e.get("strategyPhases")]
     if not events:
         return None
+    if len(events) > 1:
+        return multiple_strategy_summary(events, packet, market_text, measurements)
     event = events[0]
     if event.get("scenarioTransition"):
         return scenario_summary(event, packet, market_text, measurements)
@@ -168,3 +170,41 @@ def scenario_summary(event, packet, market_text, measurements):
                      ("current-snapshot", "현재", [market_text]),
                      ("next-check-contract", "다음 판단", [next_check,
                         (boundary + " 조건의 연결을 확인한 것이며 매매 성과는 검증 중입니다.").strip()])]}
+
+
+def multiple_strategy_summary(events, packet, market_text, measurements):
+    """Present each native strategy change without choosing an investment side."""
+    changes, meanings, checks = [], [], []
+    for event in sorted(events, key=lambda e: (str(e.get("strategyId")), str(e.get("eventId")))):
+        label = event.get("strategyLabel") or "전략 조건"
+        transition = event.get("scenarioTransition") or {}
+        if transition:
+            sequence = transition["previousLabel"] + " → " + transition["currentLabel"]
+            meaning = transition["meaning"]
+            if event.get("observationGapSeconds", 0) > event["signalValiditySeconds"]:
+                sequence += " (관찰 공백 있음)"
+        else:
+            sequence = (" · ".join(PHASE_LABELS[p] for p in event["previousStrategyPhases"]) or "이전 발송 없음")
+            sequence += " → " + " · ".join(PHASE_LABELS[p] for p in event["strategyPhases"])
+            meaning = ("진입 조건과 취소·종료 조건이 함께 확인됐습니다." if event["conflictingConditions"] else
+                       " / ".join(dict.fromkeys(s for p in event["addedStrategyPhases"] for s in event["phaseModelClaims"][p])))
+        changes.append(label + ": " + sequence)
+        meanings.append(label + ": " + meaning)
+        check = ("이전 취소·종료 조건의 해제와 현재 조건의 유지를 함께 확인해야 합니다."
+                 if transition.get("to") == "reentry-review" else event["nextCheck"]["condition"])
+        checks.append(label + ": " + check)
+    brief = (packet.get("current") or {}).get("decisionBrief") or {}
+    policies = ((brief.get("judgment") or {}).get("managementDecision") or {}).get("responses") or []
+    boundary = " ".join(r.get("label", "") for r in policies[:2])
+    # Four strategies are bounded in the compact notice; every event remains
+    # explicit in the count and the immutable detail/receipt packet.
+    overflow = (["추가 " + str(len(events) - 4) + "개 전략 변화는 전체 판단 근거에서 확인할 수 있습니다."]
+                if len(events) > 4 else [])
+    return {"version": "multiple-strategy-notice-v1", "title": "여러 전략의 조건 변화",
+        "lead": str(len(events)) + "개 전략에서 조건 변화가 확인됐습니다. 전략별 확인 내용과 다음 조건을 함께 봅니다.",
+        "sections": [("notification-purpose", "어떤 변화인가요", changes[:4] + overflow),
+                     ("decision-basis", "확인된 의미", meanings[:4]),
+                     ("decision-impact", "확인된 수치", measurements.splitlines()[:4]),
+                     ("current-snapshot", "현재", [market_text]),
+                     ("next-check-contract", "다음 판단", checks[:4] +
+                         [(boundary + " 같은 자료를 공유하는 전략은 독립된 근거 수로 세지 않습니다. 매매 성과는 검증 중입니다.").strip()])]}

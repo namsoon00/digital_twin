@@ -75,10 +75,14 @@ class TypeDBRuntimeTests(unittest.TestCase):
         return api.TypeDBOntologyGraphRepository("runtime-contract.invalid:1729", database="synthetic", **options)
 
     def test_runtime_matches_versioned_promoted_policy_schema_contract(self):
-        golden = json.loads((ROOT / "tests/fixtures/typedb_runtime_v19.json").read_text())
+        golden = json.loads((ROOT / "tests/fixtures/typedb_runtime_current_flow_v1.json").read_text())
         self.assertEqual(api.TYPEDB_NATIVE_RULE_ENGINE_VERSION, golden["engineVersion"])
         actual = contract_fingerprints(api)
-        previous = json.loads((ROOT / 'tests/fixtures/typedb_runtime_v10.json').read_text())
+        from research_knowledge_fixture import pre_current_flow_catalog
+        with pre_current_flow_catalog():
+            predecessor = json.loads((ROOT / "tests/fixtures/typedb_runtime_v19.json").read_text())
+            self.assertEqual(predecessor["scenarios"], contract_fingerprints(api))
+        previous = json.loads((ROOT / 'tests/fixtures/typedb_runtime_v19.json').read_text())
         for scenario in set(actual) - set(golden['changedCases']):
             self.assertEqual(previous['scenarios'][scenario], actual[scenario])
         self.assertEqual(set(golden["scenarios"]), set(actual))

@@ -4,7 +4,11 @@ from digital_twin.modules._exports import resolve_export
 
 
 
-_EXPORTS = {'MODEL_REVIEW_PROMPT_VERSION': ('digital_twin.modules.model_registry.domain.model_review',
+_EXPORTS = {
+    'required_statistical_model_releases': ('digital_twin.modules.model_registry.domain.statistical_signals.rule_contracts', 'required_statistical_model_releases'),
+    'current_flow_strategy_rules': ('digital_twin.modules.model_registry.domain.current_flow_strategy', 'current_flow_strategy_rules'),
+    'CURRENT_FLOW_SIGNAL_RELEASE_ID': ('digital_twin.modules.model_registry.domain.statistical_signals.registry', 'CURRENT_FLOW_SIGNAL_RELEASE_ID'),
+    'MODEL_REVIEW_PROMPT_VERSION': ('digital_twin.modules.model_registry.domain.model_review',
                                  'MODEL_REVIEW_PROMPT_VERSION'),
  'ModelReviewJob': ('digital_twin.modules.model_registry.domain.model_review', 'ModelReviewJob')}
 

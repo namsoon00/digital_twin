@@ -5,29 +5,10 @@ from __future__ import annotations
 
 def v2_model_signal_release_contract(rulebox_snapshot, settings=None):
     """Resolve model releases required by enabled rules and runtime scorers."""
-    from digital_twin.modules.model_registry.domain.statistical_signals import CAPITAL_FLOW_SHADOW_RELEASE_ID, DEFAULT_AUTHORED_THESIS_SIGNAL_RELEASE_ID, DEFAULT_CROSS_ASSET_SIGNAL_RELEASE_ID, DEFAULT_EVENT_SIGNAL_RELEASE_ID, DEFAULT_FLOW_SIGNAL_RELEASE_ID, DEFAULT_PRICE_SIGNAL_RELEASE_ID, DEFAULT_VALUATION_SIGNAL_RELEASE_ID, LEGACY_EVENT_SIGNAL_RELEASE_ID, LEGACY_VALUATION_SIGNAL_RELEASE_ID
+    from digital_twin.modules.model_registry.domain.statistical_signals import CURRENT_FLOW_SIGNAL_RELEASE_ID, CAPITAL_FLOW_SHADOW_RELEASE_ID, DEFAULT_AUTHORED_THESIS_SIGNAL_RELEASE_ID, DEFAULT_CROSS_ASSET_SIGNAL_RELEASE_ID, DEFAULT_EVENT_SIGNAL_RELEASE_ID, DEFAULT_FLOW_SIGNAL_RELEASE_ID, DEFAULT_PRICE_SIGNAL_RELEASE_ID, DEFAULT_VALUATION_SIGNAL_RELEASE_ID, LEGACY_EVENT_SIGNAL_RELEASE_ID, LEGACY_VALUATION_SIGNAL_RELEASE_ID
 
-    required = set()
-    for rule in (rulebox_snapshot or {}).get("rules") or []:
-        if not bool(rule.get("enabled", True)):
-            continue
-        for condition in rule.get("conditions") or []:
-            relation_type = str(
-                condition.get("relation_type")
-                or condition.get("relationType")
-                or ""
-            ).strip()
-            if relation_type != "HAS_MODEL_SIGNAL":
-                continue
-            filters = (
-                condition.get("target_property_filters")
-                or condition.get("targetPropertyFilters")
-                or {}
-            )
-            release_ids = filters.get("releaseId") or filters.get("release_id") or ""
-            if not isinstance(release_ids, (list, tuple)):
-                release_ids = [release_ids]
-            required.update(str(value).strip() for value in release_ids if str(value).strip())
+    from digital_twin.modules.model_registry.contracts import required_statistical_model_releases
+    required = set(required_statistical_model_releases((rulebox_snapshot or {}).get("rules")))
     configured = dict(settings or {})
     available = {
         str(
@@ -45,6 +26,7 @@ def v2_model_signal_release_contract(rulebox_snapshot, settings=None):
         DEFAULT_EVENT_SIGNAL_RELEASE_ID,
         DEFAULT_AUTHORED_THESIS_SIGNAL_RELEASE_ID,
         CAPITAL_FLOW_SHADOW_RELEASE_ID,
+        CURRENT_FLOW_SIGNAL_RELEASE_ID,
     }
     available.discard("")
     missing = sorted(required - available)

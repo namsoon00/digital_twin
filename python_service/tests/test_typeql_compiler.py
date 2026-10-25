@@ -15,7 +15,7 @@ from typeql_contract_fixture import WORLD, contract_fingerprints, enabled_rules,
 ROOT = Path(__file__).resolve().parents[1] / "digital_twin"
 PACKAGE = "digital_twin.modules.reasoning.infrastructure.typeql"
 COMPILER = ROOT / "modules/reasoning/infrastructure/typeql"
-GOLDEN = Path(__file__).parent / "fixtures/typeql_compiler_v19.json"
+GOLDEN = Path(__file__).parent / "fixtures/typeql_compiler_current_flow_v1.json"
 
 
 class TypeQLCompilerTests(unittest.TestCase):
@@ -52,16 +52,20 @@ class TypeQLCompilerTests(unittest.TestCase):
         for group, fingerprint in expected["groups"].items():
             with self.subTest(group=group, original=expected["sourceRevision"]):
                 self.assertEqual(fingerprint, actual[group])
-        # Recompile the pre-existing catalog independently. Adding composition
-        # rules must not change the individual investment predicates.
-        from unittest.mock import patch
-        import typeql_contract_fixture as fixture
-        previous = json.loads((GOLDEN.parent / 'typeql_compiler_v15.json').read_text())
-        legacy_rules = [r for r in enabled_rules() if not r.rule_id.startswith(('graph.composition.', 'graph.strategy.'))]
-        with patch.object(fixture, 'enabled_rules', return_value=legacy_rules):
-            legacy = contract_fingerprints(typeql)
-        for group in ('match', 'condition', 'indexed', 'any-group', 'governed', 'bridge', 'literals'):
-            self.assertEqual(previous['groups'][group], legacy[group], group)
+        from research_knowledge_fixture import pre_current_flow_catalog
+        with pre_current_flow_catalog():
+            previous_flow = json.loads((GOLDEN.parent / 'typeql_compiler_v19.json').read_text())
+            self.assertEqual(previous_flow['groups'], contract_fingerprints(typeql))
+            # Recompile the pre-existing catalog independently. Adding composition
+            # rules must not change the individual investment predicates.
+            from unittest.mock import patch
+            import typeql_contract_fixture as fixture
+            previous = json.loads((GOLDEN.parent / 'typeql_compiler_v15.json').read_text())
+            legacy_rules = [r for r in enabled_rules() if not r.rule_id.startswith(('graph.composition.', 'graph.strategy.'))]
+            with patch.object(fixture, 'enabled_rules', return_value=legacy_rules):
+                legacy = contract_fingerprints(typeql)
+            for group in ('match', 'condition', 'indexed', 'any-group', 'governed', 'bridge', 'literals'):
+                self.assertEqual(previous['groups'][group], legacy[group], group)
 
     def test_typeql_exports_compile_without_loading_runtime_or_database_implementations(self):
         result = subprocess.run(

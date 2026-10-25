@@ -60,3 +60,20 @@ def pre_composition_flag_schema():
             yield
     finally:
         storage_schema.typedb_rule_schema_capability_contract.cache_clear()
+
+
+@contextmanager
+def pre_current_flow_catalog():
+    """Recompile the frozen pre-flow catalog and schema without new contracts."""
+    from digital_twin.modules.model_registry.domain import current_flow_rules, ontology_rulebox_catalog
+    from digital_twin.modules.reasoning.infrastructure.typeql import storage_schema
+    def clear():
+        ontology_rulebox_catalog.governed_graph_inference_rules.cache_clear()
+        ontology_rulebox_catalog._production_graph_inference_rules.cache_clear()
+        storage_schema.typedb_rule_schema_capability_contract.cache_clear()
+    clear()
+    try:
+        with patch.object(current_flow_rules, "current_flow_rules", return_value=[]):
+            yield
+    finally:
+        clear()

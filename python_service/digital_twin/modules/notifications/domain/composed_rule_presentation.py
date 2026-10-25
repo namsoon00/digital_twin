@@ -73,6 +73,7 @@ def _display_field(row):
 def exact_measurements(current, previous, events, currency, limit=4):
     now, old = saved_composition(current), saved_composition(previous)
     causes = {rid for event in events for rid in event.get("sourceRuleIds") or []}
+    strategy_only = bool(events) and all(e.get("strategyPhases") for e in events)
     before = {}
     for group, packet in _groups(old):
         for row in packet.get("measurements") or []:
@@ -80,6 +81,9 @@ def exact_measurements(current, previous, events, currency, limit=4):
                     row["evidenceId"], row["field"], _context(row))] = row
     choices = []
     for group, packet in _groups(now):
+        is_cause = group["ruleId"] in causes or bool(set(group.get("nativeRuleIds") or []) & causes)
+        if strategy_only and not is_cause:
+            continue
         for row in packet.get("measurements") or []:
             field, value = _display_field(row), numeric(row.get("observedValue"))
             if field not in MEASURES or value is None:
@@ -111,8 +115,11 @@ def exact_measurements(current, previous, events, currency, limit=4):
             # Show one source value once. Each rule's distinct threshold remains
             # in its full receipt; the displayed threshold belongs to this row.
             semantic = (field, row.get("evidenceId"), _context(row), value)
-            choices.append((group["ruleId"] not in causes, not changed, group["ruleId"],
-                            list(MEASURES).index(field), semantic, text))
+            field_order = list(MEASURES).index(field)
+            if strategy_only and field in {"foreignNetVolume", "institutionNetVolume", "smartMoneyNetVolume", "tradeStrength", "bidAskImbalance"}:
+                field_order -= len(MEASURES)
+            choices.append((not is_cause, not changed, group["ruleId"],
+                            field_order, semantic, text))
     # Give each rule one measurement before taking additional fields from it.
     # No interpretation is based on the number of clauses.
     ordered, seen, used = [], set(), set()

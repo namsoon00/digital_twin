@@ -5,6 +5,7 @@ from typing import Dict, Iterable, Tuple
 
 
 DEFAULT_PRICE_SIGNAL_RELEASE_ID = "price-path-statistics-production-v2"
+CURRENT_FLOW_SIGNAL_RELEASE_ID = "current-flow-production-v3"
 DEFAULT_FLOW_SIGNAL_RELEASE_ID = "flow-statistics-production-v2"
 CAPITAL_FLOW_SHADOW_RELEASE_ID = "capital-flow-statistics-shadow-v1"
 DEFAULT_CROSS_ASSET_SIGNAL_RELEASE_ID = "cross-asset-statistics-production-v2"
@@ -120,6 +121,14 @@ def default_statistical_model_registry() -> Tuple[StatisticalModelRelease, ...]:
             minimum_coverage_ratio=0.75,
             scorer_version="flow-score-v1",
             description="혼합 시계열의 결손값 오염을 차단하는 동안 참고 전용으로 유지하는 기존 수급 신호입니다.",
+        ),
+        StatisticalModelRelease(
+            release_id=CURRENT_FLOW_SIGNAL_RELEASE_ID,
+            model_family="current-flow-observations",
+            signal_types=("flow-accumulation-support", "flow-distribution-risk", "flow-price-divergence-risk"),
+            status="production", validation_status="validated-deterministic", decision_eligibility="conditional",
+            minimum_samples=1, minimum_coverage_ratio=1.0, scorer_version="current-flow-contract-v3",
+            description="개별 원천 시각과 관측 필드를 확인한 당일 수급 조건입니다. 기간 누적 매집·확률·매매 성과는 별도 검증 대상입니다.",
         ),
         StatisticalModelRelease(
             release_id=CAPITAL_FLOW_SHADOW_RELEASE_ID,

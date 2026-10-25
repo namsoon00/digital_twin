@@ -22,7 +22,7 @@ class RuleClaimContractTests(unittest.TestCase):
 
         self.assertEqual(0, audit["issueRuleCount"], audit["issues"])
         self.assertEqual(audit["activePredictiveRuleCount"], audit["alignedRuleCount"])
-        self.assertEqual(58, audit["activePredictiveRuleCount"])
+        self.assertEqual(63, audit["activePredictiveRuleCount"])
 
     def test_high_beta_is_market_sensitivity_and_high_pe_is_review_context(self):
         rules = {item.rule_id: item for item in default_graph_inference_rules()}
@@ -54,13 +54,13 @@ class RuleClaimContractTests(unittest.TestCase):
 
         coverage = rule_claim_coverage(rules)
 
-        self.assertEqual(133, coverage["ruleCount"])
-        self.assertEqual(133, coverage["claimCount"])
+        self.assertEqual(138, coverage["ruleCount"])
+        self.assertEqual(138, coverage["claimCount"])
         self.assertEqual(0, coverage["orphanRuleCount"])
         self.assertEqual(0, coverage["duplicateClaimCount"])
         self.assertEqual(0, coverage["violationCount"])
-        self.assertEqual(71, coverage["predictiveClaimCount"])
-        self.assertEqual(71, coverage["structuredOutcomeContractCount"])
+        self.assertEqual(76, coverage["predictiveClaimCount"])
+        self.assertEqual(76, coverage["structuredOutcomeContractCount"])
         self.assertTrue(coverage["complete"])
 
     def test_claim_contract_round_trips_with_rulebox_payload(self):
@@ -136,11 +136,11 @@ class RuleClaimContractTests(unittest.TestCase):
         outcomes = [item for item in graph.entities if item.kind == "hypothesis-outcome-contract"]
         criteria = [item for item in graph.entities if item.kind == "hypothesis-outcome-criterion"]
         relation_types = [item.relation_type for item in graph.relations]
-        self.assertEqual(133, len(claims))
-        self.assertEqual(71, len(outcomes))
+        self.assertEqual(138, len(claims))
+        self.assertEqual(76, len(outcomes))
         self.assertGreater(len(criteria), 144)
-        self.assertEqual(133, relation_types.count("GOVERNED_BY_CLAIM"))
-        self.assertEqual(71, relation_types.count("USES_HYPOTHESIS_OUTCOME_CONTRACT"))
+        self.assertEqual(138, relation_types.count("GOVERNED_BY_CLAIM"))
+        self.assertEqual(76, relation_types.count("USES_HYPOTHESIS_OUTCOME_CONTRACT"))
         self.assertEqual(len(criteria), relation_types.count("HAS_OUTCOME_CRITERION"))
 
     def test_market_rise_does_not_validate_event_outperformance(self):

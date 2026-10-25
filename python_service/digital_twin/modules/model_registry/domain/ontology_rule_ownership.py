@@ -46,6 +46,12 @@ class RuleOwnershipContract:
 
 
 STATISTICAL_MODEL_RULE_IDS = frozenset({
+    "graph.loss_smart_money.defense.v1.current-flow.v3",
+    "graph.investor_flow.smart_money_outflow_risk.v1.current-flow.v3",
+    "graph.flow.accumulation.entry.v1.current-flow.v3",
+    "graph.flow.recovery_confirmed_by_smart_money.v1.current-flow.v3",
+    "graph.flow.price_up_smart_money_outflow.divergence.v1.current-flow.v3",
+
     "graph.aggressive.loss_recovery.add_buy_review.v1",
     "graph.company.capital.dilution.risk.v1",
     "graph.company.market.forward_expectation.review.v1",

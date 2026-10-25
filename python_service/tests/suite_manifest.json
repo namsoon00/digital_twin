@@ -1,6 +1,7 @@
 {
   "tests": [
     {"file": "test_financial_source_recovery.py", "tier": "contract", "core": true},
+    {"file": "test_current_flow_rules.py", "tier": "contract", "core": true},
     {"file": "test_question_answer_parts.py", "tier": "contract", "core": true},
     {"file": "test_strategy_scenarios.py", "tier": "contract", "core": true},
     {"file": "test_projection_computation_parity.py", "tier": "contract", "core": true},

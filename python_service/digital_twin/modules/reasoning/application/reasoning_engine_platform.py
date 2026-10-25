@@ -273,7 +273,7 @@ class ReasoningEnginePlatformService:
         from digital_twin.modules.reasoning.domain.ontology_schema import ONTOLOGY_TBOX_VERSION, tbox_fingerprint
         from digital_twin.modules.decisions.contracts import AI_DECISION_PROMPT_VERSION
         from digital_twin.infrastructure.typedb_ontology import TYPEDB_NATIVE_RULE_ENGINE_VERSION
-        from digital_twin.modules.model_registry.contracts import DEFAULT_AUTHORED_THESIS_SIGNAL_RELEASE_ID, DEFAULT_CROSS_ASSET_SIGNAL_RELEASE_ID, DEFAULT_EVENT_SIGNAL_RELEASE_ID, DEFAULT_FLOW_SIGNAL_RELEASE_ID, DEFAULT_PRICE_SIGNAL_RELEASE_ID, DEFAULT_VALUATION_SIGNAL_RELEASE_ID, LEGACY_EVENT_SIGNAL_RELEASE_ID, LEGACY_VALUATION_SIGNAL_RELEASE_ID, MODEL_SIGNAL_CONTRACT_VERSION
+        from digital_twin.modules.model_registry.contracts import CURRENT_FLOW_SIGNAL_RELEASE_ID, DEFAULT_AUTHORED_THESIS_SIGNAL_RELEASE_ID, DEFAULT_CROSS_ASSET_SIGNAL_RELEASE_ID, DEFAULT_EVENT_SIGNAL_RELEASE_ID, DEFAULT_FLOW_SIGNAL_RELEASE_ID, DEFAULT_PRICE_SIGNAL_RELEASE_ID, DEFAULT_VALUATION_SIGNAL_RELEASE_ID, LEGACY_EVENT_SIGNAL_RELEASE_ID, LEGACY_VALUATION_SIGNAL_RELEASE_ID, MODEL_SIGNAL_CONTRACT_VERSION
 
         active_backend = str(self.settings.get("timeSeriesActiveBackendId") or "mysql-primary")
         shadow_backend = str(self.settings.get("timeSeriesShadowBackendId") or "questdb-shadow")
@@ -333,6 +333,7 @@ class ReasoningEnginePlatformService:
                     or DEFAULT_FLOW_SIGNAL_RELEASE_ID
                 ),
                 DEFAULT_CROSS_ASSET_SIGNAL_RELEASE_ID,
+                CURRENT_FLOW_SIGNAL_RELEASE_ID,
                 LEGACY_VALUATION_SIGNAL_RELEASE_ID,
                 LEGACY_EVENT_SIGNAL_RELEASE_ID,
                 DEFAULT_VALUATION_SIGNAL_RELEASE_ID,
@@ -1253,6 +1254,7 @@ class ReasoningEnginePlatformService:
         from digital_twin.modules.reasoning.domain.management_upgrade_review import MANAGEMENT_UPGRADE_REVIEW_VERSION
         registration_runtime = dict(self.settings.get("_runtimeIdentity") or {})
         authored_artifact = dict(release_seed_artifact or {})
+        model_releases = bundle.model_signal_release_id
         if authored_artifact:
             from digital_twin.modules.model_registry.contracts import GraphInferenceRule, rulebox_rules_hash
             from digital_twin.modules.reasoning.domain.ontology_schema import normalize_tbox_metadata
@@ -1265,6 +1267,11 @@ class ReasoningEnginePlatformService:
                     or rulebox_rules_hash(authored_rules) != authored_artifact.get("ruleboxFingerprint")
                     or tbox.get("fingerprint") != authored_artifact.get("tboxFingerprint")):
                 return {"status": "blocked", "blockers": ["invalid-authored-release"], "violations": violations}
+            from digital_twin.modules.model_registry.contracts import required_statistical_model_releases
+            # A new authored release can add a registered model. Freeze its
+            # identity in this successor; never rewrite the baseline bundle.
+            model_releases = "+".join(sorted(set(filter(None, model_releases.split("+")))
+                                            | set(required_statistical_model_releases(authored_rules))))
         descriptor = ReasoningEngineDescriptor(
             engine_family=base.engine_family,
             engine_version=base.engine_version,
@@ -1277,7 +1284,7 @@ class ReasoningEnginePlatformService:
                 rulebox_release_id=("ontology-evolution@" + str(authored_artifact["ruleboxFingerprint"])) if authored_artifact else bundle.rulebox_release_id,
                 prompt_release_id=bundle.prompt_release_id,
                 feature_set_version=bundle.feature_set_version,
-                model_signal_release_id=bundle.model_signal_release_id,
+                model_signal_release_id=model_releases,
                 source_contract_versions=tuple(sorted(set(bundle.source_contract_versions) | {
                     COMPARISON_INPUT_CONTRACT_VERSION, "target-scope-logical-input-v2", MANAGEMENT_UPGRADE_REVIEW_VERSION, PAIRED_VALIDATION_INPUT_VERSION,
                 })),

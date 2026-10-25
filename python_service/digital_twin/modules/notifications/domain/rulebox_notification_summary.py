@@ -294,7 +294,7 @@ def compact_rulebox_summary(packet):
         market += " · 보유 수익률 " + decimal(profit, signed=True) + "%"
     from .rule_strategy_event import strategy_summary
     strategy_events = [e for e in events if e.get("strategyPhases")]
-    strategy = strategy_summary(packet, market, _measurements(current, previous, {}, strategy_events, currency, packet.get("transitions") or [])) if strategy_events else None
+    strategy = strategy_summary(packet, market, _measurements(current, previous, judgment, strategy_events, currency, packet.get("transitions") or [])) if strategy_events else None
     if strategy:
         return strategy
     released_lead = release_conclusion(packet)

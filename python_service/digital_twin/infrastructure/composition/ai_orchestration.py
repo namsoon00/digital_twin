@@ -286,14 +286,14 @@ def ai_control_status(settings=None, account_id=""):
 
 def save_ai_control_settings(payload):
     from digital_twin.infrastructure.settings import save_runtime_settings
-    if not isinstance(payload, dict) or set(payload) - {"aiControlEnabled", "aiResearchKnowledgeEnabled", "aiControlBudgetEnabled", "aiControlDailyTaskBudget", "aiControlDailyCallBudget", "aiObservationPromptMaxBytes", "aiTokenBudgetEnabled", "aiDailyTokenBudget"}:
+    if not isinstance(payload, dict) or set(payload) - {"aiControlEnabled", "aiResearchKnowledgeEnabled", "aiCompanyResearchEnabled", "aiControlBudgetEnabled", "aiControlDailyTaskBudget", "aiControlDailyCallBudget", "aiObservationPromptMaxBytes", "aiTokenBudgetEnabled", "aiDailyTokenBudget"}:
         raise ValueError("지원하지 않는 중앙 AI 설정입니다.")
     if "aiObservationPromptMaxBytes" in payload and not 65536 <= int(payload["aiObservationPromptMaxBytes"]) <= 524288:
         raise ValueError("관찰 입력 한도는 64–512 KiB 범위여야 합니다.")
     for key, maximum in (("aiControlDailyTaskBudget", 200), ("aiControlDailyCallBudget", 300), ("aiDailyTokenBudget", 100_000_000)):
         if key in payload and not 0 <= int(payload[key]) <= maximum:
             raise ValueError("작업 또는 호출 한도를 확인하세요.")
-    for key in ("aiControlEnabled", "aiControlBudgetEnabled", "aiResearchKnowledgeEnabled", "aiTokenBudgetEnabled"):
+    for key in ("aiControlEnabled", "aiControlBudgetEnabled", "aiResearchKnowledgeEnabled", "aiCompanyResearchEnabled", "aiTokenBudgetEnabled"):
         if key in payload and payload[key] not in {"true", "false"}:
             raise ValueError("관찰 또는 한도 사용 여부를 확인하세요.")
     save_runtime_settings(payload)

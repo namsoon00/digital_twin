@@ -73,6 +73,9 @@ def business_schema(packet, research):
     checkpoints = {**array(obj({"factId": choice(sorted({row["factId"] for row in financial_metrics(packet)}) or [""]),
         "metric": choice(sorted({row["metric"] for row in financial_metrics(packet)}) or [""]),
         "direction": choice(["increase", "decrease"]), "meaning": string})), "maxItems": 3}
+    from . import quantitative_research
+    if quantitative_research.enabled(packet):
+        checkpoints = {**array(quantitative_research.schema(financial_metrics(packet), ids)), "maxItems": 3}
     thesis = obj({**{key: deepcopy(string) for key in TEXT_FIELDS}, "evidenceIds": evidence,
         "missingEvidence": {**array(string), "maxItems": 3}, "horizonDays": {"type": "integer", "minimum": 90, "maximum": 730},
         "checkpoints": checkpoints})
@@ -140,6 +143,17 @@ def validate_business(value, packet, research):
             "missingEvidence": [text(entry, path + ".missingEvidence[" + str(i) + "]") for i, entry in enumerate(missing)], "horizonDays": horizon, "checkpoints": []}
         seen = set()
         for check in checks:
+            from . import quantitative_research
+            if quantitative_research.enabled(packet):
+                if not isinstance(check, dict):
+                    raise ValueError("invalid quantitative checkpoint")
+                key = (check.get("factId"), check.get("metric"))
+                if key not in metrics or key in seen or check.get("factId") not in ids:
+                    raise ValueError("quantitative checkpoint requires selected exact metric")
+                row["checkpoints"].append(quantitative_research.validate(
+                    check, metrics[key], metrics, packet, horizon, ids, text))
+                seen.add(key)
+                continue
             if not isinstance(check, dict) or set(check) != {"factId", "metric", "direction", "meaning"}:
                 raise ValueError("invalid report checkpoint")
             key = (check["factId"], check["metric"])
@@ -185,7 +199,9 @@ def raw_business(value):
     """Recheck the model-authored portion against the frozen input at commit."""
     result = deepcopy(value)
     for row in result.get("theses", []):
-        row["checkpoints"] = [{key: check[key] for key in ("factId", "metric", "direction", "meaning")} for check in row["checkpoints"]]
+        from .quantitative_research import VERSION as quantitative_version, FIELDS
+        row["checkpoints"] = [{key: check[key] for key in (FIELDS if check.get("contractVersion") == quantitative_version
+                              else ("factId", "metric", "direction", "meaning"))} for check in row["checkpoints"]]
     for row in result.get("reviews", []):
         row.pop("expectedRevision", None)
     return result
@@ -233,6 +249,13 @@ def evaluate_thesis(case, packet):
     results = []
     for index, check in enumerate(case["contract"]["checkpoints"]):
         old = previous[index] if index < len(previous) else {}
+        from .quantitative_research import VERSION as quantitative_version
+        if check.get("contractVersion") == quantitative_version:
+            from digital_twin.modules.outcomes.contracts import evaluate_research_expectation, RESEARCH_EXPECTATION_TERMINAL
+            results.append(deepcopy(old) if old.get("status") in RESEARCH_EXPECTATION_TERMINAL
+                           else evaluate_research_expectation(check, financial_metrics(packet), case["createdAt"],
+                                                              packet["capturedAt"], case["expiresAt"]))
+            continue
         # Keep the first actual observation, including a miss, immutable. Later
         # report restatements are current facts for review, not a rewritten test.
         results.append(deepcopy(old) if old.get("status") in {"direction-observed", "direction-not-observed"}

@@ -70,6 +70,8 @@ def material_key(packet, research, *, evidence_identity=None):
         common["evidenceCompletionPolicy"] = packet["evidenceCompletionPolicy"]
     if packet.get("businessInsightPolicy"):
         common["businessInsightPolicy"] = packet["businessInsightPolicy"]
+    if packet.get("companyResearchPolicy"):
+        common["companyResearchPolicy"] = packet["companyResearchPolicy"]
     if packet.get("judgmentQualityPolicy"):
         common["judgmentQualityPolicy"] = packet["judgmentQualityPolicy"]
     if market(packet):

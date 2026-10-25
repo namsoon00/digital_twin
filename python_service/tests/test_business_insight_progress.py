@@ -67,7 +67,7 @@ def business_result(value=None):
     return {**validate_plan(raw, value), 'input': value, 'observedAt': value['capturedAt'], 'executionInputId': 'author'}
 
 
-def check_storage(test, save):
+def check_storage(test, save, company_cycle=False):
     from digital_twin.infrastructure.transactions.ai_control_research_knowledge import AIControlResearchKnowledge
     from digital_twin.modules.ai_orchestration.domain.evidence_purpose import annotate
     from digital_twin.modules.reasoning.contracts import quote_clock_assessment
@@ -75,6 +75,9 @@ def check_storage(test, save):
     # are synthetic and otherwise each consumes the unknown-usage allowance.
     test.store.runtime_settings['aiDailyTokenBudget'] = 10000000
     value = source_packet(); value.update(test.subject, taskId=test.job['taskId'])
+    if company_cycle:
+        from digital_twin.modules.ai_orchestration.domain.company_research_cycle import VERSION
+        value['companyResearchPolicy'] = VERSION
     value['sourceSnapshots'] = {value['worldId']: value['sourceSnapshotId']}
     for fact in value['facts']:
         fact.update(symbol=value['symbol'], sourceWorldId=value['worldId'], sourceSnapshotId=value['sourceSnapshotId'])

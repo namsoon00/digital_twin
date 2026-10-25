@@ -9,6 +9,69 @@ Question-specific collection failures and bounded, same-revision focused reads
 follow the [source recovery contract](source-recovery.md). Diagnostics return to
 the original question and next plan without changing past answers or eligibility.
 
+## Company research cycle
+
+`AI_COMPANY_RESEARCH_ENABLED=true` is the default for new company observations.
+The equivalent persisted setting is `aiCompanyResearchEnabled`. Runtime wiring
+enables the existing evidence and judgment policies before adding
+`company-research-cycle-v1`: author v27, repair v23, customer review v16,
+retrieval v15 and independent research review v4. Crypto observations retain
+their existing contracts. Deployment uses the normal validation gate and direct
+activation; it does not run old/new authors in parallel or add a second model
+pipeline. Set the setting to false and restart managed workers to disable the
+new input contract. Existing stored cases, reviews and delivered bodies retain
+their original versions.
+
+`news_intelligence` calculates `cash-flow-bridge-v1` from existing source-bound
+reports. It requires matching provider, currency, consolidation scope and
+duration, non-overlapping comparable reporting periods, and immutable source
+references. The bridge records the contribution of operating cash flow and
+capital expenditure to `OCF - abs(capex)`, explicitly distinguishing adjacent
+quarters from the same period a year earlier. Provider-reported free cash flow
+remains separate; reconciliation requires its own matching basis. Missing
+values never become zero. Later source revisions cannot enter an earlier
+snapshot. This arithmetic does not establish working-capital, product-demand
+or other economic causes.
+Unavailable bridges expose the exact periods, metrics and missing fields for
+the existing question-directed original-document collection. Provider frequency
+labels do not manufacture missing statement start dates. Cached provider rows
+without start dates or a complete comparable pair remain explicitly unavailable
+until the necessary original evidence arrives.
+
+The existing `FinancialState` source projection exposes the bridge through
+`derivedMetricEvidence.cashFlowBridge`. Bounded `read_report` accepts
+`cashFlowBridge` and retains formula, source versions and calculation identity.
+Only valid numeric contributions can support a changed business judgment;
+calculation IDs and availability metadata cannot. No RuleBox, action scorer,
+new trading rule or engine-release ontology is added.
+
+AI research can register a `quantitative-business-checkpoint-v1` on the latest
+comparable report metric. It freezes exact target period start/end, an absolute
+expected range in the baseline currency/unit, assumptions and evidence IDs.
+Ranges are explicitly `ai-assumption`, not company guidance or market consensus.
+Unsupported ranges must be omitted and replaced by a concrete source question.
+Existing valuation assumptions and sensitivity outputs can inform the
+explanation; this change does not introduce a new valuation model or allow
+ineligible calculations to become fair-value claims.
+
+`outcomes` compares an immutable checkpoint with a later source-owned report
+of the same period and basis. It records within/below/above-range status,
+deviation and the exact observed source. Missing, incomparable or late-acquired
+reports cannot manufacture a failed or successful forecast. The first observed
+result survives restatements. Legacy directional checkpoints keep their
+existing evaluation rules.
+
+The existing atomic research handoff links independently reviewed theses to
+`research_knowledge`. New observations become immutable assessments; range
+misses propose a method review without automatically adopting a new method.
+Research knowledge must also be enabled via `aiResearchKnowledgeEnabled`.
+Its audit projection retains quantitative assessments with
+`reasoningEligible=false`. Subsequent AI inputs receive the prior assumptions,
+misses and review proposals. Research-progress notifications carry the frozen
+range and actual deviation and remain subject to milestone deduplication.
+This creates traceable learning material, not a demonstrated accuracy or return
+improvement, and does not train model weights automatically.
+
 ## Complete evidence admission and receipt provenance
 
 New quality-enabled inputs additionally freeze `business-insight-v1`: author

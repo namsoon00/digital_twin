@@ -28,6 +28,9 @@ def historical_reference(fact):
 def usable_fact(fact, field=None):
     if fact.get("valuationDecisionEligible") is False:
         return False
+    if field and field.startswith("derivedMetricEvidence.cashFlowBridge."):
+        from digital_twin.modules.news_intelligence.contracts import cash_flow_bridge_field_usable
+        return fact.get("judgementEvidenceUsable") is not False and cash_flow_bridge_field_usable(fact, field)
     from digital_twin.modules.reasoning.contracts import EXACT_QUESTION_DOCUMENT_VERSION
     ref = fact.get("questionSourceReference") or {}
     governance = fact.get("evidenceGovernance") or {}

@@ -93,6 +93,11 @@ class AIControlService:
                         packet["evidenceCompletionPolicy"] = completion_policy
                         from ..domain.business_insight import VERSION as business_policy
                         packet["businessInsightPolicy"] = business_policy
+                        from digital_twin.modules.reasoning.contracts import CRYPTO_EVIDENCE_PROFILE
+                        if (str(self.settings.get("aiCompanyResearchEnabled", "false")).lower() in {"true", "1", "on"}
+                                and packet.get("profile") != CRYPTO_EVIDENCE_PROFILE):
+                            from ..domain.company_research_cycle import VERSION as company_research_policy
+                            packet["companyResearchPolicy"] = company_research_policy
                         packet = company_value.refresh(packet)
                     brain_reader = (self.market_brain_memory or self.brain_memory) if lanes.market(packet) else self.brain_memory
                     research = list(brain_reader(job["accountId"], job["symbol"], job["worldId"]))
@@ -269,7 +274,7 @@ class AIControlService:
                                 for row in result.get("caseReviews", [])))
                             or (packet.get("questionWorkPolicy") and result.get("caseReviews"))):
                         stage = "research-assessment-review"
-                        result["researchQuality"] = {"version": research_review.VERSION, "status": "rejected"}
+                        result["researchQuality"] = {"version": research_review.version_for(packet), "status": "rejected"}
                         try:
                             review_input = research_review.freeze(result, envelope["researchResults"], envelope["promptBudgetBytes"])
                             review_id = self.store.save_execution_input(job, review_input)

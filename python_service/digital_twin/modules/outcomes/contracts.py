@@ -10,6 +10,8 @@ _EXPORTS = {'evaluate_hypothesis_outcome': ('digital_twin.modules.outcomes.domai
 
 
 _EXPORTS.update({
+    'evaluate_research_expectation': ('digital_twin.modules.outcomes.domain.research_expectation', 'evaluate_research_expectation'),
+    'RESEARCH_EXPECTATION_TERMINAL': ('digital_twin.modules.outcomes.domain.research_expectation', 'TERMINAL'),
     'notification_timing_contract': ('digital_twin.modules.outcomes.domain.notification_timing', 'timing_contract'),
     'prepare_observation_conditions': ('digital_twin.modules.outcomes.domain.observation_followup', 'prepare_observation_conditions'),
     'ObservationConditionError': ('digital_twin.modules.outcomes.domain.observation_followup', 'ObservationConditionError'),

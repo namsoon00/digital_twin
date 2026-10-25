@@ -168,6 +168,12 @@ def render_ai_observation(result, *, sent_at="", debug_number=""):
             lines += ["• " + thesis["mechanism"], "다른 설명: " + thesis["alternative"], "재검토 조건: " + thesis["invalidation"]]
             for check in thesis.get("checkpoints", []):
                 base = check["baseline"]
+                if check.get("contractVersion") == "quantitative-business-checkpoint-v1":
+                    lines.append("• " + check["meaning"] + " · 대상 " + check["targetPeriodStart"] + "~" + check["targetPeriodEnd"]
+                                 + " · AI 가정 범위 " + figure(check["expectedLow"], base["basis"]["currency"])
+                                 + "~" + figure(check["expectedHigh"], base["basis"]["currency"]))
+                    lines.append("가정: " + check["assumption"])
+                    continue
                 lines.append("• " + check["meaning"] + " · 기준 " + base["periodEnd"] + " " + str(base["value"]) + " " + base["basis"]["currency"] + " · 다음 해 같은 기간 확인")
         lines.append("사업 지표 확인은 가설 전체의 성공이나 투자 수익률 적중을 뜻하지 않습니다.")
     if business.get("reviews"):

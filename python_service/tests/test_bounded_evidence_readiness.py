@@ -410,6 +410,7 @@ class SourceRenewalStorageTests(unittest.TestCase):
         check_quality_storage(self, value, save)
         from test_business_insight_progress import check_storage
         check_storage(self, save)
+        check_storage(self, save, company_cycle=True)
 
     def setUp(self):
         from test_ai_control import AIControlStorageTests, SUBJECT

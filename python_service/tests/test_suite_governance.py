@@ -422,7 +422,8 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # quality output and endpoint validation while bounding repeated work.
         # Six work-order/closure/native-evidence regressions.
         # Fifteen authored scenario, source-order, receipt, publication, quiet-candidate and atomic history contracts.
-        self.assertLessEqual(total, 2647)
+        # Fifteen cash-flow, quantitative-contract, immutable-outcome, notification and atomic knowledge regressions.
+        self.assertLessEqual(total, 2662)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

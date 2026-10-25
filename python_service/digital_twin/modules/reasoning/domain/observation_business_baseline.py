@@ -6,7 +6,7 @@ from .observation_evidence import canonical_json, source_clock
 from .observation_report_view import report_metrics, report_view
 
 VERSION = "business-evidence-reservation-v3"
-METRICS = ("revenue", "operatingIncome", "netIncome", "operatingCashFlow",
+METRICS = ("cashFlowBridge", "revenue", "operatingIncome", "netIncome", "operatingCashFlow",
            "capitalExpenditure", "changeInWorkingCapital", "freeCashFlow",
            "revenueGrowthPct", "operatingIncomeGrowthPct", "freeCashFlowGrowthPct",
            "cashConversionPct", "sharesOutstandingGrowthPct")
@@ -61,7 +61,7 @@ def baseline(session, facts, question_documents, captured_at):
         if row["id"] in seen:
             continue
         seen.add(row["id"])
-        metrics = [key for key in METRICS if key in report_metrics(row)]
+        metrics = [key for key in METRICS if key in report_metrics(row)][:12]
         if row.get("kind") == "company-financial-state" and metrics:
             view = report_view(row, metrics)
         elif row.get("historicalDocumentReference") or row.get("questionSourceReference"):

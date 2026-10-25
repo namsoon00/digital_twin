@@ -68,4 +68,5 @@ def financial_research_evidence(symbol: str, company: Dict[str, object]) -> List
                     "publicationTimeKnown": bool(contract.get("publishedAt")),
                 },
             ))
-    return results
+    from .cash_flow_bridge import attach_cash_flow_bridges
+    return attach_cash_flow_bridges(results)

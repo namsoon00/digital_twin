@@ -17,10 +17,11 @@ def research_progress(case, event):
     if stage == "business-registered":
         category, state, label = "business", [status, observations], "사업 가설 등록"
     elif stage == "business-reviewed":
+        from digital_twin.modules.outcomes.contracts import RESEARCH_EXPECTATION_TERMINAL
         category, state = "business", [status, observations]
         label = {"superseded": "사업 가설 수정", "retired": "사업 가설 종료"}.get(status, "사업 지표 확인 상태 변경")
         if status not in {"superseded", "retired"} and not any(
-                value in {"direction-observed", "direction-not-observed"} for value in observations):
+                value in {"direction-observed", "direction-not-observed"} | RESEARCH_EXPECTATION_TERMINAL for value in observations):
             return None
     elif stage == "created" and case.get("capability") in {"research", "develop-hypothesis"}:
         category, state, label = "question", status, "연구 질문 등록"
@@ -94,6 +95,15 @@ def research_progress(case, event):
         return None
     markers[category] = signature
     review = case.get("lastReview") or case.get("lastAssessment") or {}
+    quantitative_checks = [{**{key: check[key] for key in ("contractVersion", "meaning", "targetPeriodStart",
+        "targetPeriodEnd", "expectedLow", "expectedHigh")}, "baseline": {"basis": check["baseline"]["basis"]}}
+        for check in contract.get("checkpoints", [])[:3]
+        if check.get("contractVersion") == "quantitative-business-checkpoint-v1"]
+    quantitative_actuals = [{"metric": row["metric"], "actual": row["current"]["value"],
+        "currency": row["current"]["basis"]["currency"], "rangeDeviation": row["rangeDeviation"],
+        "targetPeriodEnd": row["targetPeriodEnd"]}
+        for row in case.get("observations", [])[:3]
+        if row.get("contractVersion") == "quantitative-business-checkpoint-v1" and row.get("current")]
     return {
         "version": "research-progress-v1", "eventId": event["eventId"],
         **{key: case[key] for key in ("caseId", "accountId", "symbol", "worldId")},
@@ -102,10 +112,12 @@ def research_progress(case, event):
         "stage": stage, "status": status, "label": label, "question": case.get("question", ""),
         "reason": case.get("reason", ""), "nextCheckAt": case.get("nextCheckAt", ""),
         "contract": deepcopy({key: contract[key] for key in (
-            "mechanism", "assumption", "alternative", "invalidation", "missingEvidence", "horizonDays") if key in contract}),
+            "mechanism", "assumption", "alternative", "invalidation", "missingEvidence", "horizonDays") if key in contract}
+            | ({"checkpoints": quantitative_checks} if quantitative_checks else {})),
         "evidenceIds": list(review.get("evidenceIds") or contract.get("evidenceIds") or [])[:12],
         "sourceQuestionIds": [row["caseId"] for row in case.get("origin", {}).get("sourceQuestions", [])],
         "observations": observations, "authority": "research-status-only",
+        **({"quantitativeActuals": quantitative_actuals} if quantitative_actuals else {}),
         "qualification": "not-empirically-qualified",
         "documentaryAnswer": deepcopy(case.get("lastResearch", {}).get("result", {}).get("documentaryAnswer") or {}) if stage == "research-returned" else {},
         "reviewBlocker": deepcopy(case.get("reviewBlocker") or {}) if stage == "review-deferred" else {},

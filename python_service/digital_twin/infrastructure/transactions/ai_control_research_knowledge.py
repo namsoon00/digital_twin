@@ -83,7 +83,7 @@ class AIControlResearchKnowledge:
     @staticmethod
     def read_proof(connection, job, result):
         from digital_twin.modules.ai_orchestration.domain.execution_input import validate_execution_input
-        from digital_twin.modules.ai_orchestration.domain import scoped_retrieval, working_retrieval, indexed_retrieval, question_retrieval, lane_retrieval, bounded_retrieval, purpose_retrieval, compact_retrieval, quality_retrieval, completion_retrieval, business_retrieval, retrieval_view
+        from digital_twin.modules.ai_orchestration.domain import scoped_retrieval, working_retrieval, indexed_retrieval, question_retrieval, lane_retrieval, bounded_retrieval, purpose_retrieval, compact_retrieval, quality_retrieval, completion_retrieval, business_retrieval, company_retrieval, retrieval_view
         from digital_twin.modules.ai_orchestration.domain.question_evidence import captured_index
         from digital_twin.modules.reasoning.contracts import content_hash, validate_evidence_packet
         packet = result["input"]
@@ -102,7 +102,7 @@ class AIControlResearchKnowledge:
                 raise ValueError("research progress requires completed frozen read proof")
             envelope, step = json.loads(gzip.decompress(row["input_gzip"])), json.loads(gzip.decompress(row["round_gzip"]))
             validate_execution_input(envelope)
-            contract = business_retrieval if envelope["promptVersion"] == business_retrieval.VERSION else completion_retrieval if envelope["promptVersion"] == completion_retrieval.VERSION else quality_retrieval if envelope["promptVersion"] == quality_retrieval.VERSION else compact_retrieval if envelope["promptVersion"] == compact_retrieval.VERSION else purpose_retrieval if envelope["promptVersion"] in purpose_retrieval.SUPPORTED_VERSIONS else bounded_retrieval if envelope["promptVersion"] == bounded_retrieval.VERSION else lane_retrieval if envelope["promptVersion"] == lane_retrieval.VERSION else question_retrieval if envelope["promptVersion"] == question_retrieval.VERSION else indexed_retrieval if envelope["promptVersion"] == indexed_retrieval.VERSION else scoped_retrieval if envelope["promptVersion"] == scoped_retrieval.VERSION else working_retrieval
+            contract = company_retrieval if envelope["promptVersion"] == company_retrieval.VERSION else business_retrieval if envelope["promptVersion"] == business_retrieval.VERSION else completion_retrieval if envelope["promptVersion"] == completion_retrieval.VERSION else quality_retrieval if envelope["promptVersion"] == quality_retrieval.VERSION else compact_retrieval if envelope["promptVersion"] == compact_retrieval.VERSION else purpose_retrieval if envelope["promptVersion"] in purpose_retrieval.SUPPORTED_VERSIONS else bounded_retrieval if envelope["promptVersion"] == bounded_retrieval.VERSION else lane_retrieval if envelope["promptVersion"] == lane_retrieval.VERSION else question_retrieval if envelope["promptVersion"] == question_retrieval.VERSION else indexed_retrieval if envelope["promptVersion"] == indexed_retrieval.VERSION else scoped_retrieval if envelope["promptVersion"] == scoped_retrieval.VERSION else working_retrieval
             if (envelope["promptVersion"] != (purpose_retrieval.version_for(envelope["current"]) if contract is purpose_retrieval else contract.VERSION) or step["inputId"] != input_id or content_hash(step) != row["artifact_hash"]
                     or envelope["retrievalContext"].get("trace", []) != trace
                     or any(envelope["current"].get(key) != packet.get(key) or packet.get(key) != job.get(key)
@@ -111,7 +111,7 @@ class AIControlResearchKnowledge:
                     or envelope["current"]["capturedAt"] != packet["capturedAt"]
                     or envelope["current"].get("researchKnowledge") != packet.get("researchKnowledge")
                     or any(envelope["current"].get(key) != packet.get(key)
-                           for key in ("companyValuePolicy", "companyValueEvidence", "previousCompanyValue", "businessInsightPolicy"))
+                           for key in ("companyValuePolicy", "companyValueEvidence", "previousCompanyValue", "businessInsightPolicy", "companyResearchPolicy"))
                     or envelope["retrievalContext"].get("questionEvidencePolicy") != packet.get("questionEvidencePolicy")
                     or (packet.get("questionEvidencePolicy") and captured_index(envelope["retrievalContext"].get("questionIndex", [])) != packet.get("questionEvidenceIndex"))
                     or step.get("authorScopePolicy") != envelope["retrievalContext"].get("authorScopePolicy")):
@@ -124,7 +124,7 @@ class AIControlResearchKnowledge:
             if step.get("decision"):
                 if set(step["decision"]["selectedFactIds"]) - known.keys():
                     raise ValueError("research progress selected unread evidence")
-                if contract in {scoped_retrieval, indexed_retrieval, question_retrieval, lane_retrieval, bounded_retrieval, purpose_retrieval, compact_retrieval, quality_retrieval, completion_retrieval, business_retrieval}:
+                if contract in {scoped_retrieval, indexed_retrieval, question_retrieval, lane_retrieval, bounded_retrieval, purpose_retrieval, compact_retrieval, quality_retrieval, completion_retrieval, business_retrieval, company_retrieval}:
                     contract.validate_scope(step["decision"], envelope["retrievalContext"], known)
             for item in step["reads"]:
                 for fact in item["result"].get("facts", []):
@@ -132,24 +132,24 @@ class AIControlResearchKnowledge:
                     captured_versions.setdefault(fact["id"], set()).add(digest(fact))
             trace.append(step)
             contract.validate_trace(trace)
-            if contract in {compact_retrieval, quality_retrieval, completion_retrieval, business_retrieval}:
+            if contract in {compact_retrieval, quality_retrieval, completion_retrieval, business_retrieval, company_retrieval}:
                 retrieval_view.paths(envelope["current"], {**envelope["retrievalContext"], "trace": trace})
         if (packet["retrieval"] != contract.trace_summary(trace, packet["retrieval"]["status"])
                 or any(digest(fact) not in captured_versions.get(fact["id"], set()) for fact in packet["facts"])):
             raise ValueError("research progress evidence changed after capture")
-        if contract in {scoped_retrieval, indexed_retrieval, question_retrieval, lane_retrieval, bounded_retrieval, purpose_retrieval, compact_retrieval, quality_retrieval, completion_retrieval, business_retrieval} and packet.get("researchScope") != contract.research_scope(trace, packet["retrieval"]["status"]):
+        if contract in {scoped_retrieval, indexed_retrieval, question_retrieval, lane_retrieval, bounded_retrieval, purpose_retrieval, compact_retrieval, quality_retrieval, completion_retrieval, business_retrieval, company_retrieval} and packet.get("researchScope") != contract.research_scope(trace, packet["retrieval"]["status"]):
             raise ValueError("research progress question scope changed")
         last = (trace[-1].get("decision") or {}).get("action")
         expected = {"finish": "ready", "research": "research-ready", "defer": "deferred", "assess": "assessment-ready"}.get(last)
         from digital_twin.modules.ai_orchestration.domain import company_value
         if company_value.enabled(packet):
             company_value.validate(packet)
-        if contract in {bounded_retrieval, purpose_retrieval, compact_retrieval, quality_retrieval, completion_retrieval, business_retrieval} and not company_value.available(packet) and bounded_retrieval.price_only_finish(trace[-1].get("decision") or {}, known):
+        if contract in {bounded_retrieval, purpose_retrieval, compact_retrieval, quality_retrieval, completion_retrieval, business_retrieval, company_retrieval} and not company_value.available(packet) and bounded_retrieval.price_only_finish(trace[-1].get("decision") or {}, known):
             expected = "deferred"
         from digital_twin.modules.ai_orchestration.domain.business_progress import report_gaps
         if expected == "ready" and report_gaps(packet):
             expected = "deferred"
         if (expected and packet["retrieval"]["status"] != expected
-                and not (contract in {lane_retrieval, bounded_retrieval, purpose_retrieval, compact_retrieval, quality_retrieval, completion_retrieval, business_retrieval} and packet["retrieval"]["status"] == "context-budget")):
+                and not (contract in {lane_retrieval, bounded_retrieval, purpose_retrieval, compact_retrieval, quality_retrieval, completion_retrieval, business_retrieval, company_retrieval} and packet["retrieval"]["status"] == "context-budget")):
             raise ValueError("research progress disposition changed")
         return trace

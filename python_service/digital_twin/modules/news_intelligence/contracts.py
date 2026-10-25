@@ -4,6 +4,7 @@ from digital_twin.modules._exports import resolve_export
 
 
 _EXPORTS = {
+ 'cash_flow_bridge_field_usable': ('digital_twin.modules.news_intelligence.domain.cash_flow_bridge', 'cash_flow_bridge_field_usable'),
  'assess_disclosure_document': ('digital_twin.modules.news_intelligence.domain.disclosure_quality', 'assess_disclosure_document'),
  'annual_financial_observations': ('digital_twin.modules.news_intelligence.domain.annual_financial_history', 'annual_financial_observations'),
  'RESEARCH_FINANCIAL_METRICS': ('digital_twin.modules.news_intelligence.domain.financial_research_evidence', 'REPORTED_METRICS'),

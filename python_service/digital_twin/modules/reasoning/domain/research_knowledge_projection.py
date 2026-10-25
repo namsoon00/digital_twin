@@ -55,8 +55,14 @@ def research_knowledge_projection(context):
                 edge(claim, ref, "CONTRADICTS" if role == "contradicts" else "SUPPORTED_BY")
         assessment = row.get("currentAssessment") or row.get("assessment") or {}
         if assessment.get("assessmentId"):
+            quantitative = [{key: observation[key] for key in (
+                "contractVersion", "checkpointId", "metric", "status", "expectedLow", "expectedHigh",
+                "targetPeriodStart", "targetPeriodEnd", "expectationKind", "rangeDeviation", "observedAt")
+                if key in observation} for observation in assessment.get("observations", [])
+                if observation.get("contractVersion") == "quantitative-business-checkpoint-v1"]
             assessed = node("research-knowledge-assessment", assessment["assessmentId"], "후속 지표 관측", "ResearchKnowledgeAssessment",
-                            {"status": assessment["status"], "qualification": assessment["qualification"]})
+                            {"status": assessment["status"], "qualification": assessment["qualification"],
+                             **({"quantitativeObservations": quantitative} if quantitative else {})})
             edge(claim, assessed, "HAS_RESEARCH_ASSESSMENT")
             proposal = assessment.get("methodProposal") or {}
             if proposal:

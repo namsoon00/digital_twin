@@ -57,6 +57,13 @@ def render_research_progress(value):
         lines.extend(["", "<b>더 필요한 자료</b>", text(" · ".join(missing) if isinstance(missing, list) else missing)])
     if contract.get("horizonDays"):
         lines.append("등록된 연구 기간: " + text(contract["horizonDays"], 4) + "일")
+    for check in contract.get("checkpoints", [])[:3]:
+        if check.get("contractVersion") == "quantitative-business-checkpoint-v1":
+            from .ai_observation_message import figure
+            lines.append("확인할 실적: " + text(check["meaning"]) + " · " + text(check["targetPeriodStart"])
+                         + "~" + text(check["targetPeriodEnd"]) + " · AI 가정 범위 "
+                         + figure(check["expectedLow"]) + "~" + figure(check["expectedHigh"])
+                         + " " + text(check["baseline"]["basis"]["currency"]))
     if value.get("evidenceIds"):
         lines.append(f"연결된 근거 기록: {len(value['evidenceIds'])}건 (연구 기록에 보관)")
     if value["stage"] == "research-returned" and not answer:
@@ -65,6 +72,17 @@ def render_research_progress(value):
     observed, missed = results.count("direction-observed"), results.count("direction-not-observed")
     if observed or missed:
         lines.append(f"등록 지표 방향 관측: 일치 {observed}건 · 불일치 {missed}건. 가설 전체의 입증을 뜻하지 않습니다.")
+    matched = results.count("within-expected-range")
+    outside = results.count("below-expected-range") + results.count("above-expected-range")
+    if matched or outside:
+        lines.append(f"등록 지표의 실제 값: AI 예상 범위 안 {matched}건 · 범위 밖 {outside}건. 인과성이나 투자 수익률의 검증은 아닙니다.")
+    for actual in value.get("quantitativeActuals", [])[:3]:
+        from .ai_observation_message import figure
+        label = {"revenue": "매출", "operatingIncome": "영업이익", "netIncome": "순이익",
+                 "operatingCashFlow": "영업현금흐름", "capitalExpenditure": "설비투자", "freeCashFlow": "잉여현금흐름"}.get(actual["metric"], actual["metric"])
+        lines.append(text(actual["targetPeriodEnd"]) + " " + text(label) + ": "
+                     + figure(actual["actual"], text(actual["currency"])) + " · 예상 범위 이탈분 "
+                     + figure(actual["rangeDeviation"], text(actual["currency"]), signed=True))
     if value.get("nextCheckAt") and value["status"] not in {"answered", "dismissed", "retired", "superseded"}:
         lines.append("다음 확인 가능 시각: " + text(kst_timestamp(value["nextCheckAt"]), 60) + " (완료 예정 시각이 아닙니다)")
     lines.extend(["", "연구 과정과 AI 검토 기록입니다. 예측 성과가 검증되었다는 뜻이나 매매 권고가 아닙니다.",

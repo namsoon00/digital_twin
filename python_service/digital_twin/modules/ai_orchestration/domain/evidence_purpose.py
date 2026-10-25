@@ -41,6 +41,9 @@ def validate(packet):
 
 
 def author_version(packet):
+    from . import company_research_cycle
+    if company_research_cycle.enabled(packet):
+        return company_research_cycle.PROMPT_VERSION
     from . import business_insight
     if business_insight.enabled(packet):
         return business_insight.PROMPT_VERSION
@@ -54,6 +57,9 @@ def author_version(packet):
 
 
 def repair_version(packet):
+    from . import company_research_cycle
+    if company_research_cycle.enabled(packet):
+        return company_research_cycle.REPAIR_VERSION
     from . import business_insight
     if business_insight.enabled(packet):
         return business_insight.REPAIR_VERSION
@@ -67,6 +73,9 @@ def repair_version(packet):
 
 
 def review_version(packet):
+    from . import company_research_cycle
+    if company_research_cycle.enabled(packet):
+        return company_research_cycle.REVIEW_VERSION
     from . import business_insight
     if business_insight.enabled(packet):
         return business_insight.REVIEW_VERSION

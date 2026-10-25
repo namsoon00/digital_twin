@@ -24,6 +24,9 @@ def business_fact(fact):
 def business_ref(ref, fact):
     if not business_fact(fact):
         return False
+    if ref["field"].startswith("derivedMetricEvidence.cashFlowBridge."):
+        from digital_twin.modules.news_intelligence.contracts import cash_flow_bridge_field_usable
+        return cash_flow_bridge_field_usable(fact, ref["field"])
     if (fact.get("kind") == "company-financial-state"
             or (fact.get("questionSourceReference") or {}).get("sourceKind") == "structured-report"):
         return ref["field"].startswith("reportedValues.") or any(ref["field"] in fact.get(key, {})

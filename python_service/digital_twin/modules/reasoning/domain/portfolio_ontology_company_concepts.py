@@ -237,6 +237,7 @@ def add_company_knowledge_concepts(
         reports[raw["reportObservationId"]] = {
             **{key: raw[key] for key in ("frequency", "periodEnd", "reportedValues", "metricUnits", "metricProvenance",
                 "sourceReferences", "sourceRevision", "reportObservationId", "historicalReport", "publicationTimeKnown")},
+            "derivedMetricEvidence": raw.get("derivedMetricEvidence", {}),
             "publishedAt": evidence.published_at, "observedAt": evidence.observed_at,
             "sourceAsOf": evidence.published_at or evidence.observed_at}
     current_state_candidates = []

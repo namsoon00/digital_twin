@@ -45,9 +45,29 @@ class ResearchKnowledgeStorageTests(unittest.TestCase):
             connection.execute("DELETE FROM domain_events WHERE name IN ('research_knowledge.claim_revised','research_knowledge.progress_recorded') AND "
                 "JSON_UNQUOTE(JSON_EXTRACT(payload_json,'$.accountId'))=%s", (self.fixture.subject["accountId"],))
 
-    def draft(self, reviewed=True):
+    def draft(self, reviewed=True, quantitative=False):
         self.control.seed(self.fixture.subject); job = self.control.claim()
         p = {**business_packet(), "taskId": job["taskId"], "capturedAt": stamp()}
+        if quantitative:
+            from datetime import date, timedelta
+            from test_evidence_completion import active
+            from digital_twin.modules.ai_orchestration.domain import execution_lanes, evidence_readiness, business_insight, company_research_cycle
+            # Keep the real database clock, but choose a prospective quarter
+            # relative to it so this storage contract does not expire in CI.
+            today = date.fromisoformat(p['capturedAt'][:10])
+            month = ((today.month - 1) // 3 + 1) * 3 + 1
+            target_start = date(today.year + (month > 12), 1 if month > 12 else month, 1)
+            following = date(target_start.year + (target_start.month == 10),
+                             1 if target_start.month == 10 else target_start.month + 3, 1)
+            target_end = following - timedelta(days=1)
+            baseline = next(row for row in p['facts'] if row['id'] == 'report-2025')
+            baseline.update(frequency='quarterly', periodEnd=target_end.replace(year=target_end.year-1).isoformat(),
+                            observedAt=p['capturedAt'], publishedAt=p['capturedAt'], sourceAsOf=p['capturedAt'])
+            basis = baseline['metricProvenance']['revenue']
+            basis.update(durationBasis='quarterly', periodStart=target_start.replace(year=target_start.year-1).isoformat())
+            basis['sourceReferences'][0]['fetchedAt'] = p['capturedAt']
+            p = active(evidence_readiness.annotate(execution_lanes.annotate(p, {"capability": "observe"})))
+            p.update(businessInsightPolicy=business_insight.VERSION, companyResearchPolicy=company_research_cycle.VERSION)
         p["researchKnowledge"] = self.handoff.context(p)
         envelope = freeze_execution_input(p, [], [])
         input_id = self.control.save_execution_input(job, envelope)
@@ -56,6 +76,13 @@ class ResearchKnowledgeStorageTests(unittest.TestCase):
         raw = {**plan(), "businessResearch": raw_research(), "knowledgeResearch": proposal(businessThesisIndex=0),
                "questionResolutions": [], "followUpConditions": [], "observations": []}
         raw["notification"]["send"] = False
+        if quantitative:
+            from test_company_research_cycle import numeric_research
+            raw['businessResearch'] = numeric_research()
+            raw['businessResearch']['theses'][0]['checkpoints'][0].update(
+                targetPeriodStart=target_start.isoformat(), targetPeriodEnd=target_end.isoformat())
+            raw['judgmentChange'] = {'kind': 'none', 'impact': 'insufficient',
+                'reason': '예상 범위를 기록하고 후속 실적으로 검증하기 위한 연구 단계입니다.', 'evidence': []}
         result = {**validate_plan(raw, p, envelope["researchResults"]), "input": p,
                   "executionInputId": input_id, "observedAt": stamp()}
         result["quality"] = local_quality(result)
@@ -65,8 +92,47 @@ class ResearchKnowledgeStorageTests(unittest.TestCase):
             call = self.control.begin_call("independent-observation", review["promptHash"], job["taskId"], review_id)
             self.control.finish_call(call)
             result["researchQuality"] = research_review.accept(result,
-                {"version": research_review.VERSION, "accepted": True, "reason": "주장과 반론이 같은 시점의 근거와 적용 조건에 연결되어 있습니다."}, review_id)
+                {"version": research_review.version_for(p), "accepted": True, "reason": "주장과 반론이 같은 시점의 근거와 적용 조건에 연결되어 있습니다."}, review_id)
         return job, result
+
+    def test_quantitative_case_and_knowledge_share_atomic_reviewed_storage(self):
+        from digital_twin.modules.ai_orchestration.domain.business_research import evaluate_thesis
+        from datetime import date, timedelta
+        from digital_twin.modules.research_knowledge.infrastructure.transaction_writes import write_research
+        job, result = self.draft(quantitative=True)
+        self.control.outbox_writer = Mock(side_effect=RuntimeError('atomic rollback'))
+        with self.assertRaises(RuntimeError): self.control.complete(job, result, [])
+        self.assertEqual([], self.repository.recent(self.fixture.subject['accountId']))
+        self.assertEqual([], self.agenda.status()['cases'])
+        self.control.outbox_writer = None
+        self.assertTrue(self.control.complete(job, result, []))
+        claim = self.repository.recent(self.fixture.subject['accountId'])[0]
+        case = next(row for row in self.agenda.status()['cases'] if row['caseId'] == claim['businessThesisId'])
+        check = case['contract']['checkpoints'][0]
+        self.assertEqual((110, 130), (check['expectedLow'], check['expectedHigh']))
+        self.assertEqual('accepted', claim['reviewReceipt']['status'])
+        observed_date = date.fromisoformat(check['targetPeriodEnd']) + timedelta(days=45)
+        observed_at = observed_date.isoformat() + 'T00:00:00Z'
+        actual = copy.deepcopy(next(row for row in result['input']['facts'] if row['id'] == 'report-2025'))
+        actual.update(id='actual-report', reportObservationId='actual-report', periodEnd=check['targetPeriodEnd'],
+                      publishedAt=observed_at, observedAt=observed_at, sourceAsOf=observed_at, reportedValues={'revenue': 90})
+        actual['metricProvenance']['revenue']['periodStart'] = check['targetPeriodStart']
+        actual['metricProvenance']['revenue']['sourceReferences'][0].update(fetchedAt=observed_at, revisionId='actual-revision')
+        future = {**result['input'], 'capturedAt': observed_at, 'facts': [actual]}
+        case['observations'] = evaluate_thesis(case, future)
+        future['businessThesisMemory'] = [case]
+        future['researchKnowledge'] = self.handoff.context(future)
+        with self.repository.transaction() as connection:
+            receipt = write_research(connection, future, {'claims': [], 'coverageNote': '후속 실적이 사전 예상 범위를 벗어난 결과를 보존합니다.'},
+                                     'quantitative-assessment', future['capturedAt'])
+        self.assertEqual(1, len(receipt['revisionIds']))
+        context = self.handoff.context({**future, 'capturedAt': (observed_date+timedelta(days=1)).isoformat()+'T00:00:00Z'})
+        updated = context['claims'][0]
+        self.assertEqual(-20, updated['assessment']['observations'][0]['rangeDeviation'])
+        self.assertFalse(updated['assessment']['methodProposal']['adopted'])
+        projected = next(row for row in context['ontology']['entities'] if row['kind'] == 'research-knowledge-assessment')
+        self.assertFalse(projected['properties']['reasoningEligible'])
+        self.assertEqual(-20, projected['properties']['quantitativeObservations'][0]['rangeDeviation'])
 
     def test_rollback_retry_idempotency_and_next_research_recall(self):
         job, result = self.draft()

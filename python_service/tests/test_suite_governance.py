@@ -423,7 +423,10 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # Six work-order/closure/native-evidence regressions.
         # Fifteen authored scenario, source-order, receipt, publication, quiet-candidate and atomic history contracts.
         # Fifteen cash-flow, quantitative-contract, immutable-outcome, notification and atomic knowledge regressions.
-        self.assertLessEqual(total, 2662)
+        # Seven scope-encoding/policy and optional-cache byte-budget regressions:
+        # exact digests, copy isolation, early rejection, wire/readback parity,
+        # envelope accounting and the combined graph/context budget.
+        self.assertLessEqual(total, 2669)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

@@ -1035,6 +1035,18 @@ def _fingerprint_semantic_groups(groups: Mapping[str, Iterable[Mapping[str, obje
     # Reuse equal groups of those exact objects within this immutable view.
     # Keep the spaced sorting key: compact JSON can order strings differently.
     fingerprints = {}
+    encoded_rows = {}
+
+    def encode_row(row, *, sorting=False):
+        # Overlapping groups need the same row in different combinations.
+        # Keep both exact encodings only for this immutable scope calculation.
+        # Retaining the row prevents IDs from being reused by generator inputs.
+        entry = encoded_rows.setdefault(id(row), (row, {}))[1]
+        if sorting not in entry:
+            options = {} if sorting else {"separators": (",", ":")}
+            entry[sorting] = json.dumps(row, ensure_ascii=False, sort_keys=True, **options)
+        return entry[sorting]
+
     result = {}
     for key, items in groups.items():
         if not key or not items:
@@ -1044,8 +1056,10 @@ def _fingerprint_semantic_groups(groups: Mapping[str, Iterable[Mapping[str, obje
         cached = fingerprints.get(identity)
         if cached is None:
             if len(rows) > 1:
-                rows.sort(key=lambda item: json.dumps(item, ensure_ascii=False, sort_keys=True))
-            payload = json.dumps(rows, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+                rows.sort(key=lambda item: encode_row(item, sorting=True))
+            # This is byte-for-byte the compact JSON array contract, including
+            # duplicate assertions and the original spaced-JSON sort order.
+            payload = "[" + ",".join(encode_row(item) for item in rows) + "]"
             digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()
             # Keep the rows alive: another iterable must never reuse their IDs.
             cached = (rows, digest)
@@ -1279,6 +1293,15 @@ def _scope_fragment_payloads_with_semantic_fingerprints_and_dependencies(
         for entity in graph.entities
         if _clean(entity.entity_id)
     }
+    property_families = {}
+
+    def property_family(field, fallback):
+        # Field ownership is vocabulary, not a market observation. Reuse it
+        # within this build only so a later policy revision is evaluated anew.
+        key = (field, fallback)
+        if key not in property_families:
+            property_families[key] = _semantic_property_family(field, fallback)
+        return property_families[key]
 
     def semantic_properties_from_stable(
         raw_values: Mapping[str, object],
@@ -1326,22 +1349,17 @@ def _scope_fragment_payloads_with_semantic_fingerprints_and_dependencies(
             dependency_groups["kind:" + kind_token + ":values"].append(entity_values)
         for field, value in semantic_properties.items():
             field_key = _semantic_dependency_field_key(field)
+            field_dependency = {
+                "entity": _clean(entity.entity_id),
+                "field": field,
+                "value": value,
+            }
             if field_key != "field:":
-                field_dependency = {
-                    "entity": _clean(entity.entity_id),
-                    "field": field,
-                    "value": value,
-                }
                 dependency_groups[field_key].append(field_dependency)
                 kind_field_key = _semantic_dependency_kind_field_key(entity.kind, field)
                 if kind_field_key:
                     dependency_groups[kind_field_key].append(field_dependency)
-        for field, value in semantic_properties.items():
-            semantic_groups[_semantic_property_family(field, fallback)].append({
-                "entity": _clean(entity.entity_id),
-                "field": field,
-                "value": value,
-            })
+            semantic_groups[property_family(field, fallback)].append(field_dependency)
 
     for relation in graph.relations:
         properties = dict(relation.properties or {})

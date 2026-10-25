@@ -13,6 +13,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Dict
 
 from digital_twin.modules.reasoning.domain.ontology_projection_payload import deserialize_portfolio_ontology, serialize_portfolio_ontology
+from digital_twin.modules.reasoning.domain.ontology_projection_payload import ProjectionPayloadBudget, ProjectionPayloadTooLarge
 from digital_twin.infrastructure.mysql_operational_connection import MySQLOperationalConnection
 from digital_twin.infrastructure.mysql_operational_helpers import _json_loads
 from digital_twin.infrastructure.operational_common import json_dumps
@@ -90,18 +91,29 @@ class MySQLOntologyGraphAssemblyCacheStore(MySQLOperationalConnection):
         key = str(cache_key or "").strip()
         if not key or ttl_seconds <= 0:
             return {"status": "disabled"}
+        maximum = max(64 * 1024, min(32 * 1024 * 1024, int(max_payload_bytes or 0)))
+        budget = ProjectionPayloadBudget(maximum)
         try:
+            # Count the frozen packet first; an oversized optional cache must
+            # not serialize two full graphs only to discard them afterward.
+            packet = dict(runtime_context_packet or {})
+            budget.consume(json_dumps(packet))
             payload = {
                 "version": CACHE_PAYLOAD_VERSION,
-                "graph": serialize_portfolio_ontology(graph),
-                "persistenceGraph": serialize_portfolio_ontology(persistence_graph),
-                "runtimeContextPacket": dict(runtime_context_packet or {}),
+                "graph": serialize_portfolio_ontology(graph, budget=budget),
+                "persistenceGraph": serialize_portfolio_ontology(persistence_graph, budget=budget),
+                "runtimeContextPacket": packet,
             }
             payload_json = json_dumps(payload)
+        except ProjectionPayloadTooLarge:
+            return {
+                "status": "skipped-oversized",
+                "payloadBytesLowerBound": budget.minimum_bytes,
+                "maxPayloadBytes": maximum,
+            }
         except Exception as error:  # noqa: BLE001 - cache serialisation is never a correctness dependency.
             return {"status": "error", "reason": str(error)[:180]}
         payload_bytes = len(payload_json.encode("utf-8"))
-        maximum = max(64 * 1024, min(32 * 1024 * 1024, int(max_payload_bytes or 0)))
         if payload_bytes > maximum:
             return {
                 "status": "skipped-oversized",

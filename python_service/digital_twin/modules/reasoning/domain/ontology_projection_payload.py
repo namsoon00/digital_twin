@@ -17,22 +17,44 @@ from digital_twin.modules.reasoning.domain.ontology_contracts import OntologyBel
 ONTOLOGY_PROJECTION_PAYLOAD_VERSION = "ontology-projection-payload-v1"
 
 
-def _json_safe(value: object):
+class ProjectionPayloadTooLarge(ValueError):
+    """Optional serialization exceeded its budget before completing a payload."""
+
+
+class ProjectionPayloadBudget:
+    """Count an encoded payload lower bound without dropping any graph rows."""
+
+    def __init__(self, maximum_bytes: int):
+        self.maximum_bytes = maximum_bytes
+        self.minimum_bytes = 0
+
+    def consume(self, encoded: str) -> None:
+        self.minimum_bytes += len(encoded.encode("utf-8"))
+        if self.minimum_bytes > self.maximum_bytes:
+            raise ProjectionPayloadTooLarge("Ontology payload exceeds the optional cache budget")
+
+
+def _json_safe(value: object, budget: ProjectionPayloadBudget = None):
     """Normalise vendor values without allowing an arbitrary object in MySQL."""
-    return json.loads(json.dumps(value, ensure_ascii=False, sort_keys=True, default=str))
+    encoded = json.dumps(value, ensure_ascii=False, sort_keys=True, default=str)
+    if budget is not None:
+        budget.consume(encoded)
+    return json.loads(encoded)
 
 
-def serialize_portfolio_ontology(graph: PortfolioOntology) -> Dict[str, object]:
+def serialize_portfolio_ontology(
+    graph: PortfolioOntology, *, budget: ProjectionPayloadBudget = None,
+) -> Dict[str, object]:
     return {
         "version": ONTOLOGY_PROJECTION_PAYLOAD_VERSION,
         "portfolioId": str(graph.portfolio_id or ""),
-        "entities": [_json_safe(item.to_dict()) for item in graph.entities or []],
-        "relations": [_json_safe(item.to_dict()) for item in graph.relations or []],
-        "evidence": [_json_safe(item.to_dict()) for item in graph.evidence or []],
-        "beliefs": [_json_safe(item.to_dict()) for item in graph.beliefs or []],
-        "opinions": [_json_safe(item.to_dict()) for item in graph.opinions or []],
-        "reasoningCards": _json_safe(list(graph.reasoning_cards or [])),
-        "worldview": _json_safe(dict(graph.worldview or {})),
+        "entities": [_json_safe(item.to_dict(), budget) for item in graph.entities or []],
+        "relations": [_json_safe(item.to_dict(), budget) for item in graph.relations or []],
+        "evidence": [_json_safe(item.to_dict(), budget) for item in graph.evidence or []],
+        "beliefs": [_json_safe(item.to_dict(), budget) for item in graph.beliefs or []],
+        "opinions": [_json_safe(item.to_dict(), budget) for item in graph.opinions or []],
+        "reasoningCards": _json_safe(list(graph.reasoning_cards or []), budget),
+        "worldview": _json_safe(dict(graph.worldview or {}), budget),
         "prompt": str(graph.prompt or ""),
     }
 

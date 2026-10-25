@@ -1,5 +1,37 @@
 # Reasoning Input Latency
 
+## Bound discarded cache serialization and repeated assertion encoding (2026-10-25)
+
+The r13 candidate's slow paired runs spent 11–15 seconds constructing an
+optional persistent cache payload that was then rejected as `skipped-oversized`.
+The cache serialized both complete graphs before checking its 8 MiB limit.
+Serialization now counts the encoded UTF-8 row bytes across both graphs and the
+frozen context packet, stopping when that lower bound exceeds the limit. The
+complete graph used for TypeDB remains intact. Small cache entries retain their
+exact wire payload, version, key, TTL and copy isolation. A final exact size
+check includes envelope fields and punctuation before any database write.
+
+Scope preparation also repeatedly encoded the same assertions in overlapping
+field and kind/field dependency groups. Each immutable scope calculation now
+reuses each row's exact spaced sorting string and compact digest string. The
+array digest, duplicate multiplicity and ordering remain unchanged. Field-family
+classification is reused only within a single build; subsequent builds recheck
+the policy and all observed values. No market freshness or judgment is cached.
+
+Three runs per revision on the same preserved full graph measured median
+oversized-cache work of **7.767s before / 1.107s after**. Scope identity preparation
+measured **9.698s before / 8.746s after**. All six identity runs produced the same
+48,109,872-byte complete graph/manifest payload and SHA-256 digest. This is a
+component comparison, not an end-to-end latency or trading-accuracy claim.
+Local workers were running during measurement; no production state or customer
+notification was written by these benchmarks. The real paired worker comparison
+and existing promotion gates remain required for activation.
+
+`test_projection_computation_parity` verifies overlapping/duplicate assertion
+digests, changed policy/value isolation, bounded UTF-8 serialization, a shared
+two-graph/context budget, the final envelope check, no writes or partial cache
+entries on rejection, and exact small-cache persistence/readback.
+
 ## Reduce graph rebuild and quality-record computation (2026-10-25)
 
 Profiling a frozen operational source found repeated JSON hashing, field-name

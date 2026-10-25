@@ -1,4 +1,4 @@
-"""Bounded OpenDART XBRL extraction for official annual valuation facts."""
+"""Bounded OpenDART XBRL extraction of source-dated financial candidates."""
 
 from __future__ import annotations
 
@@ -12,13 +12,14 @@ from xml.etree import ElementTree
 import zipfile
 
 
-XBRL_INSTANCE_VERSION = "opendart-xbrl-candidate-facts-v1"
+XBRL_INSTANCE_VERSION = "opendart-xbrl-candidate-facts-v2-cash-flow"
 XBRL_INSTANCE_NAMESPACE = "http://www.xbrl.org/2003/instance"
 XBRL_DIMENSION_NAMESPACE = "http://xbrl.org/2006/xbrldi"
 XSI_NAMESPACE = "http://www.w3.org/2001/XMLSchema-instance"
 MAX_ARCHIVE_BYTES = 25 * 1024 * 1024
 MAX_INSTANCE_BYTES = 20 * 1024 * 1024
 MAX_CANDIDATE_FACTS = 500
+CASH_FLOW_TAGS = {"CashFlowsFromUsedInOperatingActivities", "PurchaseOfPropertyPlantAndEquipmentClassifiedAsInvestingActivities"}
 
 DCF_TAG_PATTERNS = tuple(re.compile(value, re.IGNORECASE) for value in (
     r"interestexpense",
@@ -30,6 +31,8 @@ DCF_TAG_PATTERNS = tuple(re.compile(value, re.IGNORECASE) for value in (
     r"dilutedearnings",
     r"adjustmentsfordecreaseincrease",
     r"adjustmentsforincreasedecrease",
+    r"^cashflowsfromusedinoperatingactivities$",
+    r"^purchaseofpropertyplantandequipmentclassifiedasinvestingactivities$",
 ))
 
 
@@ -121,11 +124,12 @@ def parse_opendart_xbrl_archive(
     receipt_no: str,
     symbol: str,
     business_year: str = "",
+    report_code: str = "11011",
 ) -> Dict[str, object]:
     """Extract bounded numeric candidates from one official XBRL archive.
 
     The parser keeps transport parsing separate from metric selection. It only
-    admits annual consolidated duration contexts and retains their exact XBRL
+    admits consolidated duration contexts and retains their exact XBRL
     tag, dimensions, unit and report identity for domain normalization.
     """
 
@@ -154,7 +158,7 @@ def parse_opendart_xbrl_archive(
     units = _units(root)
     facts = []
     duplicate_guard = set()
-    for element in root.iter():
+    for element in sorted(root.iter(), key=lambda item: _local_name(item.tag) not in CASH_FLOW_TAGS):
         context_id = str(element.attrib.get("contextRef") or "").strip()
         unit_id = str(element.attrib.get("unitRef") or "").strip()
         context = contexts.get(context_id)
@@ -163,13 +167,19 @@ def parse_opendart_xbrl_archive(
         if str(element.attrib.get("{" + XSI_NAMESPACE + "}nil") or "").lower() == "true":
             continue
         start, end = str(context.get("start") or ""), str(context.get("end") or "")
-        if not _annual_duration(start, end):
+        try:
+            duration = (date.fromisoformat(end) - date.fromisoformat(start)).days
+        except (TypeError, ValueError):
+            continue
+        if not (_annual_duration(start, end) if report_code == "11011" else 60 <= duration <= 300):
             continue
         dimensions = context.get("dimensions") if isinstance(context.get("dimensions"), list) else []
         members = [_local_name(item.get("member")) for item in dimensions if isinstance(item, Mapping)]
         if "ConsolidatedMember" not in members:
             continue
         tag = _local_name(element.tag)
+        if tag in CASH_FLOW_TAGS and any(member not in {"ConsolidatedMember", "ReportedAmountMember"} for member in members):
+            continue  # Segment totals cannot corroborate a company-wide API amount.
         if not any(pattern.search(tag) for pattern in DCF_TAG_PATTERNS):
             continue
         value = _number(element.text)
@@ -204,6 +214,7 @@ def parse_opendart_xbrl_archive(
         "symbol": str(symbol or "").upper().strip(),
         "receiptNo": str(receipt_no or "").strip(),
         "businessYear": str(business_year or "").strip(),
+        "reportCode": report_code,
         "archiveHash": archive_hash,
         "instanceFile": instance.filename,
         "instanceHash": hashlib.sha256(instance_raw).hexdigest(),

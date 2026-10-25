@@ -430,7 +430,10 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # Seven execution-preparation regressions preserve exhaustive dependency
         # matching, downstream/cyclic invalidation, scoped routing, sparse
         # evidence normalization and external endpoint persistence.
-        self.assertLessEqual(total, 2683)
+        # Seven collected-statement regressions cover canonical source selection,
+        # retained alternatives, prior interim fields, original-period corroboration,
+        # conflicting values, committed lineage and bounded paired-filing recovery.
+        self.assertLessEqual(total, 2690)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

@@ -13,7 +13,7 @@ from typing import Mapping
 
 FINANCIAL_REPORTING_VERSION = "financial-reporting-v2"
 FINANCIAL_REPORT_CONTRACT_VERSION = "financial-report-observation-v1"
-FINANCIAL_PERIOD_SELECTION_VERSION = "financial-period-selection-v1"
+FINANCIAL_PERIOD_SELECTION_VERSION = "financial-period-selection-v2-source-series"
 GROWTH_FIELDS = {
     "revenueGrowthPct": "revenue",
     "operatingIncomeGrowthPct": "operatingIncome",
@@ -65,7 +65,7 @@ def reporting_period_end(value: object):
 
 def financial_period_sort_key(value: object):
     parsed = reporting_period_end(value)
-    return (parsed.toordinal() if parsed else 0, str(value or ""))
+    return (parsed.toordinal() if parsed else 0, parsed.isoformat() if parsed else "")
 
 
 def _source_reference_rows(values):

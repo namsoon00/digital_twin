@@ -4,6 +4,7 @@ from typing import Dict, Iterable, Mapping
 from digital_twin.modules.news_intelligence.contracts import (
     assess_disclosure_document,
     bind_company_event_contract,
+    bind_summary_report_lineage,
     merge_company_knowledge_rows,
     source_reference_from_fact_row,
 )
@@ -421,6 +422,9 @@ class ExternalSignalsReadModelService:
                 continue
             fragment = bind_external_event_lineage(fragment, row)
             fragment = bind_consensus_lineage(fragment, row)
+            fragment = bind_summary_report_lineage(fragment, {
+                **source_reference_from_fact_row(row), "fetchedAt": str(row.get("fetchedAt") or ""),
+            })
             if row.get("datasetId") == "yfinance.analyst":
                 estimates = [estimate for summary in (fragment.get("companyOverviews") or {}).values()
                              if isinstance(summary, dict) for estimate in summary.get("earningsEstimates") or []

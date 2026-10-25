@@ -1,5 +1,30 @@
 # Financial Evidence Integrity
 
+## Collected statement recovery
+
+`financial-period-selection-v2-source-series` normalizes reporting dates before
+comparison and selects an entire provider/scope series. Issuer statements take
+precedence over government summaries and vendor calendar-period approximations.
+Bounded alternative reports remain in `financialReportCandidates`; they do not
+independently trigger material-change notifications. No numbers are spliced
+between reports. The shared cache uses `company-knowledge-cache-v6-source-series`.
+
+OpenDART cash-flow normalization accepts the explicitly labelled prior interim
+`frmtrm_q_amount`/`frmtrm_q_nm` pair while continuing to reject prior full-year
+totals as interim comparisons. Current and annual filing receipts schedule one
+bounded `xbrl-v2` follow-up through the existing collection queue. At most two
+official archives provide consolidated OCF/capex values, original period starts,
+units and exact receipt/context/hash lineage. Numeric agreement, currency,
+consolidation, duration and receipt must all match before an already populated
+API metric receives XBRL metadata. Conflicts remain unavailable for calculation.
+An unavailable original is explicitly recorded and cannot become a zero value.
+
+Public financial summaries are rebound to their committed external revision and
+fetch clock when read; a provider-local hash is not a persisted source identity.
+Corrections to stored company views use the existing scoped financial-evidence
+maintenance preview/apply manifest and reassessment events. Immutable source,
+judgment and delivered-message history is preserved.
+
 ## Failure Chain
 
 Reporting timestamps were sorted using their last eight digits. This ranked

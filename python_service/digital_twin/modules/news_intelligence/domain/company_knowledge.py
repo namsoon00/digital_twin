@@ -24,7 +24,7 @@ from digital_twin.modules.news_intelligence.domain.financial_reporting import (
 
 
 COMPANY_KNOWLEDGE_VERSION = "company-knowledge-v1"
-COMPANY_KNOWLEDGE_CACHE_VERSION = "company-knowledge-cache-v5-valuation-input-normalization"
+COMPANY_KNOWLEDGE_CACHE_VERSION = "company-knowledge-cache-v6-source-series"
 COMPANY_VALUATION_CONTEXT_VERSION = "company-valuation-context-v1"
 
 # Operational revision precision only. These values suppress a new company
@@ -133,6 +133,8 @@ DART_ACCOUNT_ALIASES = {
 }
 
 OPEN_DART_XBRL_METRIC_TAGS = {
+    "operatingCashFlow": ("CashFlowsFromUsedInOperatingActivities",),
+    "capitalExpenditure": ("PurchaseOfPropertyPlantAndEquipmentClassifiedAsInvestingActivities",),
     "interestExpense": (
         "InterestExpenseFinanceExpense",
         "AdjustmentsForInterestExpense",
@@ -450,6 +452,9 @@ def dart_statement_periods(rows: object, basis: Mapping[str, object] = None) -> 
             if interim and row.get("sj_div") == "CF" and prior:
                 if optional_number(row.get("frmtrm_add_amount")) is not None:
                     amount_field = "frmtrm_add_amount"
+                elif (optional_number(row.get("frmtrm_q_amount")) is not None
+                      and any(label in _clean(row.get("frmtrm_q_nm")) for label in ("분기", "반기"))):
+                    amount_field = "frmtrm_q_amount"
                 elif not any(label in _clean(row.get("frmtrm_nm")) for label in ("분기", "반기")):
                     # A prior full-year cash-flow total is not prior YTD.
                     continue
@@ -525,9 +530,13 @@ def dart_statement_periods(rows: object, basis: Mapping[str, object] = None) -> 
 
 
 def dart_xbrl_statement_periods(payload: Mapping[str, object]) -> List[Dict[str, object]]:
-    """Normalize audited annual XBRL candidates without mixing report identities."""
+    """Normalize original XBRL candidates without mixing report identities."""
 
     source = dict(payload or {}) if isinstance(payload, Mapping) else {}
+    if isinstance(source.get("documents"), list):
+        return [row for document in source["documents"][:2] if isinstance(document, Mapping)
+                for row in dart_xbrl_statement_periods(document)]
+    interim = _clean(source.get("reportCode") or "11011") != "11011"
     facts = [dict(item) for item in source.get("candidateFacts") or [] if isinstance(item, Mapping)]
     receipt = _clean(source.get("receiptNo"))
     archive_hash = _clean(source.get("archiveHash"))
@@ -545,6 +554,7 @@ def dart_xbrl_statement_periods(payload: Mapping[str, object]) -> List[Dict[str,
     def fact_score(fact: Mapping[str, object]):
         values = members(fact)
         return (
+            -_period_sort_key(fact.get("periodStart"))[0] if interim else 0,
             1 if "ReportedAmountMember" in values else 0,
             1 if "OrdinarySharesMember" in values else 0,
             -len(values),
@@ -569,14 +579,17 @@ def dart_xbrl_statement_periods(payload: Mapping[str, object]) -> List[Dict[str,
 
     def fact_provenance(field: str, fact: Mapping[str, object], *, derived=None):
         unit = _clean(fact.get("unitId"))
+        measures = fact.get("unitMeasures") or []
+        currency = (str(measures[0]).rsplit(":", 1)[-1] if len(measures) == 1 else "")
         return {
             "provider": "OpenDART XBRL",
             "official": True,
             "metric": _clean(fact.get("tag") or field),
             "period": _clean(fact.get("periodEnd")),
             "periodStart": _clean(fact.get("periodStart")),
-            "durationBasis": "annual",
-            "currency": "KRW" if unit.upper() in {"KRW", "KRWEPS"} else unit,
+            "durationBasis": "year-to-date" if interim else "annual",
+            "currency": (currency if re.fullmatch(r"[A-Z]{3}", currency) else "") if field in {"operatingCashFlow", "capitalExpenditure"}
+                        else "KRW" if unit.upper() in {"KRW", "KRWEPS"} else unit,
             "scope": "CFS",
             "receiptNo": receipt,
             "fiscalYear": business_year,
@@ -587,6 +600,7 @@ def dart_xbrl_statement_periods(payload: Mapping[str, object]) -> List[Dict[str,
             "contextId": _clean(fact.get("contextId")),
             "unitId": unit,
             "decimals": _clean(fact.get("decimals")),
+            "publishedAt": _clean(source.get("receiptDate")),
             **({"shareCountBasis": "weighted-average-diluted"} if field == "weightedAverageSharesDiluted" else {}),
             **({"derived": True, **dict(derived)} if isinstance(derived, Mapping) else {}),
         }
@@ -597,19 +611,26 @@ def dart_xbrl_statement_periods(payload: Mapping[str, object]) -> List[Dict[str,
             "period": period,
             "periodEnd": period,
             "provider": "OpenDART",
-            "frequency": "annual",
+            "frequency": "interim" if interim else "annual",
             "officialSource": True,
             "financialReportingVersion": FINANCIAL_REPORTING_VERSION,
             "metricProvenance": {},
             "xbrlReceiptNo": receipt,
         }
         for field, tags in OPEN_DART_XBRL_METRIC_TAGS.items():
+            if interim and field not in {"operatingCashFlow", "capitalExpenditure"}:
+                continue
             fact = select(tags, period)
             value = optional_number(fact.get("value")) if isinstance(fact, Mapping) else None
             if value is None:
                 continue
             row[field] = value
             row["metricProvenance"][field] = fact_provenance(field, fact)
+
+        if interim:
+            if row["metricProvenance"]:
+                result.append(row)
+            continue
 
         depreciation = select(OPEN_DART_XBRL_DA_TAGS["depreciation"], period)
         amortization = select(OPEN_DART_XBRL_DA_TAGS["amortization"], period)
@@ -672,7 +693,7 @@ def merge_dart_xbrl_periods(
         receipt = _clean(xbrl.get("xbrlReceiptNo"))
         target = next((
             item for item in result
-            if _clean(item.get("frequency")) == "annual"
+            if _clean(item.get("frequency")) == _clean(xbrl.get("frequency"))
             and _clean(item.get("periodEnd") or item.get("period")) == period
             and receipt in {
                 _clean(value.get("receiptNo"))
@@ -688,8 +709,17 @@ def merge_dart_xbrl_periods(
             if field in {
                 "period", "periodEnd", "provider", "frequency", "officialSource",
                 "financialReportingVersion", "metricProvenance", "xbrlReceiptNo",
-            } or value is None or target.get(field) is not None:
+            } or value is None:
                 continue
+            existing = provenance.get(field) or {}
+            incoming = (xbrl.get("metricProvenance") or {}).get(field) or {}
+            if target.get(field) is not None:
+                # Corroborate the exact same reported amount, receipt and basis
+                # before enriching its metadata. Never borrow another row's dates.
+                if (optional_number(target[field]) != optional_number(value)
+                        or any(existing.get(key) != incoming.get(key) for key in ("currency", "scope", "durationBasis", "receiptNo"))
+                        or not incoming.get("periodStart")):
+                    continue
             target[field] = value
             if isinstance((xbrl.get("metricProvenance") or {}).get(field), Mapping):
                 provenance[field] = dict(xbrl["metricProvenance"][field])
@@ -1323,7 +1353,11 @@ def build_company_knowledge(
             "version": FINANCIAL_REPORTING_VERSION,
             "officialInputRows": len(dart_disclosure.get("financialStatements") or []),
             "officialParsedPeriods": len(official_periods),
-            "officialXbrlCandidateFacts": len(dart_xbrl.get("candidateFacts") or []),
+            "officialXbrlCandidateFacts": sum(
+                len(document.get("candidateFacts") or [])
+                for document in dart_xbrl.get("documents", [dart_xbrl])
+                if isinstance(document, Mapping)
+            ),
             "officialXbrlParsedPeriods": len(xbrl_periods),
             "status": "error" if dart_disclosure.get("financialStatements") and not official_periods else "checked",
             "issues": (["official-financial-statements-unparsed"] if dart_disclosure.get("financialStatements") and not official_periods else [])
@@ -1352,7 +1386,7 @@ def build_company_knowledge(
     payload["factRevision"] = hashlib.sha256(revision_source.encode("utf-8")).hexdigest()[:20]
     payload["materialRevision"] = _material_revision(payload)
     payload["materialSectionRevisions"] = _material_section_revisions(payload)
-    return payload if sources or annual or quarterly else {}
+    return payload if sources or annual or quarterly or interim else {}
 
 
 def _revision_payload(payload: Mapping[str, object]) -> Dict[str, object]:
@@ -1383,6 +1417,9 @@ def _material_revision_payload(payload: Mapping[str, object]) -> Dict[str, objec
     # the normalized statement, so lineage-only changes must not schedule a
     # fresh investment reasoning turn.
     result.pop("sourceReferences", None)
+    # Only the selected reports own current semantics, not polling lineage
+    # retained with alternative whole reports for source audit.
+    result.pop("financialReportCandidates", None)
     financials = result.get("financials") if isinstance(result.get("financials"), Mapping) else {}
     result["financials"] = {
         frequency: [
@@ -1474,7 +1511,9 @@ def merge_company_knowledge_rows(*rows: Mapping[str, object]) -> Dict[str, objec
         "schemaVersion": COMPANY_KNOWLEDGE_VERSION,
         "symbol": _clean(next((row.get("symbol") for row in reversed(valid) if row.get("symbol")), "")).upper(),
     }
+    from .financial_report_selection import retained_reports, selected_reports
     excluded_financial_periods: List[Dict[str, object]] = []
+    report_candidates = []
     for source_index, row in enumerate(valid):
         if _nonempty(row.get("companyName")):
             result["companyName"] = row.get("companyName")
@@ -1505,9 +1544,9 @@ def merge_company_knowledge_rows(*rows: Mapping[str, object]) -> Dict[str, objec
             }
         incoming_financials = row.get("financials") if isinstance(row.get("financials"), Mapping) else {}
         financials = result.get("financials") if isinstance(result.get("financials"), Mapping) else {}
+        report_candidates.extend(row.get("financialReportCandidates") or [])
         for frequency in ("annual", "interim", "quarterly"):
             incoming_periods = incoming_financials.get(frequency) if isinstance(incoming_financials.get(frequency), list) else []
-            current_periods = financials.get(frequency) if isinstance(financials.get(frequency), list) else []
             if incoming_periods:
                 eligible_periods = []
                 for item in incoming_periods:
@@ -1530,14 +1569,14 @@ def merge_company_knowledge_rows(*rows: Mapping[str, object]) -> Dict[str, objec
                 if not eligible_periods:
                     continue
 
-                def recency(values):
-                    return max((_period_sort_key(item.get("period")) for item in values if isinstance(item, Mapping)), default=(0, ""))
-                if not current_periods or recency(eligible_periods) >= recency(current_periods):
-                    financials[frequency] = enrich_financial_periods([
-                        {**item, "frequency": item.get("frequency") or frequency}
-                        for item in eligible_periods
-                    ])
+                report_candidates.extend(eligible_periods)
+        report_candidates = retained_reports(report_candidates, normalize=enrich_financial_periods)
+        for frequency in ("annual", "interim", "quarterly"):
+            selected = selected_reports(report_candidates, frequency)
+            if selected:
+                financials[frequency] = enrich_financial_periods(selected)
         result["financials"] = financials
+        result["financialReportCandidates"] = report_candidates
         incoming_candidates = (
             row.get("valuationFinancialCandidates")
             if isinstance(row.get("valuationFinancialCandidates"), list)

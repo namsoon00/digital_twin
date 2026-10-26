@@ -1439,15 +1439,26 @@ class V2ReasoningEngine:
             else None
         )
         input_started = time.perf_counter()
+        input_scope = {}
         try:
-            with input_assembly_scope() if callable(input_assembly_scope) else nullcontext():
+            source_scope = input_assembly_scope() if callable(input_assembly_scope) else nullcontext()
+            with source_scope as input_scope:
                 assembled = self.input_assembler.assemble(request)
+                if isinstance(input_scope, dict):
+                    input_scope["nativeInputReady"] = assembled.get("status") == "ready"
         except InputPreparationDeferred as error:
             assembled = {"status": "deferred", "snapshots": [], "preflight": {
                 "ready": False, "permanent": False, "status": error.reason_code,
                 "retryAfterSeconds": 5, "reason": str(error),
             }}
-        stages["inputAssemblyMs"] = int((time.perf_counter() - input_started) * 1000)
+        # Retained-input waiting is real end-to-end latency, but not repeated
+        # source assembly or TypeDB computation. Keep it visible separately.
+        stages["preparedInputWriterWaitMs"] = int(
+            (input_scope or {}).get("writerWaitMs") or 0
+        )
+        stages["inputAssemblyMs"] = max(0, int(
+            (time.perf_counter() - input_started) * 1000
+        ) - stages["preparedInputWriterWaitMs"])
         progress(
             "input_assembly.completed",
             {"durationMs": stages["inputAssemblyMs"], "status": assembled.get("status")},
@@ -2012,6 +2023,7 @@ class IndependentReasoningJobRunner:
         self.route_reconciled_at = 0.0
         self.worker_id = worker_id or (socket.gethostname() + ":" + str(os.getpid()) + ":v2-" + uuid.uuid4().hex[:8])
         self.job_transitions = ClaimedJobTransitions(self.queue, self.worker_id)
+        self._shutdown_requested = threading.Event()
         self._shutdown_result: Dict[str, object] = {}
         self._progress_lock = threading.Lock()
         self._current_progress: Dict[str, object] = {}
@@ -3205,6 +3217,7 @@ class IndependentReasoningJobRunner:
     def shutdown(self) -> Dict[str, object]:
         """Release only claims owned by this exact process identity."""
 
+        self._shutdown_requested.set()
         if self._shutdown_result:
             return dict(self._shutdown_result)
         callback = getattr(self.queue, "release_worker_leases", None)
@@ -3343,34 +3356,82 @@ class IndependentReasoningJobRunner:
     def unlocked_input_assembly(self, job_ids, lease_lost):
         """Only immutable MySQL source reads may run outside the native writer.
 
-        Claims retain their existing writer fence and heartbeat. No graph read,
-        projection or publication begins until all execution fences are checked
-        again. A busy writer defers normally instead of waiting while holding it.
+        Retain one assembled batch on this execution's stack while delivery has
+        the writer. Claims keep their heartbeat; no graph read or publication
+        begins until ownership, the exact attempt and control are checked again.
         """
+        timing = {"writerWaitMs": 0}
         if self.graph_writer_guard is None:
-            yield
+            yield timing
             return
         self._input_preparation_released_writer = True
-        # Preserve the granted turn across source reads. Delivery keeps its
-        # next-turn priority; a candidate already admitted to a turn can finish
-        # preparation without losing it and repeatedly rebuilding the input.
-        released = self.release_graph_writer_ownership(keep_priority=True)
+        role = str(getattr(self.graph_writer_guard, "role", self.deployment_role))
+        # A candidate must not reserve the writer while it reads MySQL. Its
+        # prepared input survives in the suspended engine call instead. Keep
+        # delivery's priority so new background work cannot jump ahead of it.
+        released = self.release_graph_writer_ownership(
+            keep_priority=role in {"delivery", "active"},
+        )
         if not released.get("released"):
             raise InputPreparationDeferred("Could not release the graph writer for source preparation.")
         self.publish_released_writer_state()
-        yield
-        if lease_lost.is_set():
-            raise InputPreparationDeferred("Reasoning claim was lost during source preparation.", "reasoning-claim-lost")
-        ownership = self.acquire_graph_writer_ownership()
-        if not ownership.get("acquired"):
-            raise InputPreparationDeferred("Graph writer is busy after source preparation; retain the original source for retry.")
+        yield timing
+        if timing.get("nativeInputReady") is False:
+            return
+        wait_started = time.monotonic()
+        try:
+            self.resume_prepared_input(job_ids, lease_lost)
+        finally:
+            timing["writerWaitMs"] = int((time.monotonic() - wait_started) * 1000)
         self._input_preparation_released_writer = False
         self.confirm_input_assembly_claims(job_ids, lease_lost)
+        self.confirm_prepared_input_control()
+        if not self.execution_readiness().get("ready", True):
+            raise InputPreparationDeferred("Native execution is not ready after source preparation.", "execution-not-ready")
+
+    def prepared_input_wait_seconds(self):
+        # Bound resident memory to one leased batch and one normal lease
+        # interval. A crash or timeout retries the original durable source;
+        # neither path substitutes a newer snapshot or changes its clock.
+        return _int_setting(self.settings, "reasoningEngineV2LeaseSeconds", 600, 60, 3600)
+
+    def resume_prepared_input(self, job_ids, lease_lost):
+        started = time.monotonic()
+        deadline = started + self.prepared_input_wait_seconds()
+        next_authority_check = started
+        while True:
+            if self._shutdown_requested.is_set():
+                raise InputPreparationDeferred("Worker stopped while retaining prepared input.", "reasoning-worker-stopped")
+            if lease_lost.is_set():
+                raise InputPreparationDeferred("Reasoning claim was lost during source preparation.", "reasoning-claim-lost")
+            ownership = self.acquire_graph_writer_ownership()
+            if ownership.get("acquired"):
+                break
+            if ownership.get("status") not in {
+                "held-by-other-process", "delivery-waiting",
+                "granted-turn-reserved", "server-cooling-down",
+            }:
+                raise InputPreparationDeferred("Could not verify graph writer ownership after source preparation.")
+            now = time.monotonic()
+            if now >= deadline:
+                raise InputPreparationDeferred("Prepared input writer wait exceeded the bounded lease interval.")
+            self.record_progress("input_assembly.writer_wait", {
+                "preparedInputRetained": True,
+                "writerWaitMs": int((now - started) * 1000),
+                "writerStatus": str(ownership.get("status") or ""),
+            })
+            if now >= next_authority_check:
+                self.confirm_input_assembly_claims(job_ids, lease_lost)
+                self.confirm_prepared_input_control()
+                next_authority_check = now + self.heartbeat_seconds()
+            # Wait without any writer/turn reservation. The existing heartbeat
+            # thread keeps the exact claim alive, and lease loss wakes us early.
+            lease_lost.wait(min(1.0, max(0, deadline - now)))
+
+    def confirm_prepared_input_control(self):
         deployment = self.engine.descriptor().deployment_id
         if not self.control_binding_status(deployment).get("selected"):
             raise InputPreparationDeferred("Deployment changed during source preparation.", "inactive-control-binding")
-        if not self.execution_readiness().get("ready", True):
-            raise InputPreparationDeferred("Native execution is not ready after source preparation.", "execution-not-ready")
 
     def confirm_input_assembly_claims(self, job_ids, lease_lost):
         """Recheck the durable attempt before entering TypeDB, between heartbeats."""

@@ -442,7 +442,9 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # integrity regressions for the candidate starvation/parity repair.
         # Eleven delivered-context regressions protect cross-route receipts, scoped
         # history, legacy replay, same-source reinterpretation and send locking.
-        self.assertLessEqual(total, 2737)
+        # Three retained-input regressions cover authority changes during delivery,
+        # cooldown/claim loss and unusable source rejection without a native wait.
+        self.assertLessEqual(total, 2740)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

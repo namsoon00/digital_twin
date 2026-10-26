@@ -9,6 +9,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 from types import SimpleNamespace
 from unittest import TestCase
 from unittest.mock import Mock, patch
@@ -239,7 +240,7 @@ class RuleDeliveryLatencyTests(TestCase):
     def test_source_preparation_cannot_execute_after_writer_claim_or_deployment_changes(self):
         failures = ['busy', 'lease-lost', 'lease-unknown', 'deployment', 'readiness', 'source-error']
         cases = [('delivery', failure) for failure in failures]
-        cases += [('candidate', failure) for failure in failures if failure != 'busy']
+        cases += [('candidate', failure) for failure in failures]
         for role, failure in cases:
             with self.subTest(role=role, failure=failure), tempfile.TemporaryDirectory() as directory:
                 guard = LocalGraphWriterGuard('live', role, Path(directory))
@@ -256,6 +257,7 @@ class RuleDeliveryLatencyTests(TestCase):
                 assembler.assemble = assemble
                 engine = V2ReasoningEngine(descriptor(), assembler, executor, FakeCandidateBuilder())
                 runner = IndependentReasoningJobRunner(queue, engine, SimpleNamespace(), graph_writer_guard=guard)
+                runner.prepared_input_wait_seconds = lambda: 0
                 runner.prepare_queue_turn = lambda: {'status': 'ready'}
                 runner.control_binding_status = lambda _: {'selected': failure != 'deployment'}
                 runner.execution_readiness = lambda: {'ready': failure != 'readiness'}
@@ -281,35 +283,182 @@ class RuleDeliveryLatencyTests(TestCase):
         with tempfile.TemporaryDirectory() as directory:
             guard = LocalGraphWriterGuard('candidate', 'candidate', Path(directory))
             delivery = LocalGraphWriterGuard('active', 'delivery', Path(directory))
+            prepared = FakeAssembler().assemble(None)
+            waiting = threading.Event()
+            finished = threading.Event()
+            results, errors = [], []
+            claims = []
             assembler = FakeAssembler()
             def assemble(request):
                 self.assertFalse(guard.status()['acquired'])
-                self.assertFalse(delivery.acquire()['acquired'])
+                self.assertFalse(guard.status()['grantedTurnReserved'])
+                self.assertTrue(delivery.acquire()['acquired'])
                 self.assertTrue(delivery.status()['deliveryIntent'])
-                return FakeAssembler().assemble(request)
+                return prepared
             assembler.assemble = Mock(side_effect=assemble)
             executor = FakeExecutor()
             original = executor.execute
             def execute(request, snapshots):
                 self.assertTrue(guard.status()['acquired'])
+                self.assertIs(prepared['snapshots'][0], snapshots[0])
                 self.assertFalse(delivery.acquire()['acquired'])
                 return original(request, snapshots)
             executor.execute = Mock(side_effect=execute)
             engine = V2ReasoningEngine(descriptor(), assembler, executor, FakeCandidateBuilder())
+            def heartbeat(ids, worker, seconds, claimed_tokens):
+                claims.append(dict(claimed_tokens))
+                return ids == ['job:1'] and claimed_tokens == {'job:1': 'original-claim'}
             runner = IndependentReasoningJobRunner(
-                SimpleNamespace(heartbeat=lambda *args: True), engine, SimpleNamespace(),
+                SimpleNamespace(heartbeat=heartbeat), engine, SimpleNamespace(),
                 graph_writer_guard=guard)
+            runner.job_transitions.remember([{'jobId': 'job:1', 'claimedAt': 'original-claim'}])
             runner.prepare_queue_turn = lambda: {'status': 'ready'}
             runner.control_binding_status = lambda _: {'selected': True}
             runner.execution_readiness = lambda: {'ready': True}
             runner._run_once = lambda _: engine.consume([source_event()], input_assembly_scope=
                 lambda: runner.unlocked_input_assembly(['job:1'], threading.Event()))
-            result = runner.run_once()
+            runner.record_progress = lambda stage, payload: waiting.set()
+            def run():
+                try:
+                    results.append(runner.run_once())
+                except BaseException as error:
+                    errors.append(error)
+                finally:
+                    finished.set()
+            worker = threading.Thread(target=run)
+            worker.start()
+            try:
+                self.assertTrue(waiting.wait(3))
+                self.assertTrue(delivery.status()['acquired'])
+                self.assertFalse(guard.status()['acquired'])
+                self.assertFalse(guard.status()['grantedTurnReserved'])
+                executor.execute.assert_not_called()
+                self.assertFalse(finished.is_set())
+                # The engine is suspended with its exact input, without a
+                # native transaction or candidate reservation blocking delivery.
+                time.sleep(0.02)
+            finally:
+                delivery.release()
+                worker.join(timeout=4)
+            self.assertFalse(worker.is_alive())
+            self.assertEqual([], errors)
+            result = results[0]
             self.assertNotEqual('deferred', result['status'])
             assembler.assemble.assert_called_once()
             executor.execute.assert_called_once()
+            self.assertGreaterEqual(len(claims), 2)
+            self.assertGreater(result['stage_durations_ms']['preparedInputWriterWaitMs'], 0)
+            self.assertGreaterEqual(result['duration_ms'], result['stage_durations_ms']['preparedInputWriterWaitMs'])
             self.assertTrue(delivery.acquire()['acquired'])
             delivery.release()
+
+    def test_retained_input_rechecks_authority_after_a_delivery_turn(self):
+        for failure in ['lease-lost', 'lease-unknown', 'deployment', 'readiness', 'shutdown']:
+            with self.subTest(failure=failure), tempfile.TemporaryDirectory() as directory:
+                guard = LocalGraphWriterGuard('candidate', 'candidate', Path(directory))
+                delivery = LocalGraphWriterGuard('live', 'delivery', Path(directory))
+                executor = Mock()
+                queue = SimpleNamespace(heartbeat=Mock(return_value=True))
+                state = {'changed': False}
+                lease_lost = threading.Event()
+                assembler = Mock()
+                def assemble(request):
+                    self.assertTrue(delivery.acquire()['acquired'])
+                    return FakeAssembler().assemble(request)
+                assembler.assemble.side_effect = assemble
+                engine = V2ReasoningEngine(descriptor(), assembler, executor, FakeCandidateBuilder())
+                runner = IndependentReasoningJobRunner(queue, engine, SimpleNamespace(), graph_writer_guard=guard)
+                runner.prepare_queue_turn = lambda: {'status': 'ready'}
+                runner.control_binding_status = lambda _: {'selected': not (state['changed'] and failure == 'deployment')}
+                runner.execution_readiness = lambda: {'ready': not (state['changed'] and failure == 'readiness')}
+                runner._run_once = lambda _: engine.consume([source_event()], input_assembly_scope=
+                    lambda: runner.unlocked_input_assembly(['job:1'], lease_lost))
+                def finish_delivery(_seconds):
+                    state['changed'] = True
+                    delivery.release()
+                    if failure == 'lease-lost': queue.heartbeat.return_value = False
+                    if failure == 'lease-unknown': queue.heartbeat.side_effect = RuntimeError('connection lost')
+                    if failure == 'shutdown': runner.shutdown()
+                with patch.object(lease_lost, 'wait', side_effect=finish_delivery):
+                    result = runner.run_once()
+                self.assertEqual('deferred', result['status'])
+                self.assertEqual({
+                    'lease-lost': 'reasoning-claim-lost', 'lease-unknown': 'reasoning-claim-unverified',
+                    'deployment': 'inactive-control-binding', 'readiness': 'execution-not-ready',
+                    'shutdown': 'reasoning-worker-stopped',
+                }[failure], result['reason_code'])
+                assembler.assemble.assert_called_once()
+                executor.execute.assert_not_called()
+                self.assertFalse(guard.status()['acquired'])
+                self.assertFalse(guard.status()['grantedTurnReserved'])
+                self.assertTrue(delivery.acquire()['acquired'])
+                delivery.release()
+
+    def test_retained_input_wait_honors_server_backoff_and_claim_loss_without_a_writer(self):
+        for failure in ['backoff', 'lease-lost']:
+            with self.subTest(failure=failure), tempfile.TemporaryDirectory() as directory:
+                guard = LocalGraphWriterGuard('candidate', 'candidate', Path(directory))
+                delivery = LocalGraphWriterGuard('live', 'delivery', Path(directory))
+                lease_lost = threading.Event()
+                runner = IndependentReasoningJobRunner(
+                    SimpleNamespace(heartbeat=lambda *args: True), SimpleNamespace(descriptor=descriptor),
+                    SimpleNamespace(), graph_writer_guard=guard,
+                )
+                runner.control_binding_status = lambda _: {'selected': True}
+                runner.execution_readiness = lambda: {'ready': True}
+                self.assertTrue(guard.acquire()['acquired'])
+                def finish(_seconds):
+                    self.assertFalse(guard.status()['acquired'])
+                    if failure == 'backoff':
+                        guard._cooldown_path.unlink()
+                    else:
+                        lease_lost.set()
+                try:
+                    with patch.object(lease_lost, 'wait', side_effect=finish):
+                        if failure == 'lease-lost':
+                            from digital_twin.modules.reasoning.application.independent_reasoning_engine import InputPreparationDeferred
+                            with self.assertRaises(InputPreparationDeferred):
+                                with runner.unlocked_input_assembly(['job:1'], lease_lost):
+                                    self.assertTrue(delivery.acquire()['acquired'])
+                        else:
+                            with runner.unlocked_input_assembly(['job:1'], lease_lost):
+                                guard._cooldown_path.write_text(json.dumps({'until': time.time() + 10, 'failures': 1}))
+                            self.assertTrue(guard.status()['acquired'])
+                finally:
+                    guard.release()
+                    delivery.release()
+
+    def test_unusable_source_returns_its_reason_without_waiting_for_a_native_writer(self):
+        for role in ['delivery', 'candidate']:
+            with self.subTest(role=role), tempfile.TemporaryDirectory() as directory:
+                guard = LocalGraphWriterGuard('candidate', role, Path(directory))
+                delivery = LocalGraphWriterGuard('live', 'delivery', Path(directory))
+                assembler, executor = Mock(), Mock()
+                def assemble(request):
+                    self.assertTrue(delivery.acquire()['acquired'])
+                    return {'status': 'deferred', 'snapshots': [], 'preflight': {
+                        'ready': False, 'status': 'source-snapshot-missing',
+                        'reason': 'Exact source history is unavailable.',
+                    }}
+                assembler.assemble.side_effect = assemble
+                engine = V2ReasoningEngine(descriptor(), assembler, executor, FakeCandidateBuilder())
+                runner = IndependentReasoningJobRunner(
+                    SimpleNamespace(), engine, SimpleNamespace(), graph_writer_guard=guard,
+                )
+                runner.prepare_queue_turn = lambda: {'status': 'ready'}
+                runner.resume_prepared_input = Mock(side_effect=AssertionError('No native work is ready'))
+                runner._run_once = lambda _: engine.consume([source_event()], input_assembly_scope=
+                    lambda: runner.unlocked_input_assembly(['job:1'], threading.Event()))
+                try:
+                    result = runner.run_once()
+                    self.assertEqual('source-snapshot-missing', result['reason_code'])
+                    self.assertEqual(0, result['stage_durations_ms']['preparedInputWriterWaitMs'])
+                    runner.resume_prepared_input.assert_not_called()
+                    executor.execute.assert_not_called()
+                    self.assertFalse(guard.status()['acquired'])
+                    self.assertTrue(delivery.status()['acquired'])
+                finally:
+                    delivery.release()
 
     def test_exact_report_reuse_preserves_repairs_scope_thresholds_and_mutation_isolation(self):
         cache = ExactPerformanceReportCache(2)

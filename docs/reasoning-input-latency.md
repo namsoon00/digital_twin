@@ -1,5 +1,40 @@
 # Reasoning Input Latency
 
+## Yield delivery priority while retaining prepared input (2026-10-26)
+
+The v4 turn reservation removed repeated candidate source reads but also blocked
+delivery during those MySQL reads. Independent reasoning now fully releases a
+candidate's writer and turn reservation before source preparation. If delivery
+owns the writer when preparation finishes, the suspended engine call retains
+exactly one prepared batch and waits without rebuilding it or opening a native
+transaction. Delivery preserves its existing priority during its own source
+reads. The server still has exactly one native writer.
+
+The original attempt heartbeat remains active during this wait. The exact claim
+token and current control binding are checked periodically and again after
+writer acquisition; execution readiness is rechecked before TypeDB. Lease loss,
+uncertain ownership, control changes, shutdown and server cooldown retain their
+normal fail-closed behavior. Resident waiting is bounded by one configured lease
+interval (600 seconds by default). Timeout or restart retries the durable
+original source, without substituting a newer snapshot or refreshing its clock.
+No global prepared-input cache or shared result between engines is introduced.
+
+`preparedInputWriterWaitMs` records this wait separately from `inputAssemblyMs`.
+It remains included in the complete execution duration and all existing
+promotion limits; moving the wait outside a writer lease does not make it free.
+This change only releases the source-read boundary. Already-running native
+projection, persistence and inference still finish under their writer fence.
+An unusable source returns its original preflight reason without waiting for a
+writer, because it has no native work to execute.
+Candidate bootstrap cost, initial queue admission, temporal comparison parity
+and the 10-second complete-path target remain separate unresolved work.
+
+Regressions in `test_rule_delivery_latency` prove that delivery can acquire the
+actual OS writer during candidate preparation, that the exact prepared snapshot
+is consumed once afterward, and that lease/control/readiness/shutdown changes
+cannot enter native inference. Bounded timeout and cooldown cases also preserve
+the original retry and single-writer contracts.
+
 ## Granted turns and reproducible native witnesses (2026-10-26)
 
 The candidate could acquire the TypeDB writer, release it for immutable source

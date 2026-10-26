@@ -74,10 +74,14 @@ def check_storage(test, save, company_cycle=False):
     # This fixture stores several historical/new contracts in one job. Calls
     # are synthetic and otherwise each consumes the unknown-usage allowance.
     test.store.runtime_settings['aiDailyTokenBudget'] = 10000000
+    test.store.runtime_settings['aiControlDailyCallBudget'] = 32  # Historical/new read, author and review proofs in one fixture.
     value = source_packet(); value.update(test.subject, taskId=test.job['taskId'])
     if company_cycle:
         from digital_twin.modules.ai_orchestration.domain.company_research_cycle import VERSION
         value['companyResearchPolicy'] = VERSION
+        for row in value['facts']:
+            if row['kind'] == 'company-financial-state':
+                row['metricProvenance']['revenue']['sourceNote'] = 'frozen source annotation ' * 60
     value['sourceSnapshots'] = {value['worldId']: value['sourceSnapshotId']}
     for fact in value['facts']:
         fact.update(symbol=value['symbol'], sourceWorldId=value['worldId'], sourceSnapshotId=value['sourceSnapshotId'])
@@ -88,8 +92,14 @@ def check_storage(test, save, company_cycle=False):
         value = {**value, 'capturedAt': '2026-10-24T00:00:0' + str(index) + 'Z'}
         value['quoteAssessment'] = quote_clock_assessment(value['facts'], value['capturedAt'])
         value = annotate(value)
+        def decide(envelope, _):
+            result = {**scoped_decision('finish', ids), 'purpose': 'source-dated', 'blocker': 'none'}
+            if company_cycle and not envelope['retrievalContext']['trace']:
+                path = next(p for p in envelope['retrievalContext']['readableContextPaths'] if p.endswith('/metricProvenance'))
+                result.update(action='read', requests=[{'tool': 'read_context', 'path': path}])
+            return result
         final, history, research, trace = retrieve_working_evidence(ObservationEvidenceSession(value, value['facts']),
-            value, [], [], Mock(return_value={**scoped_decision('finish', ids), 'purpose': 'source-dated', 'blocker': 'none'}),
+            value, [], [], decide,
             save, 262144, record_round=lambda step: test.store.save_retrieval_round(test.job, step))
         test.assertEqual(expected, final['retrieval']['status'])
         result = {'input': final, 'retrievalInputIds': [step['inputId'] for step in trace]}

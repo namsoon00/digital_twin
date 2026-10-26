@@ -5,7 +5,7 @@ import unittest
 from test_business_research import business_packet, raw_research, report
 from test_business_insight_progress import source_packet, retrieve
 from digital_twin.modules.news_intelligence.domain.cash_flow_bridge import cash_flow_bridge
-from digital_twin.modules.ai_orchestration.domain import quantitative_research as quantitative, company_research_cycle as cycle, company_retrieval
+from digital_twin.modules.ai_orchestration.domain import quantitative_research as quantitative, company_research_cycle as cycle, efficient_retrieval
 from digital_twin.modules.ai_orchestration.domain.business_research import validate_business, raw_business, thesis_case, evaluate_thesis
 from digital_twin.modules.ai_orchestration.domain.execution_input import freeze_execution_input, freeze_repair_input, freeze_review_input, validate_execution_input
 from digital_twin.modules.reasoning.contracts import EvidenceContractError
@@ -142,7 +142,7 @@ class CompanyResearchCycleTests(unittest.TestCase):
     def test_company_cycle_retrieval_uses_existing_bounded_reads_and_keeps_policy(self):
         value = source_packet(); value['companyResearchPolicy'] = cycle.VERSION
         final, saved, _ = retrieve(value)
-        self.assertEqual(company_retrieval.VERSION, saved[0]['promptVersion'])
+        self.assertEqual(efficient_retrieval.VERSION, saved[0]['promptVersion'])
         self.assertEqual(cycle.VERSION, final['companyResearchPolicy'])
         self.assertIn('cashFlowBridge', saved[0]['prompt'])
 

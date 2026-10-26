@@ -95,6 +95,7 @@ def execute_research(job, research_store, orchestrator_factory):
         {"documentaryReviewOnly": True, "documentarySourceExploration": documentary or "news" in sources,
          "previousSourceRecovery": previous_recovery(job, research_store),
          "sourceExplorationResume": ((existing or {}).get("executedPlan") or {}).get("sourceExploration"),
+         "sourceReviewResume": prior_plan.get("documentaryReviewReuse"),
          "researchPlan": {"planId": job["taskId"], "tasks": [task], "unresolvedQuestions": [job["question"]]}},
         account_id=job["accountId"], run_id=run_id,
         request_context={"aiControlTaskId": job["taskId"], "source": "ai-control", "question": question.to_dict(),

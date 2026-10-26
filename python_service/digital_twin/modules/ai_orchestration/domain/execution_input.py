@@ -17,7 +17,7 @@ from .question_resolution import resolution_prompt, resolution_schema, resolutio
 from .knowledge_research import knowledge_prompt, knowledge_schema, knowledge_review_prompt
 from . import working_retrieval
 from . import scoped_retrieval
-from . import indexed_retrieval, memory_reference, question_retrieval, lane_retrieval, bounded_retrieval, purpose_retrieval, compact_retrieval, quality_retrieval, completion_retrieval, business_retrieval, company_retrieval, judgment_policy, evidence_completion, business_insight, company_research_cycle, retrieval_view, evidence_readiness, evidence_purpose, company_value
+from . import indexed_retrieval, memory_reference, question_retrieval, lane_retrieval, bounded_retrieval, purpose_retrieval, compact_retrieval, quality_retrieval, completion_retrieval, business_retrieval, company_retrieval, efficient_retrieval, judgment_policy, evidence_completion, business_insight, company_research_cycle, retrieval_view, evidence_readiness, evidence_purpose, company_value
 from digital_twin.modules.ai_orchestration.domain.retrieval import (
     RETRIEVAL_PROMPT_VERSION, retrieval_prompt, retrieval_schema, directed_planning_prompt, trace_summary,
     LEGACY_RETRIEVAL_PROMPT_VERSION, legacy, validate_trace,
@@ -212,20 +212,20 @@ def validate_execution_input(envelope):
     from . import research_work
     if envelope.get("promptVersion") in {research_work.PROMPT_VERSION, research_work.LEGACY_PROMPT_VERSION}:
         return research_work.validate_input(envelope)
-    if envelope.get("promptVersion") in {working_retrieval.VERSION, scoped_retrieval.VERSION, indexed_retrieval.VERSION, question_retrieval.VERSION, lane_retrieval.VERSION, bounded_retrieval.VERSION, purpose_retrieval.VERSION, company_value.RETRIEVAL_VERSION, compact_retrieval.VERSION, quality_retrieval.VERSION, completion_retrieval.VERSION, business_retrieval.VERSION, company_retrieval.VERSION}:
-        contract = company_retrieval if envelope["promptVersion"] == company_retrieval.VERSION else business_retrieval if envelope["promptVersion"] == business_retrieval.VERSION else completion_retrieval if envelope["promptVersion"] == completion_retrieval.VERSION else quality_retrieval if envelope["promptVersion"] == quality_retrieval.VERSION else compact_retrieval if envelope["promptVersion"] == compact_retrieval.VERSION else purpose_retrieval if envelope["promptVersion"] in {purpose_retrieval.VERSION, company_value.RETRIEVAL_VERSION} else bounded_retrieval if envelope["promptVersion"] == bounded_retrieval.VERSION else lane_retrieval if envelope["promptVersion"] == lane_retrieval.VERSION else question_retrieval if envelope["promptVersion"] == question_retrieval.VERSION else indexed_retrieval if envelope["promptVersion"] == indexed_retrieval.VERSION else scoped_retrieval if envelope["promptVersion"] == scoped_retrieval.VERSION else working_retrieval
+    if envelope.get("promptVersion") in {working_retrieval.VERSION, scoped_retrieval.VERSION, indexed_retrieval.VERSION, question_retrieval.VERSION, lane_retrieval.VERSION, bounded_retrieval.VERSION, purpose_retrieval.VERSION, company_value.RETRIEVAL_VERSION, compact_retrieval.VERSION, quality_retrieval.VERSION, completion_retrieval.VERSION, business_retrieval.VERSION, company_retrieval.VERSION, efficient_retrieval.VERSION}:
+        contract = efficient_retrieval if envelope["promptVersion"] == efficient_retrieval.VERSION else company_retrieval if envelope["promptVersion"] == company_retrieval.VERSION else business_retrieval if envelope["promptVersion"] == business_retrieval.VERSION else completion_retrieval if envelope["promptVersion"] == completion_retrieval.VERSION else quality_retrieval if envelope["promptVersion"] == quality_retrieval.VERSION else compact_retrieval if envelope["promptVersion"] == compact_retrieval.VERSION else purpose_retrieval if envelope["promptVersion"] in {purpose_retrieval.VERSION, company_value.RETRIEVAL_VERSION} else bounded_retrieval if envelope["promptVersion"] == bounded_retrieval.VERSION else lane_retrieval if envelope["promptVersion"] == lane_retrieval.VERSION else question_retrieval if envelope["promptVersion"] == question_retrieval.VERSION else indexed_retrieval if envelope["promptVersion"] == indexed_retrieval.VERSION else scoped_retrieval if envelope["promptVersion"] == scoped_retrieval.VERSION else working_retrieval
         if envelope.get("protocolVersion") != EXECUTION_INPUT_PROTOCOL:
             raise EvidenceContractError("unsupported AI execution input")
         validate_evidence_packet(envelope["current"])
-        if contract is company_retrieval and not company_research_cycle.enabled(envelope["current"]):
+        if contract in {company_retrieval, efficient_retrieval} and not company_research_cycle.enabled(envelope["current"]):
             raise EvidenceContractError("company research policy missing")
-        if contract in {business_retrieval, company_retrieval} and not business_insight.enabled(envelope["current"]):
+        if contract in {business_retrieval, company_retrieval, efficient_retrieval} and not business_insight.enabled(envelope["current"]):
             raise EvidenceContractError("business insight policy missing")
-        if contract in {completion_retrieval, business_retrieval, company_retrieval} and not evidence_completion.enabled(envelope["current"]):
+        if contract in {completion_retrieval, business_retrieval, company_retrieval, efficient_retrieval} and not evidence_completion.enabled(envelope["current"]):
             raise EvidenceContractError("evidence completion policy missing")
-        if contract in {quality_retrieval, completion_retrieval, business_retrieval, company_retrieval} and not judgment_policy.enabled(envelope["current"]):
+        if contract in {quality_retrieval, completion_retrieval, business_retrieval, company_retrieval, efficient_retrieval} and not judgment_policy.enabled(envelope["current"]):
             raise EvidenceContractError("quality retrieval policy missing")
-        if contract in {purpose_retrieval, compact_retrieval, quality_retrieval, completion_retrieval, business_retrieval, company_retrieval}:
+        if contract in {purpose_retrieval, compact_retrieval, quality_retrieval, completion_retrieval, business_retrieval, company_retrieval, efficient_retrieval}:
             if contract is purpose_retrieval and (envelope["promptVersion"] == company_value.RETRIEVAL_VERSION) != company_value.enabled(envelope["current"]):
                 raise EvidenceContractError("company value retrieval policy mismatch")
             if company_value.enabled(envelope["current"]):
@@ -233,7 +233,7 @@ def validate_execution_input(envelope):
             evidence_purpose.validate(envelope["current"])
             if envelope["retrievalContext"].get("evidenceUses") != envelope["current"]["evidenceUses"]:
                 raise EvidenceContractError("retrieval purpose clocks changed")
-        if contract in {compact_retrieval, quality_retrieval, completion_retrieval, business_retrieval, company_retrieval} and envelope["retrievalContext"].get("readableContextPaths") != retrieval_view.paths(envelope["current"], envelope["retrievalContext"]):
+        if contract in {compact_retrieval, quality_retrieval, completion_retrieval, business_retrieval, company_retrieval, efficient_retrieval} and envelope["retrievalContext"].get("readableContextPaths") != getattr(contract, "context_view", retrieval_view).paths(envelope["current"], envelope["retrievalContext"]):
             raise EvidenceContractError("frozen context paths mismatch")
         contract.validate_trace(envelope["retrievalContext"].get("trace", []))
         prompt = contract.prompt(envelope["current"], envelope["retrievalContext"])
@@ -287,11 +287,11 @@ def validate_execution_input(envelope):
         if directed and envelope["current"].get("retrieval"):
             trace = envelope.get("retrievalTrace", [])
             version = envelope["current"]["retrieval"]["version"]
-            if version in {working_retrieval.VERSION, scoped_retrieval.VERSION, indexed_retrieval.VERSION, question_retrieval.VERSION, lane_retrieval.VERSION, bounded_retrieval.VERSION, purpose_retrieval.VERSION, compact_retrieval.VERSION, quality_retrieval.VERSION, completion_retrieval.VERSION, business_retrieval.VERSION, company_retrieval.VERSION}:
-                contract = company_retrieval if version == company_retrieval.VERSION else business_retrieval if version == business_retrieval.VERSION else completion_retrieval if version == completion_retrieval.VERSION else quality_retrieval if version == quality_retrieval.VERSION else compact_retrieval if version == compact_retrieval.VERSION else purpose_retrieval if version == purpose_retrieval.VERSION else bounded_retrieval if version == bounded_retrieval.VERSION else lane_retrieval if version == lane_retrieval.VERSION else question_retrieval if version == question_retrieval.VERSION else indexed_retrieval if version == indexed_retrieval.VERSION else scoped_retrieval if version == scoped_retrieval.VERSION else working_retrieval
+            if version in {working_retrieval.VERSION, scoped_retrieval.VERSION, indexed_retrieval.VERSION, question_retrieval.VERSION, lane_retrieval.VERSION, bounded_retrieval.VERSION, purpose_retrieval.VERSION, compact_retrieval.VERSION, quality_retrieval.VERSION, completion_retrieval.VERSION, business_retrieval.VERSION, company_retrieval.VERSION, efficient_retrieval.VERSION}:
+                contract = efficient_retrieval if version == efficient_retrieval.VERSION else company_retrieval if version == company_retrieval.VERSION else business_retrieval if version == business_retrieval.VERSION else completion_retrieval if version == completion_retrieval.VERSION else quality_retrieval if version == quality_retrieval.VERSION else compact_retrieval if version == compact_retrieval.VERSION else purpose_retrieval if version == purpose_retrieval.VERSION else bounded_retrieval if version == bounded_retrieval.VERSION else lane_retrieval if version == lane_retrieval.VERSION else question_retrieval if version == question_retrieval.VERSION else indexed_retrieval if version == indexed_retrieval.VERSION else scoped_retrieval if version == scoped_retrieval.VERSION else working_retrieval
                 contract.validate_trace(trace)
                 summary = contract.trace_summary(trace, envelope["current"]["retrieval"]["status"])
-                if contract in {scoped_retrieval, indexed_retrieval, question_retrieval, lane_retrieval, bounded_retrieval, purpose_retrieval, compact_retrieval, quality_retrieval, completion_retrieval, business_retrieval, company_retrieval} and envelope["current"].get("researchScope") != contract.research_scope(trace, envelope["current"]["retrieval"]["status"]):
+                if contract in {scoped_retrieval, indexed_retrieval, question_retrieval, lane_retrieval, bounded_retrieval, purpose_retrieval, compact_retrieval, quality_retrieval, completion_retrieval, business_retrieval, company_retrieval, efficient_retrieval} and envelope["current"].get("researchScope") != contract.research_scope(trace, envelope["current"]["retrieval"]["status"]):
                     raise EvidenceContractError("research scope does not match retrieval trace")
             else:
                 validate_trace(trace, version)

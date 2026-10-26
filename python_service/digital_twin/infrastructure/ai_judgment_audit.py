@@ -3,7 +3,7 @@ from collections import defaultdict
 from datetime import datetime, timezone
 import json
 
-from digital_twin.modules.ai_orchestration.contracts import ai_call_metrics, ai_judgment_metrics, ai_task_metrics
+from digital_twin.modules.ai_orchestration.contracts import ai_call_metrics, ai_judgment_metrics, ai_task_metrics, ai_research_metrics
 
 
 def clock(value):
@@ -51,8 +51,13 @@ def collect(connection, since, until, limit=5000):
         fields = ("summary", "status", "executionPromptVersion", "quality", "researchQuality", "publication", "memoryCoverage",
                   "companyValue", "repair", "evidenceIds", "questionResolutions", "followUpEvaluations", "resumption", "failure")
         expression = ",".join("'%s',JSON_EXTRACT(result_json,'$.%s')" % (key, key) for key in fields)
-        expression += ", 'input',JSON_OBJECT('facts',JSON_EXTRACT(result_json,'$.input.facts'))"
+        expression += ", 'input',JSON_OBJECT('facts',JSON_EXTRACT(result_json,'$.input.facts')," \
+                      "'retrieval',JSON_OBJECT('version',JSON_EXTRACT(result_json,'$.input.retrieval.version')))"
         expression += ", 'documentaryAnswer',JSON_OBJECT('status',JSON_EXTRACT(result_json,'$.documentaryAnswer.status'))"
+        expression += ", 'changedEvidenceCount',JSON_EXTRACT(result_json,'$.changedEvidenceCount')"
+        expression += ", 'stopReason',JSON_EXTRACT(result_json,'$.stopReason')"
+        expression += ", 'planningReuse',JSON_EXTRACT(result_json,'$.planningReuse')"
+        expression += ", 'sourceRecovery',JSON_OBJECT('progress',JSON_EXTRACT(result_json,'$.sourceRecovery.progress'))"
         expression += ", 'judgmentLinks',JSON_CONTAINS_PATH(result_json,'one','$.judgmentLinks')"
         expression += ", 'documentaryReview',JSON_CONTAINS_PATH(result_json,'one','$.documentaryReview')"
         tasks = by_ids("ai_control_tasks", "task_id", [row["task_id"] for row in selected],
@@ -60,9 +65,11 @@ def collect(connection, since, until, limit=5000):
         for row in tasks:
             row["result"] = {k: v for k, v in json.loads(row.pop("result_json")).items() if v is not None}
             if row["result"].get("input", {}).get("facts") is None:
-                row["result"]["input"] = {"facts": []}
+                row["result"]["input"]["facts"] = []
             if row["result"].get("documentaryAnswer", {}).get("status") is None:
                 row["result"].pop("documentaryAnswer", None)
+            if row["result"].get("sourceRecovery", {}).get("progress") is None:
+                row["result"].pop("sourceRecovery", None)
         authored_ids = [row["task_id"] for row in tasks if row["result"].get("summary")]
         inputs = by_ids("ai_control_inputs", "task_id", authored_ids, "input_id,task_id", "ai_input_task", 2000)
         owners = {row["input_id"]: row["task_id"] for row in inputs}
@@ -92,15 +99,18 @@ def collect(connection, since, until, limit=5000):
             keys = ("trackedSince", "workloads", "pools") if row["scope_key"].startswith("token-usage:") else (
                 "startedAt", "lastSeenAt", "heartbeatAt", "blockedUntil", "lastOutcome", "consecutiveFailures", "quotaFailures")
             state_summary[row["scope_key"]] = {k: state[k] for k in keys if k in state}
-        output = {"version": "ai-judgment-audit-v1", "since": since, "until": until,
+        window_calls = [all_calls[row["call_id"]] for row in calls]
+        output = {"version": "ai-judgment-audit-v2", "since": since, "until": until,
             "windowBasis": "calls started and tasks last updated in [since,until)",
-            "calls": ai_call_metrics([all_calls[row["call_id"]] for row in calls]),
+            "calls": ai_call_metrics(window_calls),
             "authored": ai_judgment_metrics(tasks, calls_by_task, receipts), "tasks": ai_task_metrics(tasks),
+            "research": ai_research_metrics(tasks, window_calls),
             "stateAtCollection": state_summary, "warnings": warnings,
             "billing": "unmeasured", "investmentAccuracy": "unmeasured",
             "limitations": ["Retained central call cohorts exclude independent source-provider jobs and deleted history.",
                 "Old prompt versions absent from call metrics remain unrecorded; authored versions use result root.",
                 "Receipt totals cover these authored task publications only, not all deliveries in the window.",
+                "Research costs cover window calls linked by task ID; missing usage and older calls are not zero cost.",
                 "Runtime pulse gaps are unknown, not measured downtime. Memory metadata is not a fresh replay."]}
     connection.rollback()
     return output

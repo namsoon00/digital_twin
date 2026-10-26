@@ -12,6 +12,7 @@ from digital_twin.modules.market_data.contracts import parse_datetime
 from digital_twin.modules.news_intelligence.domain.materiality import evidence_materiality
 from digital_twin.modules.news_intelligence.domain.research_document_reference import question_document_changed_symbols
 from digital_twin.modules.news_intelligence.domain.research_progress import all_tasks_addressed, assess_tasks, audit_retain_until, evidence_packets, fingerprint, progress_plan, task_contract
+from digital_twin.modules.news_intelligence.domain.documentary_review_reuse import DocumentaryReviewReuse, VERSION as REVIEW_REUSE_VERSION
 
 
 DISABLED_VALUES = {"0", "false", "no", "off", "disabled"}
@@ -130,6 +131,9 @@ class InvestmentResearchOrchestrationService:
         def tasks():
             return [row for row in plan.get("tasks") or [] if isinstance(row, dict)]
 
+        review_reuse = (DocumentaryReviewReuse(run_id, account_id, target.normalized_symbol(), question.to_dict(),
+            tasks(), brief.to_dict(), brain.get("sourceReviewResume")) if brain.get("documentaryReviewOnly") else None)
+
         def sources(rows):
             return self.source_types_with_verification(unique_strings(
                 source for row in rows for source in row.get("sourceTypes") or []
@@ -140,6 +144,8 @@ class InvestmentResearchOrchestrationService:
             # retention and preserve the original queued request on checkpoints.
             executed = progress_plan(plan, assessments)
             executed.pop("taskReviews", None)
+            if review_reuse:
+                executed["documentaryReviewReuse"] = review_reuse.checkpoint()
             executed["stopReason"] = stop_reason
             executed["status"] = "addressed" if all_tasks_addressed(assessments) else "unresolved"
             return self.persist_run(ResearchRun(
@@ -192,7 +198,7 @@ class InvestmentResearchOrchestrationService:
         attempted_requests = {fingerprint(task_contract(row)) for row in tasks()} if exploration_resume else set()
         collection_ids = set()
         exploration_attempted = False
-        review_repair_used = False
+        review_repair_used = bool(review_reuse and review_reuse.repair_used)
         stop_reason = "round-budget-exhausted"
         # There is one review before collection and one after each bounded
         # collection round. A follow-up query must differ from attempted work.
@@ -202,8 +208,18 @@ class InvestmentResearchOrchestrationService:
             packets = source_packets(accepted, verified, rejected)
             assessments = assess_tasks(tasks(), packets, target.normalized_symbol(), assessed_at, plan.get("taskReviews"))
             planning_brain = {**brain, "researchPlan": progress_plan(plan, assessments, packets)}
-            plan, brief = self.plan_collection_work(planning_brain, question, target, account_id, brief)
+            cached_review = review_reuse.lookup(assessments) if review_reuse else None
+            if cached_review:
+                plan = {**planning_brain["researchPlan"], "taskReviews": cached_review["taskReviews"],
+                    "planningAudit": {**cached_review["planningAudit"], "reuse": {
+                        "version": REVIEW_REUSE_VERSION, "status": "same-evidence", "modelCallSkipped": True}}}
+                brief = brief.with_planning(plan["planningAudit"].get("status"), "source-review", plan["planningAudit"])
+                review_repair_used = review_repair_used or cached_review["repairAttempted"]
+            else:
+                plan, brief = self.plan_collection_work(planning_brain, question, target, account_id, brief)
             assessments = assess_tasks(tasks(), packets, target.normalized_symbol(), assessed_at, plan.get("taskReviews"))
+            if review_reuse:
+                review_reuse.record(assessments, plan, bool(cached_review and cached_review["repairAttempted"]))
             history.append({
                 "round": review_round, "assessedAt": assessed_at,
                 "planningAudit": dict(plan.get("planningAudit") or {}),
@@ -225,6 +241,8 @@ class InvestmentResearchOrchestrationService:
                 plan, brief = self.plan_collection_work({**brain, "researchPlan": repair_plan,
                     "researchReviewRepair": repair}, question, target, account_id, brief)
                 assessments = assess_tasks(tasks(), packets, target.normalized_symbol(), assessed_at, plan.get("taskReviews"))
+                if review_reuse:
+                    review_reuse.record(assessments, plan, repair_attempted=True)
                 history.append({"round": review_round, "phase": "citation-repair", "assessedAt": assessed_at,
                     "previousRejections": repair, "planningAudit": dict(plan.get("planningAudit") or {}),
                     "taskAssessments": assessments, "evidencePackets": packets})

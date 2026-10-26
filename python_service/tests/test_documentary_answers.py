@@ -219,7 +219,8 @@ class DocumentaryAnswerTests(unittest.TestCase):
                 if persistent:
                     self.assertEqual('unavailable', answer['status'])
                     self.assertFalse(answer['sources'])
-                    self.assertEqual(3, advisor.plan.call_count)
+                    self.assertEqual(2, advisor.plan.call_count)
+                    self.assertEqual(1, result['executedPlan']['documentaryReviewReuse']['skippedPlanningCalls'])
                 else:
                     self.assertEqual('answered', answer['status'])
                     self.assertEqual(2, advisor.plan.call_count)

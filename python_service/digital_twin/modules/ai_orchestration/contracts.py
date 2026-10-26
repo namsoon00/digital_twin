@@ -5,6 +5,7 @@ _EXPORTS = {
     "ai_call_metrics": ("digital_twin.modules.ai_orchestration.domain.judgment_metrics", "calls_summary"),
     "ai_judgment_metrics": ("digital_twin.modules.ai_orchestration.domain.judgment_metrics", "judgments_summary"),
     "ai_task_metrics": ("digital_twin.modules.ai_orchestration.domain.judgment_metrics", "task_summary"),
+    "ai_research_metrics": ("digital_twin.modules.ai_orchestration.domain.judgment_metrics", "research_summary"),
     "dated_observation": ("digital_twin.modules.ai_orchestration.domain.publication", "dated_observation"),
     "QUOTE_SELECTION_VERSIONS": ("digital_twin.modules.ai_orchestration.domain.publication", "QUOTE_SELECTION_VERSIONS"),
     "observation_subject_quote": ("digital_twin.modules.ai_orchestration.domain.publication", "quote_from"),

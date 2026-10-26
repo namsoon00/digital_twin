@@ -26,6 +26,10 @@ def calls_summary(calls):
             "calls": len(rows), "states": dict(Counter(row["status"] for row in rows)),
             "reportedUsageCalls": len(measured), "unmeasuredUsageCalls": len(rows) - len(measured),
             "reportedTokens": sum(u["input_tokens"] + u["output_tokens"] for u in measured),
+            "inputTokens": distribution([u["input_tokens"] for u in measured]),
+            "outputTokens": distribution([u["output_tokens"] for u in measured]),
+            "cachedInputTokens": distribution([u.get("cached_input_tokens") for u in measured]),
+            "tokenBasis": "input-plus-output; cached-input-is-a-subset-not-additional",
             **{key: distribution([row.get("metrics", {}).get(key) for row in rows])
                for key in ("promptBytes", "capacityWaitMs", "modelProcessMs", "totalMs")}})
     return result
@@ -35,9 +39,10 @@ def judgments_summary(tasks, calls_by_task, receipts):
     groups = defaultdict(list)
     for task in tasks:
         if task["result"].get("summary"):
-            groups[task["result"].get("executionPromptVersion") or "unrecorded"].append(task)
+            groups[(task["result"].get("executionPromptVersion") or "unrecorded",
+                    task["result"].get("input", {}).get("retrieval", {}).get("version") or "unrecorded")].append(task)
     result = []
-    for version, rows in sorted(groups.items()):
+    for (version, retrieval_version), rows in sorted(groups.items()):
         values = [row["result"] for row in rows]
         calls = [call for row in rows for call in calls_by_task.get(row["task_id"], [])]
         measured = [usage_counts(call.get("metrics", {}).get("usage")) for call in calls]
@@ -47,7 +52,7 @@ def judgments_summary(tasks, calls_by_task, receipts):
             usage = [usage_counts(call.get("metrics", {}).get("usage")) for call in linked]
             if linked and all(u is not None for u in usage) and all(c["status"] != "running" for c in linked):
                 per_task.append(sum(u["input_tokens"] + u["output_tokens"] for u in usage))
-        result.append({"executionPromptVersion": version, "authored": len(rows),
+        result.append({"executionPromptVersion": version, "retrievalVersion": retrieval_version, "authored": len(rows),
             "taskStates": dict(Counter(row["status"] for row in rows)),
             "quality": dict(Counter(v.get("quality", {}).get("status", "unknown") for v in values)),
             "publication": dict(Counter(v.get("publication", {}).get("status", "unknown") for v in values)),
@@ -85,3 +90,49 @@ def task_summary(tasks):
             "observationGaps": sum(e.get("status") in {"observation-window-missed", "unevaluable"}
                 for row in tasks for e in row["result"].get("followUpEvaluations", [])),
             "coalescedReservations": sum(row["result"].get("resumption", {}).get("coalescedTaskCount", 0) for row in tasks)}
+
+
+def research_summary(tasks, window_calls):
+    """Relate measured calls to source outcomes without treating partial as done.
+
+    Calls are restricted to the audit window, not the full lifetime of a task.
+    Missing usage/progress stays unmeasured. Collection and passage extraction
+    are useful work but are neither an answered question nor investment proof.
+    """
+    by_task, groups = defaultdict(list), defaultdict(list)
+    for call in window_calls:
+        by_task[call.get("task_id")].append(call)
+    for row in tasks:
+        result = row["result"]
+        if result.get("documentaryAnswer"):
+            groups[(result["documentaryAnswer"].get("status", "unknown"),
+                    result.get("planningReuse", {}).get("version", "unrecorded"))].append(row)
+    summaries = []
+    for (status, policy), rows in sorted(groups.items()):
+        values = [row["result"] for row in rows]
+        calls = [call for row in rows for call in by_task[row["task_id"]]]
+        measured = [usage_counts(call.get("metrics", {}).get("usage")) for call in calls]
+        # changedEvidenceCount is the repository's written-row count and may
+        # include refreshed governance metadata. It does not prove new sources.
+        writes = [v.get("changedEvidenceCount") for v in values]
+        progress = [v.get("sourceRecovery", {}).get("progress", {}) for v in values]
+        collected = [p.get("collectedEvidenceCount") for p in progress]
+        passages = [p.get("newPassageCount") for p in progress]
+        summaries.append({"answerStatus": status, "reusePolicyVersion": policy, "tasks": len(rows),
+            "taskStates": dict(Counter(row["status"] for row in rows)),
+            "stopReasons": dict(Counter(v.get("stopReason", "unrecorded") for v in values)),
+            "tasksWithWindowCalls": sum(bool(by_task[row["task_id"]]) for row in rows),
+            "windowCalls": len(calls), "callsWithUsage": sum(u is not None for u in measured),
+            "callsWithoutUsage": sum(u is None for u in measured),
+            "windowReportedTokens": sum(u["input_tokens"] + u["output_tokens"] for u in measured if u is not None),
+            "workloads": calls_summary(calls),
+            "sourceRowsWritten": distribution(writes),
+            "tasksWithSourceWrites": sum(type(n) is int and n > 0 for n in writes),
+            "explorationCollectedEvidence": distribution(collected),
+            "tasksWithExplorationEvidence": sum(type(n) is int and n > 0 for n in collected),
+            "newPassages": distribution(passages),
+            "tasksWithNewPassages": sum(type(n) is int and n > 0 for n in passages),
+            "skippedPlanningCalls": distribution([v.get("planningReuse", {}).get("skippedPlanningCalls") for v in values]),
+            "costScope": "task outcomes updated in window; only calls started in window, not lifetime cost",
+            "qualification": "source-progress-and-documentary-answer-status-not-investment-accuracy"})
+    return summaries

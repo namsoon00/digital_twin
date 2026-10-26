@@ -434,7 +434,9 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # retained alternatives, prior interim fields, original-period corroboration,
         # conflicting values, committed lineage and bounded paired-filing recovery.
         # Nine current-flow source, missing-data, legacy, phase and multi-strategy notice contracts.
-        self.assertLessEqual(total, 2699)
+        # Nine exact-routing, historical-input, review-reuse, resume/freshness,
+        # citation-repair and measured-token/outcome separation regressions.
+        self.assertLessEqual(total, 2708)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

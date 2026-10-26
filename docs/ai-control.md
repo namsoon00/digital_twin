@@ -15,7 +15,7 @@ the original question and next plan without changing past answers or eligibility
 The equivalent persisted setting is `aiCompanyResearchEnabled`. Runtime wiring
 enables the existing evidence and judgment policies before adding
 `company-research-cycle-v1`: author v27, repair v23, customer review v16,
-retrieval v15 and independent research review v4. Crypto observations retain
+retrieval v16 and independent research review v4. Crypto observations retain
 their existing contracts. Deployment uses the normal validation gate and direct
 activation; it does not run old/new authors in parallel or add a second model
 pipeline. Set the setting to false and restart managed workers to disable the
@@ -959,7 +959,7 @@ still trigger evaluation; independent publication review remains required.
 
 ### Compact routing inputs
 
-New purpose-aware reads use `independent-observation-retrieval-v11-compact-routing`.
+Purpose-aware routing introduced `independent-observation-retrieval-v11-compact-routing`.
 The persisted envelope retains the complete frozen source packet, continuity and
 read trace. Only the planner presentation is compacted: old delivery fact bodies
 and large research-knowledge sections become exact read references; duplicate
@@ -968,6 +968,30 @@ Current facts, financial values/provenance, original question/checkpoint
 contracts, reviewed missing requirements, counter-premises and follow-up
 observations remain intact. The final author still receives the selected original
 facts and required memories. Historical V9/V10 prompts remain reproducible.
+
+New company research uses `independent-observation-retrieval-v16-efficient-routing`.
+It gives the reader a short routing contract instead of repeating the final
+author's valuation, prose and forecast instructions. Reported values, units,
+periods, quality and contrary premises stay visible. Large provenance,
+comparison/calculation detail and administrative memory become exact
+`read_context` references. The complete originals remain in the frozen envelope
+and final author input. Allowed read arguments occur in the output schema;
+descriptive report/question indexes remain in the routing prompt. Large details
+inside prior read results are addressable only after that result is recorded.
+Neither source JSON nor another request in the same batch can grant a read path.
+V15 and earlier frozen inputs keep their original renderers and validation.
+
+Documentary collection persists `documentary-review-reuse-v1` checkpoints inside
+the same research run. An unchanged task/eligible-packet fingerprint reuses its
+previous source review instead of making another paid planning call. A partial
+answer retains missing requirements and counter-citations; collection can still
+continue along an untried path. New/revised evidence, changed requirements or
+eligibility trigger reassessment. Checkpoints are scoped to the run, account,
+subject, question, original task and research brief. Rejected reviews stay
+rejected and the existing single citation-repair bound survives a resume.
+Transport failures are not cached as successful reviews. This does not change
+cross-run repeat admission, source eligibility, author/reviewer authority or
+notification policy.
 
 `read_context(path)` reads only paths issued from that same frozen packet and
 continuity. It never queries a newer database snapshot or an external URL. Large
@@ -1043,15 +1067,23 @@ Use `python3 scripts/audit-ai-judgment-quality.py --since <ISO-time> --output <p
 for an explicit read-only snapshot. It selects bounded IDs through time indexes,
 reads necessary result paths and call metadata by key, and joins delivery receipts
 even when queue jobs have been removed. Authored cohorts use the result-root prompt
-version. Tokens per authored task are reported only for retained central calls with
+version and frozen retrieval version. Tokens per authored task are reported only for retained central calls with
 complete usage coverage; separate source jobs and deleted history are excluded.
 Unmeasured calls, billing and investment accuracy are explicit. The tool never
 initializes stores, changes queues, invokes models or schedules another report.
+Audit v2 also separates input/output/cache tokens (cache is a subset of input)
+and groups documentary answer states with source writes, exploration receipts,
+new passages and skipped planning calls. Source row writes can include refreshed
+governance metadata and are not counted as newly acquired sources. Research costs cover calls started in the
+window linked to tasks updated in the window; they are not lifetime task costs.
+Absent progress measurements remain unmeasured. Collected evidence and partial
+answers are not counted as completed answers or proven investment quality.
 
 Replay private captures without model calls, database writes or notifications:
 
 ```bash
 python3 scripts/verify-compact-ai-retrieval.py /private/captured-inputs.json.gz
+python3 scripts/verify-compact-ai-retrieval.py /private/company-inputs.json.gz --target efficient
 ```
 
 The input is a list of objects with an `envelope` field. The report compares prompt

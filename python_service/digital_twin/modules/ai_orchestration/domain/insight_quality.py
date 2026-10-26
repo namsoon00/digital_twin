@@ -54,6 +54,8 @@ def local_quality(result, *, causal_guard_version=CAUSAL_GUARD_VERSION):
     errors = insight_errors(result, result["input"], causal_guard_version=causal_guard_version)
     from .business_progress import quality_errors as progress_errors, focus
     errors.extend(progress_errors(result))
+    from .notification_contribution import quality_errors as contribution_errors
+    errors.extend(contribution_errors(result))
     if result["input"].get("retrieval", {}).get("status") in {"deferred", "repeated-read", "context-budget"}:
         errors.append("내부 조회를 충분히 완료하지 못해 발송을 보류했습니다.")
     from .company_value import explains_value
@@ -91,6 +93,8 @@ def accept_review(result, review, input_id):
         return quality
     from .business_progress import review_errors
     errors = review_errors(result, review)
+    from .notification_contribution import review_errors as contribution_review_errors
+    errors.extend(contribution_review_errors(result, review))
     if not isinstance(review, dict) or review.get("version") != REVIEW_VERSION or set(review.get("sections", {})) != set(SECTIONS):
         errors.append("독립 검토 응답이 완전하지 않습니다.")
     else:

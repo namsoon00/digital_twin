@@ -51,6 +51,9 @@ def validate_plan(value, packet, research=(), require_research=False, require_re
     from . import business_progress
     if business_progress.enabled(packet):
         allowed.add("judgmentChange")
+    from . import notification_contribution
+    if notification_contribution.enabled(packet):
+        allowed.add("notificationContribution")
     if set(value) - allowed:
         raise ValueError("AI plan contains unsupported fields")
     known = {str(row["id"]) for row in packet.get("facts", []) if row.get("id")}
@@ -60,6 +63,8 @@ def validate_plan(value, packet, research=(), require_research=False, require_re
     result = {}
     if business_progress.enabled(packet):
         result["judgmentChange"] = business_progress.validate_change(value.get("judgmentChange"), packet)
+    if notification_contribution.enabled(packet):
+        result["notificationContribution"] = notification_contribution.validate(value.get("notificationContribution"), packet)
     notification = value.get("notification")
     if not isinstance(notification, dict) or set(notification) != {"send", "reason"} or type(notification["send"]) is not bool:
         raise ValueError("AI must explicitly decide whether a useful notification is warranted")

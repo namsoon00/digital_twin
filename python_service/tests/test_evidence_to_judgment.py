@@ -215,3 +215,34 @@ class EvidenceToJudgmentTests(unittest.TestCase):
         for envelope in (previous, current, repair, review): validate_execution_input(envelope)
         broken = deepcopy(current); broken['current'].pop('partialJudgmentPolicy')
         with self.assertRaises(ValueError): validate_execution_input(broken)
+
+    def test_delivery_context_keeps_partial_judgment_contract_and_legacy_replay(self):
+        from test_notification_contribution import source_packet, contextual_result, contribution, context, receipt, added_value
+        from digital_twin.modules.ai_orchestration.domain import company_research_cycle, delivery_insight
+        from digital_twin.modules.ai_orchestration.domain.execution_input import freeze_execution_input, freeze_repair_input, freeze_review_input, validate_execution_input
+        from digital_twin.modules.ai_orchestration.domain.planning import validate_plan
+        packet = source_packet()
+        packet['notificationContributionPolicy'] = contribution.POLICY
+        packet['deliveredNotificationContext'] = context([receipt(packet)], packet['accountId'], packet['symbol'], packet['capturedAt'])
+        packet.update(companyResearchPolicy=company_research_cycle.VERSION, questionAnswerPolicy=question_answer.VERSION)
+        legacy = freeze_execution_input(packet, [], [])
+        saved = deepcopy(legacy)
+        packet['partialJudgmentPolicy'] = partial_judgment.VERSION
+        author = freeze_execution_input(packet, [], [])
+        result = contextual_result(packet)
+        for envelope in (author, freeze_repair_input(author, result, ['참조를 확인합니다.'], 'parent'),
+                         freeze_review_input(result)):
+            validate_execution_input(envelope)
+            self.assertIn(envelope['promptVersion'], delivery_insight.VERSIONS)
+            self.assertIn(partial_judgment.INSTRUCTIONS, envelope['prompt'])
+            self.assertIn(contribution.INSTRUCTIONS, envelope['prompt'])
+            self.assertIn('notificationContribution', envelope['outputSchema']['required'])
+        validate_execution_input(legacy)
+        self.assertEqual(saved, legacy)
+        p, memories, _, _, raw = self.partial_fixture()
+        p['notificationContributionPolicy'] = contribution.POLICY
+        p['deliveredNotificationContext'] = context([receipt(p)], p['accountId'], p['symbol'], p['capturedAt'])
+        raw['notificationContribution'] = added_value(p, evidence=raw['claimEvidence']['summary'])
+        self.assertEqual('supports', validate_plan(raw, p, memories)['questionResolutions'][0]['judgmentImpact']['effect'])
+        raw['claimEvidence']['hypothesis'][0]['field'] = 'historicalDocumentReference.publishedAt'
+        with self.assertRaises(ValueError): validate_plan(raw, p, memories)

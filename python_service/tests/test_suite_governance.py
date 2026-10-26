@@ -436,10 +436,13 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # Nine current-flow source, missing-data, legacy, phase and multi-strategy notice contracts.
         # Nine exact-routing, historical-input, review-reuse, resume/freshness,
         # citation-repair and measured-token/outcome separation regressions.
-        # Seven filing-history, immutable focus/resume and partial-judgment contracts.
+        # Eight filing-history, immutable focus/resume, partial-judgment and
+        # delivered-context composition contracts.
         # Ten granted-turn/crash, exact-native-witness and replay-packet
         # integrity regressions for the candidate starvation/parity repair.
-        self.assertLessEqual(total, 2725)
+        # Eleven delivered-context regressions protect cross-route receipts, scoped
+        # history, legacy replay, same-source reinterpretation and send locking.
+        self.assertLessEqual(total, 2737)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

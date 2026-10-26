@@ -111,7 +111,9 @@ def dated_observation(result):
 def repeat_block(result, receipts, account_id, symbol, now=None):
     now = now or datetime.now(timezone.utc)
     subject = [row for row in receipts if row.get("accountId") == account_id and row.get("symbol") == symbol]
-    if any(row.get("inputFingerprint") == result.get("inputFingerprint") for row in subject):
+    from .notification_contribution import verified as contribution_verified
+    if (any(row.get("inputFingerprint") == result.get("inputFingerprint") for row in subject)
+            and not contribution_verified(result)):
         return "이미 전달한 근거와 같아 반복 발송하지 않습니다."
     meaning = result.get("quality", {}).get("insightFingerprint")
     latest = max(subject, key=lambda row: instant(row.get("deliveredAt")) or datetime.min.replace(tzinfo=timezone.utc), default={})

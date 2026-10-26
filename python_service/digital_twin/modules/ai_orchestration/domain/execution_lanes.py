@@ -74,6 +74,10 @@ def material_key(packet, research, *, evidence_identity=None):
         common["companyResearchPolicy"] = packet["companyResearchPolicy"]
     if packet.get("judgmentQualityPolicy"):
         common["judgmentQualityPolicy"] = packet["judgmentQualityPolicy"]
+    if packet.get("notificationContributionPolicy"):
+        common["notificationContributionPolicy"] = packet["notificationContributionPolicy"]
+        if market(packet):
+            common["deliveredContext"] = packet["deliveredNotificationContext"]["fingerprint"]
     if market(packet):
         common["evidence"] = evidence_identity if evidence_identity is not None else evidence_change_identity(packet, [], [])
         common["observationCases"] = sorted([{key: row[key] for key in ("caseId", "capability", "question", "completionCriterion") if key in row}

@@ -20,6 +20,7 @@ from digital_twin.modules.notifications.domain.message_types import AI_OBSERVATI
 from digital_twin.modules.notifications.domain.delivery_suppression import NotificationDeliverySuppressed
 from digital_twin.modules.notifications.domain.notifications import NotificationJob, notification_debug_number
 from digital_twin.modules.notifications.contracts import independent_typedb_publication
+from digital_twin.modules.notifications.contracts import delivered_insight_subject
 from digital_twin.modules.notifications.domain.observation_price_basis import PRICE_PRESENTATION_VERSION, price_basis_for_result
 
 
@@ -157,6 +158,21 @@ class AIControlPublication:
 
     @contextmanager
     def delivery_guard(self, job, message):
+        scope = delivered_insight_subject(job) if legacy_route_retired(self.settings) else {}
+        if scope:
+            # All four customer routes share this outer lock. A rule receipt
+            # cannot appear between the AI's last comparison and its send.
+            with self.notifications.delivery_subject_lock(job.account_id, "delivered-context:" + scope["symbol"]) as acquired:
+                if not acquired:
+                    raise RuntimeError("같은 종목의 다른 알림이 발송 중이므로 잠시 후 다시 비교합니다.")
+                with self._delivery_guard(job, message):
+                    yield
+        else:
+            with self._delivery_guard(job, message):
+                yield
+
+    @contextmanager
+    def _delivery_guard(self, job, message):
         if job.message_type == "investmentInsight" and legacy_route_retired(self.settings) and not independent_typedb_publication(job.context, account_id=job.account_id):
             raise NotificationDeliverySuppressed(RETIRED_REASON)
         if job.message_type == AI_OBSERVATION_DIAGNOSTIC:
@@ -208,6 +224,16 @@ class AIControlPublication:
             latest = last_delivered.get("jobId", "")
             if latest != baseline:
                 reason = "분석 이후 다른 알림이 먼저 전달되어 다음 관찰에서 다시 비교합니다."
+            from digital_twin.modules.ai_orchestration.domain.notification_contribution import enabled as contextual
+            if contextual(packet):
+                from digital_twin.modules.notifications.infrastructure.delivery_context_reader import DeliveredInsightContextReader
+                from digital_twin.modules.ai_orchestration.domain.publication import instant
+                current_context = DeliveredInsightContextReader(self.notifications).read(job.account_id, row["symbol"], stamp())
+                captured = packet["deliveredNotificationContext"]
+                compared = {item["jobId"] for item in captured["entries"]}
+                if any(item["jobId"] not in compared and instant(item["deliveredAt"]) >= instant(packet["capturedAt"])
+                       for item in current_context["entries"]):
+                    reason = "분석 중 새 규칙·시세·연구·AI 알림이 전달되어 다음 관찰에서 추가 가치를 다시 비교합니다."
             if reason:
                 raise NotificationDeliverySuppressed(reason)
             # Receipt stores exactly the facts and explanation actually delivered.
@@ -216,6 +242,10 @@ class AIControlPublication:
                 **{key: result[key] for key in ("summary", "hypothesis", "counterEvidence", "comparison", "portfolioImpact", "insightVersion", "followUpConditions", "observations")},
                 "insightFingerprint": result["quality"]["insightFingerprint"], "facts": receipt_facts(result),
                 "receiptEvidenceVersion": RECEIPT_EVIDENCE_VERSION}
+            if contextual(packet):
+                job.context["aiControlDeliverySnapshot"].update(
+                    notificationContribution=result["notificationContribution"],
+                    deliveredContextFingerprint=packet["deliveredNotificationContext"]["fingerprint"])
             if "companyValue" in result:
                 job.context["aiControlDeliverySnapshot"]["companyValue"] = result["companyValue"]
             if "quoteAssessment" in packet:

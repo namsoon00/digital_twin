@@ -23,6 +23,11 @@ are met. This grants neither valuation readiness nor trading authority; an
 unchanged explanation remains unchanged and unsupported explanations remain
 insufficient. No extra model stage or automatic retry is added.
 
+When delivered-notification context is enabled, its author/review contract wraps
+the partial-judgment contract. Both the citation-bound impact validation and
+independent added-meaning review remain active. Older delivery-context inputs
+without the partial-judgment marker retain their original prompt and schema.
+
 Before a bounded source collection, accepted documentary reviews supply the
 outstanding requirements as `sourceFocus`. The immutable question and original
 completion contract remain intact. Full requirement strings survive the
@@ -2226,3 +2231,50 @@ Validation adds six Python regressions for alternating fairness, scoped/fresh
 holding hints, owned question progress, lease-persisted selection reasons,
 receipt deduplication, and frozen native portfolio evidence. The suite ceiling
 increases by six, from 2626 to 2632, with no tests removed or disabled.
+
+## Added meaning across delivered notifications (2026-10-26)
+
+Market observations now freeze `delivered-insight-context-v1` alongside the
+unchanged `lastDeliveredNotification` AI baseline. The notifications owner reads
+successful receipt bodies for AI observations, rule observations, raw price
+notices and research progress in the same account and symbol, at or before the
+source capture cutoff. This context contains at most two messages per route
+from the last seven days, with bounded, link-redacted excerpts and explicit
+missing-body/truncation coverage. It is a view of identifiable retained receipts,
+not a complete lifetime notification history. Failed jobs and unverified drafts
+are excluded. Retired legacy research jobs without a receipt subject cannot be
+reconstructed; new receipts retain the subject independently of the job.
+The reader uses the existing completion-time index and parses receipt metadata
+once in a single bounded query, rather than rescanning large bodies per route.
+Unavailable history fails the observation into its existing retry path; it is
+never represented as an empty first observation.
+
+These messages are historical conversation context, never new ABox facts or
+current investment evidence. Original facts, source clocks, business hypotheses
+and the prior AI judgment remain available. A new notification does not refresh
+market data or complete a research question. The original-question lane retains
+its existing source/research contract.
+
+Author V28, repair V24 and review V17 add `notificationContribution`. The author
+must compare the captured receipt IDs and identify the actual delivered section
+and current source fields that support its added meaning. An independent review
+separately judges that contribution. Same-source reinterpretation, correction,
+changed assessment and a material risk change can qualify even when the overall
+conclusion is maintained. New measurements with no additional meaning, reworded
+rule conditions, and generic caution remain internal. Source equality alone no
+longer vetoes an independently reviewed explanation under this new contract.
+Insufficient evidence, actionless authority, quote validity, exact-repeat guards,
+cooldowns and account/subject daily limits remain enforced.
+
+All four routes share a subject delivery lock. Immediately before an AI send,
+new successful receipts since capture require the next observation to compare
+them; the frozen analysis is never rewritten during transport. Receipt identity
+can renew that comparison, while a new polling clock alone cannot. Already frozen
+older prompts, hashes, review schemas and notification bodies keep their original
+contracts. No extra model phase or new worker is introduced.
+
+Eleven regressions cover scope, failed/future receipt exclusion, bounded and
+missing bodies, source reuse, semantic-review rejection, legacy prompt replay,
+tamper detection, retained receipt identity, shared locking and a rule delivered
+during AI analysis. The suite ceiling increases from 2718 to 2729. These checks
+verify the execution and publication contract, not investment prediction quality.

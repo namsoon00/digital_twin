@@ -300,8 +300,20 @@ def insight_fingerprint(result, packet):
             documents.append({"valueBasis": model["basisFingerprint"],
                               "pricePosition": model.get("priceComparison", {}).get("position", "unavailable")})
     transitions = [row["conditionId"] for row in packet.get("followUpEvaluations", []) if row.get("transitionVerified")]
-    return content_hash({"version": INSIGHT_VERSION, "relations": sorted(relations, key=str),
-                         "documents": sorted(documents, key=content_hash), "transitions": sorted(transitions)})
+    fingerprint = {"version": INSIGHT_VERSION, "relations": sorted(relations, key=str),
+                   "documents": sorted(documents, key=content_hash), "transitions": sorted(transitions)}
+    from .notification_contribution import enabled
+    if enabled(packet):
+        # Identical source facts may support a newly reviewed interpretation.
+        # Text identity only catches exact repeats; semantic novelty belongs to
+        # the independent, receipt-aware review, not a text-similarity threshold.
+        fingerprint["explanation"] = {key: result.get(key) for key in
+            ("summary", "hypothesis", "portfolioImpact", "counterEvidence")}
+        fingerprint["contributionKind"] = (result.get("notificationContribution") or {}).get("kind")
+        fingerprint["contributionValues"] = [
+            {"field": ref["field"], "factId": ref["factId"], "value": resolve_ref(packet, ref)[1]}
+            for ref in (result.get("notificationContribution") or {}).get("evidence", [])]
+    return content_hash(fingerprint)
 
 
 def narrative_digest(result):
@@ -324,4 +336,6 @@ def narrative_digest(result):
         content["documentaryReview"] = result["documentaryReview"]
     if "judgmentChange" in result:
         content["judgmentChange"] = result["judgmentChange"]
+    if "notificationContribution" in result:
+        content["notificationContribution"] = result["notificationContribution"]
     return content_hash(content)

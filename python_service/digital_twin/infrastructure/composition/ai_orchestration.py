@@ -180,9 +180,12 @@ def build_ai_control_service(settings=None):
         return improvement_feedback(packet, notices, outcomes, unavailable, cases)
 
     from digital_twin.infrastructure.transactions.ai_observation_source_refresh import AIObservationSourceRefresh
+    from digital_twin.modules.notifications.infrastructure.delivery_context_reader import DeliveredInsightContextReader
     from digital_twin.infrastructure.composition.runtime_support import setting_truthy
     return AIControlService(store, subjects, evidence, planner, researcher, research_memory, configured,
-                            delivery_memory=publication.memory, reviewer=planner, development_memory=development.memory,
+                            delivery_memory=publication.memory,
+                            delivery_context=DeliveredInsightContextReader(publication.notifications).read,
+                            reviewer=planner, development_memory=development.memory,
                             brain_memory=lambda account, symbol, world: agenda.memory(account, symbol, world, max_cases=12 if knowledge else 5), brain_waker=wake_brain, read_planner=planner,
                             evidence_waker=evidence_wake.run_once, read_round_budget=store.retrieval_round_budget, company_memory=company_memory,
                             research_plan_memory=lambda account, symbol, world: agenda.memory(account, symbol, world, research_only=True, max_cases=12 if knowledge else 5),

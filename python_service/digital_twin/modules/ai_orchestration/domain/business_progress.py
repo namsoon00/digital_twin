@@ -81,7 +81,11 @@ def quality_errors(result):
         return ["판단 변화의 종류·영향·원천 근거가 완전하지 않습니다."]
     if not result.get("notification", {}).get("send"):
         return []
-    if change["kind"] == "none" or change["impact"] in {"unchanged", "insufficient"}:
+    from .notification_contribution import enabled as contribution_enabled
+    contextual = contribution_enabled(packet)
+    reinterpreted = contextual and (result.get("notificationContribution") or {}).get("kind") in {
+        "new-interpretation", "correction", "material-risk-change"}
+    if change["kind"] == "none" or change["impact"] == "insufficient" or (change["impact"] == "unchanged" and not reinterpreted):
         return ["판단 진전이 없는 연구 상태는 투자 관찰로 발송할 수 없습니다."]
     errors = []
     if report_gaps(packet):
@@ -114,7 +118,7 @@ def quality_errors(result):
                 novel.append(before != after)
             except ValueError:
                 novel.append(old is None or ref["field"] not in {"sourceAsOf", "asOf", "observedAt"})
-        if novel and not any(novel):
+        if novel and not any(novel) and not contextual:
             errors.append("지난 발송과 같은 사업 근거에 가격 변화만 더해 재발송할 수 없습니다.")
     elif any(facts.get(ref.get("factId"), {}).get("kind") in
              {"company-financial-state", "company-relationship", "fair-value-estimate"} for section in ("summary", "hypothesis")

@@ -438,7 +438,9 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # citation-repair and measured-token/outcome separation regressions.
         # Ten granted-turn/crash, exact-native-witness and replay-packet
         # integrity regressions for the candidate starvation/parity repair.
-        self.assertLessEqual(total, 2718)
+        # Eleven delivered-context regressions protect cross-route receipts, scoped
+        # history, legacy replay, same-source reinterpretation and send locking.
+        self.assertLessEqual(total, 2729)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

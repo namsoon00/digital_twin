@@ -16,6 +16,7 @@ from .business_research import business_prompt, business_schema, business_review
 from .question_resolution import resolution_prompt, resolution_schema, resolution_review_prompt
 from .knowledge_research import knowledge_prompt, knowledge_schema, knowledge_review_prompt
 from . import working_retrieval
+from . import delivery_insight
 from . import scoped_retrieval
 from . import indexed_retrieval, memory_reference, question_retrieval, lane_retrieval, bounded_retrieval, purpose_retrieval, compact_retrieval, quality_retrieval, completion_retrieval, business_retrieval, company_retrieval, efficient_retrieval, judgment_policy, evidence_completion, business_insight, company_research_cycle, retrieval_view, evidence_readiness, evidence_purpose, company_value
 from digital_twin.modules.ai_orchestration.domain.retrieval import (
@@ -84,8 +85,8 @@ def freeze_execution_input(packet, history, research, max_prompt_bytes=DEFAULT_P
     indexed = packet.get("memoryReadPolicy") == memory_reference.VERSION
     continuity = memory_reference.continuity(history, research) if indexed else continuity_memory(history, research)
     previous, results = continuity["previousAnalyses"], continuity["researchResults"]
-    builder = company_research_cycle.prompt if company_research_cycle.enabled(current) else business_insight.prompt if business_insight.enabled(current) else evidence_completion.prompt if evidence_completion.enabled(current) else judgment_policy.prompt if judgment_policy.enabled(current) else evidence_purpose.prompt if evidence_purpose.enabled(current) else evidence_readiness.prompt if evidence_readiness.enabled(current) else knowledge_prompt
-    schema_builder = company_research_cycle.schema if company_research_cycle.enabled(current) else business_insight.schema if business_insight.enabled(current) else evidence_readiness.schema if evidence_readiness.enabled(current) else knowledge_schema
+    builder = delivery_insight.prompt if delivery_insight.enabled(current) else company_research_cycle.prompt if company_research_cycle.enabled(current) else business_insight.prompt if business_insight.enabled(current) else evidence_completion.prompt if evidence_completion.enabled(current) else judgment_policy.prompt if judgment_policy.enabled(current) else evidence_purpose.prompt if evidence_purpose.enabled(current) else evidence_readiness.prompt if evidence_readiness.enabled(current) else knowledge_prompt
+    schema_builder = delivery_insight.schema if delivery_insight.enabled(current) else company_research_cycle.schema if company_research_cycle.enabled(current) else business_insight.schema if business_insight.enabled(current) else evidence_readiness.schema if evidence_readiness.enabled(current) else knowledge_schema
     prompt = builder(current, previous, results)
     limit = prompt_budget(max_prompt_bytes)
     if len(prompt.encode()) > limit:
@@ -126,6 +127,8 @@ def freeze_execution_input(packet, history, research, max_prompt_bytes=DEFAULT_P
 
 
 def validate_execution_input(envelope):
+    if envelope.get("promptVersion") in delivery_insight.VERSIONS:
+        return delivery_insight.validate_input(envelope)
     if envelope.get("promptVersion") in company_research_cycle.VERSIONS:
         return company_research_cycle.validate_input(envelope)
     if envelope.get("promptVersion") in business_insight.VERSIONS:
@@ -313,7 +316,7 @@ def freeze_repair_input(envelope, draft, errors, parent_input_id, review=None):
     limit = prompt_budget(value.get("promptBudgetBytes", DEFAULT_PROMPT_BYTES))
     value["promptBudgetBytes"] = limit
     active = evidence_readiness.enabled(value["current"])
-    builder = company_research_cycle.prompt if company_research_cycle.enabled(value["current"]) else business_insight.prompt if business_insight.enabled(value["current"]) else evidence_completion.prompt if evidence_completion.enabled(value["current"]) else judgment_policy.prompt if judgment_policy.enabled(value["current"]) else evidence_purpose.prompt if evidence_purpose.enabled(value["current"]) else evidence_readiness.prompt if active else knowledge_prompt
+    builder = delivery_insight.prompt if delivery_insight.enabled(value["current"]) else company_research_cycle.prompt if company_research_cycle.enabled(value["current"]) else business_insight.prompt if business_insight.enabled(value["current"]) else evidence_completion.prompt if evidence_completion.enabled(value["current"]) else judgment_policy.prompt if judgment_policy.enabled(value["current"]) else evidence_purpose.prompt if evidence_purpose.enabled(value["current"]) else evidence_readiness.prompt if active else knowledge_prompt
     value["promptVersion"] = evidence_purpose.repair_version(value["current"]) if evidence_purpose.enabled(value["current"]) else evidence_readiness.REPAIR_VERSION if active else LANE_REPAIR_PROMPT_VERSION if value["current"].get("executionLanePolicy") else REPAIR_PROMPT_VERSION
     value["repair"] = {"parentInputId": parent_input_id, "rejectedDraft": copy.deepcopy(draft),
                        "errors": list(errors), "comparisons": comparison_diagnostics(draft, value["current"])}
@@ -331,7 +334,7 @@ def freeze_repair_input(envelope, draft, errors, parent_input_id, review=None):
             value.setdefault("memoryCoverage", {}).setdefault("excluded", {}).setdefault(kind, []).append(
                 {"hash": content_hash(omitted), "reason": "repair-context-budget"})
             value["prompt"] = repair_prompt(builder(value["current"], value["previousAnalyses"], value["researchResults"]), value["repair"])
-    value["outputSchema"] = (company_research_cycle.schema if company_research_cycle.enabled(value["current"]) else business_insight.schema if business_insight.enabled(value["current"]) else evidence_readiness.schema if active else knowledge_schema)(value["current"], value["researchResults"])
+    value["outputSchema"] = (delivery_insight.schema if delivery_insight.enabled(value["current"]) else company_research_cycle.schema if company_research_cycle.enabled(value["current"]) else business_insight.schema if business_insight.enabled(value["current"]) else evidence_readiness.schema if active else knowledge_schema)(value["current"], value["researchResults"])
     value.setdefault("memoryCoverage", {}).update(analysesIncluded=memory_count(value["previousAnalyses"]),
         researchIncluded=memory_count(value["researchResults"]), promptBytes=len(value["prompt"].encode()))
     value["promptHash"] = hashlib.sha256(value["prompt"].encode()).hexdigest()
@@ -343,9 +346,9 @@ def freeze_repair_input(envelope, draft, errors, parent_input_id, review=None):
 def freeze_review_input(result, max_prompt_bytes=DEFAULT_PROMPT_BYTES):
     draft = copy.deepcopy({key: value for key, value in result.items() if key not in {"input", "quality", "comparisonFacts"}})
     packet = copy.deepcopy(result["input"])
-    prompt = (company_research_cycle.review_prompt if company_research_cycle.enabled(packet) else business_insight.review_prompt if business_insight.enabled(packet) else evidence_completion.review_prompt if evidence_completion.enabled(packet) else judgment_policy.review_prompt if judgment_policy.enabled(packet) else evidence_purpose.review_prompt if evidence_purpose.enabled(packet) else knowledge_review_prompt)(packet, draft)
+    prompt = (delivery_insight.review_prompt if delivery_insight.enabled(packet) else company_research_cycle.review_prompt if company_research_cycle.enabled(packet) else business_insight.review_prompt if business_insight.enabled(packet) else evidence_completion.review_prompt if evidence_completion.enabled(packet) else judgment_policy.review_prompt if judgment_policy.enabled(packet) else evidence_purpose.review_prompt if evidence_purpose.enabled(packet) else knowledge_review_prompt)(packet, draft)
     limit = prompt_budget(max_prompt_bytes)
     if len(prompt.encode()) > limit:
         raise EvidenceContractError("observation review exceeds context budget")
     return {"protocolVersion": EXECUTION_INPUT_PROTOCOL, "promptVersion": evidence_purpose.review_version(packet) if evidence_purpose.enabled(packet) else evidence_readiness.REVIEW_VERSION if evidence_readiness.enabled(packet) else LANE_REVIEW_PROMPT_VERSION if packet.get("executionLanePolicy") else REVIEW_PROMPT_VERSION, "promptBudgetBytes": limit,
-            "current": packet, "draft": draft, "prompt": prompt, "promptHash": hashlib.sha256(prompt.encode()).hexdigest(), "outputSchema": business_insight.review_schema() if business_insight.enabled(packet) else review_schema()}
+            "current": packet, "draft": draft, "prompt": prompt, "promptHash": hashlib.sha256(prompt.encode()).hexdigest(), "outputSchema": delivery_insight.review_schema(packet) if delivery_insight.enabled(packet) else business_insight.review_schema() if business_insight.enabled(packet) else review_schema()}

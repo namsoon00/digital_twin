@@ -3,6 +3,8 @@
 from digital_twin.modules._exports import resolve_export
 
 
+_DELIVERED_CONTEXT = 'digital_twin.modules.notifications.domain.delivered_insight_context'
+
 _EXPORTS = {'DeliveryPolicyContext': ('digital_twin.modules.notifications.domain.notification.delivery_policy',
                            'DeliveryPolicyContext'),
  'FINAL_AI_DELIVERY_POLICY_VERSION': ('digital_twin.modules.notifications.domain.notification.delivery_policy',
@@ -15,6 +17,11 @@ _EXPORTS = {'DeliveryPolicyContext': ('digital_twin.modules.notifications.domain
                        'notification_kind'),
  'presentation_metadata': ('digital_twin.modules.notifications.domain.notification.presentation',
                            'presentation_metadata')}
+
+_EXPORTS.update({
+    'validate_delivered_insight_context': (_DELIVERED_CONTEXT, 'validate'),
+    'delivered_insight_subject': (_DELIVERED_CONTEXT, 'subject'),
+})
 
 _EXPORTS['independent_typedb_publication'] = ('digital_twin.modules.notifications.domain.typedb_publication', 'independent_typedb_publication')
 _EXPORTS['COMPANY_VALUE_PRESENTATION_VERSION'] = ('digital_twin.modules.notifications.domain.company_value_status', 'COMPANY_VALUE_PRESENTATION_VERSION')

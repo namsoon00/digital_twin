@@ -10,6 +10,7 @@ from digital_twin.modules.notifications.domain.notifications import Notification
 from digital_twin.modules.notifications.domain.relation_follow_up import delivery_snapshot
 from digital_twin.modules.notifications.domain.delivery_suppression import NotificationDeliverySuppressed
 from digital_twin.modules.notifications.domain.investment_conversation import relation_parent_job_id
+from digital_twin.modules.notifications.domain.delivered_insight_context import subject as delivered_subject
 from digital_twin.modules.outcomes.contracts import notification_timing_contract
 
 
@@ -104,6 +105,8 @@ class NotificationDispatchService:
             "deliveryBaseline": context.get("investmentInsightDeliveryHistory") or {}}
         if context.get("notificationConversation"):
             rendered_audit["notificationConversation"] = context["notificationConversation"]
+        if delivered_subject(job):
+            rendered_audit["notificationSubject"] = delivered_subject(job)
         relation_change = context.get("relationChangeEvidence") or {}
         if context.get("aiControlDeliverySnapshot"):
             rendered_audit["aiControlObservation"] = context["aiControlDeliverySnapshot"]

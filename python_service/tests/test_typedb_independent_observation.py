@@ -1,6 +1,7 @@
 """Independent delivery and readable, source-clocked graph observations."""
 
 from copy import deepcopy
+from contextlib import nullcontext
 from dataclasses import replace
 import unittest
 from unittest.mock import Mock
@@ -267,7 +268,9 @@ class IndependentTypeDBTests(unittest.TestCase):
         job = next(iter(queue.jobs.values()))
         self.assertTrue(independent_typedb_publication(job.context, account_id=job.account_id))
         self.assertFalse(typedb_context_observation_contract(job.context)["aiHandoffPending"])
-        publication = AIControlPublication({"investmentNotificationRoute": "ai-control"}, Mock(), Mock(), lambda: [])
+        notifications = Mock()
+        notifications.delivery_subject_lock.side_effect = lambda *_: nullcontext(True)
+        publication = AIControlPublication({"investmentNotificationRoute": "ai-control"}, Mock(), notifications, lambda: [])
         with publication.delivery_guard(job, "saved observation"):
             pass
         for key, field in (("investmentSubjectDecisionCase", "sourceAboxSnapshotId"),

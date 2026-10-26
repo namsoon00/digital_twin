@@ -293,6 +293,42 @@ class PriceContextAssertions:
         self.assertEqual(state['metadata']['marketPriceDiagnostics'], stale['metadata']['marketPriceDiagnostics'])
 
 
+    def assert_multiple_symbols_keep_context_after_fifteen_minute_range(self):
+        from digital_twin.modules.market_data.domain.price_observation_context import STATE_KEY as CONTEXT
+
+        state = {}
+        for minute in range(17):
+            snap = snapshot(minute, 100 + minute / 10 if minute < 15 else 104)
+            watch = snapshot(minute, 200 - minute / 10 if minute < 15 else 192, "watchlist").watchlist[0]
+            watch.symbol = "SECOND"
+            snap.watchlist = [watch]
+            before = deepcopy(state)
+            events = smart_market_observations(snap, state, [], SETTINGS)
+            persisted = persist_price_state(snap.to_monitor_state(), state, SETTINGS)
+            self.assertEqual(before, state)
+
+            contexts = persisted["metadata"][CONTEXT]
+            self.assertEqual({"TEST", "SECOND"}, set(contexts))
+            self.assertEqual(100, contexts["TEST"]["day"]["low"])
+            self.assertEqual(200, contexts["SECOND"]["day"]["high"])
+            for symbol in contexts:
+                self.assertEqual(snapshot(0, 100).generated_at, contexts[symbol]["day"]["firstAt"])
+                self.assertEqual(snap.generated_at, contexts[symbol]["lastAt"])
+
+            if minute == 15:
+                by_symbol = {event.symbol: event.metadata["priceContext"] for event in events}
+                self.assertEqual({"TEST", "SECOND"}, set(by_symbol))
+                for symbol, high, low, direction in (("TEST", 101.4, 100, "above"),
+                                                     ("SECOND", 200, 198.6, "below")):
+                    interval = by_symbol[symbol]["priorRange"]
+                    self.assertAlmostEqual(high, interval["high"])
+                    self.assertAlmostEqual(low, interval["low"])
+                    self.assertEqual(direction, interval["break"])
+                    self.assertEqual(15, interval["sampleCount"])
+                    self.assertEqual(840, interval["elapsedSeconds"])
+            state = acknowledge_transitions(persisted, events)
+
+
 class SmartPriceObservationTests(PriceContextAssertions, unittest.TestCase):
     def test_source_clock_gap_and_reference_are_not_fast_moves(self):
         with self.subTest(price_context="repeated_reference_merges_preserve_actual_price_proof"):
@@ -474,6 +510,8 @@ class SmartPriceObservationTests(PriceContextAssertions, unittest.TestCase):
         self.assertEqual(60, events[0].metadata["priceMovement"]["trigger"]["windowMinutes"])
 
     def test_persistence_wiring_and_presentation(self):
+        with self.subTest(price_context="multiple_symbols_keep_context_after_fifteen_minute_range"):
+            self.assert_multiple_symbols_keep_context_after_fifteen_minute_range()
         with self.subTest(price_context="session_context_uses_matching_provider_facts_and_multiplicative_gaps"):
             self.assert_session_context_uses_matching_provider_facts_and_multiplicative_gaps()
         with self.subTest(price_context="new_context_is_frozen_in_price_event_and_persisted_with_diagnostics"):

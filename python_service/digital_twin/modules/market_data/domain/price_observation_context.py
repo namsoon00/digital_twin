@@ -127,10 +127,10 @@ def window_context(path, old_samples, item):
 
 
 def advance_price_context(current, previous, paths):
-    prior = ((previous.get("metadata") or {}).get(STATE_KEY) or {}) if current.get("accountId") == previous.get("accountId") else {}
+    prior_contexts = ((previous.get("metadata") or {}).get(STATE_KEY) or {}) if current.get("accountId") == previous.get("accountId") else {}
     states, facts = {}, {}
     for symbol, (item, _) in positions(current).items():
-        old = deepcopy(prior.get(symbol) or {})
+        old = deepcopy(prior_contexts.get(symbol) or {})
         point, status = source_point(item, current.get("generatedAt"))
         if not point:
             states[symbol] = old
@@ -162,10 +162,10 @@ def advance_price_context(current, previous, paths):
         interval = {}
         if ranges:
             window = ranges[0]
-            prior = window["points"][:-1]
-            interval = observed_range(prior, window["startAt"], prior[-1]["at"])
-            interval.update(elapsedSeconds=(parse_timestamp(prior[-1]["at"]) - parse_timestamp(window["startAt"])).total_seconds(),
-                            sampleCount=len(prior),
+            prior_points = window["points"][:-1]
+            interval = observed_range(prior_points, window["startAt"], prior_points[-1]["at"])
+            interval.update(elapsedSeconds=(parse_timestamp(prior_points[-1]["at"]) - parse_timestamp(window["startAt"])).total_seconds(),
+                            sampleCount=len(prior_points),
                             **{"break": "above" if point["price"] > interval["high"] else
                                "below" if point["price"] < interval["low"] else "inside"})
         facts[symbol] = {"version": VERSION, "status": "available", "symbol": symbol,

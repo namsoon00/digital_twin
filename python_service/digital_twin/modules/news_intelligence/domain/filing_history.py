@@ -106,5 +106,5 @@ def verified_filing_history(value, symbol, cik):
 
 def history_material(value):
     """New records/coverage may reopen work; another observation clock may not."""
-    return {key: deepcopy(value[key]) for key in ("version", "symbol", "cik", "sourceUrl",
-        "fromDate", "forms", "rows", "matchedRowCount", "complete", "coverageGaps") if key in value}
+    return {key: deepcopy(value[key]) for key in ("version", "symbol", "cik", "corpCode", "sourceUrl",
+        "fromDate", "forms", "reportPeriods", "rows", "matchedRowCount", "complete", "coverageGaps") if key in value}

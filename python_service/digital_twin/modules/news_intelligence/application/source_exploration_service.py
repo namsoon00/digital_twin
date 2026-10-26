@@ -8,6 +8,8 @@ from ..domain.source_exploration import VERSION, exploration_action, public_url
 from ..domain.investment_research import research_evidence_from_payload
 from ..domain.research_progress import fingerprint, task_contract
 from ..domain.source_recovery import VERSION as RECOVERY_VERSION, source_recovery_summary
+from ..domain.collection_units import focus_collection
+from ..domain.source_focus import source_research_focus
 
 
 class SourceExplorationService:
@@ -44,6 +46,18 @@ class SourceExplorationService:
                         for row in audit.get("collectedEvidence", [])]
             if audit.get("complete"):
                 return evidence, audit
+        # Freeze the collection focus once. A deferred operation must resume
+        # with the same requirements even if a later review changes its gaps.
+        if not resume:
+            tasks, audit["collectionUnits"] = focus_collection(tasks, assessments)
+            audit["collectionFocus"] = {row["taskId"]: deepcopy(row["sourceFocus"])
+                                        for row in tasks if row.get("sourceFocus")}
+        else:
+            tasks = deepcopy(tasks)
+            for row in tasks:
+                focus = audit.get("collectionFocus", {}).get(row["taskId"])
+                if focus:
+                    row["sourceFocus"] = source_research_focus(focus["missingRequirements"])
         pending_step = audit["steps"][-1] if audit["steps"] and audit["steps"][-1].get("status") == "deferred" else None
         audit["stopReason"] = "step-budget-exhausted"
         def add_candidates(rows):

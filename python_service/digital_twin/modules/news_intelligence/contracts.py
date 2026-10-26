@@ -76,6 +76,8 @@ _EXPORTS.update({
     'source_route_opportunity': ('digital_twin.modules.news_intelligence.domain.collection_recovery', 'source_route_opportunity'),
     'needs_filing_history': ('digital_twin.modules.news_intelligence.domain.source_focus', 'needs_filing_history'),
     'build_filing_history': ('digital_twin.modules.news_intelligence.domain.filing_history', 'build_filing_history'),
+    'build_dart_filing_history': ('digital_twin.modules.news_intelligence.domain.dart_filing_history', 'build_history'),
+    'verified_dart_filing_history': ('digital_twin.modules.news_intelligence.domain.dart_filing_history', 'verified_history'),
     'filing_history_material': ('digital_twin.modules.news_intelligence.domain.filing_history', 'history_material'),
     'select_dart_question_filings': ('digital_twin.modules.news_intelligence.domain.dart_question_filings', 'select_dart_question_filings'),
     'select_question_passages': ('digital_twin.modules.news_intelligence.domain.question_passages', 'select_question_passages'),

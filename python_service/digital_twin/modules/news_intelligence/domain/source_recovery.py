@@ -16,6 +16,7 @@ CAUSES = {
     "passages-missing": ("질문에 필요한 본문 미확보", "extract", "읽은 원문에서 부족한 항목과 표 주변 설명을 집중 추출합니다."),
     "attachment-unresolved": ("첨부 원문 위치 미확인", "search", "같은 공시의 공식 첨부 목록이나 기업 IR 원문을 확인합니다."),
     "date-unverified": ("발행일 미확인", "read", "해당 문서의 발행일이 표시된 공식 원문 또는 색인을 확인합니다."),
+    "metadata-unverified": ("공시 제출 이력 미확인", "read", "발행사·접수일·보고기간과 누락된 목록 페이지를 확인합니다."),
     "issuer-unverified": ("발행사·출처 미확인", "search", "대상 기업이 확인되는 공식 원문을 찾습니다."),
     "source-changed": ("원문 버전 변경", "wait", "새 원문을 별도 조사에서 다시 읽고 검증합니다."),
     "search-empty": ("검색 후보 없음", "search", "기간·항목을 구체화하거나 다른 공식 출처를 검색합니다."),
@@ -27,6 +28,8 @@ CAUSES = {
 
 
 def failure_cause(code):
+    if code in {"filing-history-unverified", "filing-history-invalid-metadata"}:
+        return "metadata-unverified"
     if code == "exhibit-link-unavailable":
         return "attachment-unresolved"
     if code == "issuer-identity-unavailable":
@@ -35,7 +38,7 @@ def failure_cause(code):
         return "extraction-unavailable"
     if code in {"dart-document-014", "dart-document-800", "metadata-unavailable"}:
         return "transport-failed"
-    if code == "dart-document-020":
+    if code in {"dart-document-020", "dart-list-020"}:
         return "rate-limited"
     if code in {"document-access-blocked", "official-document-unavailable", "document-http-401", "document-http-403"}:
         return "access-denied"

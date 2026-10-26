@@ -11,6 +11,46 @@ the original question and next plan without changing past answers or eligibility
 
 ## Company research cycle
 
+Company research with `question-answer-parts-v1` now freezes
+`verified-partial-judgment-v1`: author v28, repair v24, customer review v17 and
+independent research review v6. Other company observations retain v27 and
+earlier frozen inputs keep their constructors. A partial answer may support or
+weaken a specific business explanation only when its confirmed answer cites
+usable, current, question-scoped evidence also cited in both summary and
+hypothesis. Independent review checks the actual explanation and the effect of
+remaining gaps. The parent question stays open until all original requirements
+are met. This grants neither valuation readiness nor trading authority; an
+unchanged explanation remains unchanged and unsupported explanations remain
+insufficient. No extra model stage or automatic retry is added.
+
+Before a bounded source collection, accepted documentary reviews supply the
+outstanding requirements as `sourceFocus`. The immutable question and original
+completion contract remain intact. Full requirement strings survive the
+source assessment; they are no longer cut at 180 characters. Collection units
+record their original task and assessment fingerprints. A deferred exploration
+resumes its captured focus and operation without spending a second decision
+call; a new review does not rewrite an in-flight read. Same-evidence review
+reuse and existing attempt limits still apply.
+
+DART questions needing correction history read issuer-bound regular-filing
+lists even when two originals are cached. Following the
+[OpenDART listing contract](https://opendart.fss.or.kr/guide/detail.do?apiGrpCd=DS001&apiId=2019001),
+`last_reprt_at=N` retains original and amended receipts. At most two guarded
+pages of 100 rows are read and at most 24 matching receipts enter the evidence.
+Unvisited pages, changing pagination or output truncation explicitly make the
+history incomplete. Listing hashes, issuer, receipt dates and report periods
+travel with the original document through the research packet and graph
+reference, within existing byte limits. A later polling clock alone is not new
+research material. Listing completeness is limited to the recorded issuer,
+filing type, dates and report periods; it cannot prove statement contents,
+audit status, comparative units or absence of every possible correction.
+
+Correction matching additionally requires the same issuer and reporting
+period whenever either source identifies a period. Similar prose in a prior
+year's report is retained as comparative evidence instead of being retired by
+the current year's correction. Sources without reporting metadata retain the
+existing news similarity policy.
+
 `AI_COMPANY_RESEARCH_ENABLED=true` is the default for new company observations.
 The equivalent persisted setting is `aiCompanyResearchEnabled`. Runtime wiring
 enables the existing evidence and judgment policies before adding

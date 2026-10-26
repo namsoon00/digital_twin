@@ -111,6 +111,8 @@ def validate_resolutions(value, packet, research, result, required=False):
             if question_answer.enabled(packet):
                 if case.get("capability") == "research":
                     question_answer.validate(row["answerParts"], row, reviews[key], scope, known)
+                    from .partial_judgment import validate_impact as validate_partial_impact
+                    validate_partial_impact(packet, row, result, known)
                 elif row["answerParts"] != {"confirmed": [], "gaps": []}:
                     raise ValueError("answer parts belong only to research questions")
         source = {"caseId": key, "revision": case["revision"], "question": case.get("question", ""),

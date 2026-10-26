@@ -8,6 +8,7 @@ from digital_twin.modules.market_data.contracts import parse_datetime
 from .disclosure_quality import normalize_official_document_text
 from .dart_question_filings import period_end
 from .historical_document_admission import current_or_dated_source, allowed_reference_reasons
+from .dart_filing_history import verified_history
 
 
 def dart_document_reference(item):
@@ -59,4 +60,10 @@ def dart_document_reference(item):
              "passageHashes": [row["passageHash"] for row in passages], "text": joined,
              "passageTextHash": digest(joined), "sourceNormalization": "disclosure-document-quality-v3",
              "limitation": "해당 보고 기간의 공식 원문 발췌입니다. 제목의 보고 기간은 표의 단위·연결 범위·누계/단일 기간을 확인한 결과가 아니며 현재 주가의 원인을 증명하지 않습니다."}
+    history = verified_history(raw.get("filingHistory"), item.symbol, issuer["corpCode"])
+    if history:
+        value["filingHistory"] = history
+        if len(json.dumps(value, ensure_ascii=False).encode()) > 16000:
+            value.pop("filingHistory")
+            value["limitation"] += " 제출 이력은 입력 예산으로 제외되어 이 근거에서 확인할 수 없습니다."
     return deepcopy(value) if len(json.dumps(value, ensure_ascii=False).encode()) <= 16000 else {}

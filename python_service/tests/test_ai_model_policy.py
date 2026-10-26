@@ -9,7 +9,7 @@ import unittest
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -43,6 +43,14 @@ from digital_twin.infrastructure.codex_execution_output import codex_execution_o
 
 class AiModelPolicyTests(unittest.TestCase):
     def setUp(self):
+        # These tests exercise subprocess/schema policy, not MySQL admission.
+        # Keep standalone runs independent of live quota state and storage.
+        store = Mock()
+        store.begin_call.return_value = "model-policy-call"
+        execution_store = patch("digital_twin.modules.ai_orchestration.infrastructure.execution._store",
+                                return_value=store)
+        execution_store.start()
+        self.addCleanup(execution_store.stop)
         directory = tempfile.TemporaryDirectory()
         self.addCleanup(directory.cleanup)
         self.runtime_directory = Path(directory.name) / "runtime"
@@ -316,7 +324,22 @@ class AiModelPolicyTests(unittest.TestCase):
                 "pathlib.Path(sys.argv[1]).write_text(str(child.pid)); time.sleep(60)"
             )
             metrics = {}
-            with self.assertRaises(subprocess.TimeoutExpired):
+            # Exercise descendant cleanup after the fixture actually spawned
+            # its child. Under concurrent suites Python startup can exceed the
+            # 200 ms timeout, which otherwise tests an absent child.pid file.
+            real_popen = subprocess.Popen
+            def ready_process(*args, **kwargs):
+                process = real_popen(*args, **kwargs)
+                deadline = time.monotonic() + 10
+                while not (child_pid_path.exists() and child_pid_path.read_text().strip().isdigit()):
+                    if process.poll() is not None or time.monotonic() >= deadline:
+                        from digital_twin.infrastructure.local_ai_process_guard import terminate_process_group
+                        terminate_process_group(process, force=True)
+                        process.wait(timeout=5)
+                        self.fail("descendant fixture did not become ready")
+                    time.sleep(0.01)
+                return process
+            with patch('digital_twin.infrastructure.local_ai_process_guard.subprocess.Popen', side_effect=ready_process), self.assertRaises(subprocess.TimeoutExpired):
                 run_ai_prompt_command(
                     [sys.executable, "-c", script, str(child_pid_path)],
                     "",

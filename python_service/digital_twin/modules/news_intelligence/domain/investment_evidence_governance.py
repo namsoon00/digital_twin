@@ -1532,6 +1532,9 @@ def governed_evidence(
         correction_time = claim_timestamp(correction)
         for previous_record in records:
             previous = previous_record["claim"]
+            from .correction_scope import same_correction_scope
+            if not same_correction_scope(item, previous_record["item"]):
+                continue
             if previous.get("claimId") == correction.get("claimId") or previous.get("isCorrection"):
                 continue
             if str(previous.get("sourceOrigin") or "") != str(correction.get("sourceOrigin") or ""):

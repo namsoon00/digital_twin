@@ -10,10 +10,11 @@ from digital_twin.modules.market_data.contracts import ExternalCallDeferred
 from digital_twin.modules.news_intelligence.contracts import (
     question_terms, select_question_passages, select_dart_question_filings,
     research_evidence_from_external_signals,
-    required_report_periods, question_collection_scope,
+    required_report_periods, question_collection_scope, needs_filing_history,
 )
 from .external_signal_utils import dart_document_error_response
 from .dart_document_passages import document_passages, VERSION as PASSAGES_VERSION
+from .dart_question_history import collect_history
 
 VERSION = "dart-question-original-v1"
 MAX_ARCHIVE_BYTES = 8 * 1024 * 1024
@@ -66,27 +67,22 @@ def collect_dart_question_documents(provider, target, signals, tasks):
             and str(row.get("corpCode") or row.get("corp_code") or corp) == corp]
     selected = select_dart_question_filings(rows, tasks, now)
     required = required_report_periods(tasks)
-    statuses, evidence = [], []
+    statuses, evidence, history = [], [], {}
     # Normal monitoring's short filing lookback is not a research inventory.
-    # One guarded, bounded list read discovers comparable older originals.
-    if len(selected) < 2:
+    # Read submission metadata even when two cached originals exist, if the
+    # question still needs correction history. This is not statement proof.
+    history_needed = needs_filing_history(tasks)
+    if len(selected) < 2 or history_needed:
         text = " ".join(str(t.get("question", "")) + " " + " ".join(t.get("queryTerms") or []) for t in tasks)
         years = [int(value[:4]) for value in required] or [int(y) for y in re.findall(r"(?:19|20)\d{2}", text)]
         year = datetime.now(timezone.utc).year
         begin = str(max(year-5, min([year-1, *years]))) + "0101"
-        params = {"crtfc_key": key, "corp_code": corp, "bgn_de": begin, "end_de": now[:10].replace("-", ""),
-                  "pblntf_ty": "A", "page_no": 1, "page_count": 100, "sort": "date", "sort_mth": "desc"}
         try:
-            url = "https://opendart.fss.or.kr/api/list.json?" + urlencode(params)
-            listing = provider.guarded_call("OpenDART", "question-list:"+symbol+":"+begin+":"+params["end_de"],
-                                            lambda: provider.fetch_json(url))
-            if str(listing.get("status")) == "000":
-                admitted = [row for row in (listing.get("list") or []) if isinstance(row, dict) and row.get("corp_code") == corp]
-                rows.extend(admitted[:100])
-                selected = select_dart_question_filings(rows, tasks, now)
-            else:
-                statuses.append({**base, "ok": str(listing.get("status")) == "013", "status": "metadata-unavailable",
-                                 "reasonCode": "dart-list-"+str(listing.get("status", "unknown"))})
+            discovered, history, history_statuses = collect_history(
+                provider, symbol, corp, key, begin, now, required, history_needed)
+            rows.extend(discovered)
+            selected = select_dart_question_filings(rows, tasks, now)
+            statuses.extend({**base, **row} for row in history_statuses)
         except ExternalCallDeferred as error:
             return [], [{**base, "ok": False, "status": "deferred", "reason": error.reason, "retryAt": error.retry_at}]
         except Exception as error:
@@ -142,6 +138,8 @@ def collect_dart_question_documents(provider, target, signals, tasks):
                     researchTaskIds=base["taskIds"], researchQueryTerms=base["queryTerms"],
                     reportingPeriodMetadata={"value": filing["reportPeriodEnd"], "source": "official-filing-title",
                         "limitation": "title-does-not-verify-consolidation-units-or-single-period"})
+                if history:
+                    item.raw_payload["filingHistory"] = history
             evidence.extend(items)
         except ExternalCallDeferred as error:
             statuses.append({**base, "ok": False, "status": "deferred", "reason": error.reason, "retryAt": error.retry_at})

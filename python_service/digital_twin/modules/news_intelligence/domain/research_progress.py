@@ -149,6 +149,10 @@ def evidence_packets(items: Iterable[ResearchEvidence], claims: Iterable[object]
         from .filing_history import verified_filing_history
         history = verified_filing_history(raw.get("filingHistory"), item.symbol,
                                          str((raw.get("documentIssuerIdentity") or {}).get("cik") or "").zfill(10))
+        if not history:
+            from .dart_filing_history import verified_history
+            history = verified_history(raw.get("filingHistory"), item.symbol,
+                                       str((raw.get("documentIssuerIdentity") or {}).get("corpCode") or ""))
         if history:
             packet["filingHistory"] = history
         packet["researchMaterialFingerprint"] = research_material_fingerprint(research_source_packet(item))
@@ -271,7 +275,7 @@ def assess_tasks(
         selected = [row for row in candidates if row["evidenceId"] in set(cited + counter)] if review_valid else candidates
         missing = missing_requirements(task, selected)
         if review_valid and "missingRequirements" in review:
-            missing = texts(missing + [value[:180] for value in texts(review.get("missingRequirements"), 8)])
+            missing = texts(missing + texts(review.get("missingRequirements"), 8))
             if review.get("status") in {"partial", "unresolved"} and not missing:
                 missing = ["질문에 필요한 수치·기간 또는 설명의 추가 확인"]
         satisfied = review_valid and review.get("status") == "addressed" and not missing

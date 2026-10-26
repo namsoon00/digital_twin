@@ -134,6 +134,9 @@ class AIControlService:
                         packet["questionWorkPolicy"] = question_policy
                         from ..domain.question_answer import VERSION as answer_policy
                         packet["questionAnswerPolicy"] = answer_policy
+                        if packet.get("companyResearchPolicy"):
+                            from ..domain.partial_judgment import VERSION as partial_policy
+                            packet["partialJudgmentPolicy"] = partial_policy
                         from ..domain.question_assessment import prepare
                         research = prepare(research, session.question_work_inventory())
                         packet["questionWorkPending"] = sorted(row["questionWorkKey"] for row in research

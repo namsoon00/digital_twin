@@ -13,6 +13,7 @@ from digital_twin.modules.news_intelligence.domain.materiality import evidence_m
 from digital_twin.modules.news_intelligence.domain.research_document_reference import question_document_changed_symbols
 from digital_twin.modules.news_intelligence.domain.research_progress import all_tasks_addressed, assess_tasks, audit_retain_until, evidence_packets, fingerprint, progress_plan, task_contract
 from digital_twin.modules.news_intelligence.domain.documentary_review_reuse import DocumentaryReviewReuse, VERSION as REVIEW_REUSE_VERSION
+from digital_twin.modules.news_intelligence.domain.collection_units import focus_collection
 
 
 DISABLED_VALUES = {"0", "false", "no", "off", "disabled"}
@@ -295,6 +296,8 @@ class InvestmentResearchOrchestrationService:
             else:
                 pending = unexplored
                 attempted_requests.update(fingerprint(task_contract(row)) for row in pending)
+                pending, focus = focus_collection(pending, assessments)
+                plan.setdefault("collectionFocus", []).append({**focus, "round": round_count + 1})
                 query_terms = unique_strings(term for row in pending for term in row.get("queryTerms") or [])[:6]
                 research_target = replace(target, research_query_terms=query_terms)
                 collected, provider_statuses = self.collect(research_target, sources(pending), pending)

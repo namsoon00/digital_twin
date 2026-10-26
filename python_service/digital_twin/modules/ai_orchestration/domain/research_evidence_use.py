@@ -44,6 +44,11 @@ def usable_fact(fact, field=None):
         return field is None or field.split(".")[0] in {"periodEnd", "reportedValues", "metricUnits", "metricProvenance",
             "durationBases", "sourceReferences", "reportObservationId", "sourceRevision", "questionSourceReference"}
     if "historicalDocumentReference" in fact:
+        if field == "historicalDocumentReference.filingHistory.summary":
+            from digital_twin.modules.news_intelligence.contracts import verified_dart_filing_history
+            history = fact["historicalDocumentReference"].get("filingHistory") or {}
+            return bool(historical_reference(fact) and verified_dart_filing_history(
+                history, fact.get("symbol", ""), str(history.get("corpCode") or "")))
         return historical_reference(fact) and (field is None or field in {
             "historicalDocumentReference.text", "historicalDocumentReference.periodEnd",
             "historicalDocumentReference.publishedAt", "historicalDocumentReference.limitation"})

@@ -99,7 +99,8 @@ def validate_resolutions(value, packet, research, result, required=False):
                     and not all((case.get("questionContract") or {}).get(field) for field in ("target", "period", "answerCriterion"))):
                 raise ValueError("question answer requires its original completion contract")
             missing = row["missingRequirements"]
-            scope = next((scope for scope in packet.get("researchScope", {}).get("questions", []) if scope["caseId"] == key), {})
+            from .question_source_handoff import assessment_scope
+            scope = assessment_scope(packet, key)
             if (not isinstance(missing, list) or len(missing) > 8
                     or any(not isinstance(item, str) or not 1 <= len(item.strip()) <= 600 for item in missing)
                     or set(scope.get("missingEvidence", [])) - set(missing)

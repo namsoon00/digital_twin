@@ -150,6 +150,9 @@ class AIControlService:
                         research = prepare(research, session.question_work_inventory())
                         packet["questionWorkPending"] = sorted(row["questionWorkKey"] for row in research
                             if row.get("questionWorkKey") and not row.get("questionWorkUnchanged"))
+                    if packet.get("companyResearchPolicy") and session and self.read_planner:
+                        from ..domain.question_purpose import VERSION as purpose_policy
+                        packet["questionPurposePolicy"] = purpose_policy
                     fingerprint = lanes.material_key(packet, research) if lanes.market(packet) else observation_fingerprint(packet, research)
                     repeat_key = fingerprint if lanes.market(packet) else repeat.observation_key(packet, research)
                     retry_identity = retry_key(packet, research)
@@ -286,7 +289,8 @@ class AIControlService:
                             or (result.get("knowledgeResearch") or {}).get("claims")
                             or (packet.get("questionEvidencePolicy") and any(row["action"] in {"answered", "dismissed"}
                                 for row in result.get("caseReviews", [])))
-                            or (packet.get("questionWorkPolicy") and result.get("caseReviews"))):
+                            or (packet.get("questionWorkPolicy") and result.get("caseReviews"))
+                            or result.get("questionPurposes")):
                         stage = "research-assessment-review"
                         result["researchQuality"] = {"version": research_review.version_for(packet), "status": "rejected"}
                         try:

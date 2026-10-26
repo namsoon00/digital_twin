@@ -55,6 +55,15 @@ def execute_research(job, research_store, orchestrator_factory):
         task["purpose"] = "원래 질문의 대상·기간·완료 기준을 모두 확인합니다: " + json.dumps(job["questionContract"], ensure_ascii=False, sort_keys=True)
     previous_answer = job.get("knownSourceAnswer") or {}
     missing = job.get("evidenceRequirements") or previous_answer.get("missingRequirements", [])
+    from ..domain.question_purpose import VERSION as purpose_version
+    purpose = job.get("questionPurpose") or {}
+    purposeful = purpose.get("version") == purpose_version
+    if purposeful:
+        task["purpose"] += "\n이 질문이 필요한 이유와 자료 작업(답변 완료를 의미하지 않음): " + json.dumps({
+            "decisionRelevance": purpose["decisionRelevance"], "evidenceTasks": purpose["evidenceTasks"]}, ensure_ascii=False)
+        if not missing:
+            missing = [" / ".join(row[key] for key in ("target", "period", "answerCriterion"))
+                       for row in purpose["evidenceTasks"]]
     if missing:
         from digital_twin.modules.news_intelligence.contracts import source_research_focus
         task["sourceFocus"] = source_research_focus(missing)
@@ -88,6 +97,9 @@ def execute_research(job, research_store, orchestrator_factory):
                 "missingRequirements": job.get("evidenceRequirements") or previous_answer.get("missingRequirements", []),
                 "sourceEvidenceIds": [row.get("evidenceId") for row in previous_answer.get("sources", [])],
             }, ensure_ascii=False, sort_keys=True))
+    if purposeful and prior_plan.get("sourceExploration"):
+        # Resume the exact captured source task, including its purpose text.
+        task["purpose"] = prior_task["purpose"]
     orchestrator = orchestrator_factory()
     # Keep the authored collection scope, but allow the source owner to review
     # the collected answer independently of market-observation quality gates.

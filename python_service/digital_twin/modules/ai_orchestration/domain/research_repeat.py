@@ -126,6 +126,8 @@ def observation_key(packet, research):
 
 def preserve_answer(case, answer):
     """A failed later attempt does not erase a previously cited partial answer."""
+    from .question_source_handoff import retain
+    retain(case, answer)
     previous = case.get("latestSourceAnswer") or {}
     if previous.get("status") in {"partial", "answered"} and answer.get("status") == "unavailable":
         return False

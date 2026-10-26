@@ -20,9 +20,10 @@ def source_answer(case):
 def source_identity(case):
     """Source content and reviewed coverage matter; model prose and timers do not."""
     answer = source_answer(case)
+    from .question_source_handoff import source_references
     sources = [{"materialFingerprint": row["materialFingerprint"]} if row.get("materialFingerprint") else
         {key: row[key] for key in ("evidenceId", "inputFingerprint", "periodEnd", "reportDate", "publishedAt") if key in row}
-        for row in answer.get("sources", [])]
+        for row in source_references(case)]
     return {"status": (case.get("answerResolution") or {}).get("status", answer.get("status", "")),
         "sources": sorted({content_hash(row): row for row in sources}.values(), key=content_hash)}
 
@@ -42,7 +43,8 @@ def question_index(research):
         row = {key: deepcopy(case[key]) for key in ("caseId", "question", "questionContract", "revision") if key in case}
         if case.get("questionWorkKey"):
             row["questionWorkKey"] = case["questionWorkKey"]
-        sources = answer.get("sources", [])
+        from .question_source_handoff import source_references
+        sources = source_references(case, limit=None)
         row["sourceAnswer"] = {"status": resolution.get("status", answer.get("status", "unavailable")),
             "sources": [{key: deepcopy(source[key]) for key in ("evidenceId", "periodEnd", "reportDate", "publishedAt")
                          if key in source} for source in sources[:8]], "omittedSourceCount": max(0, len(sources)-8),
@@ -54,10 +56,11 @@ def question_index(research):
     return result[:5]
 
 
-def captured_index(index):
+def captured_index(index, preserve_sources=False):
     """Only ownership/replay pointers belong in the final author's packet."""
     return [{**{key: deepcopy(row[key]) for key in ("caseId", "revision", "questionContract", "questionWorkKey") if key in row},
-             "sourceAnswer": {"sourceIdentity": row.get("sourceAnswer", {}).get("sourceIdentity", "")}}
+             "sourceAnswer": {"sourceIdentity": row.get("sourceAnswer", {}).get("sourceIdentity", ""),
+                 **({"sources": deepcopy(row.get("sourceAnswer", {}).get("sources", []))} if preserve_sources else {})}}
             for row in index]
 
 

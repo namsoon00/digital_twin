@@ -1,4 +1,5 @@
 """Commit the parent answer, child question and source handoff atomically."""
+from ..domain.research_review_parts import approved
 from copy import deepcopy
 import json
 
@@ -13,7 +14,7 @@ def record_continuation(store, connection, job, result, item, continuation, chil
     def defer(reason):
         receipt["deferred"].append({"question": item["question"], "parentCaseId": continuation["parentCaseId"], "reason": reason})
 
-    if result.get("researchQuality", {}).get("status") != "accepted":
+    if not approved(result):
         defer("next-question-independent-review-required")
         return
     parent = store.read(connection, continuation["parentCaseId"], job["accountId"], job["symbol"], lock=True)

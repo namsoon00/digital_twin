@@ -41,6 +41,9 @@ def validate(packet):
 
 
 def author_version(packet):
+    from . import question_purpose_prompt
+    if question_purpose_prompt.enabled(packet):
+        return question_purpose_prompt.PROMPT_VERSION
     from . import research_chain_prompt
     if research_chain_prompt.enabled(packet):
         return research_chain_prompt.PROMPT_VERSION
@@ -66,6 +69,9 @@ def author_version(packet):
 
 
 def repair_version(packet):
+    from . import question_purpose_prompt
+    if question_purpose_prompt.enabled(packet):
+        return question_purpose_prompt.REPAIR_VERSION
     from . import research_chain_prompt
     if research_chain_prompt.enabled(packet):
         return research_chain_prompt.REPAIR_VERSION
@@ -91,6 +97,9 @@ def repair_version(packet):
 
 
 def review_version(packet):
+    from . import question_purpose_prompt
+    if question_purpose_prompt.enabled(packet):
+        return question_purpose_prompt.REVIEW_VERSION
     from . import research_chain_prompt
     if research_chain_prompt.enabled(packet):
         return research_chain_prompt.REVIEW_VERSION

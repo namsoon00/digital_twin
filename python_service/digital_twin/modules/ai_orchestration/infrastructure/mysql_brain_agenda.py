@@ -162,15 +162,21 @@ class MySQLBrainAgendaStore(MySQLOperationalConnection):
             if research_chain.validate(result.get("questionContinuations"), result["input"],
                     envelope["researchResults"], result) != result.get("questionContinuations"):
                 raise ValueError("research chain changed after input capture")
+        from ..domain import question_purpose, question_source_handoff
+        if question_purpose.enabled(result["input"]):
+            question_source_handoff.validate(result["input"], envelope["researchResults"])
+            if question_purpose.validate(result.get("questionPurposes"), result["input"], result) != result.get("questionPurposes"):
+                raise ValueError("question purpose changed after capture")
         from ..domain.scoped_research import validate_plan as validate_scope
         validate_scope(result, result["input"])
         return envelope
 
     @staticmethod
-    def research_proof(connection, job, result, author):
+    def research_proof(connection, job, result, author, section="assessment"):
         from ..domain import research_review
         quality = result.get("researchQuality") or {}
-        if quality.get("status") != "accepted":
+        from ..domain.research_review_parts import approved
+        if not approved(result, section):
             return False
         row = connection.execute("SELECT i.artifact_gzip FROM ai_control_inputs i JOIN ai_control_input_calls l ON l.input_id=i.input_id "
             "JOIN ai_control_calls c ON c.call_id=l.call_id AND c.task_id=i.task_id AND c.prompt_hash=i.prompt_hash "
@@ -207,7 +213,9 @@ class MySQLBrainAgendaStore(MySQLOperationalConnection):
         question_review_required = (result["input"].get("questionEvidencePolicy") == evidence_policy
             and (any(row["action"] in {"answered", "dismissed"} for row in result.get("caseReviews", []))
                  or (result["input"].get("questionWorkPolicy") and result.get("caseReviews"))))
-        if not research_accepted and (question_review_required
+        from ..domain.research_review_parts import VERSION as separate_review_version
+        separate_review_rejected = result.get("researchQuality", {}).get("version") == separate_review_version and not research_accepted
+        if not research_accepted and (question_review_required or separate_review_rejected
                 or result.get("quality", {}).get("status") not in {"accepted", "observation-only"} or local_quality(result)["errors"]):
             children[:] = [child for child in children if child["capability"] != "research"]
             for review in result.get("caseReviews", []):
@@ -261,7 +269,15 @@ class MySQLBrainAgendaStore(MySQLOperationalConnection):
         return receipt
 
     def record_questions(self, connection, job, result, children, source, now, receipt, research_only=False):
+        from ..domain import question_purpose
+        from ..domain.research_review_parts import approved
+        block_new_research = question_purpose.enabled(result["input"]) and not approved(result)
+        if block_new_research:
+            new_questions = {row["question"] for row in result.get("workQuestions", []) if row["capability"] == "research"}
+            children[:] = [child for child in children if child.get("question") not in new_questions]
         for index, item in enumerate(result.get("workQuestions", [])):
+            if block_new_research and item["capability"] == "research":
+                continue
             if research_only and item["capability"] != "research":
                 continue
             continuation = next((row for row in result.get("questionContinuations", []) if row["questionIndex"] == index), None)
@@ -370,6 +386,7 @@ class MySQLBrainAgendaStore(MySQLOperationalConnection):
             **({"previousSourceRun": {"runId": previous["result"]["runId"], "taskId": previous["taskId"]}}
                if previous.get("taskId") and previous.get("result", {}).get("runId") else {}),
             **({"questionContract": copy.deepcopy(case["questionContract"])} if case.get("questionContract") else {}),
+            **({"questionPurpose": copy.deepcopy(case["questionPurpose"])} if case.get("questionPurpose") else {}),
             **({"evidenceRequirements": copy.deepcopy((case.get("questionAssessment") or case.get("evidenceProgress", {}))["missingRequirements"])[:8]}
                if (recovery_key or route_key) and (case.get("questionAssessment") or case.get("evidenceProgress", {})).get("missingRequirements") else {}),
             **({"sourceRouteOpportunity": copy.deepcopy(case["researchSourceState"]["sourceRouteOpportunity"])} if route_key else {}),
@@ -525,7 +542,7 @@ class MySQLBrainAgendaStore(MySQLOperationalConnection):
                 "researchAttempts": case["researchAttempts"], "development": case.get("development", {}),
                 "researchRequest": case.get("researchRequest", {}),
                 "questionContract": case.get("questionContract", {}), "answerResolution": case.get("answerResolution", {}),
-                **{key: copy.deepcopy(case[key]) for key in ("inquiryLineage", "inquiryContinuation") if key in case},
+                **{key: copy.deepcopy(case[key]) for key in ("inquiryLineage", "inquiryContinuation", "questionPurpose", "questionSourceReferences") if key in case},
                 **({"questionAssessment": case["questionAssessment"]} if case.get("questionAssessment") else {}),
                 "researchPlan": case.get("researchPlan", {}),
                 **({"evidenceProgress": case["evidenceProgress"]} if case.get("evidenceProgress") else {}),

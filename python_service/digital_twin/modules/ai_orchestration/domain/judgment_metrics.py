@@ -1,4 +1,5 @@
 """Measured operational quality, without interpreting model reviews as accuracy."""
+from .research_review_parts import approved
 from collections import Counter, defaultdict
 from statistics import mean, median
 
@@ -70,7 +71,7 @@ def judgments_summary(tasks, calls_by_task, receipts):
                                             for v in values for q in v.get("questionResolutions", []))),
             "researchReviewStates": dict(Counter(v.get("researchQuality", {}).get("status", "not-required") for v in values)),
             "reviewedQuestionImpacts": dict(Counter(q.get("judgmentImpact", {}).get("effect", "unknown")
-                for v in values if v.get("researchQuality", {}).get("status") == "accepted"
+                for v in values if approved(v)
                 for q in v.get("questionResolutions", []))),
             "linkedCentralCalls": len(calls), "linkedCallsWithUsage": sum(u is not None for u in measured),
             "tokensPerFullyMeasuredAuthoredTask": distribution(per_task),

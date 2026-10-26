@@ -448,7 +448,9 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # optional packet exceeds its limit and reject unbound cached context.
         # Nine answer-led inquiry contracts cover cited lineage, repeat limits,
         # independent review, immutable inputs and atomic child scheduling.
-        self.assertLessEqual(total, 2751)
+        # Purpose/evidence lineage, split review admission and atomic question continuation
+        # protect eight additional production boundaries without paid model tests.
+        self.assertLessEqual(total, 2759)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

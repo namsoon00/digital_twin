@@ -48,7 +48,10 @@ def validate_plan(value, packet, research=(), require_research=False, require_re
     # No model-authored account, symbol, command, source URL or action is executable.
     allowed = {"summary", "hypothesis", "counterEvidence", "comparison", "evidenceIds", "questions", "nextCheckMinutes", "notification",
                "insightVersion", "portfolioImpact", "claimEvidence", "observations", "followUpConditions", "caseReviews", "serviceFeedback", "businessResearch", "questionResolutions", "knowledgeResearch"}
-    from . import business_progress, research_chain
+    from . import business_progress, research_chain, question_purpose, question_source_handoff
+    if question_purpose.enabled(packet):
+        allowed.add("questionPurposes")
+        question_source_handoff.validate(packet, research)
     if research_chain.enabled(packet):
         allowed.add("questionContinuations")
     if business_progress.enabled(packet):
@@ -136,6 +139,8 @@ def validate_plan(value, packet, research=(), require_research=False, require_re
         result["questionResolutions"] = validate_resolutions(value.get("questionResolutions"), packet, research, result, required=require_resolution)
     if research_chain.enabled(packet):
         result["questionContinuations"] = research_chain.validate(value.get("questionContinuations"), packet, research, result)
+    if question_purpose.enabled(packet):
+        result["questionPurposes"] = question_purpose.validate(value.get("questionPurposes"), packet, result)
     if "knowledgeResearch" in value or packet.get("researchKnowledge"):
         from .knowledge_research import validate_research
         result["knowledgeResearch"] = validate_research(value.get("knowledgeResearch"), packet,

@@ -1,4 +1,5 @@
 """Original-question progress and its authored impact, separate from source receipts."""
+from .research_review_parts import approved
 from copy import deepcopy
 from digital_twin.modules.reasoning.contracts import content_hash
 
@@ -49,18 +50,21 @@ def assessment(case, job, result, review, resolution, now):
     if not enabled(packet) or case.get("capability") != "research":
         return None
     quality = result.get("researchQuality") or {}
-    if quality.get("status") != "accepted" or not quality.get("reviewInputId"):
+    if not approved(result) or not quality.get("reviewInputId"):
         raise ValueError("question assessment requires independent research review")
     captured = next((row for row in packet.get("questionEvidenceIndex", []) if row["caseId"] == case["caseId"]), None)
     if not captured or captured.get("questionContract") != case.get("questionContract"):
         raise ValueError("question assessment requires its original captured contract")
-    scope = next((row for row in packet["researchScope"]["questions"] if row["caseId"] == case["caseId"]), None)
+    from .question_source_handoff import assessment_scope
+    scope = assessment_scope(packet, case["caseId"])
     if not scope:
         raise ValueError("question assessment requires a frozen read scope")
     selected = set(scope["selectedFactIds"])
     if not selected.intersection(review["evidenceIds"]):
         raise ValueError("question assessment must cite its own selected source evidence")
-    return {"version": VERSION, "status": review["action"] if review["action"] in {"answered", "dismissed"} else "partial",
+    from . import question_purpose
+    return {**({"questionPurposePolicy": question_purpose.VERSION} if question_purpose.enabled(packet) else {}),
+        "version": VERSION, "status": review["action"] if review["action"] in {"answered", "dismissed"} else "partial",
         "reviewAction": review["action"],
         **({"answerParts": deepcopy(resolution["answerParts"]), "answerPartsVersion": packet["questionAnswerPolicy"]}
            if "answerParts" in resolution else {}),

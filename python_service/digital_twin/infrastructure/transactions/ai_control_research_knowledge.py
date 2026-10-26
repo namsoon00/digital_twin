@@ -46,7 +46,7 @@ class AIControlResearchKnowledge:
         questions = self.question_progress(connection, job, result["input"], envelope.get("retrievalTrace", []))
         for event in progress.pop("events", []):
             insert_domain_event_with_connection(connection, event)
-        reviewed = self.agenda.research_proof(connection, job, result, envelope)
+        reviewed = self.agenda.research_proof(connection, job, result, envelope, section="knowledge")
         if not reviewed and result["knowledgeResearch"]["claims"]:
             return {"status": "review-required", "progress": progress, **questions}
         theses = (result.get("businessResearch") or {}).get("theses", [])
@@ -59,10 +59,11 @@ class AIControlResearchKnowledge:
         if reviewed:
             from digital_twin.modules.reasoning.contracts import content_hash
             quality = result["researchQuality"]
+            from digital_twin.modules.ai_orchestration.domain.research_review_parts import reason
             frozen = connection.execute("SELECT input_hash FROM ai_control_inputs WHERE input_id=%s", (quality["reviewInputId"],)).fetchone()
             review_receipt = {"version": quality["version"], "status": "accepted", "authorInputId": result["executionInputId"],
                 "authorInputHash": content_hash(envelope), "reviewInputId": quality["reviewInputId"], "reviewInputHash": frozen["input_hash"],
-                "proposalHash": quality["proposalHash"], "reason": quality["review"]["reason"],
+                "proposalHash": quality["proposalHash"], "reason": reason(quality, "knowledge"),
                 "authority": "research-assessment-only", "qualification": "not-empirically-qualified"}
         receipt = write_research(connection, result["input"], proposals, result["executionInputId"], now, business_ids, review_receipt)
         for event in receipt.pop("events"):
@@ -85,6 +86,7 @@ class AIControlResearchKnowledge:
         from digital_twin.modules.ai_orchestration.domain.execution_input import validate_execution_input
         from digital_twin.modules.ai_orchestration.domain import scoped_retrieval, working_retrieval, indexed_retrieval, question_retrieval, lane_retrieval, bounded_retrieval, purpose_retrieval, compact_retrieval, quality_retrieval, completion_retrieval, business_retrieval, company_retrieval, efficient_retrieval, retrieval_view
         from digital_twin.modules.ai_orchestration.domain.question_evidence import captured_index
+        from digital_twin.modules.ai_orchestration.domain import question_purpose
         from digital_twin.modules.reasoning.contracts import content_hash, validate_evidence_packet
         packet = result["input"]
         validate_evidence_packet(packet)
@@ -111,9 +113,9 @@ class AIControlResearchKnowledge:
                     or envelope["current"]["capturedAt"] != packet["capturedAt"]
                     or envelope["current"].get("researchKnowledge") != packet.get("researchKnowledge")
                     or any(envelope["current"].get(key) != packet.get(key)
-                           for key in ("companyValuePolicy", "companyValueEvidence", "previousCompanyValue", "businessInsightPolicy", "companyResearchPolicy"))
+                           for key in ("companyValuePolicy", "companyValueEvidence", "previousCompanyValue", "businessInsightPolicy", "companyResearchPolicy", "questionPurposePolicy"))
                     or envelope["retrievalContext"].get("questionEvidencePolicy") != packet.get("questionEvidencePolicy")
-                    or (packet.get("questionEvidencePolicy") and captured_index(envelope["retrievalContext"].get("questionIndex", [])) != packet.get("questionEvidenceIndex"))
+                    or (packet.get("questionEvidencePolicy") and captured_index(envelope["retrievalContext"].get("questionIndex", []), preserve_sources=question_purpose.enabled(packet)) != packet.get("questionEvidenceIndex"))
                     or step.get("authorScopePolicy") != envelope["retrievalContext"].get("authorScopePolicy")):
                 raise ValueError("research progress input scope or trace mismatch")
             if packet.get("businessInsightPolicy") and envelope["current"].get("businessEvidence") != packet.get("businessEvidence"):

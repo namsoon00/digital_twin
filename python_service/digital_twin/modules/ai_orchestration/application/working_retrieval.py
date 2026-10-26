@@ -13,7 +13,7 @@ from ..domain.knowledge_research import knowledge_prompt
 from ..domain import bounded_retrieval, purpose_retrieval, compact_retrieval, quality_retrieval, completion_retrieval, business_retrieval, company_retrieval, efficient_retrieval, judgment_policy, evidence_completion, retrieval_view, evidence_readiness, evidence_purpose, company_value
 from .read_tools import ObservationReadTools
 from .retrieval import RetrievalLeaseLost, RetrievalContractFailure
-from ..domain import business_insight, business_progress
+from ..domain import business_insight, business_progress, question_purpose, question_source_handoff
 
 
 def byte_size(value):
@@ -33,7 +33,10 @@ def author_packet(session, packet, ids, seen, research, trace, status, reserve=0
     views = {key: row for key, row in seen.items() if row.get("evidenceView")}
     protected = {key for key, row in seen.items() if row.get("evidenceCategory") == "quality"}
     value_protected = set(packet.get("companyValueEvidence", {}).get("factIds", [])) if company_value.enabled(packet) else set()
-    result = {**selected_packet(session, packet, set(ids) | protected | value_protected, views),
+    scope_packet = {**packet, "researchScope": contract.research_scope(trace, status)} if question_purpose.enabled(packet) else packet
+    source_handoff = question_source_handoff.build(scope_packet, research, seen.values())
+    source_protected = {key for row in source_handoff.get("questions", []) for key in row["factIds"]}
+    result = {**selected_packet(session, packet, set(ids) | protected | value_protected | source_protected, views),
               "retrieval": contract.trace_summary(trace, status)}
     if evidence_purpose.enabled(result):
         result = evidence_purpose.annotate(result)
@@ -41,6 +44,8 @@ def author_packet(session, packet, ids, seen, research, trace, status, reserve=0
         result["analysisPurpose"] = decision.get("purpose", "")
     if contract in {scoped_retrieval, indexed_retrieval, question_retrieval, lane_retrieval, bounded_retrieval, purpose_retrieval, compact_retrieval, quality_retrieval, completion_retrieval, business_retrieval, company_retrieval, efficient_retrieval}:
         result["researchScope"] = contract.research_scope(trace, status)
+    if question_purpose.enabled(result):
+        result["questionSourceHandoff"] = source_handoff
     result["businessThesisMemory"] = []
     for row in research:
         if row.get("kind") == "business-thesis":
@@ -55,6 +60,8 @@ def author_packet(session, packet, ids, seen, research, trace, status, reserve=0
                               if key not in {fact["id"] for fact in result["facts"]}]}
     if company_value.enabled(result):
         result["workingEvidence"]["requiredCompanyValueFactIds"] = sorted(value_protected)
+    if question_purpose.enabled(result):
+        result["workingEvidence"]["requiredQuestionSourceFactIds"] = sorted(source_protected)
     result = company_value.refresh(result)
     if evidence_completion.enabled(result) and result.get("researchScope", {}).get("assessmentPolicy") == scoped_retrieval.AUTHOR_SCOPE_POLICY:
         result["researchDeferredQuestions"] = [{key: deepcopy(row[key]) for key in
@@ -81,12 +88,12 @@ def retrieve_working_evidence(session, packet, history, research, decide, save_i
         research, window = contract.research_window(research)
         question_index = contract.question_index(research)
         packet = {**packet, "researchWindow": window, "questionEvidencePolicy": evidence_policy,
-                  "questionEvidenceIndex": captured_index(question_index)}
+                  "questionEvidenceIndex": captured_index(question_index, preserve_sources=question_purpose.enabled(packet))}
     rounds = max(0, min(MAX_ROUNDS, int(max_rounds)))
     sources = {}
     for case in research:
         if case.get("kind") == "brain-case":
-            for source in (case.get("latestSourceAnswer") or {}).get("sources", []):
+            for source in question_source_handoff.source_references(case):
                 if source.get("evidenceId"):
                     sources.setdefault(source["evidenceId"], []).append(case["caseId"])
     documents = session.question_document_index(sources, document_views=True) if question_work or contract in {lane_retrieval, bounded_retrieval, purpose_retrieval, compact_retrieval, quality_retrieval, completion_retrieval, business_retrieval, company_retrieval, efficient_retrieval} else session.question_document_index(sources)

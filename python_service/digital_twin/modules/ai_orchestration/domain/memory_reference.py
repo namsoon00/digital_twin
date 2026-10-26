@@ -28,7 +28,7 @@ def brief(row, category):
                   "summary", "hypothesis", "counterEvidence", "followUpConditions", "companyValue")
     elif row.get("kind") == "brain-case":
         fields = ("kind", "caseId", "accountId", "symbol", "worldId", "question", "capability", "status",
-                  "revision", "reviewDue", "nextCheckAt", "completionCriterion", "researchAttempts", "questionContract", "inquiryLineage", "inquiryContinuation")
+                  "revision", "reviewDue", "nextCheckAt", "completionCriterion", "researchAttempts", "questionContract", "inquiryLineage", "inquiryContinuation", "questionPurpose")
     elif row.get("kind") == "business-thesis":
         # Checkpoint baselines are an exact deterministic observation contract.
         fields = ("kind", "caseId", "accountId", "symbol", "worldId", "revision", "status", "reviewDue",
@@ -54,6 +54,12 @@ def brief(row, category):
         if row.get("questionAssessment"):
             result["questionAssessment"] = {key: deepcopy(row["questionAssessment"][key]) for key in
                 ("status", "missingRequirements", "judgmentImpact", "hypothesisDisposition") if key in row["questionAssessment"]}
+        from .question_purpose import VERSION as purpose_version
+        if row.get("questionAssessment", {}).get("questionPurposePolicy") == purpose_version:
+            # Previously reviewed parts remain historical, with their exact sources
+            # and gaps visible; no repeated detail read just to recover the answer.
+            result["questionAssessment"]["answerParts"] = deepcopy(row["questionAssessment"].get("answerParts", {}))
+            result["questionAssessment"]["authority"] = "historical-reviewed-answer-only"
         # Preserve exact question requirements, but omit answer prose/provider audits.
         for key in ("answerResolution", "evidenceProgress"):
             source = row.get(key) or {}

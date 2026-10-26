@@ -1,4 +1,5 @@
 """Extra guards for the versioned partial-research route; legacy inputs unchanged."""
+from .research_review_parts import approved
 from .scoped_retrieval import SCOPE_VERSION, AUTHOR_SCOPE_POLICY
 from .validation_diagnostic import PlanValidationError
 
@@ -24,7 +25,7 @@ def research_disposition(result):
     from .research_review import needed
     if not needed(result):
         return "research-only"
-    return ("research-reviewed" if (result.get("researchQuality") or {}).get("status") == "accepted"
+    return ("research-reviewed" if approved(result)
             else "research-review-required")
 
 

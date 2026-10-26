@@ -146,7 +146,10 @@ def source_memory(job, result):
 def new_case(job, result, question, capability, now):
     request = next((item.get("researchRequest", {}) for item in result.get("workQuestions", [])
                     if item["question"] == question and item["capability"] == capability), {})
-    return {"caseId": case_identity(job["accountId"], job["symbol"], job["worldId"], capability, question),
+    from .question_purpose import for_question
+    purpose = for_question(result, question, capability)
+    return {**({"questionPurpose": purpose} if purpose else {}),
+        "caseId": case_identity(job["accountId"], job["symbol"], job["worldId"], capability, question),
         "accountId": job["accountId"], "symbol": job["symbol"], "worldId": job["worldId"],
         "question": question, "capability": capability, "status": "open", "revision": 0,
         "createdAt": now, "updatedAt": now, "nextCheckAt": later(now, result["nextCheckMinutes"]),

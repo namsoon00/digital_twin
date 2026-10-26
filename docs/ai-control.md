@@ -2278,3 +2278,47 @@ missing bodies, source reuse, semantic-review rejection, legacy prompt replay,
 tamper detection, retained receipt identity, shared locking and a rule delivered
 during AI analysis. The suite ceiling increases from 2718 to 2729. These checks
 verify the execution and publication contract, not investment prediction quality.
+
+### Question purpose and source continuity (2026-10-27)
+
+`question-purpose-v1` enables author V30, repair V26 and narrative review V19
+on the existing company research path. Every new research question carries its
+current evidence IDs, decision relevance, unresolved explanation, expected
+insight and at most three evidence tasks (target, period, completion criterion).
+These tasks describe work inside the original case; they do not create separate
+jobs or increase source attempts. The source planner V3 reads that purpose while
+preserving the original question contract, confirmed answers and missing items.
+Existing questions keep their original contracts. New research questions require
+independent assessment approval; answer-led successors retain the one-child,
+maximum-depth and transactional parent-answer checks.
+
+Original source pointers are retained across partial/failed source responses,
+bounded to eight per case, including the existing three-entry answer history.
+DART question originals use `kind=disclosure` and now participate in both normal
+and preferred source reservation, alongside SEC filings and issuer IR. They must
+still pass original-source governance, current graph projection and exact scoped
+reads. The final input preserves already-read question-owned documents as
+`questionSourceHandoff`; unread archive content is never injected directly into
+an observation. `researchScope` remains the exact router decision. Its missing
+conditions and waiting status cannot be cleared by source handoff. If preserved
+originals exceed the existing prompt limit, the existing context-budget stop
+applies rather than another paid correction or silent evidence loss.
+
+Research review V8 returns independent `assessment` and `knowledge` admissions
+in the same review call. The assessment group includes the answer, business
+explanation, purposes and continuations because those changes depend on each
+other. An unrelated rejected knowledge revision does not discard an accepted
+partial answer. A knowledge proposal linked to a rejected new business thesis is
+also blocked. Both writers verify the exact original frozen proposal and review
+receipt before using their own admission. `partially-accepted` is recorded
+explicitly; it does not imply full review approval or investment accuracy.
+Reviewed partial answer parts stay visible in bounded historical memory with
+an explicit historical-only authority, including unresolved conditions.
+
+The existing work ordering (answer ready, contrary evidence, held exposure,
+partial answer, alternating oldest-work turn) and conservative retry/token
+limits remain in force. No new worker, automatic question fan-out, trading
+permission, or forced historical task replay is introduced. Earlier prompt
+versions remain reproducible. Tests cover immutable replay, question ownership,
+source retention, false completion, section dependencies, forged approval,
+transaction rollback, child deduplication and persisted purpose memory.

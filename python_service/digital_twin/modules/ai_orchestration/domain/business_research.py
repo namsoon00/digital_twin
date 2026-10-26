@@ -1,4 +1,5 @@
 """Source-bound business theses. Observed metrics are not investment outcomes."""
+from .research_review_parts import approved
 from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 import math
@@ -290,7 +291,7 @@ def thesis_case(job, result, thesis, now):
         "nextCheckAt": (clock(now) + timedelta(days=7)).isoformat().replace("+00:00", "Z"),
         "origin": {"taskId": job["taskId"], "executionInputId": result["executionInputId"],
             **({"researchReviewInputId": result["researchQuality"]["reviewInputId"]}
-               if result.get("researchQuality", {}).get("status") == "accepted" else {}),
+               if approved(result) else {}),
             "sourceQuestions": [deepcopy(row["sourceQuestion"]) for row in result.get("questionResolutions", [])
                 if row["disposition"] == "business-thesis"
                 and result["businessResearch"]["theses"][row["targetIndex"]] == thesis],

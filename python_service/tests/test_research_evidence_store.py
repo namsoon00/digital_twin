@@ -52,6 +52,22 @@ class ResearchEvidenceStoreTests(unittest.TestCase):
         self.assertEqual([financial.evidence_id], [row.evidence_id for row in
             store.question_documents("TEST", limit=1, preferred_ids=[financial.evidence_id])])
         self.assertEqual([], store.question_documents("ANOTHER", preferred_ids=[financial.evidence_id]))
+        # DART originals are stored as disclosure, not filing. They must be
+        # reserved alongside SEC/IR evidence even when newer headlines exist.
+        from test_bounded_evidence_readiness import DartQuestionOriginalTests
+        from digital_twin.infrastructure.official_question_research import collect_question_documents
+        from digital_twin.modules.news_intelligence.domain.investment_evidence_governance import governed_evidence
+        from digital_twin.modules.news_intelligence.contracts import research_document_reference
+        from datetime import datetime, timezone, timedelta
+        provider, target, signals, tasks = DartQuestionOriginalTests().fixture()
+        originals, _ = collect_question_documents(provider, target, signals, tasks)
+        accepted, _, _ = governed_evidence(originals, target, 999999, now=datetime.now(timezone.utc)+timedelta(seconds=1))
+        store.upsert_many(accepted)
+        documents = store.question_documents(target.symbol, preferred_ids=[r.evidence_id for r in accepted])
+        self.assertEqual({r.evidence_id for r in accepted}, {r.evidence_id for r in documents})
+        self.assertTrue(all(research_document_reference(r) for r in documents))
+        self.assertEqual([accepted[0].evidence_id], [r.evidence_id for r in store.question_documents(
+            target.symbol, limit=1, preferred_ids=[accepted[0].evidence_id])])
         previous = {"officialDocumentText": "", "documentVerified": False,
                     "evidenceQualityAuthority": "revalidation-v1", "dataState": "insufficient", "validationState": "blocked"}
         incoming = {"officialDocumentText": "Verified filing body", "documentVerified": True,

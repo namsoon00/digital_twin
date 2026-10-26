@@ -1417,7 +1417,7 @@ class MySQLResearchEvidenceStore(MySQLOperationalConnection):
     def question_documents(self, symbol: str, limit: int = 8, preferred_ids=()) -> List[ResearchEvidence]:
         """Reserve bounded source-owner records even when newer news crowds them out."""
         conditions, params = self._latest_conditions(symbol=symbol, include_inactive=False)
-        document_conditions = ["kind IN ('filing','issuer-ir')",
+        document_conditions = ["kind IN ('filing','disclosure','issuer-ir')",
             "JSON_LENGTH(JSON_EXTRACT(payload_json,'$.researchTaskIds'))>0",
             "JSON_LENGTH(JSON_EXTRACT(payload_json,'$.documentPassages'))>0"]
         with self.connect() as connection:
@@ -1425,7 +1425,7 @@ class MySQLResearchEvidenceStore(MySQLOperationalConnection):
             if preferred_ids:
                 preferred_ids = list(dict.fromkeys(preferred_ids))[:8]
                 preferred = self._latest_rows(connection,
-                    conditions + ["kind IN ('filing','issuer-ir','financial-fact')",
+                    conditions + ["kind IN ('filing','disclosure','issuer-ir','financial-fact')",
                         "evidence_id IN (" + ",".join(["%s"] * len(preferred_ids)) + ")"],
                     [*params, *preferred_ids], 8, 0)
                 by_id = {row["evidence_id"]: row for row in preferred}

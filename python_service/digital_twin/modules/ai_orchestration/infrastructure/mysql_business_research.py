@@ -1,4 +1,5 @@
 """Business contracts use the existing atomic agenda/event transaction."""
+from ..domain.research_review_parts import approved
 from copy import deepcopy
 from datetime import timedelta
 import json
@@ -24,7 +25,7 @@ def record_business(connection, job, result, read, save, now):
         case["observations"] = deepcopy(memory.get("observations", case.get("observations", [])))
         case["lastReview"] = {**deepcopy(review), "taskId": job["taskId"], "executionInputId": result["executionInputId"],
                               **({"researchReviewInputId": result["researchQuality"]["reviewInputId"]}
-                                 if result.get("researchQuality", {}).get("status") == "accepted" else {}),
+                                 if approved(result) else {}),
                               "at": now, "observations": deepcopy(case["observations"])}
         case.update(status={"retain": "tracking" if case["contract"]["checkpoints"] else "data-needed",
                             "revise": "superseded", "retire": "retired"}[review["disposition"]], reason=review["reason"],

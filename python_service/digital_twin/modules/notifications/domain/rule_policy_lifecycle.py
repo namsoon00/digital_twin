@@ -75,7 +75,9 @@ def release_conclusion(packet):
     remaining = ((current.get('decisionBrief') or {}).get('managementDecision') or {}).get('responses') or []
     labels = list(dict.fromkeys(names[r['code']] for r in remaining if r.get('code') in names))
     if labels:
-        lead += ' ' + '·'.join(labels) + '은 계속 적용됩니다.'
+        label = '·'.join(labels)
+        particle = '은' if (ord(label[-1]) - 0xAC00) % 28 else '는'
+        lead += ' ' + label + particle + ' 계속 적용됩니다.'
     elif (packet.get('policyLifecycle') or {}).get('remainingRestrictions'):
         lead += ' 다른 관리 제한은 계속 적용됩니다.'
     elif (packet.get('policyLifecycle') or {}).get('unverifiedPreviousRuleIds'):

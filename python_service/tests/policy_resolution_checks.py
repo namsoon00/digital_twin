@@ -183,6 +183,9 @@ def assert_policy_resolution_flow(test, checks):
     text = NotificationRenderingService().render(recovered.job)
     test.assertIn('손실 구간 추가매수 제한 해제', text)
     test.assertIn('해제 기준 0% 이상', text)
+    from rule_notice_evidence_checks import assert_policy_cause_survives_composition
+    assert_policy_cause_survives_composition(test, recovered.job.context['relationChangeEvidence'],
+                                           original.job.context['relationChangeEvidence'])
     graph = PortfolioOntology('missing-cost')
     subject = OntologyEntity('stock:MSTR', '스트래티지', 'stock', {**recovery['ontologyRelationContext']['facts'], 'averagePrice': 0})
     rule = next(r for r in default_graph_inference_rules() if r.rule_id == 'graph.instrument_profile.averaging_down_policy.v1')

@@ -9,6 +9,7 @@ from digital_twin.modules.notifications.domain.relation_observation_language imp
 from digital_twin.modules.notifications.domain.relation_observation_proof import window_limitation, window_name, source_time
 from digital_twin.modules.notifications.domain.rule_event_presentation import ACTION_LABELS, event_conclusion, qualification_notice
 from digital_twin.modules.notifications.domain.rule_policy_lifecycle import release_conclusion
+from digital_twin.modules.notifications.domain.rule_notice_evidence import bind_policy_notice
 
 
 from digital_twin.modules.notifications.domain.composed_rule_presentation import (
@@ -16,7 +17,7 @@ from digital_twin.modules.notifications.domain.composed_rule_presentation import
 )
 
 
-VERSION = "compact-rulebox-v5"
+VERSION = "compact-rulebox-v6"
 
 
 def _unique(values):
@@ -296,7 +297,7 @@ def compact_rulebox_summary(packet):
     strategy_events = [e for e in events if e.get("strategyPhases")]
     strategy = strategy_summary(packet, market, _measurements(current, previous, judgment, strategy_events, currency, packet.get("transitions") or [])) if strategy_events else None
     if strategy:
-        return strategy
+        return bind_policy_notice(strategy, packet)
     released_lead = release_conclusion(packet)
     lead = released_lead or _conclusion(judgment, events)
     impact = ((packet.get('policyLifecycle') or {}).get('decisionImpact') or {}) if judgment else {}
@@ -365,9 +366,9 @@ def compact_rulebox_summary(packet):
     # Separate rows survive the shared customer-language normalizer, which
     # deliberately folds whitespace inside a single prose row.
     measurement_rows = ([target_text] if target_text else []) + measurements.splitlines()
-    return {"version": VERSION, "lead": lead, "judgment": judgment, "decisionImpact": impact,
+    return bind_policy_notice({"version": VERSION, "lead": lead, "judgment": judgment, "decisionImpact": impact,
         "sections": [("notification-purpose", "알림 이유", [purpose]),
                      ("decision-impact", "핵심 수치", measurement_rows),
                      ("decision-basis", "함께 보면", [together]),
                      ("current-snapshot", "현재", [market]),
-                     ("next-check-contract", "다음 확인", [next_text])]}
+                     ("next-check-contract", "다음 확인", [next_text])]}, packet)

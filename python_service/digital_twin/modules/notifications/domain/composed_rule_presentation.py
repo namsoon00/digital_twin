@@ -70,7 +70,7 @@ def _display_field(row):
     return field
 
 
-def exact_measurements(current, previous, events, currency, limit=4):
+def exact_measurements(current, previous, events, currency, limit=4, *, cause_only=False):
     now, old = saved_composition(current), saved_composition(previous)
     causes = {rid for event in events for rid in event.get("sourceRuleIds") or []}
     strategy_only = bool(events) and all(e.get("strategyPhases") for e in events)
@@ -82,7 +82,7 @@ def exact_measurements(current, previous, events, currency, limit=4):
     choices = []
     for group, packet in _groups(now):
         is_cause = group["ruleId"] in causes or bool(set(group.get("nativeRuleIds") or []) & causes)
-        if strategy_only and not is_cause:
+        if (strategy_only or cause_only) and not is_cause:
             continue
         for row in packet.get("measurements") or []:
             field, value = _display_field(row), numeric(row.get("observedValue"))

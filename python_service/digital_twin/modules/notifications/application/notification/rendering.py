@@ -146,9 +146,15 @@ class NotificationRenderingService:
             if is_investment and document_quality.get("status") != "passed":
                 rendered = enforce_customer_message_quality(rendered)
             compact_document = customer_investment_document_from_dict(context.get("customerInvestmentDocument"))
+            if is_investment:
+                from .evidence_document import enforce_policy_evidence_document
+                compact_document = enforce_policy_evidence_document(context, compact_document)
             rendered = (render_customer_investment_document(compact_document)
                         if compact_document and compact_document.layout == "compact-rulebox-v1"
                         else present_notification(job.message_type, context, rendered))
+            if context.get("ruleNoticeEvidenceQuality"):
+                context["telegramMessage"] = rendered
+                context["readableMessage"] = html.unescape(re.sub(r"<[^>]+>", "", rendered))
             quality_issues = customer_text_quality_issues(rendered) if is_investment else []
             job.text = rendered
             context["notificationPresentationAudit"] = {
@@ -177,6 +183,7 @@ class NotificationRenderingService:
                 "warnings": context.get("notificationPresentationWarnings", []),
                 "writerProvenance": dict(context.get("notificationWriterProvenance") or {}),
                 "claimValidation": dict(context.get("notificationClaimValidation") or {}),
+                "evidenceValidation": dict(context.get("ruleNoticeEvidenceQuality") or {}),
                 "narrativeVersion": str(
                     (context.get("notificationNarrativeBrief") or {}).get("version") or ""
                 ),

@@ -1,0 +1,25 @@
+{
+  "sourceRevision": "c636b379f + deterministic native witness v20",
+  "engineVersion": "typedb-direct-typeql-rule-engine-v20",
+  "semanticChange": "Select exact usable TypeDB proof witnesses by frozen source clocks and logical identity. All compiled predicates, schema and storage contracts are unchanged; only the native profile interpreter version changes.",
+  "changedCases": [
+    "manifestIdentity",
+    "schema",
+    "schemaIdentity"
+  ],
+  "scenarios": {
+    "schema": "cf4fe47ef3b036e28db0db8a22724322172a09e2d6e00d3dec53b5dfa727126d",
+    "schemaIdentity": "62086405e9078e52420d447a6b9cf72714b3479c8dbb6074f074a0f9930edc5b",
+    "manifestIdentity": "97f14d49a67d1f388f8a16cba095475cdf0284d07a49121412d5be9328278fce",
+    "generatedRows": "80621c24965aaf2c7a0b78aec925f1484ae11aa03a6beed93f10208285a0571b",
+    "sentinels": "d5ab4a5c1814c359f34eeb343bc97ece24bf0f19d546a4e3718070b40baf8c26",
+    "restore:ok": "1071d072665321a01c3c38a781b50bfcb815a3a5abb464b88fc108558b976594",
+    "restore:schema-error": "efd028dcb469055af5f90d9c970a48c41097c4239a89577fe86dea9a9063c6c4",
+    "restore:static-error": "e16dbc36106d181b8e722fe532fdebac6f6875d012e9748060d79808bb6b2943",
+    "restore:manifest-error": "e76f9ed27e69aac5e3fefdb6d78f7d264ac55afe262981c99bc815f2fc79f647",
+    "restore:readback-error": "8f653b27f7e678dcb52f72307e23a92c5b763ace24676b08d72ecf4ecbecc64e",
+    "restore:hash-error": "cf956e95de926529c5a374f535506fae7dc15223087baf78ca34293ddacf22db",
+    "restore:contract-error": "fccca9db4148a8be1964036f491a51f4f17e6a69c40413eb2ca9905637c14cfe",
+    "restore:missing-box": "0ccfdc6e478a56a911fc2a4d27092fba6473a8d96a5c7c0bd65068ef1611a373"
+  }
+}

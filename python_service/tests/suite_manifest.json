@@ -14,6 +14,8 @@
     {"file": "test_business_insight_progress.py", "tier": "contract", "core": true},
     {"file": "test_company_research_cycle.py", "tier": "contract", "core": true},
     {"file": "test_rule_delivery_latency.py", "tier": "integration", "core": true},
+    {"file": "test_native_evidence_witness.py", "tier": "contract", "core": true},
+    {"file": "test_runtime_packet_integrity.py", "tier": "unit", "core": true},
     {"file": "test_reasoning_source_preparation.py", "tier": "integration", "core": true},
     {"file": "test_reasoning_sibling_batch.py", "tier": "integration", "core": true},
     {"file": "test_rule_notification_repair.py", "tier": "contract", "core": true},

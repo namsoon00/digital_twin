@@ -1252,6 +1252,14 @@ class ReasoningEnginePlatformService:
         from digital_twin.modules.reasoning.domain.reasoning_comparison_identity import COMPARISON_INPUT_CONTRACT_VERSION, PAIRED_VALIDATION_INPUT_VERSION
         from digital_twin.modules.reasoning.domain.reasoning_shadow import REASONING_SHADOW_CONTRACT_VERSION
         from digital_twin.modules.reasoning.domain.management_upgrade_review import MANAGEMENT_UPGRADE_REVIEW_VERSION
+        from digital_twin.modules.reasoning.infrastructure.typeql.constants import TYPEDB_NATIVE_RULE_ENGINE_VERSION
+        # Preserve the approved RuleBox, but bind a new deployment to the
+        # native interpreter actually running it. Inheriting an old v19 tag
+        # after a v20 proof fix would mislabel the immutable validation cohort.
+        source_contract_versions = {
+            version for version in bundle.source_contract_versions
+            if not version.startswith("typedb-direct-typeql-rule-engine-")
+        } | {TYPEDB_NATIVE_RULE_ENGINE_VERSION}
         registration_runtime = dict(self.settings.get("_runtimeIdentity") or {})
         authored_artifact = dict(release_seed_artifact or {})
         model_releases = bundle.model_signal_release_id
@@ -1285,7 +1293,7 @@ class ReasoningEnginePlatformService:
                 prompt_release_id=bundle.prompt_release_id,
                 feature_set_version=bundle.feature_set_version,
                 model_signal_release_id=model_releases,
-                source_contract_versions=tuple(sorted(set(bundle.source_contract_versions) | {
+                source_contract_versions=tuple(sorted(source_contract_versions | {
                     COMPARISON_INPUT_CONTRACT_VERSION, "target-scope-logical-input-v2", MANAGEMENT_UPGRADE_REVIEW_VERSION, PAIRED_VALIDATION_INPUT_VERSION,
                 })),
                 release_id=clean_release_id,

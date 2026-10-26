@@ -59,6 +59,66 @@ class LocalGraphWriterGuardTests(unittest.TestCase):
             self.assertEqual("released", guard.release()["status"])
             self.assertFalse(guard.status()["acquired"])
 
+    def test_granted_candidate_turn_survives_source_reads_and_delivery_is_next(self):
+        with tempfile.TemporaryDirectory() as directory:
+            candidate = LocalGraphWriterGuard("candidate", "candidate", Path(directory))
+            delivery = LocalGraphWriterGuard("active", "delivery", Path(directory))
+            other = LocalGraphWriterGuard("other", "candidate", Path(directory))
+            self.assertTrue(candidate.acquire()["acquired"])
+            self.assertTrue(candidate.release(keep_priority=True)["released"])
+            self.assertFalse(candidate.status()["acquired"])
+            self.assertEqual("granted-turn-reserved", delivery.acquire()["status"])
+            self.assertTrue(delivery.status()["deliveryIntent"])
+            self.assertFalse(other.acquire()["acquired"])
+            self.assertTrue(candidate.acquire()["acquired"])
+            candidate.release()
+            self.assertFalse(candidate.status()["grantedTurnReserved"])
+            self.assertEqual("delivery-waiting", other.acquire()["status"])
+            self.assertTrue(delivery.acquire()["acquired"])
+            delivery.release()
+            self.assertTrue(other.acquire()["acquired"])
+            other.release()
+
+    def test_abandoned_source_preparation_releases_granted_turn(self):
+        with tempfile.TemporaryDirectory() as directory:
+            candidate = LocalGraphWriterGuard("candidate", "candidate", Path(directory))
+            delivery = LocalGraphWriterGuard("active", "delivery", Path(directory))
+            self.assertTrue(candidate.acquire()["acquired"])
+            candidate.release(keep_priority=True)
+            self.assertFalse(delivery.acquire()["acquired"])
+            candidate.release()
+            self.assertTrue(delivery.acquire()["acquired"])
+            delivery.release()
+
+    def test_process_exit_releases_granted_preparation_turn(self):
+        with tempfile.TemporaryDirectory() as directory:
+            code = """
+import sys
+from pathlib import Path
+from digital_twin.infrastructure.graph_writer_guard import LocalGraphWriterGuard
+x = LocalGraphWriterGuard('candidate', 'candidate', Path(sys.argv[1]))
+assert x.acquire()['acquired']
+assert x.release(keep_priority=True)['released']
+print('preparing', flush=True)
+sys.stdin.read()
+"""
+            child = subprocess.Popen([sys.executable, "-c", code, directory],
+                                     stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+            delivery = LocalGraphWriterGuard("active", "delivery", Path(directory))
+            try:
+                self.assertEqual("preparing", child.stdout.readline().strip())
+                self.assertFalse(delivery.acquire()["acquired"])
+                child.kill()
+                child.wait(timeout=5)
+                self.assertTrue(delivery.acquire()["acquired"])
+            finally:
+                delivery.release()
+                if child.poll() is None:
+                    child.kill()
+                    child.wait(timeout=5)
+                child.stdin.close()
+                child.stdout.close()
+
     def test_same_database_on_isolated_typedb_instances_has_separate_writer_locks(self):
         with tempfile.TemporaryDirectory() as directory:
             active = LocalGraphWriterGuard(

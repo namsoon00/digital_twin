@@ -237,9 +237,12 @@ class RuleDeliveryLatencyTests(TestCase):
             background.release()
 
     def test_source_preparation_cannot_execute_after_writer_claim_or_deployment_changes(self):
-        for failure in ['busy', 'lease-lost', 'lease-unknown', 'deployment', 'readiness', 'source-error']:
-            with self.subTest(failure=failure), tempfile.TemporaryDirectory() as directory:
-                guard = LocalGraphWriterGuard('live', 'delivery', Path(directory))
+        failures = ['busy', 'lease-lost', 'lease-unknown', 'deployment', 'readiness', 'source-error']
+        cases = [('delivery', failure) for failure in failures]
+        cases += [('candidate', failure) for failure in failures if failure != 'busy']
+        for role, failure in cases:
+            with self.subTest(role=role, failure=failure), tempfile.TemporaryDirectory() as directory:
+                guard = LocalGraphWriterGuard('live', role, Path(directory))
                 contender = LocalGraphWriterGuard('active', 'active', Path(directory))
                 executor = Mock()
                 queue = SimpleNamespace(heartbeat=Mock(return_value=failure != 'lease-lost'))
@@ -270,8 +273,43 @@ class RuleDeliveryLatencyTests(TestCase):
                             self.assertTrue(contender.status()['acquired'])
                     executor.execute.assert_not_called()
                     self.assertFalse(guard.status()['acquired'])
+                    self.assertFalse(guard.status()['grantedTurnReserved'])
                 finally:
                     contender.release()
+
+    def test_candidate_prepares_once_despite_delivery_arriving_during_source_read(self):
+        with tempfile.TemporaryDirectory() as directory:
+            guard = LocalGraphWriterGuard('candidate', 'candidate', Path(directory))
+            delivery = LocalGraphWriterGuard('active', 'delivery', Path(directory))
+            assembler = FakeAssembler()
+            def assemble(request):
+                self.assertFalse(guard.status()['acquired'])
+                self.assertFalse(delivery.acquire()['acquired'])
+                self.assertTrue(delivery.status()['deliveryIntent'])
+                return FakeAssembler().assemble(request)
+            assembler.assemble = Mock(side_effect=assemble)
+            executor = FakeExecutor()
+            original = executor.execute
+            def execute(request, snapshots):
+                self.assertTrue(guard.status()['acquired'])
+                self.assertFalse(delivery.acquire()['acquired'])
+                return original(request, snapshots)
+            executor.execute = Mock(side_effect=execute)
+            engine = V2ReasoningEngine(descriptor(), assembler, executor, FakeCandidateBuilder())
+            runner = IndependentReasoningJobRunner(
+                SimpleNamespace(heartbeat=lambda *args: True), engine, SimpleNamespace(),
+                graph_writer_guard=guard)
+            runner.prepare_queue_turn = lambda: {'status': 'ready'}
+            runner.control_binding_status = lambda _: {'selected': True}
+            runner.execution_readiness = lambda: {'ready': True}
+            runner._run_once = lambda _: engine.consume([source_event()], input_assembly_scope=
+                lambda: runner.unlocked_input_assembly(['job:1'], threading.Event()))
+            result = runner.run_once()
+            self.assertNotEqual('deferred', result['status'])
+            assembler.assemble.assert_called_once()
+            executor.execute.assert_called_once()
+            self.assertTrue(delivery.acquire()['acquired'])
+            delivery.release()
 
     def test_exact_report_reuse_preserves_repairs_scope_thresholds_and_mutation_isolation(self):
         cache = ExactPerformanceReportCache(2)

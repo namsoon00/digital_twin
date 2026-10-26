@@ -328,7 +328,8 @@ class AIControlStorageTests(unittest.TestCase):
     def setUp(self):
         from digital_twin.infrastructure.settings import runtime_settings
         from digital_twin.modules.ai_orchestration.infrastructure.mysql_control import MySQLAIControlStore
-        self.store = MySQLAIControlStore({**runtime_settings(), "aiControlDailyTaskBudget": 10, "aiControlDailyCallBudget": 2})
+        from mysql_fixtures import mysql_test_settings
+        self.store = MySQLAIControlStore({**runtime_settings(), **mysql_test_settings(), "aiControlDailyTaskBudget": 10, "aiControlDailyCallBudget": 2})
         self.clean()
 
     def clean(self):

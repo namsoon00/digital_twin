@@ -1,5 +1,54 @@
 # Reasoning Input Latency
 
+## Granted turns and reproducible native witnesses (2026-10-26)
+
+The candidate could acquire the TypeDB writer, release it for immutable source
+preparation, then lose its turn to delivery before inference. Its prepared input
+was discarded and prepared again on the next retry. Writer contract v4 retains
+an OS-backed background turn reservation across that preparation. A waiting
+delivery worker reserves the next turn; newly arriving background workers still
+yield to delivery. Normal completion, input/lease failure and process death
+release the reservation. This removes repeated preparation after admission; it
+does not remove the initial wait or make TypeDB transactions concurrent.
+
+One failed comparison had identical logical ABox scope fingerprints but selected
+different witnesses for `graph.security_line.coverage_gap.v1`: a stale ADR gap
+versus a fresh ETF gap. Grounding ordered matches by physical assertion hashes,
+which change across worlds/snapshots. Native engine v20 selects a usable witness
+among the exact TypeDB matches, then orders ties by logical endpoint identity.
+All-stale, missing-clock, future and explicitly unusable witnesses remain
+unusable. Native predicates and source clocks are unchanged. A successor release
+records the current native engine contract instead of inheriting its predecessor's
+interpreter tag; historical failed comparisons remain immutable.
+
+Replay packet serialization no longer deep-copies the complete history before
+encoding or after decoding into a newly owned JSON tree. Canonical bytes,
+compression, hashes, secret filtering, size/account checks and mutation isolation
+are preserved. A fixed ETH source/context replay with graph caches disabled and
+profiling enabled measured assembly at 3.450s before and 2.243s after; the logical
+graph digest and all 51 entities/55 relations were identical. This is a limited
+input-preparation measurement, not a production end-to-end latency claim or a
+stock trading test. Live queue, TypeDB execution and notification latency still
+need separate observation.
+
+An unprofiled alternating three-run benchmark over the same 3,660,069-byte
+context measured packet encode/decode medians of 0.4489s and 0.1846s. The full
+packet, including compressed bytes and source clocks, was identical. The native
+witness smoke passed both physical identity orders; all 96 existing current-flow
+TypeQL checks also passed, with zero delivery and no operational graph writes.
+V20 compiler snapshots differ only in the diagnostic engine-version profile;
+query predicates, schema and static restoration fingerprints remain unchanged.
+
+Regressions: `test_graph_writer_guard`, `test_rule_delivery_latency`,
+`test_native_evidence_witness`, `test_runtime_packet_integrity`, and
+`test_reasoning_engine_versions`. `native_evidence_witness_smoke.py` exercises
+the actual TypeQL witness set in an isolated temporary database; the existing
+`native_current_flow_smoke.py` checks source/clock/session/linked-phase gates.
+The curated runner now acquires the existing test-schema lock before loading
+fixtures. Direct AI storage fixtures use that same lock and the configured
+managed test schema, including nested recovery checks. Concurrent local test
+sessions must not delete one another's rows while validating a release.
+
 ## Indexed execution preparation and the acceptance boundary (2026-10-26)
 
 The execution profiler found 5.29 million structural dependency comparisons in

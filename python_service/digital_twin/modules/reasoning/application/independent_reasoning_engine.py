@@ -3351,8 +3351,9 @@ class IndependentReasoningJobRunner:
             yield
             return
         self._input_preparation_released_writer = True
-        # Retain delivery's existing priority reservation: background work must
-        # not overtake a live job merely because its source read takes seconds.
+        # Preserve the granted turn across source reads. Delivery keeps its
+        # next-turn priority; a candidate already admitted to a turn can finish
+        # preparation without losing it and repeatedly rebuilding the input.
         released = self.release_graph_writer_ownership(keep_priority=True)
         if not released.get("released"):
             raise InputPreparationDeferred("Could not release the graph writer for source preparation.")

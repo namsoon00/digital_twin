@@ -1,0 +1,72 @@
+{
+  "sourceRevision": "c636b379f + deterministic native witness v20",
+  "engineVersion": "typedb-direct-typeql-rule-engine-v20",
+  "semanticChange": "Select exact usable TypeDB proof witnesses by frozen source clocks and logical identity. All compiled predicates, schema and storage contracts are unchanged; only the native profile interpreter version changes.",
+  "changedCases": [
+    "bridge",
+    "catalog",
+    "condition",
+    "indexed",
+    "match",
+    "planning",
+    "profiles",
+    "schema"
+  ],
+  "groups": {
+    "any-group": {
+      "count": 58,
+      "bytes": 139096,
+      "sha256": "e26b7a70cb467afb47db5ff977f74292f45dbc0bc22b11e2f36584a0ecafca5a"
+    },
+    "bridge": {
+      "count": 10,
+      "bytes": 39729,
+      "sha256": "0601f9a85bb0c2eb11bafdce4c28a7a31132b6e321722925c1431ff7846ebb7c"
+    },
+    "catalog": {
+      "count": 1,
+      "bytes": 3069461,
+      "sha256": "717ed388d152e3b637c76e71447ce6e1912833d7274d0f9e4cafee894a7bd986"
+    },
+    "condition": {
+      "count": 318,
+      "bytes": 643581,
+      "sha256": "c9e2a304bc203761e6320621a64b7d15f51e49609bdb583c3efc4bf7ae753ddf"
+    },
+    "governed": {
+      "count": 29,
+      "bytes": 297993,
+      "sha256": "ee488f96dd680bf2d1cc6a3adebdb127f683433461ae8fcbe4509ca6b7d3807e"
+    },
+    "indexed": {
+      "count": 276,
+      "bytes": 785575,
+      "sha256": "8afee8ff329c62d6c6ae02e209d8d8f4a11a3a4df4ae8548a74870b838d07864"
+    },
+    "literals": {
+      "count": 30,
+      "bytes": 1033,
+      "sha256": "6767b7f1c7d34d9bf06cf6b684f7d7c2528d7ed79aaebc4bf6e899e0566b3f31"
+    },
+    "match": {
+      "count": 414,
+      "bytes": 1606093,
+      "sha256": "8d8f0214c4b8a94546cbd82d31639fd3b467663ae8b671ef451455a9f73589a9"
+    },
+    "planning": {
+      "count": 2,
+      "bytes": 47545,
+      "sha256": "f8d69a9304606d08c36e210d95fcb3346027e2b9c56b732136dd87214e613634"
+    },
+    "profiles": {
+      "count": 1,
+      "bytes": 293626,
+      "sha256": "1e24ce7bb2a02f86e0271d7f3705a6ede5a22a12e2d46eb3cf5878e26bd589a6"
+    },
+    "schema": {
+      "count": 1,
+      "bytes": 27037,
+      "sha256": "45ddac6fdf8c9a00de3643f0d535f43df205a38acf377bb4aa279c96db300747"
+    }
+  }
+}

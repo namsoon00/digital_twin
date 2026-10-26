@@ -1,6 +1,19 @@
 const escape = (value) => String(value ?? "").replace(/[&<>"']/g, (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const effects = {supports:"이번 설명을 뒷받침",weakens:"이번 설명을 약화",unchanged:"이번 설명 유지",insufficient:"설명을 바꿀 근거 부족"};
 
+function inquiryView(row) {
+  const chain = row.inquiryLineage;
+  const next = row.inquiryContinuation;
+  if (!chain && !next) return "";
+  const relations = {cause:"원인 확인", "counter-evidence":"반대 설명 확인", persistence:"지속 조건 확인", "value-implication":"기업 가치 영향 확인"};
+  const path = (chain?.path || []).map(step => `<li><strong>${escape(step.question)}</strong><br>당시 확인한 답: ${escape(step.answer)}</li>`).join("");
+  return `<div class="question-assessment"><strong>이어지는 연구</strong>
+    ${path ? `<ol>${path}<li><strong>이번 질문</strong> · ${escape(row.question)}</li></ol>` : ""}
+    ${chain ? `<p>${escape(relations[chain.relation] || "후속 탐구")} · ${escape(chain.rationale)}</p><p><strong>이번 답으로 구분할 내용</strong><br>${escape(chain.expectedInsight)}</p>` : ""}
+    ${next ? `<p><strong>이 답에서 이어진 다음 질문</strong><br>${escape(next.question)}</p><p>${escape(next.expectedInsight)}</p>` : ""}
+    <p class="muted">이전 답은 당시 근거로 확인한 연구 이력입니다. 다음 질문의 답변 완료 여부와 별도로 보존합니다.</p></div>`;
+}
+
 function answerPartsView(closure) {
   if (!closure) return "";
   const confirmed = (closure.confirmedParts || []).map(part => `<li>${escape(part.text)}</li>`).join("");
@@ -31,7 +44,7 @@ function workflowView(workflow) {
 }
 
 export function questionAssessmentView(row) {
-  const workflow = workflowView(row.workflow);
+  const workflow = inquiryView(row) + workflowView(row.workflow);
   const closure = row.workflow?.closure;
   const assessment = row.workflow && !row.workflow.judgmentTaskId ? null : row.questionAssessment;
   const progress = row.evidenceProgress;

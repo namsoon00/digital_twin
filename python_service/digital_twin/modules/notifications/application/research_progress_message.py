@@ -27,6 +27,11 @@ def render_research_progress(value):
     lines = ["<b>🔬 연구 진행 · " + subject + "</b>",
              text(value["label"]), "", "<b>연구 질문</b>", text(value["question"])]
     answer = value.get("documentaryAnswer") or {}
+    chain = value.get("inquiryLineage") or {}
+    if chain:
+        lines.extend(["", "<b>출발점이 된 답변 · 이전 검토 시점</b>", text(chain.get("parentAnswer", {}).get("text")),
+            "<b>이 답에서 이어지는 이유</b>", text(chain.get("rationale")),
+            "<b>다음 답으로 구분할 내용</b>", text(chain.get("expectedInsight"))])
     followup = value.get("sourceFollowUp") or {}
     if followup:
         lines.extend(["", "<b>이번에 보완할 조사</b>", text(followup.get("reason"))])

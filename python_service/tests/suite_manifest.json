@@ -1,5 +1,6 @@
 {
   "tests": [
+    {"file": "test_answer_led_research.py", "tier": "contract", "core": true},
     {"file": "test_notification_contribution.py", "tier": "contract", "core": true},
     {"file": "test_evidence_to_judgment.py", "tier": "contract", "core": true},
     {"file": "test_financial_source_recovery.py", "tier": "contract", "core": true},

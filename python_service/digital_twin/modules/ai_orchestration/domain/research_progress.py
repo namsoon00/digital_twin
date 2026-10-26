@@ -24,7 +24,7 @@ def research_progress(case, event):
                 value in {"direction-observed", "direction-not-observed"} | RESEARCH_EXPECTATION_TERMINAL for value in observations):
             return None
     elif stage == "created" and case.get("capability") in {"research", "develop-hypothesis"}:
-        category, state, label = "question", status, "연구 질문 등록"
+        category, state, label = "question", status, "답변에서 이어진 후속 질문" if case.get("inquiryLineage") else "연구 질문 등록"
     elif stage == "assessment" and status in {"answered", "blocked", "dismissed"}:
         category, state = "question", status
         label = {"answered": "연구 답변 검토", "blocked": "연구 진행 보류", "dismissed": "연구 질문 종료"}[status]
@@ -117,6 +117,9 @@ def research_progress(case, event):
         "evidenceIds": list(review.get("evidenceIds") or contract.get("evidenceIds") or [])[:12],
         "sourceQuestionIds": [row["caseId"] for row in case.get("origin", {}).get("sourceQuestions", [])],
         "observations": observations, "authority": "research-status-only",
+        **({"inquiryLineage": deepcopy({key: case["inquiryLineage"][key] for key in
+            ("parentCaseId", "parentAnswer", "depth", "relation", "rationale", "expectedInsight")})}
+           if case.get("inquiryLineage") else {}),
         **({"quantitativeActuals": quantitative_actuals} if quantitative_actuals else {}),
         "qualification": "not-empirically-qualified",
         "documentaryAnswer": deepcopy(case.get("lastResearch", {}).get("result", {}).get("documentaryAnswer") or {}) if stage == "research-returned" else {},

@@ -1,5 +1,36 @@
 # Source-bound business research
 
+## Answer-led questions
+
+New original-question assessments use `answer-led-research-chain-v1`. The AI
+may connect one next research question to an exact `answerParts.confirmed`
+entry in the same assessment. The connection records the parent case, answer
+index, causal/counter-evidence/persistence/value question, its reporting-period
+contract, why it follows, and what a different answer would change. A partial
+answer may support an independent next question while the parent's original
+requirements and investigation limits remain unchanged.
+
+The existing independent research review checks this additional meaning against
+current source facts. Missing parent evidence, a reworded question, the parent's
+unresolved requirements, or an unreviewed proposal cannot create a successor.
+Each parent can have one successor; one assessment creates at most one, with a
+maximum of six successive questions. A chain can stop earlier when further
+answers would add no useful distinction. Existing task/token budgets, source
+admission, account/world isolation, and the 12-active-question limit remain.
+
+The parent assessment, `inquiryContinuation`, child's `inquiryLineage`, original
+child contract, case events and source collection job commit in the existing
+transaction. Retrying completion cannot duplicate them. This lineage is research
+history, not fresh evidence or an investment action. Each subsequent answer must
+cite newly selected usable source facts; the historical answer cannot cite itself.
+The question screen and existing research-progress messages show the parent
+answer and the next question's purpose.
+
+Activation applies to new assessments without rewriting old questions or forcing
+a paid migration pass. Previously completed questions are not silently reopened;
+unchanged-source waits continue under their existing policy. Tests use synthetic
+model results and the isolated MySQL test database, not production notifications.
+
 The central observation lane now has a business research contract alongside its
 price observations. This is a research memory, not a qualified predictive model
 or a trading action. Existing TypeDB investment-action governance is unchanged.

@@ -31,7 +31,10 @@ def _work_summary(row):
     result = _summary(row, ("kind", "caseId", "accountId", "symbol", "worldId", "question",
         "capability", "status", "revision", "reviewDue", "nextCheckAt", "completionCriterion", "reason",
         "researchAttempts", "researchRequest", "hypothesisResolution", "developmentProgress",
-        "questionContract", "answerResolution", "researchPlan", "mergedQuestions"))
+        "questionContract", "answerResolution", "researchPlan", "mergedQuestions", "inquiryLineage", "inquiryContinuation"))
+    if row.get("inquiryLineage"):
+        from .research_chain import memory_lineage
+        result["inquiryLineage"] = memory_lineage(row["inquiryLineage"])
     if row.get("evidenceProgress"):
         from .question_evidence import progress_memory
         result["evidenceProgress"] = progress_memory(row["evidenceProgress"])

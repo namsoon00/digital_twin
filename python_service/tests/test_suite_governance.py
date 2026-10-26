@@ -446,7 +446,9 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # cooldown/claim loss and unusable source rejection without a native wait.
         # Two replay-receipt regressions preserve temporal identity when the
         # optional packet exceeds its limit and reject unbound cached context.
-        self.assertLessEqual(total, 2742)
+        # Nine answer-led inquiry contracts cover cited lineage, repeat limits,
+        # independent review, immutable inputs and atomic child scheduling.
+        self.assertLessEqual(total, 2751)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

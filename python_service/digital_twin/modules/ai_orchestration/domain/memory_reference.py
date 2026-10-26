@@ -28,7 +28,7 @@ def brief(row, category):
                   "summary", "hypothesis", "counterEvidence", "followUpConditions", "companyValue")
     elif row.get("kind") == "brain-case":
         fields = ("kind", "caseId", "accountId", "symbol", "worldId", "question", "capability", "status",
-                  "revision", "reviewDue", "nextCheckAt", "completionCriterion", "researchAttempts", "questionContract")
+                  "revision", "reviewDue", "nextCheckAt", "completionCriterion", "researchAttempts", "questionContract", "inquiryLineage", "inquiryContinuation")
     elif row.get("kind") == "business-thesis":
         # Checkpoint baselines are an exact deterministic observation contract.
         fields = ("kind", "caseId", "accountId", "symbol", "worldId", "revision", "status", "reviewDue",
@@ -48,6 +48,9 @@ def brief(row, category):
         result["quality"] = {"status": row.get("quality", {}).get("status"),
                              "errorCount": len(row.get("quality", {}).get("errors") or [])}
     if row.get("kind") == "brain-case":
+        if row.get("inquiryLineage"):
+            from .research_chain import memory_lineage
+            result["inquiryLineage"] = memory_lineage(row["inquiryLineage"])
         if row.get("questionAssessment"):
             result["questionAssessment"] = {key: deepcopy(row["questionAssessment"][key]) for key in
                 ("status", "missingRequirements", "judgmentImpact", "hypothesisDisposition") if key in row["questionAssessment"]}

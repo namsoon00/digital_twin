@@ -155,6 +155,13 @@ class MySQLBrainAgendaStore(MySQLOperationalConnection):
             if validate_resolutions(raw_resolutions(result["questionResolutions"]), result["input"],
                     envelope["researchResults"], result, required=True) != result["questionResolutions"]:
                 raise ValueError("question resolution changed after input capture")
+        from ..domain import research_chain
+        if "questionContinuations" in result and not research_chain.enabled(result["input"]):
+            raise ValueError("legacy assessment cannot originate an answer-led research chain")
+        if research_chain.enabled(result["input"]):
+            if research_chain.validate(result.get("questionContinuations"), result["input"],
+                    envelope["researchResults"], result) != result.get("questionContinuations"):
+                raise ValueError("research chain changed after input capture")
         from ..domain.scoped_research import validate_plan as validate_scope
         validate_scope(result, result["input"])
         return envelope
@@ -254,8 +261,13 @@ class MySQLBrainAgendaStore(MySQLOperationalConnection):
         return receipt
 
     def record_questions(self, connection, job, result, children, source, now, receipt, research_only=False):
-        for item in result.get("workQuestions", []):
+        for index, item in enumerate(result.get("workQuestions", [])):
             if research_only and item["capability"] != "research":
+                continue
+            continuation = next((row for row in result.get("questionContinuations", []) if row["questionIndex"] == index), None)
+            if continuation:
+                from .mysql_research_chain import record_continuation
+                record_continuation(self, connection, job, result, item, continuation, children, now, receipt)
                 continue
             key = case_identity(job["accountId"], job["symbol"], job["worldId"], item["capability"], item["question"])
             case = self.read(connection, key, job["accountId"], job["symbol"], lock=True)
@@ -513,6 +525,7 @@ class MySQLBrainAgendaStore(MySQLOperationalConnection):
                 "researchAttempts": case["researchAttempts"], "development": case.get("development", {}),
                 "researchRequest": case.get("researchRequest", {}),
                 "questionContract": case.get("questionContract", {}), "answerResolution": case.get("answerResolution", {}),
+                **{key: copy.deepcopy(case[key]) for key in ("inquiryLineage", "inquiryContinuation") if key in case},
                 **({"questionAssessment": case["questionAssessment"]} if case.get("questionAssessment") else {}),
                 "researchPlan": case.get("researchPlan", {}),
                 **({"evidenceProgress": case["evidenceProgress"]} if case.get("evidenceProgress") else {}),

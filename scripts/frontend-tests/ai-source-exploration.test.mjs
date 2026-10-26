@@ -4,6 +4,15 @@ import vm from "node:vm";
 import test from "node:test";
 import { questionAssessmentView, questionPerformanceView } from "../../public/modules/research/question-assessment.mjs";
 
+test("research chains expose dated parent answers and the next question with escaped text", () => {
+  const html = questionAssessmentView({question:"이번 질문", inquiryLineage:{depth:1, relation:"cause",
+    path:[{question:"왜 증가했나?", answer:"<script>이전 답변</script>"}],
+    rationale:"확인한 답에서 원인을 묻습니다.", expectedInsight:"가격과 수량의 기여를 구분합니다."},
+    inquiryContinuation:{question:"성장 조건이 이어지는가?", expectedInsight:"일시적 효과와 지속 조건을 구분합니다."}});
+  for (const text of ["이어지는 연구", "당시 확인한 답", "이번 질문", "가격과 수량", "성장 조건", "&lt;script&gt;"]) assert.ok(html.includes(text), text);
+  assert.doesNotMatch(html, /<script>|예측 적중 확인/);
+});
+
 const source = fs.readFileSync(new URL("../../public/ai-control.mjs", import.meta.url), "utf8")
   .replace(/^import \{ questionAssessmentView, questionPerformanceView \} from "\.\/modules\/research\/question-assessment\.mjs(?:\?v=[^"]+)?";$/m, "");
 function render(input) {

@@ -141,6 +141,8 @@ class AIControlService:
                         packet["questionWorkPolicy"] = question_policy
                         from ..domain.question_answer import VERSION as answer_policy
                         packet["questionAnswerPolicy"] = answer_policy
+                        from ..domain.research_chain import VERSION as chain_policy
+                        packet["researchChainPolicy"] = chain_policy
                         if packet.get("companyResearchPolicy"):
                             from ..domain.partial_judgment import VERSION as partial_policy
                             packet["partialJudgmentPolicy"] = partial_policy

@@ -25,8 +25,9 @@ class ExecutionPersistenceChecks(unittest.TestCase):
         from digital_twin.infrastructure.settings import runtime_settings
         from digital_twin.infrastructure.mysql_monitoring import mysql_settings
         from digital_twin.modules.ai_orchestration.infrastructure.mysql_control import MySQLAIControlStore
-        self.settings = {**runtime_settings(), "mysqlDatabase": "orbit_alpha_test", "aiControlBudgetEnabled": "false"}
-        self.assertEqual("orbit_alpha_test", mysql_settings(self.settings)["database"])
+        from mysql_fixtures import is_managed_test_database, mysql_test_settings
+        self.settings = {**runtime_settings(), **mysql_test_settings(), "aiControlBudgetEnabled": "false"}
+        self.assertTrue(is_managed_test_database(mysql_settings(self.settings)["database"]))
         self.store = MySQLAIControlStore(self.settings)
         self.clean()
 

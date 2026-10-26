@@ -106,6 +106,10 @@ def main() -> int:
     parser.add_argument("files", nargs="+")
     args = parser.parse_args()
     _require_test_storage()
+    # Hold the shared schema lock before importing or running any fixture.
+    # Some storage tests construct adapters directly without a schema reset.
+    from mysql_fixtures import mysql_test_settings
+    mysql_test_settings()
     suite = _load_suite(args.files)
     started = time.perf_counter()
     runner = unittest.TextTestRunner(verbosity=1, resultclass=TimingResult)

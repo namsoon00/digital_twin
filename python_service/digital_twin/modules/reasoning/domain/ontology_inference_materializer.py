@@ -903,20 +903,25 @@ def evidence_relation_index(graph: PortfolioOntology) -> Dict[str, object]:
         if relation_id:
             by_relation_id.setdefault(relation_id, []).append(relation)
 
-    def candidate_key(item: Tuple[OntologyRelation, OntologyEntity]) -> Tuple[str, str]:
-        relation, _target = item
-        return (
-            str((getattr(relation, "properties", {}) or {}).get("_relationId") or ""),
-            str(getattr(relation, "target", "") or ""),
-        )
-
     for values in by_subject_direction_type.values():
-        values.sort(key=candidate_key)
+        values.sort(key=evidence_relation_logical_key)
     return {
         "entities": entities,
         "bySubjectDirectionType": by_subject_direction_type,
         "byRelationId": by_relation_id,
     }
+
+
+def evidence_relation_logical_key(item):
+    """Order an explanation by logical identity, never a world/snapshot hash."""
+    relation, target = item
+    return (
+        str(target.entity_id if target else ""),
+        str(relation.source or ""),
+        str(relation.target or ""),
+        str(relation.relation_type or ""),
+        str((relation.properties or {}).get("ruleId") or ""),
+    )
 
 
 def matching_evidence_relation(
@@ -966,13 +971,7 @@ def matching_evidence_relation(
         # fall back to the subject/type index for legacy rows that do not yet
         # include relation identities.
         if exact_candidates:
-            indexed_candidates = sorted(
-                exact_candidates,
-                key=lambda item: (
-                    str((getattr(item[0], "properties", {}) or {}).get("_relationId") or ""),
-                    str(getattr(item[0], "target", "") or ""),
-                ),
-            )
+            indexed_candidates = exact_candidates
 
     candidates = []
     for relation, target in indexed_candidates:
@@ -994,7 +993,26 @@ def matching_evidence_relation(
         candidates.append((relation, target))
     if not candidates:
         return None, None
-    return candidates[0]
+    if len(candidates) == 1:
+        return candidates[0]
+
+    def witness_key(item):
+        relation, target = item
+        properties = dict(target.properties if target else {})
+        properties.setdefault("observationKind", target.kind if target else "")
+        properties.setdefault("observationRelationType", relation.relation_type)
+        metadata = observation_metadata(
+            properties, None, str((graph.worldview or {}).get("evidenceEvaluationAsOf") or "")
+        )
+        # TypeDB already proved this existential condition and supplied its
+        # witnesses. Prefer a usable witness among those exact matches, with
+        # stable logical ordering for ties. A different database/snapshot can
+        # change assertion hashes but must not change proof eligibility.
+        # If all witnesses are stale/missing/future, keep an unusable proof;
+        # neither the source clock nor the freshness gate is repaired here.
+        return (not metadata["judgementEvidenceUsable"], evidence_relation_logical_key(item))
+
+    return min(candidates, key=witness_key)
 
 
 def ontology_properties_match(properties: Dict[str, object], filters: Dict[str, object]) -> bool:

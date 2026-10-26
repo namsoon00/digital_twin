@@ -1179,6 +1179,12 @@ class ReasoningEngineVersionTests(unittest.TestCase):
              "_runtimeIdentity": {"revision": "fixed-input-runtime"}},
         )
 
+        from dataclasses import replace
+        from digital_twin.modules.reasoning.infrastructure.typeql.constants import TYPEDB_NATIVE_RULE_ENGINE_VERSION
+        descriptors = [replace(d, release_bundle=replace(d.release_bundle,
+            source_contract_versions=("typedb-direct-typeql-rule-engine-v1", "fixture-preserved-contract")))
+            for d in platform.descriptors()]
+        platform.descriptors = lambda: descriptors
         result = platform.register_v2_release("v2-candidate", "release-candidate")
 
         self.assertEqual("registered", result["status"])
@@ -1191,6 +1197,10 @@ class ReasoningEngineVersionTests(unittest.TestCase):
         self.assertEqual("ontology-release-seed-artifact-v2", artifact["version"])
         self.assertEqual("fixed-input-runtime", artifact["releaseBundle"]["runtime_revision"])
         self.assertIn("reasoning-comparison-input-v6", artifact["releaseBundle"]["source_contract_versions"])
+        contracts = artifact["releaseBundle"]["source_contract_versions"]
+        self.assertIn(TYPEDB_NATIVE_RULE_ENGINE_VERSION, contracts)
+        self.assertIn("fixture-preserved-contract", contracts)
+        self.assertNotIn("typedb-direct-typeql-rule-engine-v1", contracts)
         self.assertEqual(
             "release-candidate",
             artifact["releaseBundle"]["release_id"],

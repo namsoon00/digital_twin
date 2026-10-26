@@ -40,7 +40,7 @@ class LocalGraphWriterGuard:
     generation manifests still remain short-lived and independently audited.
     """
 
-    contract_version = "local-typedb-single-writer-v3"
+    contract_version = "local-typedb-single-writer-v4"
 
     def __init__(
         self,
@@ -58,8 +58,10 @@ class LocalGraphWriterGuard:
         digest = hashlib.sha256(scope.encode("utf-8")).hexdigest()[:20]
         self.path = Path(lock_directory) / ("typedb-writer-" + digest + ".lock")
         self._priority_path = self.path.with_suffix(".priority")
+        self._turn_path = self.path.with_suffix(".turn")
         self._cooldown_path = self.path.with_suffix(".cooldown")
         self._priority_handle = None
+        self._turn_handle = None
         self._handle = None
         self._depth = 0
         self._acquired_at = ""
@@ -84,13 +86,18 @@ class LocalGraphWriterGuard:
                 "contractVersion": self.contract_version,
             }
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        # Delivery keeps a shared intent lock while waiting. Background writers
-        # only probe the exclusive side, so a waiting delivery gets the next turn.
-        priority = self._priority_handle or self._priority_path.open("a+")
+        # A granted background turn spans source preparation and native work.
+        # Delivery may reserve the NEXT turn while this turn is in progress,
+        # but must not repeatedly steal it when immutable source reads yield.
+        reserved_turn = self._turn_handle is not None
+        priority = None if reserved_turn else (
+            self._priority_handle or self._priority_path.open("a+")
+        )
         try:
-            fcntl.flock(priority.fileno(),
-                        (fcntl.LOCK_SH if self.role in {"delivery", "active"}
-                         else fcntl.LOCK_EX) | fcntl.LOCK_NB)
+            if priority is not None:
+                fcntl.flock(priority.fileno(),
+                            (fcntl.LOCK_SH if self.role in {"delivery", "active"}
+                             else fcntl.LOCK_EX) | fcntl.LOCK_NB)
         except BlockingIOError:
             priority.close()
             with self.path.open("a+", encoding="utf-8") as current:
@@ -99,13 +106,28 @@ class LocalGraphWriterGuard:
                     "owner": owner, "contractVersion": self.contract_version}
         if self.role in {"delivery", "active"}:
             self._priority_handle = priority
+        turn = self._turn_handle or self._turn_path.open("a+")
+        try:
+            fcntl.flock(turn.fileno(),
+                        (fcntl.LOCK_SH if self.role in {"delivery", "active"}
+                         else fcntl.LOCK_EX) | fcntl.LOCK_NB)
+        except BlockingIOError:
+            turn.close()
+            if self._priority_handle is None and priority is not None:
+                priority.close()
+            with self.path.open("a+", encoding="utf-8") as current:
+                owner = self._owner_payload(current)
+            return {"acquired": False, "status": "granted-turn-reserved",
+                    "owner": owner, "contractVersion": self.contract_version}
         handle = self.path.open("a+", encoding="utf-8")
         try:
             fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
             owner = self._owner_payload(handle)
             handle.close()
-            if self._priority_handle is None:
+            if not reserved_turn:
+                turn.close()
+            if self._priority_handle is None and priority is not None:
                 priority.close()
             return {
                 "acquired": False,
@@ -118,17 +140,23 @@ class LocalGraphWriterGuard:
                 "owner": owner,
                 "reason": "Another local process owns the TypeDB graph writer boundary.",
             }
-        if self._priority_handle is None:
+        if self._priority_handle is None and priority is not None:
             priority.close()
         cooldown = self._read_cooldown()
         remaining = min(120, max(0, float(cooldown.get("until") or 0) - time.time()))
         if remaining:
             handle.close()
+            if not reserved_turn:
+                turn.close()
             # Keep delivery's reservation across cooldown polls, so a faster
             # candidate poll cannot steal the first admissible recovery turn.
             return {"acquired": False, "status": "server-cooling-down",
                     "retryAfterSeconds": math.ceil(remaining),
                     "contractVersion": self.contract_version}
+        if self.role in {"delivery", "active"}:
+            turn.close()
+        else:
+            self._turn_handle = turn
         self._handle = handle
         self._depth = 1
         self._acquired_at = _utc_now_iso()
@@ -195,6 +223,7 @@ class LocalGraphWriterGuard:
             "lockPath": str(self.path),
             "lockScope": "server",
             "deliveryIntent": self._priority_handle is not None,
+            "grantedTurnReserved": self._turn_handle is not None,
             "serverBackoff": self._read_cooldown(),
         }
 
@@ -202,6 +231,9 @@ class LocalGraphWriterGuard:
         if self._priority_handle is not None:
             self._priority_handle.close()
             self._priority_handle = None
+        if self._turn_handle is not None:
+            self._turn_handle.close()
+            self._turn_handle = None
 
     def _read_cooldown(self):
         try:

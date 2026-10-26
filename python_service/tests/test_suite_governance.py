@@ -437,7 +437,9 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # Nine exact-routing, historical-input, review-reuse, resume/freshness,
         # citation-repair and measured-token/outcome separation regressions.
         # Seven filing-history, immutable focus/resume and partial-judgment contracts.
-        self.assertLessEqual(total, 2715)
+        # Ten granted-turn/crash, exact-native-witness and replay-packet
+        # integrity regressions for the candidate starvation/parity repair.
+        self.assertLessEqual(total, 2725)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

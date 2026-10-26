@@ -64,33 +64,37 @@ def payload_hash(value: object) -> str:
     return hashlib.sha256(canonical_json(value).encode("utf-8")).hexdigest()
 
 
-def frozen_projection_runtime_context(value: Mapping[str, object]) -> Dict[str, object]:
-    """Freeze only causal projection context and ontology-owned policy.
-
-    Runtime settings also contain database addresses and provider secrets.
-    Those values are neither investment facts nor valid shadow inputs, so the
-    durable replay packet keeps only keys consumed by ontology construction.
-    """
-
-    context = deepcopy(dict(value or {}))
+def _projection_runtime_context_view(value: Mapping[str, object]) -> Dict[str, object]:
+    """Secret-free read view, consumed synchronously by copying/serialization."""
+    context = dict(value or {})
     settings = context.get("settings")
     settings = dict(settings or {}) if isinstance(settings, Mapping) else {}
     context["settings"] = {
-        key: deepcopy(settings[key])
+        key: settings[key]
         for key in sorted(ONTOLOGY_RUNTIME_POLICY_SETTING_KEYS)
         if key in settings
     }
     return context
 
 
+def frozen_projection_runtime_context(value: Mapping[str, object]) -> Dict[str, object]:
+    """Freeze causal context, excluding connection settings and secrets.
+
+    Filter before copying; callers still own a fully isolated object tree.
+    """
+    return deepcopy(_projection_runtime_context_view(value))
+
+
 def pack_projection_runtime_contexts(
     values: Mapping[str, Mapping[str, object]],
 ) -> Dict[str, object]:
     contexts = {
-        str(account_id or ""): frozen_projection_runtime_context(context)
+        str(account_id or ""): _projection_runtime_context_view(context)
         for account_id, context in dict(values or {}).items()
         if str(account_id or "") and isinstance(context, Mapping)
     }
+    # Serialization already creates the immutable byte snapshot. Deep-copying
+    # the full temporal history first only duplicates work and memory.
     raw = canonical_json(contexts).encode("utf-8")
     if len(raw) > MAX_PROJECTION_RUNTIME_CONTEXT_BYTES:
         raise ValueError("Projection runtime context exceeds the immutable shadow input limit")
@@ -135,7 +139,9 @@ def unpack_projection_runtime_contexts(packet: Mapping[str, object]) -> Dict[str
     if not isinstance(decoded, dict):
         raise ValueError("Projection runtime context must contain an account map")
     contexts = {
-        str(account_id or ""): frozen_projection_runtime_context(context)
+        # json.loads produced a new privately owned tree. Sanitizing its
+        # settings needs no second deep copy of every historical observation.
+        str(account_id or ""): _projection_runtime_context_view(context)
         for account_id, context in decoded.items()
         if str(account_id or "") and isinstance(context, Mapping)
     }

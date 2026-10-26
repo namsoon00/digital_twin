@@ -14,7 +14,8 @@ from digital_twin.modules.reasoning.domain.reasoning_shadow import frozen_projec
 from digital_twin.modules.reasoning.domain.reasoning_shadow import pack_projection_runtime_contexts
 from typing import Mapping
 import time
-from .ports import ModelEvidenceInputs, PreparedGraphInput
+from .ports import ModelEvidenceInputs, ModelEvidenceResult, PreparedGraphInput
+from .temporal import temporal_feature_input_from_context
 from digital_twin.modules.reasoning.domain.projection_facts import rule_id_from_payload
 
 
@@ -67,6 +68,7 @@ def attach_model_evidence(
     input_symbols = prepared.computation_symbols
     runtime_context = prepared.runtime_context
     runtime_context_packet = prepared.runtime_context_packet
+    temporal_feature_input = temporal_feature_input_from_context(runtime_context)
     active_tbox = prepared.active_tbox
     statistical_scoring_required = bool(
         _inputs.statistical_signal_service
@@ -76,6 +78,9 @@ def attach_model_evidence(
         1 if statistical_scoring_required else 0
     )
     if statistical_scoring_required:
+        # Only this scoring attempt can attest to its feature input. A failed
+        # attempt must not inherit an identity from earlier runtime context.
+        temporal_feature_input = {}
         emit("statistical_signals.start", symbolCount=len(input_symbols))
         signal_started = time.perf_counter()
         statistical_signal_context = {}
@@ -140,9 +145,16 @@ def attach_model_evidence(
                     ),
                 },
             }
+            temporal_feature_input = temporal_feature_input_from_context(
+                statistical_signal_context
+            )
         except (
             Exception
         ) as error:  # noqa: BLE001 - fail closed: no model contract, no predictive rule.
+            runtime_context = {
+                key: value for key, value in runtime_context.items()
+                if key not in {"temporalFeatureSnapshot", "statisticalSignalSnapshot"}
+            }
             statistical_signal_context = {
                 "statisticalSignalPipeline": {
                     "status": "error",
@@ -246,4 +258,4 @@ def attach_model_evidence(
         except ValueError:
             runtime_context_packet = {}
 
-    return runtime_context_packet
+    return ModelEvidenceResult(runtime_context_packet, temporal_feature_input)

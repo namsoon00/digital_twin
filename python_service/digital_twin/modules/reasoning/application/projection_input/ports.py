@@ -221,6 +221,12 @@ class AssemblyInputs:
 
 
 @dataclass(frozen=True)
+class ModelEvidenceResult:
+    runtime_context_packet: Dict[str, object]
+    temporal_feature_input: Dict[str, object]
+
+
+@dataclass(frozen=True)
 class PreparedGraphInput:
     observation_input: Dict[str, object]
     input_mode: str

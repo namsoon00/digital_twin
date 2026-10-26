@@ -444,7 +444,9 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # history, legacy replay, same-source reinterpretation and send locking.
         # Three retained-input regressions cover authority changes during delivery,
         # cooldown/claim loss and unusable source rejection without a native wait.
-        self.assertLessEqual(total, 2740)
+        # Two replay-receipt regressions preserve temporal identity when the
+        # optional packet exceeds its limit and reject unbound cached context.
+        self.assertLessEqual(total, 2742)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

@@ -1,5 +1,26 @@
 # Reasoning Input Latency
 
+## Preserve executed temporal input identity (2026-10-26)
+
+A paired equity validation produced identical assembled and persisted facts,
+but was correctly rejected because both temporal feature receipts were absent.
+The graph assembly derived that small receipt from an optional replay packet;
+when the packet exceeded its existing size limit, it also lost the identity of
+the feature snapshot that scoring had actually consumed.
+
+Assembly now carries the exact scoring result's small feature receipt directly.
+Optional replay limits remain unchanged. A graph without an account-bound,
+verified replay context is not cached or reused. Failed scoring cannot inherit
+a previous feature identity, including through a subsequent cache hit. Complete
+source fallback and manifest repair replace the receipt with the identity of
+the graph actually used, or explicitly leave it absent when unavailable.
+
+This changes audit provenance, not native investment predicates, source clocks,
+immutable releases or comparison thresholds. Old incomplete comparisons remain
+rejected; promotion requires new valid evidence. Packet-size, invalid-cache,
+failed-scoring and fallback regressions exercise these boundaries without live
+delivery. A live paired comparison is still required after deploying the fix.
+
 ## Yield delivery priority while retaining prepared input (2026-10-26)
 
 The v4 turn reservation removed repeated candidate source reads but also blocked

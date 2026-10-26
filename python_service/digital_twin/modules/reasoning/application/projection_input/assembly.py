@@ -10,7 +10,6 @@ from .ports import AssemblyInputs
 from .capture import capture_graph_input
 from .cache_flow import load_cached_assembly, store_cached_assembly
 from .model_evidence import attach_model_evidence
-from .temporal import temporal_feature_input_from_packet
 from digital_twin.modules.reasoning.domain.projection_facts import (
     build_factual_graph,
     verify_calibration_lineage,
@@ -86,13 +85,11 @@ def build_graph_assembly(
         active_tbox,
         stage_timings,
     )
-    runtime_context_packet = attach_model_evidence(
+    model_evidence = attach_model_evidence(
         _inputs.model, prepared, snapshot, graph, rule_catalog, stage_timings, emit
     )
-    temporal_feature_input = temporal_feature_input_from_packet(
-        runtime_context_packet,
-        snapshot.account_id,
-    )
+    runtime_context_packet = model_evidence.runtime_context_packet
+    temporal_feature_input = model_evidence.temporal_feature_input
     emit(
         "ontology_graph.done",
         runtimeMs=int((time.perf_counter() - assembly_started) * 1000),
@@ -109,7 +106,9 @@ def build_graph_assembly(
 
     store_cached_assembly(
         _inputs.cache,
-        cache_enabled,
+        # A graph without its replay context cannot restore an input receipt
+        # on cache reuse. Oversized optional replay still permits this run.
+        cache_enabled and bool(runtime_context_packet),
         cache_key,
         graph,
         persistence_graph,

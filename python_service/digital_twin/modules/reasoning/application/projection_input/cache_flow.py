@@ -10,6 +10,18 @@ from .ports import CacheFlowInputs, PreparedGraphInput
 from .temporal import temporal_feature_input_from_packet
 
 
+def cached_account_context(result, account_id):
+    if result.get("status") != "hit":
+        return None
+    try:
+        context = unpack_projection_runtime_contexts(
+            result.get("runtimeContextPacket") or {}
+        ).get(account_id)
+    except ValueError:
+        return None
+    return context if isinstance(context, dict) else None
+
+
 def load_cached_assembly(
     _inputs: CacheFlowInputs,
     prepared: PreparedGraphInput,
@@ -41,18 +53,10 @@ def load_cached_assembly(
         runtimeMs=stage_timings["graphAssemblyCacheReadMs"],
         status=str(cache_result.get("status") or ""),
     )
-    if str(cache_result.get("status") or "") == "hit":
+    cached_context = cached_account_context(cache_result, snapshot.account_id)
+    if cached_context is not None:
         runtime_context_packet = cache_result.get("runtimeContextPacket") or {}
-        try:
-            cached_contexts = unpack_projection_runtime_contexts(
-                runtime_context_packet
-            )
-            if snapshot.account_id in cached_contexts:
-                _inputs.last_runtime_contexts[snapshot.account_id] = cached_contexts[
-                    snapshot.account_id
-                ]
-        except ValueError:
-            pass
+        _inputs.last_runtime_contexts[snapshot.account_id] = cached_context
         return (
             cache_result["graph"],
             cache_result["persistenceGraph"],
@@ -85,15 +89,14 @@ def load_cached_assembly(
     stage_timings["graphAssemblyPersistentCacheReadMs"] = int(
         (time.perf_counter() - persistent_cache_started) * 1000
     )
-    stage_timings["graphAssemblyPersistentCacheHit"] = (
-        1 if str(persistent_cache_result.get("status") or "") == "hit" else 0
-    )
+    cached_context = cached_account_context(persistent_cache_result, snapshot.account_id)
+    stage_timings["graphAssemblyPersistentCacheHit"] = int(cached_context is not None)
     emit(
         "persistent_cache.done",
         runtimeMs=stage_timings["graphAssemblyPersistentCacheReadMs"],
         status=str(persistent_cache_result.get("status") or ""),
     )
-    if str(persistent_cache_result.get("status") or "") == "hit":
+    if cached_context is not None:
         graph = persistent_cache_result["graph"]
         persistence_graph = persistent_cache_result["persistenceGraph"]
         runtime_context_packet = (
@@ -106,16 +109,7 @@ def load_cached_assembly(
             _inputs.graph_assembly_cache_max_entries(),
             runtime_context_packet,
         )
-        try:
-            cached_contexts = unpack_projection_runtime_contexts(
-                runtime_context_packet
-            )
-            if snapshot.account_id in cached_contexts:
-                _inputs.last_runtime_contexts[snapshot.account_id] = cached_contexts[
-                    snapshot.account_id
-                ]
-        except ValueError:
-            pass
+        _inputs.last_runtime_contexts[snapshot.account_id] = cached_context
         return (
             deepcopy(graph),
             deepcopy(persistence_graph),

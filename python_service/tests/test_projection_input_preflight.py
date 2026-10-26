@@ -131,9 +131,21 @@ class ProjectionInputPreflightTests(unittest.TestCase):
         kwargs["_store"].build_projection_graph.assert_called_once()
 
     def _assert_post_assembly_safety_rejection_still_rebuilds_complete_source(self):
-        result, kwargs, _ = self.assemble(ready_manifest(), eligible=False)
-        selected = self.select(result, kwargs)
-        self.assertEqual(2, kwargs["_store"].build_projection_graph.call_count)
-        self.assertEqual("full", selected.material_fingerprint)
-        self.assertTrue(result.graph_input["fallback"])
-        self.assertEqual(1, kwargs["runtime_stages"]["targetScopedInputFallback"])
+        for receipt in ({"snapshotId": "feature:full", "payloadHash": "full"}, {}):
+            result, kwargs, _ = self.assemble(ready_manifest(), eligible=False)
+            result.graph_input["temporalFeatureInput"] = {"snapshotId": "feature:scoped"}
+            build = kwargs["_store"].build_projection_graph
+            original_build = build.side_effect
+
+            def full_build(*args, **options):
+                rebuilt = original_build(*args, **options)
+                rebuilt["assembly"]["temporalFeatureInput"] = receipt
+                return rebuilt
+
+            build.side_effect = full_build
+            selected = self.select(result, kwargs)
+            self.assertEqual(2, build.call_count)
+            self.assertEqual("full", selected.material_fingerprint)
+            self.assertTrue(result.graph_input["fallback"])
+            self.assertEqual(receipt, result.graph_input["temporalFeatureInput"])
+            self.assertEqual(1, kwargs["runtime_stages"]["targetScopedInputFallback"])

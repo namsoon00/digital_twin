@@ -21,6 +21,12 @@ def temporal_feature_input_from_packet(packet, account_id: str) -> Dict[str, obj
     except ValueError:
         return {}
     context = dict(contexts.get(str(account_id or "")) or {})
+    return temporal_feature_input_from_context(context)
+
+
+def temporal_feature_input_from_context(context) -> Dict[str, object]:
+    """Keep the small input receipt independent of optional replay serialization."""
+
     snapshot = dict(context.get("temporalFeatureSnapshot") or {})
     snapshot_id = str(snapshot.get("snapshotId") or "").strip()
     payload_hash = str(snapshot.get("payloadHash") or "").strip()

@@ -299,6 +299,22 @@ class InternalManifestTests(unittest.TestCase):
         )
         self.assertEqual(3, fixture.kwargs["runtime_stages"]["targetManifestRepairInputAssemblyMs"])
         self.assertEqual(fixture.original_active, fixture.active)
+        # The audit must describe the replacement graph, never the discarded
+        # scoped attempt. Missing replacement identity must stay missing.
+        for receipt in ({"snapshotId": "feature:repair", "payloadHash": "repair"}, {}):
+            fixture = ManifestFixture()
+            fixture.merge_results = [{"status": "missing-endpoint"}, fixture.default_applied]
+            fixture.kwargs["graph_input"]["temporalFeatureInput"] = {"snapshotId": "feature:scoped"}
+            original_build = fixture.build_projection_graph
+
+            def repaired_build(*args, **options):
+                rebuilt = original_build(*args, **options)
+                rebuilt["assembly"]["temporalFeatureInput"] = receipt
+                return rebuilt
+
+            fixture.build_projection_graph = repaired_build
+            fixture.run()
+            self.assertEqual(receipt, fixture.kwargs["graph_input"]["temporalFeatureInput"])
 
     def test_blocked_local_patch_never_falls_through_to_full_publication(self):
         for requires_source in (False, True):

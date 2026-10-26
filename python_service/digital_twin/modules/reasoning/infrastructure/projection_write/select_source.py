@@ -135,6 +135,9 @@ def select_source(
                 "externalSignalProjection": dict(
                     graph_assembly.get("externalSignalProjection") or {}
                 ),
+                "temporalFeatureInput": dict(
+                    graph_assembly.get("temporalFeatureInput") or {}
+                ),
                 "fallback": True,
                 "fallbackReason": str(
                     target_scoped_patch.get("fallbackReason")

@@ -109,6 +109,20 @@ class NotificationRenderingService:
         warnings = []
         if self.context_enricher:
             self.context_enricher(job)
+        if job.message_type == "marketObservation":
+            from digital_twin.modules.notifications.domain.price_current_snapshot import price_current_content
+            try:
+                content = price_current_content(job.context, job.account_id, job.context.get("symbol"))
+            except (KeyError, TypeError, ValueError, AttributeError) as error:
+                warnings.append("price-snapshot-fallback:" + type(error).__name__)
+                content = None
+            if content:
+                job.context["notificationContent"] = content
+                job.context["priceCurrentPresentationVersion"] = content["version"]
+                detail_context = {**job.context, "notificationContent": price_current_content(
+                    job.context, job.account_id, job.context.get("symbol"), detail=True)}
+                detail_context.pop("priceCurrentPresentationVersion", None)
+                job.context["priceCurrentDetailText"] = present_notification(job.message_type, detail_context, "")
         try:
             self.apply_investment_presentation_contract(job)
         except (KeyError, TypeError, ValueError, AttributeError) as error:
@@ -152,7 +166,7 @@ class NotificationRenderingService:
             rendered = (render_customer_investment_document(compact_document)
                         if compact_document and compact_document.layout == "compact-rulebox-v1"
                         else present_notification(job.message_type, context, rendered))
-            if context.get("ruleNoticeEvidenceQuality"):
+            if context.get("ruleNoticeEvidenceQuality") or context.get("priceCurrentPresentationVersion"):
                 context["telegramMessage"] = rendered
                 context["readableMessage"] = html.unescape(re.sub(r"<[^>]+>", "", rendered))
             quality_issues = customer_text_quality_issues(rendered) if is_investment else []

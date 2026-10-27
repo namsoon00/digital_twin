@@ -4,6 +4,26 @@ The notification module owns templates and delivery, not investment analysis.
 TypeDB and AI own the upstream facts, interpretation and final action. A missing
 decision does not mean HOLD. Writing prose with AI does not grant action authority.
 
+## Price and relationship message roles (2026-10-27)
+
+- Price changes carry `price-current-snapshot-v1`: an allowlisted, frozen copy of
+  the position that triggered the event, with current quote, holding P/L, investor
+  flows, executions/order book, volume pace and moving-average distances. Each
+  source retains its own observation time and missing/unsupported status. The
+  final transport renders this copy, even when a saved template is brief.
+- Relationship changes carry `relation-notice-focus-v1`: selected changed rules,
+  their original measurements, before/after values and thresholds, the saved
+  combined judgment and continuing restrictions. Unchanged market data remains
+  in the detail document; price/P&L in the short message is reference context.
+- An unchanged restriction is shown under “계속 적용되는 조건”, separately from
+  the rule that caused delivery. Two rules using the same measurement retain
+  their distinct thresholds. A model rule's own confirmation inputs remain
+  attached to that rule; unrelated rule inputs do not become delivery causes.
+- Rendering performs no market fetch, AI call or investment inference. Triggers,
+  cooldowns and successful-receipt baselines are unchanged. Old jobs without a
+  current-data snapshot use their existing body. Partial deliveries and explicit
+  original replays preserve the already-sent text.
+
 ## Input
 
 `NotificationRequest.from_dict` accepts a small envelope plus free text. Optional

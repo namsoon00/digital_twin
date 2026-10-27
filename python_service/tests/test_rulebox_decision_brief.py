@@ -831,7 +831,7 @@ class ManagementObservationFlowChecks(unittest.TestCase):
         self.assertIsNone(case.final_decision)
         self.assertEqual((), case.candidate_set.eligible_hypothesis_ids)
         body = NotificationRenderingService().render(queue.job)
-        for phrase in ('계좌 비중을 설정 상한 이내로 조정', '78.45%', '45%', '알림 이유', '핵심 수치', '다음 확인'):
+        for phrase in ('계좌 비중을 설정 상한 이내로 조정', '78.45%', '45%', '알림 이유', '변경 근거 수치', '달라진 규칙', '다음 확인'):
             self.assertIn(phrase, body)
         self.assertLessEqual(len([line for line in body.splitlines() if line.strip()]), 9)
         self.assertTrue(queue.job.context['relationChangeEvidence']['eligible'])

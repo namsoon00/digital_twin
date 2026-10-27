@@ -3,6 +3,7 @@
 from digital_twin.modules.notifications.domain.observation_market_snapshot import decimal, numeric
 from digital_twin.modules.notifications.domain.relation_change_presentation import FIELDS, OPERATORS, measurement
 from digital_twin.modules.model_registry.contracts import verified_measurement_packet
+from digital_twin.modules.notifications.domain.relation_notice_focus import notice_rule_ids
 
 
 MEASURES = {
@@ -70,9 +71,9 @@ def _display_field(row):
     return field
 
 
-def exact_measurements(current, previous, events, currency, limit=4, *, cause_only=False):
+def exact_measurements(current, previous, events, currency, limit=4, *, cause_only=False, rule_labels=None):
     now, old = saved_composition(current), saved_composition(previous)
-    causes = {rid for event in events for rid in event.get("sourceRuleIds") or []}
+    causes = {rid for event in events for rid in (notice_rule_ids(event) if cause_only else event.get("sourceRuleIds") or [])}
     strategy_only = bool(events) and all(e.get("strategyPhases") for e in events)
     before = {}
     for group, packet in _groups(old):
@@ -115,6 +116,14 @@ def exact_measurements(current, previous, events, currency, limit=4, *, cause_on
             # Show one source value once. Each rule's distinct threshold remains
             # in its full receipt; the displayed threshold belongs to this row.
             semantic = (field, row.get("evidenceId"), _context(row), value)
+            if rule_labels is not None:
+                # Distinct triggering rules may use the same observation with
+                # different boundaries. Neither threshold may erase the other.
+                semantic += (group["ruleId"], row.get("conditionId"), row.get("operator"), expected)
+                rid = next((rid for rid in [group["ruleId"], *group.get("nativeRuleIds", [])]
+                            if rid in causes and rule_labels.get(rid)), None)
+                if rid and rule_labels[rid] != rid:
+                    text = str(rule_labels[rid]) + ": " + text
             field_order = list(MEASURES).index(field)
             if strategy_only and field in {"foreignNetVolume", "institutionNetVolume", "smartMoneyNetVolume", "tradeStrength", "bidAskImbalance"}:
                 field_order -= len(MEASURES)

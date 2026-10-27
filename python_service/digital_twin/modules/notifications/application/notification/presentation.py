@@ -68,6 +68,11 @@ def present_notification(message_type, context, text) -> str:
         link = content_body({"links": [{"url": detail_url, "label": "상세 기업 보고서 · 실적과 원문 근거"}]})
         if link:
             body += "\n\n" + link
+    if context.get("priceCurrentPresentationVersion"):
+        detail_url = _text(context.get("notificationDetailUrl"))
+        link = content_body({"links": [{"url": detail_url, "label": "관측 데이터와 계산 근거 보기"}]})
+        if link:
+            body += "\n\n" + link
     lines = body.splitlines()
     notices = []
     while lines and _plain(lines[0]).startswith(("🧪 테스트 알림", "[재발송]", "[검증]")):

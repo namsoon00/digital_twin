@@ -10,6 +10,7 @@ from digital_twin.modules.notifications.domain.relation_observation_proof import
 from digital_twin.modules.notifications.domain.rule_event_presentation import ACTION_LABELS, event_conclusion, qualification_notice
 from digital_twin.modules.notifications.domain.rule_policy_lifecycle import release_conclusion
 from digital_twin.modules.notifications.domain.rule_notice_evidence import bind_policy_notice
+from digital_twin.modules.notifications.domain.relation_notice_focus import focus_relation_notice, notice_rule_ids
 
 
 from digital_twin.modules.notifications.domain.composed_rule_presentation import (
@@ -17,7 +18,7 @@ from digital_twin.modules.notifications.domain.composed_rule_presentation import
 )
 
 
-VERSION = "compact-rulebox-v6"
+VERSION = "compact-rulebox-v7"
 
 
 def _unique(values):
@@ -101,10 +102,9 @@ def _measurements(current, previous, judgment, events, currency, transitions):
         for rid in event.get('sourceRuleIds') or []:
             if rid not in before_rules and event.get('previousConditions'):
                 before_rules[rid] = {'conditions': event['previousConditions']}
-    cause_ids = {rid for e in events for rid in e.get("sourceRuleIds") or []}
+    cause_ids = {rid for e in events for rid in notice_rule_ids(e)}
     strategy_ids = {rid for e in events if e.get("strategyPhases") for rid in e.get("sourceRuleIds") or []}
-    hypothesis_only = bool(events) and all(e.get("purpose") == "hypothesis-evidence" for e in events)
-    used = cause_ids if hypothesis_only else cause_ids | set(judgment.get("sourceRuleIds") or [])
+    used = cause_ids
     changed, unchanged, reference = [], [], []
     for event in events:
         if not event.get('contextState'):
@@ -151,15 +151,17 @@ def _measurements(current, previous, judgment, events, currency, transitions):
                     if key not in seen:
                         seen.add(key)
                         (changed if '→' in text else unchanged).append('규칙 입력: ' + text)
-            if field not in FIELDS or numeric(actual) is None or field in seen:
+            condition_key = (rule.get("id"), condition.get("conditionId"), field)
+            if field not in FIELDS or numeric(actual) is None or condition_key in seen:
                 continue
-            seen.add(field)
+            seen.add(condition_key)
             old = [c for c in before_rules.get(rule.get("id"), {}).get("conditions", [])
                    if c.get("field") == field and c.get("conditionId") == condition.get("conditionId")]
             older = old[0].get("observedValue") if len(old) == 1 else None
             is_cause = rule.get("id") in cause_ids
             has_change = is_cause and numeric(older) is not None and older != actual
-            text = ("" if is_cause else "현재 판단 참고: ") + FIELDS[field][0] + " "
+            label = rule.get("label") if rule.get("label") != rule.get("id") else ""
+            text = (str(label) + ": " if label else "") + FIELDS[field][0] + " "
             text += (value_text(field, older) + " → " if has_change else "현재 ")
             text += value_text(field, actual)
             saved = condition.get("resolvedThreshold") or {}
@@ -176,11 +178,11 @@ def _measurements(current, previous, judgment, events, currency, transitions):
     # Native policy responses carry their exact objective and bound values,
     # even when an old receipt did not keep condition detail.
     for response in (judgment.get("managementDecision") or {}).get("responses", []):
-        if hypothesis_only and response.get("ruleId") not in cause_ids:
+        if response.get("ruleId") not in cause_ids:
             continue
         objective = response.get("objective") or {}
         field = objective.get("field")
-        if field in FIELDS and field not in seen:
+        if field in FIELDS and not any(isinstance(key, tuple) and key[0] == response.get("ruleId") and key[-1] == field for key in seen):
             is_cause = response.get("ruleId") in cause_ids
             (unchanged if is_cause else reference).append(("" if is_cause else "현재 판단 참고: ")
                              + FIELDS[field][0] + " 현재 " + value_text(field, response.get("observedValue"))
@@ -188,7 +190,7 @@ def _measurements(current, previous, judgment, events, currency, transitions):
                              + " " + {"<=": "이하", ">=": "이상"}.get(objective.get("operator"), ""))
     policy_values = []
     for response in (judgment.get("managementDecision") or {}).get("responses") or []:
-        if hypothesis_only and response.get("ruleId") not in cause_ids:
+        if response.get("ruleId") not in cause_ids:
             continue
         objective = response.get("objective") or {}
         field = objective.get("field")
@@ -197,11 +199,12 @@ def _measurements(current, previous, judgment, events, currency, transitions):
                 + " / 해제 기준 " + value_text(field, response["targetValue"]) + " "
                 + {"<=": "이하", ">=": "이상", "<": "미만", ">": "초과"}.get(objective.get("operator"), ""))
     exact = exact_measurements(judgment, (previous.get("decisionBrief") or {}).get("judgment") or {},
-                               events, currency, limit=max(2, 4 - len(policy_values)))
+                               events, currency, limit=max(2, 4 - len(policy_values)), cause_only=True,
+                               rule_labels={r.get("id"): r.get("label") for r in current.get("rules") or []})
     if exact:
         return "\n".join(exact + policy_values[:2])
     result = _unique(changed + unchanged + reference)
-    return " · ".join(result[:3]) if result else "조건 변화는 확인됐지만 직접 비교할 측정값이 보존되지 않았습니다. 상세 근거를 확인해 주세요."
+    return "\n".join(result[:3]) if result else "조건 변화는 확인됐지만 직접 비교할 측정값이 보존되지 않았습니다. 상세 근거를 확인해 주세요."
 
 
 def _comparison(judgment, current, events):
@@ -297,7 +300,7 @@ def compact_rulebox_summary(packet):
     strategy_events = [e for e in events if e.get("strategyPhases")]
     strategy = strategy_summary(packet, market, _measurements(current, previous, judgment, strategy_events, currency, packet.get("transitions") or [])) if strategy_events else None
     if strategy:
-        return bind_policy_notice(strategy, packet)
+        return focus_relation_notice(bind_policy_notice(strategy, packet), packet)
     released_lead = release_conclusion(packet)
     lead = released_lead or _conclusion(judgment, events)
     impact = ((packet.get('policyLifecycle') or {}).get('decisionImpact') or {}) if judgment else {}
@@ -366,9 +369,9 @@ def compact_rulebox_summary(packet):
     # Separate rows survive the shared customer-language normalizer, which
     # deliberately folds whitespace inside a single prose row.
     measurement_rows = ([target_text] if target_text else []) + measurements.splitlines()
-    return bind_policy_notice({"version": VERSION, "lead": lead, "judgment": judgment, "decisionImpact": impact,
+    return focus_relation_notice(bind_policy_notice({"version": VERSION, "lead": lead, "judgment": judgment, "decisionImpact": impact,
         "sections": [("notification-purpose", "알림 이유", [purpose]),
                      ("decision-impact", "핵심 수치", measurement_rows),
                      ("decision-basis", "함께 보면", [together]),
                      ("current-snapshot", "현재", [market]),
-                     ("next-check-contract", "다음 확인", [next_text])]}, packet)
+                     ("next-check-contract", "다음 확인", [next_text])]}, packet), packet)

@@ -88,7 +88,7 @@ def price_movement_lines(movement, currency, source, session, effect):
     return result
 
 
-def price_context_lines(context, currency, *, compact=False, window_minutes=None):
+def price_context_lines(context, currency, *, compact=False, window_minutes=None, include_comparisons=True):
     """Render only frozen facts, without reconstructing old alerts from live quotes."""
     if context.get("version") != "price-context-v1" or context.get("status") != "available":
         return []
@@ -117,6 +117,8 @@ def price_context_lines(context, currency, *, compact=False, window_minutes=None
         result.append("직전 관측 가격 범위 " + amount_text(prior["low"], currency) + "~" + amount_text(prior["high"], currency)
                       + (" 위로 이동" if prior["break"] == "above" else " 아래로 이동")
                       + " (" + kst_timestamp(prior["startAt"], "%H:%M") + "~" + kst_timestamp(prior["endAt"], "%H:%M KST") + ")")
+    if not include_comparisons:
+        return result
     comparisons = [row for row in context.get("comparisons") or []
                    if window_minutes is None or row["windowMinutes"] == window_minutes]
     available = [row for row in comparisons if row.get("status") == "available"]

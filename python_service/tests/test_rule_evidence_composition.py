@@ -366,8 +366,16 @@ class RuleEvidenceCompositionTests(unittest.TestCase):
                 self.assertIn("45% 이하", sections["next-check-contract"])
                 self.assertIn("0%", sections["next-check-contract"])
                 self.assertIn("각각 확인", sections["next-check-contract"])
-            self.assertIn("미국 10년 국채 금리", sections["decision-impact"])
-            self.assertIn("IEF", sections["decision-impact"])
+            if events:
+                self.assertIn("미국 10년 국채 금리", sections["decision-impact"])
+                # The rate rule itself requires relative resilience at +1%p.
+                # Keep that input, but exclude the other rule's +2%p threshold.
+                self.assertIn("IEF", sections["decision-impact"])
+                self.assertIn("기준 +1%p 이상", sections["decision-impact"])
+                self.assertNotIn("기준 +2%p 이상", sections["decision-impact"])
+            else:
+                self.assertNotIn("미국 10년 국채 금리", sections["decision-impact"])
+                self.assertNotIn("IEF", sections["decision-impact"])
             if events:
                 self.assertIn("금리 변화", sections["next-check-contract"])
                 self.assertNotIn("45%", sections["next-check-contract"])
@@ -384,7 +392,5 @@ class RuleEvidenceCompositionTests(unittest.TestCase):
             ))
             rendered = render_customer_investment_document(document)
             numeric_rows = next(s.rows for s in document.sections if s.key == "decision-impact")
-            expected_rows = 3 if events else 4
-            self.assertEqual(expected_rows, len(numeric_rows))
-            self.assertEqual(expected_rows, len([line for line in rendered.splitlines() if line.startswith("• ")]))
-            self.assertTrue(any("IEF" in line for line in rendered.splitlines() if line.startswith("• ")))
+            self.assertEqual(2 if events else 1, len(numeric_rows))
+            self.assertEqual(bool(events), any("IEF" in line for line in numeric_rows))

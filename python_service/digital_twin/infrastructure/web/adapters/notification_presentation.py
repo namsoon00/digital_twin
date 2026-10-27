@@ -492,10 +492,13 @@ def notification_job_public_payload(
         report = context.get("companyChangeReport")
         if isinstance(report, dict):
             payload["companyChangeReport"] = report
+        if (detail or include_detail_document) and presentation_context.get("priceCurrentDetailText"):
+            payload["fullText"] = full_notification_text(presentation_context["priceCurrentDetailText"])
     if detail:
         payload["relationChangeEvidence"] = dict(context.get("relationChangeEvidence") or {})
         configured_settings = configured_settings or operational_read_settings()
-        payload["fullText"] = full_notification_text(presentation_context.get("customerInvestmentDetailText") or customer_text)
+        payload["fullText"] = full_notification_text(presentation_context.get("customerInvestmentDetailText")
+            or presentation_context.get("priceCurrentDetailText") or customer_text)
         payload["actionFlow"] = notification_action_flow(context)
         # The trace is rebuilt from the immutable context captured with this
         # job, never from the currently active graph generation.

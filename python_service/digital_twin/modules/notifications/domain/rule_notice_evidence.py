@@ -88,6 +88,8 @@ def policy_notice_evidence(packet):
                 row = _measurement(rid, condition, _rows(event.get("previousConditions")), "cause", currency)
                 if row:
                     row.update(eventId=event.get("eventId"), policyState=event.get("policyState"))
+                    if rule.get("label") and rule["label"] != rid:
+                        row["text"] = rule["label"] + " · " + row["text"]
                     rows.append(row)
             responses = [r for r in _rows(management.get("resolutions" if released else "responses")) if r.get("ruleId") == rid]
             # A native resolution and its condition must describe the same fact.
@@ -140,7 +142,8 @@ def bind_policy_notice(summary, packet):
     result = deepcopy(summary)
     result["evidenceContract"] = evidence
     sections = {key: (title, list(rows)) for key, title, rows in result["sections"]}
-    required = [r["text"] for r in evidence["measurements"]]
+    required = [r["text"] for r in evidence["measurements"] if r["role"] == "cause"]
+    remaining = [r["text"] for r in evidence["measurements"] if r["role"] == "remaining"]
     # A simultaneous market event keeps its own proven measurements, clearly
     # separate from the policy cause. Unrelated reference groups stay in detail.
     other_events = [e for e in _rows(packet.get("customerEvents")) if not e.get("policyState")]
@@ -152,6 +155,8 @@ def bind_policy_notice(summary, packet):
     # Keep every cause and remaining restriction, even when several use the
     # same field. A reference measurement is never a substitute for a cause.
     sections["decision-impact"] = ("핵심 수치", required or ["판정에 사용한 비교값과 기준이 보존되지 않아 확인이 필요합니다."])
+    if remaining:
+        sections["remaining-policy"] = ("계속 적용되는 조건", remaining)
     if evidence["status"] != "complete":
         result["lead"] = "관리 조건 변경의 근거를 확인해야 합니다."
         sections["notification-purpose"] = ("알림 이유", ["저장된 판정과 직접 비교 근거를 함께 확인할 수 없어 변경 내용을 확정해서 안내할 수 없습니다."])

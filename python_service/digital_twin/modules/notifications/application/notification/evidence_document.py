@@ -24,20 +24,21 @@ def enforce_policy_evidence_document(context, document):
     # Normalize each mandatory row independently. The generic preview's
     # eight-row limit and punctuation-insensitive dedupe cannot erase a sign,
     # a second rule's threshold, or the ninth required comparison.
-    mandatory = []
+    mandatory = {"decision-impact": [], "remaining-policy": []}
     for row in contract["measurements"]:
+        key = "remaining-policy" if row["role"] == "remaining" else "decision-impact"
         one = normalized_customer_investment_document(replace(source,
-            sections=(CustomerInvestmentSection("decision-impact", "핵심 수치", (row["text"],)),)))
-        mandatory.extend(one.sections[0].rows if one.sections else ())
-    if mandatory:
+            sections=(CustomerInvestmentSection(key, "비교 수치", (row["text"],)),)))
+        mandatory[key].extend(one.sections[0].rows if one.sections else ())
+    if any(mandatory.values()):
         extras = next((rows for key, _, rows in summary['sections'] if key == 'decision-impact'), [])
         reference = [row for row in extras if row.startswith('함께 바뀐 근거: ')]
         for text in reference:
             one = normalized_customer_investment_document(replace(source,
                 sections=(CustomerInvestmentSection("decision-impact", "핵심 수치", (text,)),)))
-            mandatory.extend(one.sections[0].rows if one.sections else ())
-        expected = replace(expected, sections=tuple(replace(s, rows=tuple(mandatory))
-            if s.key == "decision-impact" else s for s in expected.sections))
+            mandatory["decision-impact"].extend(one.sections[0].rows if one.sections else ())
+        expected = replace(expected, sections=tuple(replace(s, rows=tuple(mandatory[s.key]))
+            if mandatory.get(s.key) else s for s in expected.sections))
     issues = []
     if not document or document.lead != expected.lead:
         issues.append("policy-conclusion-mismatch")

@@ -453,7 +453,8 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # Six external-influence contracts cover bounded reads, original source
         # and company exposure, scoped research, review/memory, legacy wake
         # isolation, and persisted delivery receipts without paid model calls.
-        self.assertLessEqual(total, 2765)
+        # Six producer-to-transport, frozen scope and rule-cause presentation regressions.
+        self.assertLessEqual(total, 2771)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

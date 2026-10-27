@@ -785,7 +785,9 @@ def customer_investment_document_quality(
         for key in ("notification-purpose", "decision-impact", "decision-basis", "current-snapshot", "next-check-contract"):
             if key not in section_keys:
                 issues.append("missing-observation-" + key)
-        if len(document.sections) > 5:
+        # Rule transitions and continuing restrictions have distinct roles;
+        # neither is another current-market-data section.
+        if len([s for s in document.sections if s.key not in {"changed-rules", "remaining-policy"}]) > 5:
             issues.append("compact-observation-too-many-sections")
     if "next-update" not in section_keys and not compact:
         issues.append("missing-next-update")

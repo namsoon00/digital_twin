@@ -9,6 +9,46 @@ Question-specific collection failures and bounded, same-revision focused reads
 follow the [source recovery contract](source-recovery.md). Diagnostics return to
 the original question and next plan without changing past answers or eligibility.
 
+## External events and company influence
+
+New company `market-observe` runs with question-purpose support also freeze
+`external-company-influence-v1`: retrieval v17, author v31, repair v27 and
+customer review v20. Research-only runs and older immutable inputs retain
+their constructors. The policy is attached in `application/control.py`; its
+prompt, structured fields and validation live in `domain/external_influence.py`.
+
+The author can record at most two `externalInfluences`: geopolitics, interest
+rates, currency, policy/elections, trade/tariffs, commodities, supply chain,
+technology, competition, disasters or another relevant category. This is an
+extensible analysis scope, not a claim to collect every global event. The
+reader uses the existing bounded macro, company and original-document
+inventory. It does not scan every category or add a separate model stage.
+
+Each path binds current event evidence to company exposure evidence, a possible
+transmission mechanism, horizon, assumptions and counter-evidence. References
+must identify usable fields in the captured graph packet; titles, identifiers,
+AI analyses and price co-movement cannot stand in for event/exposure evidence.
+`conditional` means a source-backed scenario, not verified causality or an
+investment action. It must be explained and cited in the existing summary or
+hypothesis. `unconfirmed` requires explicit missing evidence and limitations;
+its event references cannot authorize a new notification. Other independently
+supported explanations can still proceed. The independent reviewer checks the
+actual delivery text against these paths before publication.
+
+Important gaps link to the existing `questions` / `questionPurposes` contract
+and its original-source collection, without increasing the two-question limit
+or resetting repeat/attempt controls. Existing source collection (including
+bounded web/original-document reads) must project newly acquired facts through
+the ontology before the targeted evidence wake resumes observation. There is
+no new unrestricted crawler, global subject fan-out or RuleBox mutation.
+
+Paths survive in analysis memory and receipt-backed delivery history as prior
+interpretations. Later observations must recheck their current sources and
+explain meaningful changes. The narrative digest includes the paths, so changes
+after review invalidate publication. Existing freshness-by-purpose checks,
+cooldowns, quotas and cross-route delivery comparison still apply. The feature
+does not change model/token budgets or establish analytical accuracy.
+
 ## Company research cycle
 
 Company research with `question-answer-parts-v1` now freezes

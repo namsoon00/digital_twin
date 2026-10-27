@@ -450,7 +450,10 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # independent review, immutable inputs and atomic child scheduling.
         # Purpose/evidence lineage, split review admission and atomic question continuation
         # protect eight additional production boundaries without paid model tests.
-        self.assertLessEqual(total, 2759)
+        # Six external-influence contracts cover bounded reads, original source
+        # and company exposure, scoped research, review/memory, legacy wake
+        # isolation, and persisted delivery receipts without paid model calls.
+        self.assertLessEqual(total, 2765)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

@@ -41,6 +41,9 @@ def validate(packet):
 
 
 def author_version(packet):
+    from . import external_influence_prompt
+    if external_influence_prompt.enabled(packet):
+        return external_influence_prompt.PROMPT_VERSION
     from . import question_purpose_prompt
     if question_purpose_prompt.enabled(packet):
         return question_purpose_prompt.PROMPT_VERSION
@@ -69,6 +72,9 @@ def author_version(packet):
 
 
 def repair_version(packet):
+    from . import external_influence_prompt
+    if external_influence_prompt.enabled(packet):
+        return external_influence_prompt.REPAIR_VERSION
     from . import question_purpose_prompt
     if question_purpose_prompt.enabled(packet):
         return question_purpose_prompt.REPAIR_VERSION
@@ -97,6 +103,9 @@ def repair_version(packet):
 
 
 def review_version(packet):
+    from . import external_influence_prompt
+    if external_influence_prompt.enabled(packet):
+        return external_influence_prompt.REVIEW_VERSION
     from . import question_purpose_prompt
     if question_purpose_prompt.enabled(packet):
         return question_purpose_prompt.REVIEW_VERSION

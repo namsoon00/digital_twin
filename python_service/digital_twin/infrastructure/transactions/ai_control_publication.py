@@ -246,6 +246,8 @@ class AIControlPublication:
                 job.context["aiControlDeliverySnapshot"].update(
                     notificationContribution=result["notificationContribution"],
                     deliveredContextFingerprint=packet["deliveredNotificationContext"]["fingerprint"])
+            if "externalInfluences" in result:
+                job.context["aiControlDeliverySnapshot"]["externalInfluences"] = result["externalInfluences"]
             if "companyValue" in result:
                 job.context["aiControlDeliverySnapshot"]["companyValue"] = result["companyValue"]
             if "quoteAssessment" in packet:

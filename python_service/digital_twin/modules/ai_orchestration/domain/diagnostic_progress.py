@@ -68,8 +68,12 @@ def progress_state(task, delivery=None, receipt=None):
     if result.get("status") == "retired":
         return {**base, "stage": "closed", "terminal": True, "reasons": ["현재 관찰 대상에서 제외되어 이 초안의 후속 확인을 종료했습니다."]}
     if result.get("notification", {}).get("send") is False:
-        return {**base, "stage": "closed", "terminal": True, "reasons": [
-            "후속 분석은 마쳤지만 새로 전달할 해석이 없어 정식 알림을 보내지 않았습니다. 원본 초안을 승인한 것은 아닙니다."]}
+        from .observation_abstention import assessment
+        held = assessment(result)
+        closed = held["reasonCode"] in {"repetition", "no-material-change"}
+        return {**base, "stage": "closed" if closed else "waiting", "terminal": closed,
+                "reasonCode": held["reasonCode"], "reasons": [held["reason"]],
+                "resumeCondition": "새 원천 자료, 검증된 조건 변화 또는 실행 장애 복구"}
     return None
 
 

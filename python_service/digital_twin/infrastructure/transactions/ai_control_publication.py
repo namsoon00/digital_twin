@@ -108,6 +108,9 @@ class AIControlPublication:
         reason = publication_block(result) or quality_block(result) or self.review_block(task["taskId"], result, connection=connection)
         if reason:
             publication = {"status": "recorded", "reason": reason}
+            if result.get("notification", {}).get("send") is False:
+                from digital_twin.modules.ai_orchestration.domain.observation_abstention import assessment
+                publication["reasonCode"] = assessment(result)["reasonCode"]
             diagnostic = observation_diagnostic(result, task["taskId"], reason)
             if diagnostic:
                 ancestor = self.control.diagnostic_ancestor(connection, task)

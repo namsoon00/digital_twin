@@ -462,7 +462,8 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # bounded repeats, quote expiry, protected budget and persisted read replay.
         # Earnings source clocks, review-only projection, period reconciliation,
         # isolated collection failures and bounded target rotation add eight contracts.
-        self.assertLessEqual(total, 2806)
+        # Twelve bounded abstention, source delivery, replay, persistence and omission review contracts.
+        self.assertLessEqual(total, 2818)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

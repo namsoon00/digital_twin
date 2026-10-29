@@ -5,6 +5,19 @@ import math
 VERSION = "unconfirmed-price-source-wait-v1"
 
 
+def memory(packet):
+    """Keep just the proof required after the storage memory view drops input."""
+    from copy import deepcopy
+    fields = {"id", "kind", "currency", "source", "currentPrice", "changeRate", "priceChangeRate",
+              "marketSessionStatus", "freshnessReferenceState", "judgementEvidenceUsable", "previousClose",
+              "positionWeight", "strategyMaxPositionWeightPct"}
+    return {key: deepcopy(packet[key]) for key in
+            ("priceInvestigationRepeatPolicy", "priceInvestigationSourceKey", "abstentionPolicy") if key in packet} | {
+        "facts": [{key: deepcopy(value) for key, value in fact.items() if key in fields}
+                  for fact in packet.get("facts", []) if fact.get("kind") == "stock"],
+        "deliveredNotificationContext": {"fingerprint": packet.get("deliveredNotificationContext", {}).get("fingerprint")}}
+
+
 def unchanged_price_context(packet, previous):
     """Fail open on a changed session, direction, base or meaningful price move.
 
@@ -18,8 +31,15 @@ def unchanged_price_context(packet, previous):
     for key, current in quotes[0].items():
         old = quotes[1][key]
         if any(current.get(field) != old.get(field) for field in ("currency", "source", "marketSessionStatus",
-                "freshnessReferenceState", "judgementEvidenceUsable", "previousClose")):
+                "freshnessReferenceState", "judgementEvidenceUsable", "previousClose", "strategyMaxPositionWeightPct")):
             return False
+        # Even a small price move can cross an existing portfolio limit. This
+        # cost gate must reopen before selective review gets a chance to run.
+        if current.get("strategyMaxPositionWeightPct") is not None:
+            weights = [current.get("positionWeight"), old.get("positionWeight"), current["strategyMaxPositionWeightPct"]]
+            if (not all(isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v) for v in weights)
+                    or (weights[0] > weights[2]) != (weights[1] > weights[2])):
+                return False
         try:
             if any(isinstance(value["currentPrice"], bool) for value in (current, old)):
                 return False
@@ -40,9 +60,10 @@ def unchanged_price_context(packet, previous):
 
 def waiting(packet, previous, research, now=None):
     now = now or datetime.now(timezone.utc)
-    old = previous.get("input") or {}
+    old = previous.get("input") or previous.get("priceInvestigationMemory") or {}
     if (packet.get("priceInvestigationRepeatPolicy") != VERSION
             or old.get("priceInvestigationRepeatPolicy") != VERSION
+            or old.get("abstentionPolicy") != packet.get("abstentionPolicy")
             or not packet.get("priceInvestigationSourceKey")
             or packet["priceInvestigationSourceKey"] != old.get("priceInvestigationSourceKey")
             or not unchanged_price_context(packet, old)

@@ -344,6 +344,9 @@ class MySQLAIControlStore(AITokenUsagePersistence, DiagnosticProgressPersistence
         for row in rows:
             saved = json.loads(row["result_json"])
             previous = saved.pop("input", {})
+            if previous.get("priceInvestigationRepeatPolicy"):
+                from ..domain.price_investigation_repeat import memory as price_repeat_memory
+                saved["priceInvestigationMemory"] = price_repeat_memory(previous)
             saved.pop("comparisonFacts", None)
             keys = ("id", "kind", "label", "symbol", "currency", "currentPrice", "changeRate", "ma20", "ma60", "volumeRatio",
                     "profitLossRate", "seriesId", "value", "unit", "observationDate", "sourceAsOf", "asOf", "sourceSnapshotId",

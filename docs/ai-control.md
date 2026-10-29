@@ -2410,3 +2410,52 @@ permission, or forced historical task replay is introduced. Earlier prompt
 versions remain reproducible. Tests cover immutable replay, question ownership,
 source retention, false completion, section dependencies, forged approval,
 transaction rollback, child deduplication and persisted purpose memory.
+
+
+## Evidence-scoped abstention and selective omission review (2026-10-30)
+
+Market observations use `independent-observation-v34-abstention-bounds`.
+The immutable writer packet carries `sourceDelivery`, recomputed from the exact
+selected facts. Event metadata, collector `bodyRead` flags and derived summaries
+are not original text. Referenced passages require their original text hash;
+parent source eligibility remains authoritative. A successful source read is
+neither an exhaustive search nor proof of relevance or causality. Missing event
+text does not prohibit an independently grounded risk explanation.
+
+`abstention` and recorded `publication.reasonCode` distinguish missing delivery,
+missing text, absent/ineligible candidates, insufficient evidence, unconfirmed
+causes, execution failures, invalid outputs and actual repetition/no material
+change. The original author reason is retained. Diagnostic follow-ups for
+unresolved evidence remain waiting instead of falsely closing as no added value.
+Legacy results without this evidence contract get a neutral `not-requested`
+reason; persisted legacy publication text and frozen prompts are not rewritten.
+
+A held, locally valid market draft receives at most one omission review when
+there is a verified weakening/invalidation transition, a crossing of an existing
+position limit, a withheld source-backed judgment change, or a newly published
+usable original source in the captured event scope. These are review candidates,
+not investment signals. Price ticks, headlines and unusable/future sources alone
+do not trigger another call. The review prompt is capped at 48 KiB, includes all
+captured delivered-message context and exact selected source facts, and persists
+before the existing model runner is called. Existing shared token/call limits
+still apply; this change does not raise budgets.
+
+The reviewer may retain silence or cite a missed explanation for one rewrite.
+It cannot publish: any rewritten send candidate must still pass the full
+independent narrative review and the unchanged receipt/freshness/cooldown gates.
+The omission review artifact is deliberately rejected as delivery approval.
+Failed or budget-blocked optional reviews preserve the authored work and expose
+an execution limitation. A bounded 16-key attempt history prevents retries over
+the same source/receipt context, including after failure; new source content,
+verified conditions or actual delivered context can reopen review. No timer-only
+paid retry is added. This conservatively trades automatic retry after a transient
+review failure for avoiding repeated author/reviewer spending on unchanged data.
+
+`test_observation_abstention` covers source-delivery distinctions, source/receipt
+bounds, exact frozen replay, rejected/unseen citations, selective admission,
+cache reuse, failed attempts, rewrite limits and actual MySQL persistence.
+The MySQL memory projection retains a compact `priceInvestigationMemory` so the
+existing three-hour same-source cost gate remains usable after full input removal;
+a policy-version change, new source or meaningful price/condition change still
+reopens observation.
+These checks establish execution behavior, not analyst accuracy or returns.

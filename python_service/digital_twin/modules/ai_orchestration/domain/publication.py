@@ -66,7 +66,8 @@ def publication_block(result, now=None):
     if research_only(result.get("input") or {}):
         return "잠정 연구는 독립 연구 검토 후 내부에만 보관합니다."
     if result.get("notification", {}).get("send") is not True:
-        return "AI가 지금 알릴 만큼 새로운 해석이 없다고 판단했습니다."
+        from .observation_abstention import assessment
+        return assessment(result)["reason"]
     packet = result.get("input", {})
     captured = instant(packet.get("capturedAt"))
     if captured is None or not 0 <= (now - captured).total_seconds() <= 1800:

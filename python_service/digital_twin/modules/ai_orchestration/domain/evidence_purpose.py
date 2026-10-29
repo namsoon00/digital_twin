@@ -52,6 +52,9 @@ def validate(packet):
 
 
 def author_version(packet):
+    from . import abstention_prompt
+    if abstention_prompt.enabled(packet):
+        return abstention_prompt.PROMPT_VERSION
     from . import price_investigation_prompt
     if price_investigation_prompt.enabled(packet):
         return price_investigation_prompt.PROMPT_VERSION
@@ -89,6 +92,9 @@ def author_version(packet):
 
 
 def repair_version(packet):
+    from . import abstention_prompt
+    if abstention_prompt.enabled(packet):
+        return abstention_prompt.REPAIR_VERSION
     from . import price_investigation_prompt
     if price_investigation_prompt.enabled(packet):
         return price_investigation_prompt.REPAIR_VERSION
@@ -126,6 +132,9 @@ def repair_version(packet):
 
 
 def review_version(packet):
+    from . import abstention_prompt
+    if abstention_prompt.enabled(packet):
+        return abstention_prompt.REVIEW_VERSION
     from . import price_investigation_prompt
     if price_investigation_prompt.enabled(packet):
         return price_investigation_prompt.REVIEW_VERSION

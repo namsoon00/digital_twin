@@ -163,6 +163,8 @@ class AIControlService:
                             packet["marketExplanationPolicy"] = explanation_policy
                             from ..domain.price_investigation import VERSION as investigation_policy
                             packet["priceInvestigationPolicy"] = investigation_policy
+                            from ..domain.observation_abstention import VERSION as abstention_policy
+                            packet["abstentionPolicy"] = abstention_policy
                             from ..domain.price_investigation_repeat import VERSION as repeat_policy
                             packet["priceInvestigationRepeatPolicy"] = repeat_policy
                             packet["priceInvestigationSourceKey"] = lanes.material_key(packet, research, evidence_identity=session.price_investigation_source_key())
@@ -208,6 +210,7 @@ class AIControlService:
                             "resumption": observation_resume(job, packet),
                             "followUpEvaluations": packet["followUpEvaluations"]}, [child])
                         return {"status": "unchanged" if saved else "lease-lost", "taskId": job["taskId"]}
+                    abstention_memory = history
                     waiting_source_packet = packet
                     waiting_source_research = research
                     retrieval_trace = []
@@ -245,6 +248,9 @@ class AIControlService:
                         refreshed = self.knowledge_refresh(knowledge, packet)
                         packet["researchKnowledge"] = lanes.compact_knowledge(refreshed) if lanes.identified(packet) else refreshed
                     stage = "input-freeze"
+                    from ..domain import observation_abstention
+                    if observation_abstention.enabled(packet):
+                        packet = observation_abstention.annotate(packet)
                     envelope = freeze_execution_input(packet, history, research,
                         max_prompt_bytes=self.settings.get("aiObservationPromptMaxBytes", 256 * 1024), retrieval_trace=retrieval_trace)
                     input_id = self.store.save_execution_input(job, envelope)
@@ -268,6 +274,12 @@ class AIControlService:
                         result["validationRepair"] = validation_repair
                     if packet.get("dataRecovery"):
                         result["dataRecovery"] = packet["dataRecovery"]
+                    reconsidered = False
+                    if observation_abstention.enabled(packet):
+                        result["quality"] = local_quality(result)
+                        from .abstention_review import reconsider
+                        raw, envelope, input_id, reconsidered = reconsider(result, raw, envelope, input_id,
+                            abstention_memory, lambda value: self.store.save_execution_input(job, value), self.reviewer, self.planner)
                     for verification in range(2):
                         result["quality"] = local_quality(result)
                         if result["notification"]["send"] and result["quality"]["status"] == "awaiting-review" and self.reviewer:
@@ -283,7 +295,7 @@ class AIControlService:
                             except Exception as error:
                                 result["quality"].update(status="rejected", errors=["독립 검토를 완료하지 못해 발송을 보류했습니다."])
                                 result["quality"]["failure"] = task_failure("independent-review", error)[1]
-                        if (verification or validation_repair or packet.get("researchScope", {}).get("mode") == "research-only"
+                        if (verification or validation_repair or reconsidered or packet.get("researchScope", {}).get("mode") == "research-only"
                                 or packet.get("retrieval", {}).get("status") in {"deferred", "repeated-read", "context-budget"}
                                 or not correction_warranted(result)):
                             break
@@ -338,6 +350,8 @@ class AIControlService:
                     result["processingOutcome"] = disposition(packet, retry_identity,
                         research_disposition(result) or (evidence_purpose.authored_status(result) if evidence_purpose.enabled(packet) else "data-wait" if result.get("dataRecovery") else "output-invalid" if result["quality"]["status"] == "rejected" else "ready"),
                         result["quality"].get("errors", []))
+                    if observation_abstention.enabled(packet):
+                        result["abstention"] = observation_abstention.assessment(result)
                     children = []
                     for question in result["researchQuestions"]:
                         request = next((item.get("researchRequest", {}) for item in result["workQuestions"]

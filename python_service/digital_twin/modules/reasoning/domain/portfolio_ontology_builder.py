@@ -241,6 +241,7 @@ def build_portfolio_ontology(
             "positionRole": source,
             "targetPositionRole": source,
             "currentPrice": current_price,
+            **({"previousClose": number(position.previous_close)} if number(position.previous_close) > 0 else {}),
             "averagePrice": number(position.average_price),
             "quantity": number(position.quantity),
             "sellableQuantity": number(position.sellable_quantity),

@@ -6,7 +6,7 @@ from .observation_event_index import build as legacy_index, instant, EVENTS
 from .observation_evidence import canonical_json, quote_use_assessment
 
 VERSION = "price-investigation-sources-v1"
-MARKET_KINDS = {"benchmark-index", "market-proxy-observation"}
+MARKET_KINDS = {"benchmark-index", "market-proxy-observation", "relative-performance-observation"}
 
 
 def price_move_anchor(packet):
@@ -33,7 +33,7 @@ def content_state(fact):
     if any(isinstance(fact.get(key), str) and fact[key].strip()
            for key in ("officialDocumentText", "articleText", "body", "text")) or any(
             isinstance(fact.get(key), dict) and fact[key].get("text")
-            for key in ("historicalDocumentReference", "questionSourceReference")):
+            for key in ("historicalDocumentReference", "questionSourceReference", "articleSourceReference")):
         return "source-text-present"
     if fact.get("kind") not in EVENTS:
         return "context-record; verify-source-fields"

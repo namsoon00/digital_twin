@@ -297,7 +297,7 @@ class MySQLBrainAgendaStore(MySQLOperationalConnection):
                     "AND kind='question' AND status IN ('open','waiting','review-needed','blocked') "
                     "AND JSON_UNQUOTE(JSON_EXTRACT(payload_json,'$.worldId'))=%s ORDER BY next_check_at LIMIT 12",
                     (job["accountId"], job["symbol"], job["worldId"])).fetchall()
-                stalled = repeat.stalled_question([json.loads(row["payload_json"]) for row in rows], item.get("researchRequest"))
+                stalled = repeat.stalled_question([json.loads(row["payload_json"]) for row in rows], item.get("researchRequest"), question=item["question"])
                 if stalled:
                     receipt["deferred"].append({"question": item["question"], "reason": "existing-source-work-stalled", "caseId": stalled})
                     continue

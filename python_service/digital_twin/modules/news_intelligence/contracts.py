@@ -142,6 +142,8 @@ _EXPORTS.update({
 _EXPORTS["financial_research_evidence"] = ("digital_twin.modules.news_intelligence.domain.financial_research_evidence", "financial_research_evidence")
 _EXPORTS["research_material_fingerprint"] = ("digital_twin.modules.news_intelligence.domain.research_material", "research_material_fingerprint")
 _EXPORTS["valid_company_relationship_assertions"] = ("digital_twin.modules.news_intelligence.domain.company_relationships", "valid_assertions")
+_EXPORTS["article_source_reference"] = ("digital_twin.modules.news_intelligence.domain.article_source_reference", "article_source_reference")
+_EXPORTS["article_projection_proof"] = ("digital_twin.modules.news_intelligence.domain.article_source_reference", "article_projection_proof")
 
 __all__ = list(_EXPORTS)
 

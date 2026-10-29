@@ -104,7 +104,7 @@ def record_plan(store, connection, job, result, children):
         if duplicate or store.read(connection, key, job["accountId"], job["symbol"], lock=True):
             receipt["deferred"].append({"question": item["question"], "reason": "existing-question", "caseId": duplicate["caseId"] if duplicate else key})
             continue
-        stalled = repeat.stalled_question(active, item["research"], item["contract"])
+        stalled = repeat.stalled_question(active, item["research"], item["contract"], item["question"])
         if stalled:
             receipt["deferred"].append({"question": item["question"], "reason": "existing-source-work-stalled", "caseId": stalled})
             continue

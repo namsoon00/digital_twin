@@ -32,13 +32,15 @@ def check_paced_budget(test):
     now = datetime(2026, 10, 24, 0, tzinfo=timezone.utc)
     settings = {'aiDailyTokenBudget': 20_000_000, 'aiTokenBudgetPolicy': POLICY}
     state = {}
-    for _ in range(7):
+    # Unused preparation can fund an eighth read while retaining two source
+    # preparation reservations and the protected completion allowance.
+    for _ in range(8):
         state = reserve(settings, state, 'independent-observation', now, 'retrieval')
         state = settle(state, 'independent-observation', {'input_tokens': 90_000, 'output_tokens': 10_000}, pool='retrieval')
     with test.assertRaises(AIControlBudgetWait) as wait:
         reserve(settings, state, 'independent-observation', now, 'retrieval')
     test.assertEqual('2026-10-24T01:00:00Z', wait.exception.reset_at)
-    for _ in range(3):
+    for _ in range(2):
         state = reserve(settings, state, 'news-analysis', now, 'preparation')
         state = settle(state, 'news-analysis', {'input_tokens': 100_000, 'output_tokens': 0}, pool='preparation')
     with test.assertRaises(AIControlBudgetWait):

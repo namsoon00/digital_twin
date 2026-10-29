@@ -1,0 +1,16 @@
+{
+  "sourceRevision": "6e24f5136 + exact article projection proof",
+  "contractVersion": "projection-input-execution-v15",
+  "reason": "Projection source contract V8 invalidates compact inputs that dropped exact article verification material; previous V14 and earlier fixtures remain unchanged and replay with original versions. Article compaction-to-ABox regressions in test_ai_notification_recovery.",
+  "scenarios": {
+    "full": "9c47833799203b6fd1daa9b598d8bda426e392ed7c44589be6ad0d2d23f48cc6",
+    "target": "992889e28315bd3dc554d0471362e3368a2878dc2251016457d41b37ae1c5afc",
+    "source-facts": "0596d0e6545d7b5806d1534e8a8e0b6b0213354975ca85bed2ec5904f2e23abb",
+    "live-context": "8c994e94c495c89c51eebf80e6c8941b376b5496db9b5760d6d95c35da6a0263",
+    "memory-hit": "655476065886579d0ceb2f728a8b55d1b57ee7b87dfdb1adf1593a77eb8aa9e5",
+    "persistent-hit": "a3684b1b288ca552b926908b7c73bf7396bf678bb6520810364c44f6ca595835",
+    "cache-errors": "e8decd3d83f6bce11af491c73c8fb53251ee1dee62e0bc69ac461209f8d4c89a",
+    "scoring-failure": "f75a1f43d3d1c86bea1a3c5a7960ee0493322c4c760d1a4c8e2202c06dbe16b8",
+    "world-identity": "8d53c028db6f4fc6eacba3f7d928f13d86f4c8f04245ca5b2435f261f926d69f"
+  }
+}

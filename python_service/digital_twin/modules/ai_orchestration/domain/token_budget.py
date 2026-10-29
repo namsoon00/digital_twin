@@ -28,7 +28,9 @@ def allocation(settings, state, now, limit):
     """Release an hourly allowance with a small burst; carry unused capacity.
 
     Forty percent remains available for authored answers and their reviews.
-    Retrieval alone can spend at most forty percent. Unknown historic charges
+    Retrieval may borrow unused preparation allowance, within its shared sixty
+    percent ceiling. This never spends the protected completion allowance.
+    Unknown historic charges
     conservatively belong to preparation, never to the protected completion pool.
     """
     now = now.astimezone(timezone.utc)
@@ -37,10 +39,18 @@ def allocation(settings, state, now, limit):
     total = sum(charged(row) for row in state.get("workloads", {}).values())
     pools = {key: charged(row) for key, row in state.get("pools", {}).items()}
     completion = pools.get("completion", 0)
-    return {"version": POLICY, "releasedTokens": released, "chargedTokens": total,
+    preparation = max(0, total - completion)
+    other_preparation = max(0, preparation - pools.get("retrieval", 0))
+    base_retrieval = released * 40 // 100
+    # Leave two reservations for new source preparation; borrowing cannot
+    # starve the collectors that supply tomorrow's evidence.
+    retrieval_limit = max(base_retrieval, released * 60 // 100 - other_preparation - 2 * RESERVATION)
+    return {"version": POLICY, "allocationRevision": "preparation-borrow-v2",
+            "releasedTokens": released, "chargedTokens": total,
             "completionProtectedTokens": released * 40 // 100,
-            "preparationLimit": released * 60 // 100, "preparationCharged": max(0, total - completion),
-            "retrievalLimit": released * 40 // 100, "retrievalCharged": pools.get("retrieval", 0),
+            "preparationLimit": released * 60 // 100, "preparationCharged": preparation,
+            "retrievalBaseLimit": base_retrieval, "retrievalBorrowLimit": retrieval_limit - base_retrieval,
+            "retrievalLimit": retrieval_limit, "retrievalCharged": pools.get("retrieval", 0),
             "nextReleaseAt": (now.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)).isoformat().replace("+00:00", "Z"),
             "pools": pools}
 

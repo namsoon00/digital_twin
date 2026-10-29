@@ -145,8 +145,19 @@ def answer_changed(previous, answer):
                for row in answer.get("sources", []))
 
 
-def stalled_question(active, request, contract=None):
-    """Defer creation, never merge possibly distinct questions or reset limits."""
+def stalled_question(active, request, contract=None, question=""):
+    """A stalled source is not a veto over every question using that source.
+
+    Match the actual inquiry or its exact search intent. Source overlap alone
+    used to park new event investigations behind unrelated company research.
+    Existing per-case attempt/material limits and the active-case cap still apply.
+    """
+    def normalized(value):
+        return re.sub(r"[\W_]+", "", str(value or "").casefold())
+
+    def terms(value):
+        return {normalized(term) for term in (value or {}).get("queryTerms", []) if normalized(term)}
+
     requested_sources = set((request or {}).get("sourceTypes") or ["official-filing", "news"])
     for case in active:
         guard = case.get("researchRepeat") or {}
@@ -162,6 +173,12 @@ def stalled_question(active, request, contract=None):
         new_dates = set(re.findall(r"\d{4}-\d{2}-\d{2}", new_period or ""))
         if old_dates and new_dates and old_dates.isdisjoint(new_dates):
             continue
-        if requested_sources.intersection((case.get("researchRequest") or {}).get("sourceTypes") or ["official-filing", "news"]):
+        from .research_work import contract_key
+        same_contract = bool(contract and case.get("questionContract")
+                             and contract_key(contract) == contract_key(case["questionContract"]))
+        same_question = bool(question and normalized(question) == normalized(case.get("question")))
+        same_search = bool(terms(request) and terms(request) == terms(case.get("researchRequest")))
+        if ((same_contract or same_question or same_search)
+                and requested_sources.intersection((case.get("researchRequest") or {}).get("sourceTypes") or ["official-filing", "news"])):
             return case["caseId"]
     return ""

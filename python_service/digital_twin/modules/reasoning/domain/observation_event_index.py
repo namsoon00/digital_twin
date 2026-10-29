@@ -5,7 +5,7 @@ from .observation_evidence import canonical_json
 VERSION = "observation-event-index-v1"
 EVENTS = {"news-article", "research-evidence", "evidence:news", "evidence:filing",
           "evidence:disclosure", "fundamental-event"}
-CONTEXT = {"macro-print", "interest-rate", "yield-curve", "fx-rate", "benchmark-index",
+CONTEXT = {"relative-performance-observation", "macro-print", "interest-rate", "yield-curve", "fx-rate", "benchmark-index",
            "market-proxy-observation", "company", "company-relationship", "revenue-exposure",
            "customer-exposure", "supply-chain-exposure"}
 

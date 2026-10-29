@@ -14,7 +14,8 @@ EVIDENCE_PROTOCOL = "observation-evidence-v1"
 LEGACY_EVIDENCE_PROFILE = "independent-observation-v1"
 MACRO_EVIDENCE_PROFILE = "independent-observation-v2-macro-prints"
 BUSINESS_EVIDENCE_PROFILE = "independent-observation-v3-business-research"
-EVIDENCE_PROFILE = "independent-observation-v5-portfolio-context"
+PORTFOLIO_EVIDENCE_PROFILE = "independent-observation-v5-portfolio-context"
+EVIDENCE_PROFILE = "independent-observation-v6-market-comparison"
 CRYPTO_EVIDENCE_PROFILE = "independent-observation-v4-crypto"
 OBSERVATION_QUOTE_KINDS = ("stock", "crypto-asset")
 EVIDENCE_PACKET_MAX_BYTES = 96000
@@ -113,7 +114,7 @@ CATEGORIES = (
         "revenue-exposure", "customer-exposure", "supply-chain-exposure", "company-relationship", "fundamental-event", "earnings-calendar-event", "analyst-revision", "company-governance-state", "position-risk-metric", *PORTFOLIO_CONTEXT_KINDS), 10000),
     EvidenceCategory("research", ("research-evidence", "news-article", "article-ai-analysis", "evidence:news"), 10000),
     EvidenceCategory("macro", ("macro-print", "interest-rate", "yield-curve", "fx-rate", "benchmark-index", "market-proxy-observation"), 8000),
-    EvidenceCategory("technical", ("temporal-window", "trend-observation", "technical-metric", "price-bar", "price-metric", "price-path"), 6000),
+    EvidenceCategory("technical", ("temporal-window", "trend-observation", "technical-metric", "price-bar", "price-metric", "price-path", "relative-performance-observation"), 6000),
     EvidenceCategory("flow", ("flow-metric", "liquidity-profile", "volume-profile", "exit-capacity"), 6000),
     EvidenceCategory("quality", ("data-quality", "data-availability-assessment", "coverage-gap", "missing-data",
         "data-latency", "temporal-coverage-gap", "data-quality-status"), 4000),
@@ -267,7 +268,7 @@ def select_evidence(candidates):
 
 
 def validate_evidence_packet(packet):
-    if packet.get("protocolVersion") != EVIDENCE_PROTOCOL or packet.get("profile") not in {EVIDENCE_PROFILE, BUSINESS_EVIDENCE_PROFILE, MACRO_EVIDENCE_PROFILE, LEGACY_EVIDENCE_PROFILE, CRYPTO_EVIDENCE_PROFILE}:
+    if packet.get("protocolVersion") != EVIDENCE_PROTOCOL or packet.get("profile") not in {EVIDENCE_PROFILE, PORTFOLIO_EVIDENCE_PROFILE, BUSINESS_EVIDENCE_PROFILE, MACRO_EVIDENCE_PROFILE, LEGACY_EVIDENCE_PROFILE, CRYPTO_EVIDENCE_PROFILE}:
         raise EvidenceContractError("unsupported observation evidence contract")
     if not all(packet.get(key) for key in ("accountId", "symbol", "worldId", "sourceSnapshotId", "capturedAt")):
         raise EvidenceContractError("observation evidence ownership missing")
@@ -281,6 +282,8 @@ def validate_evidence_packet(packet):
     if len({row.get("id") for row in facts}) != len(facts):
         raise EvidenceContractError("duplicate evidence identity")
     for fact in facts:
+        if fact.get("kind") == "relative-performance-observation" and packet["profile"] != EVIDENCE_PROFILE:
+            raise EvidenceContractError("market comparison requires v6 observation profile")
         if fact.get("kind") == "crypto-asset" and packet["profile"] != CRYPTO_EVIDENCE_PROFILE:
             raise EvidenceContractError("crypto quote requires v4 observation profile")
         if packet["profile"] == LEGACY_EVIDENCE_PROFILE and fact.get("kind") == "macro-print":

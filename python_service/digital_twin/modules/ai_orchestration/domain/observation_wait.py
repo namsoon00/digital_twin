@@ -59,6 +59,10 @@ def disposition(packet, key, status, requirements, now=None):
 def unchanged_wait(previous, key, now=None):
     if not isinstance(previous, dict) or previous.get("version") != POLICY or previous.get("retryKey") != key:
         return False
+    if previous.get("reasonCode") == "unchanged-price-explanation-sources":
+        # This bounded gate must be reassessed against the last authored
+        # observation, not converted into an indefinite identical-input wait.
+        return False
     # retryAt schedules a cheap source check, not permission to spend another
     # model call on identical failed input. Genuine evidence/work changes alter
     # key; verified follow-up transitions are admitted separately by the caller.

@@ -19,7 +19,7 @@ class AITokenUsagePersistence:
         state = self._locked_execution_state(connection, key, now)
         allocation = view.get("allocation", {})
         signature = [view["day"], view["enabled"], view["dailyLimit"],
-                     allocation.get("version"), allocation.get("releasedTokens")]
+                     allocation.get("version"), allocation.get("releasedTokens"), allocation.get("allocationRevision")]
         if state.get("signature") == signature and state.get("complete"):
             return
         stamp = now.isoformat().replace("+00:00", "Z")

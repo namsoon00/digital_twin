@@ -153,7 +153,7 @@ def check_persistence(test):
         store.runtime_settings.update(aiDailyTokenBudget=20_000_000, aiTokenBudgetPolicy=POLICY)
         start = later.replace(hour=0)
         with store.transaction() as connection:
-            for _ in range(7):
+            for _ in range(8):
                 store.reserve_tokens(connection, "independent-observation", start.isoformat(), "retrieval")
                 store.settle_tokens(connection, {"started_at": start.isoformat(), "workload": "independent-observation"},
                                     USAGE, start.isoformat(), pool="retrieval")

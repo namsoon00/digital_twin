@@ -458,7 +458,9 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # Eight fixed-price survey, source-clock, bounded-read, outcome and receipt contracts.
         # Three collection-clock and dispatch-reason regressions span stored
         # source facts, native condition evidence and the final expiry gate.
-        self.assertLessEqual(total, 2787)
+        # Eleven alert-recovery contracts cover exact article proof, scoped gaps,
+        # bounded repeats, quote expiry, protected budget and persisted read replay.
+        self.assertLessEqual(total, 2798)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

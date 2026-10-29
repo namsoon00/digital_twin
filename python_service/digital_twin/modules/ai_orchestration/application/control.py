@@ -153,6 +153,9 @@ class AIControlService:
                     if packet.get("companyResearchPolicy") and session and self.read_planner:
                         from ..domain.question_purpose import VERSION as purpose_policy
                         packet["questionPurposePolicy"] = purpose_policy
+                        if not lanes.market(packet):
+                            from ..domain.question_gap_retrieval import MARKER as gap_policy
+                            packet["questionGapPolicy"] = gap_policy
                         if lanes.market(packet):
                             from ..domain.external_influence import VERSION as influence_policy
                             packet["externalInfluencePolicy"] = influence_policy
@@ -160,6 +163,9 @@ class AIControlService:
                             packet["marketExplanationPolicy"] = explanation_policy
                             from ..domain.price_investigation import VERSION as investigation_policy
                             packet["priceInvestigationPolicy"] = investigation_policy
+                            from ..domain.price_investigation_repeat import VERSION as repeat_policy
+                            packet["priceInvestigationRepeatPolicy"] = repeat_policy
+                            packet["priceInvestigationSourceKey"] = lanes.material_key(packet, research, evidence_identity=session.price_investigation_source_key())
                     fingerprint = lanes.material_key(packet, research) if lanes.market(packet) else observation_fingerprint(packet, research)
                     repeat_key = fingerprint if lanes.market(packet) else repeat.observation_key(packet, research)
                     retry_identity = retry_key(packet, research)
@@ -182,6 +188,11 @@ class AIControlService:
                         state = disposition(packet, retry_identity, "data-wait", ["새 원문 또는 아직 평가하지 않은 원래 연구 질문을 기다립니다."])
                         return self.complete_wait(job, packet, state, [], "unchanged-wait")
                     previous = history[0] if history else {}
+                    from ..domain.price_investigation_repeat import waiting as waiting_price_sources
+                    if waiting_price_sources(packet, previous, research):
+                        state = disposition(packet, retry_identity, "data-wait", ["가격 변동의 원인을 설명할 새 자료가 없어 같은 원문 조사를 잠시 보류합니다."])
+                        state.update(reasonCode="unchanged-price-explanation-sources", repeatPolicy="unconfirmed-price-source-wait-v1")
+                        return self.complete_wait(job, packet, state, [], "unchanged-wait")
                     # A case timer requests a fresh source check (already done),
                     # not another paid review of the same question and evidence.
                     if (not any(row.get("reviewDue") for row in research if row.get("kind") == "business-thesis")
@@ -198,6 +209,7 @@ class AIControlService:
                             "followUpEvaluations": packet["followUpEvaluations"]}, [child])
                         return {"status": "unchanged" if saved else "lease-lost", "taskId": job["taskId"]}
                     waiting_source_packet = packet
+                    waiting_source_research = research
                     retrieval_trace = []
                     stage = "evidence-retrieval"
                     if session and self.read_planner:
@@ -211,8 +223,14 @@ class AIControlService:
                                 read["result"].get("status") in {"context-budget", "repeated-read"} for step in retrieval_trace for read in step["reads"]))
                             state = disposition(packet, retry_identity, "retrieval-blocked" if blocked else "data-wait",
                                 missing or ["조회 범위 또는 호출 한도 안에서 필요한 근거를 선택하지 못했습니다."])
-                            state.update(evidence_purpose.waiting_metadata(waiting_source_packet, retrieval_trace, research))
+                            state.update(evidence_purpose.waiting_metadata(waiting_source_packet, retrieval_trace, waiting_source_research))
                             return self.complete_wait(job, packet, state, retrieval_trace)
+                    expired_quote = evidence_purpose.expired_current_quote(packet, stamp())
+                    if expired_quote:
+                        state = disposition(packet, retry_identity, "data-wait", ["조회 중 시세 유효시간이 지나 새 원천 시세를 기다립니다."])
+                        state.update(reasonCode="current-quote", stage="pre-author-quote-check",
+                            quoteWaitKey=evidence_purpose.quote_wait_key({**waiting_source_packet, "quoteAssessment": expired_quote}, waiting_source_research))
+                        return self.complete_wait(job, packet, state, retrieval_trace)
                     from ..domain.business_research import evaluate_thesis
                     from copy import deepcopy
                     business_memory = []
@@ -415,6 +433,8 @@ class AIControlService:
         # manufactured from an incomplete read. Only the leased task advances.
         if lanes.market(packet):
             outcome = {**outcome, "retryAt": lanes.wait_until(packet), "repeatPolicy": "market-material-change-only-v1"}
+            if outcome.get("reasonCode") == "current-quote":
+                outcome["retryAt"] = (datetime.now(timezone.utc) + timedelta(minutes=5)).isoformat().replace("+00:00", "Z")
         elif status == "unchanged-wait":
             outcome = {**outcome, "retryAt": (datetime.now(timezone.utc) + timedelta(hours=6)).isoformat().replace("+00:00", "Z"),
                        "repeatPolicy": "source-change-only-v1"}

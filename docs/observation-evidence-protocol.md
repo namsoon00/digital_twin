@@ -324,3 +324,49 @@ Unavailable facts remain unavailable, and omitted facts stay in the model's
 bounded inventory for explicit reads. Existing numeric, provenance, novelty and
 publication guards still apply. Account observations are not real-time prices;
 their source clock and data state must be retained when cited.
+
+### Delivery investigation recovery (2026-10-30)
+
+The stock profile `independent-observation-v6-market-comparison` admits existing
+subject-owned `relative-performance-observation` facts. Exact returns, proxy,
+source clocks, alignment and eligibility remain unchanged. This adds readable
+context, not a calculated return or proof of a common return period. Historical
+profiles and frozen prompts retain their validation; the crypto profile is unchanged.
+
+`article-source-reference-v1` exposes only preserved body passages that match
+the captured article text and their source-owned passage IDs. It retains URL,
+publication/observation clocks, body and passage hashes and an excerpt limitation.
+Oversized or unverified passages are omitted whole. Headline, preview and AI
+summary text cannot substitute for the body. Parent governance and investment
+eligibility remain unchanged, including rejection of low-quality evidence.
+Projection input V8 preserves up to 32 KB of exact body/grounding verification
+inputs through compaction; the ABox exposes at most 8 KB of verified references.
+An oversized proof stays in the source store and is never silently truncated.
+
+Question routing V20 (`question-gap-union-v1`) conservatively joins the two
+bounded missing-evidence lists for a single assessment. It cannot turn a partial
+answer into a complete one. Both remaining requirements reach the author and
+persisted question progress without a paid wording repair. V16 and other frozen
+inputs retain their original contract. A stalled research question blocks only
+the same question, original contract or normalized query set with overlapping
+sources and periods. Sharing a source type alone no longer blocks unrelated work;
+per-question attempt and unchanged-material limits remain enforced.
+
+Under `preparation-borrow-v2`, retrieval may borrow unused preparation capacity,
+leaving two source-preparation reservations. The shared 60% preparation ceiling,
+40% completion protection and daily limit remain enforced. A quote that expires
+during retrieval stops current-state authoring before the next paid call and
+rechecks source readiness after five minutes. Source-dated explanation remains
+allowed; publication still independently checks source clocks.
+
+For three hours after an unsent, observation-only, cause-unconfirmed explanation,
+unchanged source inventory can defer repeated paid investigation. This inventory
+includes excluded source facts, portfolio composition, question review receipts,
+delivery context and source eligibility. New sources, verified follow-up changes,
+due business reviews and elapsed time release the gate. A changed session,
+price base or direction, a price move of at least 0.5%, or a reported change-rate
+move of at least 0.5 percentage points also releases it. This bounds suppression,
+not alert admission. Small quote ticks alone do not repair absent causal evidence.
+Waiting is not an authored judgment, successful
+answer, publication or delivery receipt. Deployment verification must report
+those outcomes separately; none of these changes forces an investment alert.

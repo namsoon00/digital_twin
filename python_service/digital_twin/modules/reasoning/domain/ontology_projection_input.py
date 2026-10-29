@@ -23,7 +23,7 @@ from digital_twin.modules.news_intelligence.contracts import company_knowledge_b
 from digital_twin.modules.instruments.contracts import security_lines_for_symbol
 
 
-ONTOLOGY_PROJECTION_INPUT_VERSION = "ontology-projection-input-v7"
+ONTOLOGY_PROJECTION_INPUT_VERSION = "ontology-projection-input-v8-article-proof"
 ONTOLOGY_REASONING_SNAPSHOT_INPUT_VERSION = "ontology-reasoning-snapshot-input-v7"
 
 SYMBOL_SIGNAL_GROUPS = {
@@ -264,6 +264,7 @@ def _compact_article_facts(value: object) -> Dict[str, object]:
 
 
 def _compact_research_payload(item: Mapping[str, object]) -> Dict[str, object]:
+    from digital_twin.modules.news_intelligence.contracts import article_projection_proof
     nested = item.get("payload") or item.get("rawPayload") or item.get("raw_payload")
     source = nested if isinstance(nested, Mapping) else {}
     result = _selected(
@@ -288,6 +289,7 @@ def _compact_research_payload(item: Mapping[str, object]) -> Dict[str, object]:
         list_limit=10,
         depth=2,
     )
+    result.update(article_projection_proof(source))
     relationships = source.get("companyRelationships") or {}
     if source.get("researchTaskIds") and source.get("documentPassages"):
         # Preserve exact bounded passages and their verification inputs.

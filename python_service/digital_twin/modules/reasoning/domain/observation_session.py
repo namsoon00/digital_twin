@@ -3,7 +3,7 @@ from copy import deepcopy
 
 from .observation_evidence import (
     CATEGORIES, MACRO_KINDS, PROMPT_STORAGE_METADATA, EvidenceContractError, canonical_json,
-    content_hash, source_clock, validate_evidence_packet, quote_clock_assessment, EVIDENCE_PROFILE, CRYPTO_EVIDENCE_PROFILE, OBSERVATION_QUOTE_KINDS,
+    content_hash, source_clock, validate_evidence_packet, quote_clock_assessment, EVIDENCE_PROFILE, PORTFOLIO_EVIDENCE_PROFILE, CRYPTO_EVIDENCE_PROFILE, OBSERVATION_QUOTE_KINDS,
 )
 
 
@@ -50,7 +50,7 @@ class ObservationEvidenceSession:
         """Source changes can resume questions; quote ticks and our prose cannot."""
         records = []
         for fact in self._facts.values():
-            ref = fact.get("historicalDocumentReference") or fact.get("questionSourceReference")
+            ref = fact.get("historicalDocumentReference") or fact.get("questionSourceReference") or fact.get("articleSourceReference")
             if ref:
                 state = {name: {key: value for key, value in (fact.get(name) or {}).items()
                     if key not in {"checkedAt", "ageMinutes"}} for name in ("evidenceGovernance", "promptEvidenceAdmission")}
@@ -117,6 +117,25 @@ class ObservationEvidenceSession:
         from .price_investigation_sources import build
         return build(self._facts.values(), self._packet)
 
+    def price_investigation_source_key(self):
+        """All captured event/company sources, including budget-excluded ones.
+
+        Quote ticks cannot repair an absent article, but source/market context,
+        account composition and source eligibility changes must reopen the work.
+        """
+        from .observation_evidence import material_fact
+        from .price_investigation_sources import EVENTS, MARKET_KINDS
+        records = []
+        for fact in self._facts.values():
+            if fact["kind"] in OBSERVATION_QUOTE_KINDS:
+                records.append({key: fact[key] for key in ("id", "kind", "symbol", "source", "positionRole",
+                    "quantity", "sellableQuantity", "averagePrice", "currency", "policyLimitRatio") if key in fact})
+            elif fact["kind"] in EVENTS | MARKET_KINDS or fact.get("evidenceCategory") in {"company", "valuation", "quality", "macro"}:
+                records.append(material_fact(fact))
+        return content_hash({"version": "price-source-inventory-v1", "profile": self._packet["profile"],
+            "account": self._packet["accountId"], "symbol": self._packet["symbol"],
+            "world": self._packet["worldId"], "facts": sorted(records, key=canonical_json)})
+
     def event_index(self):
         from .observation_event_index import build
         quote = next((row for row in self._packet["facts"] if row["kind"] in OBSERVATION_QUOTE_KINDS
@@ -173,7 +192,7 @@ class ObservationEvidenceSession:
     def select(self, fact_ids, views=None, *, macro_baseline=True):
         """Keep quote and the v2 bounded macro baseline alongside requested facts."""
         selected = set(fact_ids) | {row["id"] for row in self._packet["facts"] if row["kind"] in OBSERVATION_QUOTE_KINDS
-            or (macro_baseline and self._packet["profile"] in {EVIDENCE_PROFILE, CRYPTO_EVIDENCE_PROFILE} and row["evidenceCategory"] == "macro")}
+            or (macro_baseline and self._packet["profile"] in {EVIDENCE_PROFILE, PORTFOLIO_EVIDENCE_PROFILE, CRYPTO_EVIDENCE_PROFILE} and row["evidenceCategory"] == "macro")}
         if selected - self._facts.keys():
             raise EvidenceContractError("unknown selected evidence")
         packet = self.packet()

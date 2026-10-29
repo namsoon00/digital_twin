@@ -26,6 +26,17 @@ def uses(packet):
     return {"version": VERSION, "quotes": quote_use_assessment(packet), "authority": "source-use-boundary-only"}
 
 
+def expired_current_quote(packet, checked_at):
+    """Recheck before authoring; never rewrite a frozen source or its purpose."""
+    if not enabled(packet) or packet.get("analysisPurpose") != "current-state":
+        return None
+    from digital_twin.modules.reasoning.contracts import quote_clock_assessment
+    checked = quote_clock_assessment(packet["facts"], checked_at)
+    if any(row["currentStateEligible"] for row in uses({**packet, "quoteAssessment": checked})["quotes"]):
+        return None
+    return checked
+
+
 def annotate(packet):
     if not evidence_readiness.enabled(packet) or not execution_lanes.identified(packet):
         return packet

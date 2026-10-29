@@ -4,6 +4,7 @@ from typing import Dict, Iterable, List
 from digital_twin.modules.investment_calendar.domain.investment_calendar import clean_text, parse_utc
 from digital_twin.modules.investment_calendar.domain.investment_calendar_candidates import CANDIDATE_FINAL_STATUSES
 from digital_twin.modules.investment_calendar.domain.investment_calendar_extraction import calendar_candidate_sets_from_research_items
+from digital_twin.modules.investment_calendar.application.collection_schedule import collection_attempt, collection_due
 from digital_twin.modules.news_intelligence.contracts import NewsCollectionTarget
 from digital_twin.modules.decisions.contracts import event_type_guidance, target_text
 from digital_twin.modules.market_data.contracts import number
@@ -70,6 +71,8 @@ class InvestmentCalendarDiscoveryService:
         self.target_reader = target_reader
         self.last_run_at = None
         self.last_result: Dict[str, object] = {}
+        self.target_states = {}
+        self._failed_symbols = set()
         self.checkpoint_error = ""
         self._checkpoint_loaded = False
 
@@ -84,6 +87,11 @@ class InvestmentCalendarDiscoveryService:
             self.last_run_at = checkpoint_datetime(payload, "lastRunAt")
             result = payload.get("lastResult")
             self.last_result = dict(result) if isinstance(result, dict) else {}
+            self.target_states = dict(payload.get("targetStates") or {})
+            if not self.target_states and self.last_run_at:
+                for symbol in self.last_result.get("symbols") or []:
+                    self.target_states[symbol] = collection_attempt({}, self.last_run_at, self.interval_seconds(),
+                                                                     self.last_result.get("status") == "partial")
         except Exception as error:  # noqa: BLE001 - discovery can still run without its cadence checkpoint.
             self.checkpoint_error = str(error)[:240]
 
@@ -93,6 +101,7 @@ class InvestmentCalendarDiscoveryService:
         payload = {
             "lastRunAt": checkpoint_iso(self.last_run_at),
             "lastResult": dict(result or {}),
+            "targetStates": dict(self.target_states),
         }
         try:
             self.checkpoint_store.save(CALENDAR_DISCOVERY_CHECKPOINT_ID, payload)
@@ -121,9 +130,10 @@ class InvestmentCalendarDiscoveryService:
         self.restore_checkpoint()
         if not self.enabled() or not self.research_gateway:
             return False
-        if not self.last_run_at:
-            return True
-        return self.now() - self.last_run_at >= timedelta(seconds=self.interval_seconds())
+        targets = self.targets(include_all=True)
+        if targets:
+            return any(collection_due(self.target_states.get(target.symbol), self.now()) for target in targets)
+        return not self.last_run_at or self.now() - self.last_run_at >= timedelta(seconds=self.interval_seconds())
 
     def accounts(self) -> List[object]:
         if not self.account_repository:
@@ -134,7 +144,7 @@ class InvestmentCalendarDiscoveryService:
             rows = []
         return [account for account in rows or [] if getattr(account, "enabled", True)]
 
-    def targets(self, payload: Dict[str, object] = None) -> List[NewsCollectionTarget]:
+    def targets(self, payload: Dict[str, object] = None, include_all=False) -> List[NewsCollectionTarget]:
         payload = payload if isinstance(payload, dict) else {}
         requested = clean_text(payload.get("symbol"), 24).upper()
         symbols = []
@@ -159,6 +169,8 @@ class InvestmentCalendarDiscoveryService:
             currency = "KRW" if symbol.isdigit() else "USD"
             targets.append(NewsCollectionTarget(symbol=symbol, name=symbol, market=market, currency=currency))
         # Continue after the preceding batch so a long watchlist cannot starve.
+        if include_all:
+            return targets
         maximum = self.max_symbols(payload)
         if not requested and len(targets) > maximum:
             self.restore_checkpoint()
@@ -195,6 +207,7 @@ class InvestmentCalendarDiscoveryService:
         return ["official", "official-filing", "financial-data"]
 
     def collect(self, targets: Iterable[NewsCollectionTarget]) -> tuple:
+        self._failed_symbols = set()
         items = []
         statuses = []
         errors = []
@@ -203,6 +216,7 @@ class InvestmentCalendarDiscoveryService:
                 rows, source_statuses = self.research_gateway.collect_for_target(target, source_types=self.source_types())
             except Exception as error:  # noqa: BLE001 - one symbol cannot stop calendar discovery.
                 errors.append(str(getattr(target, "symbol", "")) + ": " + str(error)[:180])
+                self._failed_symbols.add(target.symbol)
                 continue
             items.extend(item for item in rows or [] if item)
             for source_status in source_statuses or []:
@@ -211,6 +225,7 @@ class InvestmentCalendarDiscoveryService:
                 status = dict(source_status)
                 statuses.append(status)
                 if status.get("ok") is False:
+                    self._failed_symbols.add(target.symbol)
                     source = clean_text(status.get("source"), 80) or str(getattr(target, "symbol", ""))
                     message = clean_text(status.get("message") or status.get("status") or "source request failed", 180)
                     errors.append(source + ": " + message)
@@ -318,18 +333,31 @@ class InvestmentCalendarDiscoveryService:
         }
 
     def run_due(self) -> Dict[str, object]:
-        if not self.due():
-            return {"status": "not-due", "targetCount": 0, "evidenceCount": 0, "tentativeCount": 0}
-        return self.run_once()
+        return self.run_once(scheduled=True)
 
-    def run_once(self, payload: Dict[str, object] = None, force: bool = False) -> Dict[str, object]:
+    def run_once(self, payload: Dict[str, object] = None, force: bool = False, scheduled=False) -> Dict[str, object]:
+        self.restore_checkpoint()
         payload = payload if isinstance(payload, dict) else {}
         force = bool(force or payload.get("force"))
         if not self.enabled() and not force:
             return {"status": "disabled", "targetCount": 0, "evidenceCount": 0, "tentativeCount": 0}
         if not self.research_gateway:
             return {"status": "unavailable", "targetCount": 0, "evidenceCount": 0, "tentativeCount": 0}
-        targets = self.targets(payload)
+        all_targets = self.targets(payload, include_all=True)
+        current_symbols = {target.symbol for target in all_targets}
+        previous_symbols = set(self.target_states)
+        if not payload.get("symbol"):
+            self.target_states = {symbol: state for symbol, state in self.target_states.items() if symbol in current_symbols}
+        if scheduled:
+            targets = [target for target in all_targets if collection_due(self.target_states.get(target.symbol), self.now())]
+            targets.sort(key=lambda target: self.target_states.get(target.symbol, {}).get("nextAttemptAt", ""))
+            targets = targets[:self.max_symbols(payload)]
+            if not targets and (all_targets or (self.last_run_at and self.now() - self.last_run_at < timedelta(seconds=self.interval_seconds()))):
+                if previous_symbols != set(self.target_states):
+                    self.save_checkpoint(self.last_result)
+                return {"status": "not-due", "targetCount": 0, "evidenceCount": 0, "tentativeCount": 0}
+        else:
+            targets = self.targets(payload)
         if not targets:
             result = {
                 "status": "noTargets",
@@ -345,6 +373,11 @@ class InvestmentCalendarDiscoveryService:
             return result
         items, statuses, collect_errors = self.collect(targets)
         result = self.save_discovered_candidates(items)
+        for target in targets:
+            self.target_states[target.symbol] = collection_attempt(
+                self.target_states.get(target.symbol), self.now(), self.interval_seconds(),
+                failed=target.symbol in self._failed_symbols or bool(result.get("errors")),
+            )
         result.update({
             "status": "partial" if collect_errors or result.get("errors") else "ok",
             "generatedAt": utc_now_iso(),
@@ -354,6 +387,8 @@ class InvestmentCalendarDiscoveryService:
             "evidenceCount": len(items),
             "savedEvidenceCount": self.persist_evidence(items),
             "sources": statuses[:80],
+            "dueTargetCount": sum(collection_due(self.target_states.get(target.symbol), self.now()) for target in all_targets),
+            "retrySymbols": [symbol for symbol, state in self.target_states.items() if state.get("failureCount")],
             "errors": (collect_errors + list(result.get("errors") or []))[:10],
         })
         self.last_run_at = self.now()

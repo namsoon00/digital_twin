@@ -252,12 +252,16 @@ class InvestmentCalendarService:
                 checkpoint = dict(self.sync_status_reader() or {})
                 last = checkpoint.get("lastResult") or {}
                 collection = {
+                    "enabled": truthy(self.settings.get("investmentCalendarOfficialMacroSyncEnabled"), True),
+                    "intervalHours": int_setting(self.settings, "investmentCalendarOfficialMacroSyncIntervalHours", 12, 1, 168),
                     "lastRunAt": checkpoint.get("lastRunAt"),
                     "lastResult": {
                         "status": last.get("status"),
-                        "sources": [{key: source.get(key) for key in ("source", "status", "fetchedCount", "savedCount")}
+                        "sources": [{key: source.get(key) for key in ("source", "status", "fetchedCount", "savedCount",
+                                     "coverageState", "upcomingCount", "dateOnlyCount", "lastAttemptAt", "lastSuccessAt", "nextAttemptAt")}
                                     for source in last.get("sources") or []],
                         "unsupportedSymbols": list(last.get("unsupportedSymbols") or []),
+                        "targetSymbols": list(last.get("targetSymbols") or []),
                     },
                 }
             except Exception:

@@ -268,8 +268,11 @@ function renderInvestmentCalendarSummaryPanel() {
   var summary = payload.summary || {};
   var events = investmentCalendarEvents();
   var registeredCount = events.filter(function (event) { return event.calendarOrigin !== "detected" && !event.readOnly; }).length;
-  var collection = (payload.officialCollection || {}).lastResult || {};
-  var unavailable = (collection.sources || []).filter(function (source) { return source.status === "error"; }).map(function (source) { return source.source; });
+  var automation = payload.officialCollection || {};
+  var collection = automation.lastResult || {};
+  var failedSources = (collection.sources || []).filter(function (source) { return source.status === "error" || source.status === "partial"; });
+  var unavailable = failedSources.map(function (source) { return source.source; });
+  var nextRetry = failedSources.map(function (source) { return source.nextAttemptAt; }).filter(Boolean).sort()[0];
   var unsupported = collection.unsupportedSymbols || [];
   var upcoming = investmentCalendarUpcomingEvents();
   var next = upcoming[0] || {};
@@ -296,13 +299,14 @@ function renderInvestmentCalendarSummaryPanel() {
     '</div>',
     calendarState.investmentCalendarError ? '<p class="form-error">' + escapeHtml(calendarState.investmentCalendarError) + '</p>' : '',
     payload.candidateError ? '<p class="form-error">' + escapeHtml(payload.candidateError) + '</p>' : '',
-    unavailable.length ? '<p class="subtle">공식 일정 수집 실패: ' + escapeHtml(unavailable.join(", ")) + ' · 일정이 없다는 뜻은 아닙니다.</p>' : '',
-    unsupported.length ? '<p class="subtle">공식 일정 자동 수집 미지원: ' + escapeHtml(unsupported.join(", ")) + ' · 제공자 후보와 직접 등록으로 확인할 수 있습니다.</p>' : '',
+    automation.enabled === true ? '<p class="subtle">공식 일정 자동 갱신 · ' + escapeHtml(String(automation.intervalHours || 12)) + '시간 주기 · 보유·관심 종목 변경 시 추가 확인' + (automation.lastRunAt ? ' · 최근 수집 실행 ' + escapeHtml(formatClock(automation.lastRunAt)) : ' · 첫 수집 대기') + '</p>' : automation.enabled === false ? '<p class="subtle">공식 일정 자동 수집이 꺼져 있습니다.</p>' : '',
+    unavailable.length ? '<p class="subtle">공식 일정 수집 실패: ' + escapeHtml(unavailable.join(", ")) + ' · 일정이 없다는 뜻은 아닙니다.' + (nextRetry ? ' 자동 재시도 예정: ' + escapeHtml(formatClock(nextRetry)) : '') + '</p>' : '',
+    unsupported.length ? '<p class="subtle">공식 일정 수집 출처 연결 필요: ' + escapeHtml(unsupported.join(", ")) + ' · 제공자 예상 일정은 미확정으로 표시됩니다.</p>' : '',
     '<details class="oa-secondary-details" id="disclosure-calendar-metrics"><summary><strong>일정 현황</strong></summary><div class="investment-calendar-kpis">',
     renderCalendarKpi("전체", events.length, registeredCount + "건 등록 · " + Number(summary.unconfirmed || 0) + "건 미확정", "metric-cell", "hold", { type: "anchor", value: "calendar-events" }),
     renderCalendarKpi("예정", summary.upcoming || upcoming.length || 0, "표시 일정", "metric-cell", upcoming.length ? "watch" : "hold", { type: "anchor", value: "calendar-events" }),
     renderCalendarKpi("중요", important, "중요도 80+", "metric-cell", important ? "caution" : "hold", { type: "anchor", value: "calendar-events" }),
-    renderCalendarKpi("다음", next.startsAt ? investmentCalendarScheduleLabel(next) : "대기", next.startsAt ? investmentCalendarEventTypeLabel(next.eventType) + " · " + investmentCalendarTargetLabel(next) : "등록 필요", "metric-cell", next.startsAt ? "watch" : "hold", next.startsAt ? { type: "detail", value: "investment-calendar-event", key: next.eventId || next.id || next.title || "" } : { type: "calendar-entry" }),
+    renderCalendarKpi("다음", next.startsAt ? investmentCalendarScheduleLabel(next) : "대기", next.startsAt ? investmentCalendarEventTypeLabel(next.eventType) + " · " + investmentCalendarTargetLabel(next) : "예정 일정 미확인", "metric-cell", next.startsAt ? "watch" : "hold", next.startsAt ? { type: "detail", value: "investment-calendar-event", key: next.eventId || next.id || next.title || "" } : { type: "anchor", value: "calendar-events" }),
     '</div></details>',
     '</article>'
   ].join("");

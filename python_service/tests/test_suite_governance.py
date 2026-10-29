@@ -467,7 +467,9 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # preserve sixteen additional production boundaries.
         # Seven startup/history isolation, bounded repair and rollback contracts.
         # Three bounded delivery/background fairness and repair fallback contracts.
-        self.assertLessEqual(total, 2844)
+        # Ten automatic-calendar contracts protect live targets, per-source
+        # retry persistence, collection coverage and bounded discovery fairness.
+        self.assertLessEqual(total, 2854)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

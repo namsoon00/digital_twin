@@ -139,8 +139,11 @@ class UsIssuerEarningsCalendarSource:
                 raise RuntimeError(f"official source unavailable ({type(error).__name__}{':' + str(code) if code else ''})") from None
         return guarded_external_call(self.settings, self.label, external_call_target(ISSUER_PAGES[self.symbol]), fetch)
 
+    def enabled(self):
+        return str(self.settings.get("investmentCalendarOfficialEarningsSyncEnabled", "1")).lower() not in {"0", "false", "off", "no", "disabled"}
+
     def events(self):
-        if str(self.settings.get("investmentCalendarOfficialEarningsSyncEnabled", "1")).lower() in {"0", "false", "off", "no", "disabled"}:
+        if not self.enabled():
             return []
         markup = self._fetch(ISSUER_PAGES[self.symbol])
         if self.symbol == "AAPL":

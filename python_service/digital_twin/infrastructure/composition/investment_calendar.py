@@ -57,8 +57,23 @@ def build_official_calendar_sync_service(settings=None, event_publisher=None) ->
     configured_settings = settings or runtime_settings()
     calendar_service = build_investment_calendar_service(configured_settings, event_publisher)
     account_repository = stores.account_reader(configured_settings)
-    priority_symbols = ontology_reasoning_priority_symbols(account_repository, configured_settings)
-    calendar_symbols = list(priority_symbols.get("holdingSymbols") or []) + list(priority_symbols.get("watchlistSymbols") or [])
+    fixed_sources = [
+        BokPolicyDecisionCalendarSource(configured_settings),
+        FederalReserveFomcCalendarSource(configured_settings),
+        BlsMacroReleaseCalendarSource(configured_settings),
+        BeaMacroReleaseCalendarSource(configured_settings),
+        SamsungIrEarningsCalendarSource(configured_settings),
+    ]
+
+    def source_plan():
+        priority = ontology_reasoning_priority_symbols(account_repository, configured_settings)
+        symbols = list(dict.fromkeys(list(priority.get("holdingSymbols") or []) + list(priority.get("watchlistSymbols") or [])))
+        return {
+            "targetSymbols": symbols,
+            "sources": fixed_sources + [OpenDartEarningsCalendarSource(configured_settings, target_symbols=symbols)]
+            + [UsIssuerEarningsCalendarSource(symbol, configured_settings) for symbol in symbols if symbol in ISSUER_PAGES],
+            "unsupportedSymbols": [symbol for symbol in symbols if not symbol.isdigit() and symbol not in ISSUER_PAGES],
+        }
     candidate_service = InvestmentCalendarCandidateService(
         candidate_repository=stores.investment_calendar_candidate_store(configured_settings),
         calendar_service=calendar_service,
@@ -67,20 +82,11 @@ def build_official_calendar_sync_service(settings=None, event_publisher=None) ->
     )
     return OfficialCalendarSyncService(
         calendar_service=calendar_service,
-        sources=[
-            BokPolicyDecisionCalendarSource(configured_settings),
-            FederalReserveFomcCalendarSource(configured_settings),
-            BlsMacroReleaseCalendarSource(configured_settings),
-            BeaMacroReleaseCalendarSource(configured_settings),
-            OpenDartEarningsCalendarSource(configured_settings, target_symbols=calendar_symbols),
-            SamsungIrEarningsCalendarSource(configured_settings),
-        ] + [UsIssuerEarningsCalendarSource(symbol, configured_settings)
-             for symbol in dict.fromkeys(calendar_symbols) if symbol in ISSUER_PAGES],
+        sources=fixed_sources,
+        source_reader=source_plan,
         candidate_service=candidate_service,
         settings=configured_settings,
         checkpoint_store=stores.runtime_checkpoint_store(configured_settings),
-        unsupported_symbols=[symbol for symbol in dict.fromkeys(calendar_symbols)
-                             if symbol.isalpha() and symbol not in ISSUER_PAGES],
     )
 
 

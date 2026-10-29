@@ -24,9 +24,10 @@ class ExistingApiResearchGateway:
         "financial-data",
     }
 
-    def __init__(self, settings: Dict[str, object] = None, provider=None):
+    def __init__(self, settings: Dict[str, object] = None, provider=None, collection_purposes=None):
         self.settings = dict(settings or {})
         self.provider = provider
+        self.collection_purposes = set(collection_purposes or [])
 
     def collect_for_target(
         self,
@@ -60,6 +61,8 @@ class ExistingApiResearchGateway:
         self.attach_target_market(items, target)
         items = self.filter_items(items, requested)
         statuses = [dict(item) for item in signals.get("statuses") or [] if isinstance(item, dict)]
+        if self.collection_purposes and (signals.get("externalDataPlatform") or {}).get("enabled"):
+            statuses = self.target_collection_statuses(signals, target.normalized_symbol())
         if tasks and (not requested or requested.intersection({"official", "official-filing", "company-ir"})):
             from .official_question_research import collect_question_documents
             documents, document_statuses = collect_question_documents(provider, target, signals, tasks)
@@ -75,6 +78,35 @@ class ExistingApiResearchGateway:
             "fetchedAt": signals.get("fetchedAt"),
         })
         return items, statuses
+
+    def target_collection_statuses(self, signals, symbol):
+        from digital_twin.modules.market_data.contracts import external_dataset_semantics
+
+        result = []
+        platform = signals.get("externalDataPlatform") or {}
+        for row in platform.get("collectionStates") or []:
+            if str(row.get("subjectKey") or "").upper() != symbol:
+                continue
+            dataset = str(row.get("datasetId") or "")
+            try:
+                semantics = external_dataset_semantics(dataset)
+            except KeyError:
+                continue
+            if not self.collection_purposes.intersection(semantics.purpose_ids):
+                continue
+            failed = row.get("active") is not False and (bool(row.get("errorPresent")) or row.get("jobStatus") == "failed")
+            result.append({
+                "source": dataset, "datasetId": dataset, "symbol": symbol,
+                "ok": not failed, "state": row.get("jobStatus"),
+                "message": "해당 종목의 원천 수집 실패 · 자동 재시도 대기" if failed else "해당 종목의 원천 수집 상태",
+                "lastAttemptAt": row.get("lastAttemptAt"), "lastSuccessAt": row.get("lastSuccessAt"),
+                "nextRetryAt": row.get("nextDueAt"),
+            })
+        if "collectionStates" not in platform:
+            result.append({"source": "existing-api-bundle", "symbol": symbol, "ok": True,
+                           "state": "scope-unavailable", "dataUsable": False, "deferred": True,
+                           "message": "종목별 수집 상태를 확인하지 못했습니다."})
+        return result
 
     @staticmethod
     def attach_target_market(items: Iterable[ResearchEvidence], target: NewsCollectionTarget) -> None:

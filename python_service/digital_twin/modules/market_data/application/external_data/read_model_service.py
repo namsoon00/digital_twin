@@ -360,6 +360,30 @@ def merge_external_signal_read_models(
     return result
 
 
+def collection_status_projection(rows, requested_subjects):
+    """One status per dataset/issuer; historical filing partitions stay out of inputs."""
+    groups = {}
+    for row in rows:
+        subject = str(row.get("subjectKey") or "").upper()
+        if subject in requested_subjects:
+            groups.setdefault((str(row.get("datasetId") or ""), subject), []).append(row)
+    result = []
+    for (dataset, subject), partitions in sorted(groups.items()):
+        active = [row for row in partitions if row.get("active")]
+        relevant = active or partitions
+        latest = max(relevant, key=lambda row: str(row.get("lastAttemptAt") or ""))
+        failed = any(row.get("lastError") or row.get("jobStatus") == "failed" for row in active)
+        retry_times = [str(row["nextDueAt"]) for row in active if row.get("nextDueAt")]
+        result.append({
+            "datasetId": dataset, "subjectKey": subject, "active": bool(active),
+            "jobStatus": "failed" if failed else latest.get("jobStatus"), "errorPresent": failed,
+            "lastAttemptAt": latest.get("lastAttemptAt"),
+            "lastSuccessAt": max(str(row.get("lastSuccessAt") or "") for row in relevant),
+            "nextDueAt": min(retry_times) if retry_times else "",
+        })
+    return result
+
+
 class ExternalSignalsReadModelService:
     """Build the compact legacy read model from independently stored facts."""
 
@@ -539,6 +563,10 @@ class ExternalSignalsReadModelService:
             "factCount": len(rows),
             "datasets": sorted(datasets),
             "staleDatasets": sorted(stale),
+            # Provider-wide health cannot identify which issuer failed. Expose
+            # the already-loaded partition clocks so scoped consumers do not
+            # attribute one company's failure to every requested company.
+            "collectionStates": collection_status_projection(collection_states, requested_subjects),
             "fitness": evaluate_external_data_fitness(
                 rows,
                 self.fact_store.provider_statuses(),

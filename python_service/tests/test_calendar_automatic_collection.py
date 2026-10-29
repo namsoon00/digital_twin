@@ -178,6 +178,63 @@ class CalendarAutomaticCollectionTest(unittest.TestCase):
         self.assertEqual(discovery.run_due()["status"], "disabled")
         gateway.collect_for_target.assert_not_called()
 
+    def test_partition_status_does_not_spread_a_global_issuer_error(self):
+        from digital_twin.modules.market_data.application.external_data.read_model_service import ExternalSignalsReadModelService
+        from digital_twin.infrastructure.investment_research_gateway import ExistingApiResearchGateway
+        from digital_twin.modules.news_intelligence.contracts import NewsCollectionTarget
+
+        states = [
+            {"datasetId": "issuer.ir_documents", "subjectKey": "AAPL", "active": True,
+             "jobStatus": "failed", "lastError": "private diagnostic"},
+            {"datasetId": "issuer.ir_documents", "subjectKey": "NVDA", "active": True,
+             "jobStatus": "completed", "lastError": ""},
+            {"datasetId": "issuer.ir_documents", "subjectKey": "NVDA", "active": False,
+             "jobStatus": "failed", "lastError": "historical partition failure"},
+            {"datasetId": "public-data.kr-security-master", "subjectKey": "NVDA", "active": True,
+             "jobStatus": "failed", "lastError": "unrelated dataset"},
+        ]
+        store = SimpleNamespace(list_current=lambda _: [], collection_coverage_rows=lambda _: states,
+            provider_statuses=lambda: [{"datasetId": "issuer.ir_documents", "providerId": "issuer-ir",
+                                       "state": "failed", "lastError": "AAPL failed"}])
+        read_model = ExternalSignalsReadModelService(store)
+        provider = SimpleNamespace(signals_for_positions=lambda positions: read_model.signals_for_subjects([positions[0].symbol]))
+        gateway = ExistingApiResearchGateway(provider=provider, collection_purposes={"disclosure", "investor-relations", "valuation"})
+        for symbol, expected_ok in [("NVDA", True), ("AAPL", False)]:
+            signals = read_model.signals_for_subjects([symbol])
+            self.assertNotIn("private diagnostic", str(signals["externalDataPlatform"]["collectionStates"]))
+            _, statuses = gateway.collect_for_target(NewsCollectionTarget(symbol=symbol, name=symbol, market="US"),
+                                                     source_types=["official", "financial-data"])
+            collection = [row for row in statuses if row.get("datasetId")]
+            self.assertEqual(len(collection), 1)
+            self.assertEqual(collection[0]["symbol"], symbol)
+            self.assertEqual(collection[0]["ok"], expected_ok)
+
+    def test_scoped_calendar_gateway_preserves_legacy_research_status_behavior(self):
+        from digital_twin.infrastructure.investment_research_gateway import ExistingApiResearchGateway
+        from digital_twin.modules.news_intelligence.contracts import NewsCollectionTarget
+
+        global_error = {"source": "issuer-ir", "ok": False, "message": "provider-wide error"}
+        provider = SimpleNamespace(signals_for_positions=lambda _: {
+            "statuses": [global_error], "externalDataPlatform": {"enabled": True},
+        })
+        target = NewsCollectionTarget(symbol="NVDA", name="NVIDIA", market="US")
+        _, legacy = ExistingApiResearchGateway(provider=provider).collect_for_target(target)
+        self.assertIn(global_error, legacy)
+        _, scoped = ExistingApiResearchGateway(provider=provider, collection_purposes={"investor-relations"}).collect_for_target(target)
+        self.assertNotIn(global_error, scoped)
+        self.assertEqual(scoped[0]["state"], "scope-unavailable")
+        # Upgrade old retry state without waiting for its provider-wide backoff.
+        symbols = ["AAPL", "NVDA"]
+        collecting = SimpleNamespace(collect_for_target=Mock(side_effect=[TimeoutError(), ([], []), ([], [])]))
+        previous = self.discovery(symbols, collecting)
+        previous.run_due()
+        upgraded = self.discovery(symbols, collecting)
+        upgraded.status_scope_version = "target-purpose-v1"
+        self.assertEqual(upgraded.run_due()["symbols"], ["AAPL"])
+        self.assertEqual(upgraded.run_due()["status"], "not-due")
+        checkpoint = next(iter(self.checkpoints.rows.values()))
+        self.assertEqual(checkpoint["statusScopeVersion"], "target-purpose-v1")
+
 
 if __name__ == "__main__":
     unittest.main()

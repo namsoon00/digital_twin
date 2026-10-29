@@ -469,7 +469,9 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # Three bounded delivery/background fairness and repair fallback contracts.
         # Ten automatic-calendar contracts protect live targets, per-source
         # retry persistence, collection coverage and bounded discovery fairness.
-        self.assertLessEqual(total, 2854)
+        # Two collection-scope contracts keep unrelated provider health and
+        # other issuers' failures out of automatic calendar retries.
+        self.assertLessEqual(total, 2856)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

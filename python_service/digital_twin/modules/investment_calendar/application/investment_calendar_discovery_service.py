@@ -59,6 +59,7 @@ class InvestmentCalendarDiscoveryService:
         now=None,
         checkpoint_store=None,
         target_reader=None,
+        status_scope_version="",
     ):
         self.calendar_service = calendar_service
         self.candidate_repository = candidate_repository
@@ -69,6 +70,7 @@ class InvestmentCalendarDiscoveryService:
         self.now = now or (lambda: datetime.now(timezone.utc))
         self.checkpoint_store = checkpoint_store
         self.target_reader = target_reader
+        self.status_scope_version = status_scope_version
         self.last_run_at = None
         self.last_result: Dict[str, object] = {}
         self.target_states = {}
@@ -92,6 +94,12 @@ class InvestmentCalendarDiscoveryService:
                 for symbol in self.last_result.get("symbols") or []:
                     self.target_states[symbol] = collection_attempt({}, self.last_run_at, self.interval_seconds(),
                                                                      self.last_result.get("status") == "partial")
+            if self.status_scope_version and payload.get("statusScopeVersion") != self.status_scope_version:
+                # A provider-wide error is not a proved failure of this issuer.
+                # Recheck old failed targets immediately under the scoped
+                # contract while preserving already-successful collection clocks.
+                self.target_states = {symbol: state for symbol, state in self.target_states.items()
+                                      if not state.get("failureCount")}
         except Exception as error:  # noqa: BLE001 - discovery can still run without its cadence checkpoint.
             self.checkpoint_error = str(error)[:240]
 
@@ -102,6 +110,7 @@ class InvestmentCalendarDiscoveryService:
             "lastRunAt": checkpoint_iso(self.last_run_at),
             "lastResult": dict(result or {}),
             "targetStates": dict(self.target_states),
+            "statusScopeVersion": self.status_scope_version,
         }
         try:
             self.checkpoint_store.save(CALENDAR_DISCOVERY_CHECKPOINT_ID, payload)

@@ -156,6 +156,8 @@ class AIControlService:
                         if lanes.market(packet):
                             from ..domain.external_influence import VERSION as influence_policy
                             packet["externalInfluencePolicy"] = influence_policy
+                            from ..domain.market_explanation import VERSION as explanation_policy
+                            packet["marketExplanationPolicy"] = explanation_policy
                     fingerprint = lanes.material_key(packet, research) if lanes.market(packet) else observation_fingerprint(packet, research)
                     repeat_key = fingerprint if lanes.market(packet) else repeat.observation_key(packet, research)
                     retry_identity = retry_key(packet, research)

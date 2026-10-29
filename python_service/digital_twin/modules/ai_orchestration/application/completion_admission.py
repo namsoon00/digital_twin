@@ -14,6 +14,8 @@ def admit_baseline(session, packet, views, research, history, prompt_bytes, cont
     from .working_retrieval import author_packet, byte_size
     from ..domain.execution_input import freeze_execution_input
     original = deepcopy(packet)
+    from ..domain import market_explanation
+    reserve = RESERVE_BYTES + (market_explanation.DISCOVERY_RESERVE_BYTES if market_explanation.enabled(packet) else 0)
     business = original['businessEvidence']['factIds']
     value = original.get('companyValueEvidence', {})
     value_ids = value.get('factIds', [])
@@ -47,7 +49,7 @@ def admit_baseline(session, packet, views, research, history, prompt_bytes, cont
         result['businessEvidence']['bytes'] = sum(byte_size(seen[k]) for k in selected_business)
         if value:
             result['companyValueEvidence']['bytes'] = sum(byte_size(seen[k]) for k in selected_value)
-        candidate = author_packet(session, result, ids, seen, research, [], 'deferred', RESERVE_BYTES, contract)
+        candidate = author_packet(session, result, ids, seen, research, [], 'deferred', reserve, contract)
         freeze_execution_input(candidate, history, research, prompt_bytes)
         return result
 

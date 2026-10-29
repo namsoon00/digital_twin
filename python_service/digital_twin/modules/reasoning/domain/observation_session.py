@@ -113,6 +113,12 @@ class ObservationEvidenceSession:
         return {"sourceSnapshots": deepcopy(self._packet["sourceSnapshots"]),
                 "coverage": deepcopy(self._packet["coverage"]), "ordering": "source-time-descending-then-id"}
 
+    def event_index(self):
+        from .observation_event_index import build
+        quote = next((row for row in self._packet["facts"] if row["kind"] in OBSERVATION_QUOTE_KINDS
+                      and row.get("symbol") == self._packet["symbol"]), {})
+        return build(self._facts.values(), self._packet["capturedAt"], quote.get("sourceAsOf") or quote.get("asOf", ""))
+
     def read(self, category, kind="", offset=0, limit=4, fact_id=""):
         if category not in {row.name for row in CATEGORIES}:
             raise EvidenceContractError("unknown evidence category")

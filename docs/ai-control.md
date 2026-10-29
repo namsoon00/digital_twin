@@ -9,6 +9,54 @@ Question-specific collection failures and bounded, same-revision focused reads
 follow the [source recovery contract](source-recovery.md). Diagnostics return to
 the original question and next plan without changing past answers or eligibility.
 
+## Price-context explanations (2026-10-29)
+
+New company observations attach `price-context-explanation-v1` after the
+external-influence policy: retrieval v18, author v32, repair v28 and review v21.
+Existing v17/v31 inputs retain their exact constructors and replay behavior.
+
+The reasoning-owned `observation-event-index-v1` exposes at most twelve event
+and twelve context pointers from the already captured, subject-scoped ABox.
+Events rank by their actual publication clock, not a recent fetch clock. Future
+publications are excluded; unknown dates, explicitly ineligible records and
+publications after the quote remain distinguishable. The index is discovery
+metadata only: an issued `read_fact` must fetch the original before its fields
+can be selected or cited. Omitted counts remain visible. This is neither a web
+crawl nor evidence that every relevant event was found.
+
+The reader reserves an additional 8 KiB before admitting optional business
+baselines. Its original 16 KiB audit reserve is consumed by the growing trace,
+instead of being added in full again after every read (with a 2 KiB minimum).
+The 96,000-byte source limit, whole-source provenance, required quality facts,
+last delivered comparison and final prompt limit still apply. Budget exclusions
+remain explicit, readable source candidates, not missing data. No model rounds
+or daily spending limits are increased.
+
+`missingEvidence` retains essential gaps. New `optionalEvidence` records up to
+four gaps for explanations deliberately outside the chosen scope. A model may
+finish a supported, limited explanation with optional gaps, but code never
+promotes `defer` to `finish`. Missing essential sources, unusable current quotes,
+unread references, stale source claims and unfinished reads still block their
+corresponding conclusions. The optional gaps survive the frozen read trace and
+reach both the author and independent reviewer.
+
+The author separates measured movement, business background, possible drivers
+and unknown causes. Same-period market/sector comparisons require captured,
+comparable observations; they are not fabricated when absent. A financial
+report, moving average or later publication alone does not establish the cause
+of an earlier price move. The independent review must explicitly approve
+`marketExplanation` timing, scope and limitations before publication. Existing
+novelty, receipt, cooldown and source-refresh gates continue to apply.
+
+`test_market_explanation_flow.py` covers discovery timing, read-before-selection,
+optional versus required gaps, a crowded source packet, legacy input replay,
+and isolated MySQL read proof through reviewed outbox delivery with a fake
+transport. Private admission replay of twelve retained operating failures
+validated seventeen old inputs and increased initial read headroom from
+1,265–5,931 bytes to 9,000–15,794 bytes. Only retained initial facts and successful
+reads were available; this is input-admission evidence, not a replay of every
+failed source read or proof of better causal explanations.
+
 ## External events and company influence
 
 New company `market-observe` runs with question-purpose support also freeze

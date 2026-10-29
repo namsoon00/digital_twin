@@ -99,6 +99,8 @@ def accept_review(result, review, input_id):
     errors.extend(contribution_review_errors(result, review))
     from .external_influence import review_errors as influence_review_errors
     errors.extend(influence_review_errors(result, review))
+    from .market_explanation import review_errors as explanation_review_errors
+    errors.extend(explanation_review_errors(result, review))
     if not isinstance(review, dict) or review.get("version") != REVIEW_VERSION or set(review.get("sections", {})) != set(SECTIONS):
         errors.append("독립 검토 응답이 완전하지 않습니다.")
     else:

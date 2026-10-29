@@ -51,14 +51,21 @@ class MySQLMaintenanceAdmissionTests(unittest.TestCase):
     def test_cleanup_timeout_does_not_replay_bounded_or_completed_retention(self):
         from unittest.mock import Mock, patch
         from digital_twin.infrastructure import cli
-        for include_legacy, error_code in ((False, 2013), (True, 2013), (False, 3024)):
-            with self.subTest(include_legacy=include_legacy, error_code=error_code):
+        cases = ((False, 2013, "minimal-retention"),
+                 (True, 2013, "capacity-refresh"),
+                 (False, 3024, "minimal-retention"),
+                 (True, 2013, "legacy-metadata-repair"),
+                 (True, 2013, "decision-memory-repair"),
+                 (True, 2013, "legacy-flow-repair"),
+                 (True, 2013, "legacy-receipt-repair"))
+        for include_legacy, error_code, failure_stage in cases:
+            with self.subTest(include_legacy=include_legacy, error_code=error_code, stage=failure_stage):
                 error = RuntimeError(error_code, "query timed out")
                 store, service, connection = Mock(), Mock(), Mock()
                 store.connect.return_value.__enter__ = Mock(return_value=connection)
                 store.connect.return_value.__exit__ = Mock(return_value=False)
-                inventory = [{}, error] if include_legacy else [{}]
-                service.run_once.side_effect = None if include_legacy else error
+                inventory = [{}, error] if failure_stage == "capacity-refresh" else [{}]
+                service.run_once.side_effect = error if failure_stage == "minimal-retention" else None
                 service.run_once.return_value = {"deleted": 2}
                 with patch.object(cli, "operational_storage_inventory", side_effect=inventory), \
                      patch.object(cli, "observe_operational_storage_capacity"), \
@@ -67,12 +74,20 @@ class MySQLMaintenanceAdmissionTests(unittest.TestCase):
                      patch.object(cli, "MySQLMinimalRetentionRepository") as repository, \
                      patch.object(cli, "MySQLMinimalRetentionService", return_value=service), \
                      patch("digital_twin.modules.outcomes.infrastructure.mysql_decision_calibration_inputs.MySQLDecisionCalibrationInputStore"), \
+                     patch("digital_twin.infrastructure.mysql_schema_tuning.repair_mysql_legacy_metadata", return_value={},
+                           side_effect=error if failure_stage == "legacy-metadata-repair" else None), \
+                     patch("digital_twin.modules.decisions.infrastructure.mysql_projection_inputs.MySQLDecisionProjectionInputStore") as projection, \
+                     patch("digital_twin.modules.decisions.infrastructure.legacy_flow_projection.MySQLLegacyDecisionFlowRepairStore") as flows, \
+                     patch("digital_twin.modules.notifications.infrastructure.legacy_receipt_repair.MySQLLegacyDecisionReceiptRepairStore") as receipts, \
                      patch.object(cli.time, "sleep") as sleep, \
                      self.assertRaises(RuntimeError) as raised:
+                    for factory_mock, stage in ((projection, "decision-memory-repair"),
+                                                (flows, "legacy-flow-repair"),
+                                                (receipts, "legacy-receipt-repair")):
+                        factory_mock.return_value.repair.side_effect = error if failure_stage == stage else None
                     cli.run_mysql_operational_cleanup({}, include_legacy=include_legacy)
                 self.assertIs(error, raised.exception)
-                self.assertEqual("capacity-refresh" if include_legacy else "minimal-retention",
-                                 error.orbit_maintenance_stage)
+                self.assertEqual(failure_stage, error.orbit_maintenance_stage)
                 factory.assert_called_once()
                 service.run_once.assert_called_once()
                 sleep.assert_not_called()

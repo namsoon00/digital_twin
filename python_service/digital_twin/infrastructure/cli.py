@@ -1970,7 +1970,7 @@ def run_mysql_temporal_snapshot_compaction(
 
 def maintenance_command(args) -> int:
     """Run storage maintenance outside the realtime inference path."""
-    settings = dict(runtime_settings())
+    settings = dict(runtime_settings(fast_operational_read=True))
     if args.maintenance_action == "financial-evidence":
         from digital_twin.infrastructure.financial_evidence_maintenance import run_financial_evidence_maintenance
         symbols = [item.strip() for item in str(args.symbols or "").split(",") if item.strip()]
@@ -2045,6 +2045,24 @@ def maintenance_command(args) -> int:
         )
 
         def cleanup_once():
+            nonlocal settings, minimal_policy
+            # A startup fallback is not the owner's capacity policy. Reload
+            # without schema DDL before every observation, including deferred
+            # cleanup turns. A failed read must not manufacture a lower limit
+            # or replace the last known policy with defaults.
+            try:
+                current_settings = dict(runtime_settings(
+                    fast_operational_read=True, require_store_read=True))
+            except Exception as error:
+                return {
+                    "status": "settings-unavailable",
+                    "skipped": "capacity-policy-unavailable",
+                    "settingsReadErrorType": type(error).__name__,
+                    "nextIntervalSeconds": 60,
+                    "deleted": 0,
+                }
+            settings = current_settings
+            minimal_policy = mysql_minimal_retention_policy(settings)
             # Capacity is observable even when queue priority or the realtime
             # lease defers retention. Otherwise critical state can remain stale
             # for hours precisely while inference is blocked by disk pressure.

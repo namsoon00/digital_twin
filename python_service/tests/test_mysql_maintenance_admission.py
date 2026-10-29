@@ -7,6 +7,47 @@ from digital_twin.infrastructure.mysql_realtime_workload_guard import MySQLRealt
 
 
 class MySQLMaintenanceAdmissionTests(unittest.TestCase):
+    def _assert_capacity_turn_never_alerts_from_fallback_limits(self):
+        from types import SimpleNamespace
+        from unittest.mock import Mock, patch
+        from digital_twin.infrastructure import cli, settings as settings_module
+        from digital_twin.infrastructure.mysql_operational import MySQLRuntimeSettingsStore
+
+        # Strict operational reads do not disguise a database failure as the
+        # legacy file or defaults. Other settings callers retain their fallback.
+        with patch.object(MySQLRuntimeSettingsStore, 'load', side_effect=TimeoutError), \
+             patch.object(MySQLRuntimeSettingsStore, '__init__', return_value=None) as init, \
+             patch.object(settings_module, 'read_json', return_value={'fallback': 'yes'}) as fallback:
+            with self.assertRaises(TimeoutError):
+                settings_module.read_settings_store(fast_operational_read=True, require_store_read=True)
+            fallback.assert_not_called()
+            self.assertEqual('1', init.call_args.args[0]['_skipOperationalSchemaBootstrap'])
+            self.assertEqual({'fallback': 'yes'}, settings_module.read_settings_store(fast_operational_read=True))
+
+        startup = {'operationalMySqlDataMaxSizeMb': '32768', 'typedbDataMaxSizeMb': '24576'}
+        saved = {**startup, 'operationalMySqlDataMaxSizeMb': '40960', 'typedbDataMaxSizeMb': '32768'}
+        changed = {**saved, 'operationalMySqlDataMaxSizeMb': '45056'}
+        scheduler, results = Mock(), []
+        admission = SimpleNamespace(run_cleanup=False, deferral_started_at=1,
+            status='deferred', reason='busy', deferred_seconds=0, next_interval_seconds=30)
+        with patch.object(cli, 'runtime_settings', side_effect=[startup, saved, changed, TimeoutError]) as read, \
+             patch.object(cli, 'build_ontology_reasoning_queue_probe', return_value=lambda: {'effectivePendingCount': 1}), \
+             patch.object(cli, 'operational_storage_inventory', side_effect=lambda config: {'mysqlLimitMb': int(config['operationalMySqlDataMaxSizeMb'])}) as inventory, \
+             patch.object(cli, 'observe_operational_storage_capacity') as observe, \
+             patch('digital_twin.platform.domain.mysql_maintenance_admission.mysql_maintenance_admission', return_value=admission), \
+             patch.object(cli, 'run_mysql_operational_cleanup') as cleanup, \
+             patch.object(cli, 'OperationalHistoryRetentionScheduler', return_value=scheduler) as factory:
+            scheduler.run_forever.side_effect = lambda: results.extend(factory.call_args.args[0]() for _ in range(3))
+            cli.maintenance_command(SimpleNamespace(maintenance_action='watch', interval='60'))
+        self.assertEqual([saved, changed], [call.args[0] for call in inventory.call_args_list])
+        self.assertEqual([40960, 45056], [call.kwargs['snapshot']['mysqlLimitMb'] for call in observe.call_args_list])
+        self.assertEqual('capacity-policy-unavailable', results[-1]['skipped'])
+        self.assertEqual('TimeoutError', results[-1]['settingsReadErrorType'])
+        self.assertEqual(60, results[-1]['nextIntervalSeconds'])
+        self.assertTrue(all(call.kwargs == {'fast_operational_read': True, 'require_store_read': True}
+                            for call in read.call_args_list[1:]))
+        cleanup.assert_not_called()
+
     def test_cleanup_timeout_does_not_replay_bounded_or_completed_retention(self):
         from unittest.mock import Mock, patch
         from digital_twin.infrastructure import cli
@@ -187,6 +228,7 @@ class MySQLMaintenanceAdmissionTests(unittest.TestCase):
             self.assertEqual(sql, storage.snapshot_schema_statement(sql, supported=False))
 
     def test_capacity_refresh_runs_even_when_busy_queue_defers_retention(self):
+        self._assert_capacity_turn_never_alerts_from_fallback_limits()
         from types import SimpleNamespace
         from unittest.mock import Mock, patch
         from digital_twin.infrastructure import cli

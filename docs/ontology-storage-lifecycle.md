@@ -170,6 +170,15 @@ files, live data and indexes, and allocator pages reclaimable by explicit
 compaction. Increasing retention does not treat deleted but unreclaimed pages
 as live investment history.
 
+The maintenance worker reloads the persisted settings before every capacity
+observation, including turns that defer cleanup for realtime work. This read
+skips schema bootstrap and must succeed: a failed settings read defers the turn
+for 60 seconds with `capacity-policy-unavailable`, without publishing a new
+capacity state using legacy-file or default limits. The previous capacity
+record retains its timestamp; it is not evidence of a fresh observation.
+Changing a stored ceiling therefore takes effect on the next successful turn
+without restarting the worker.
+
 MySQL physical compaction is explicit because `OPTIMIZE TABLE` can briefly
 rebuild a table. The command selects only allow-listed tables, requires at
 least 20% reclaimable space, and preserves the configured shared-disk reserve:

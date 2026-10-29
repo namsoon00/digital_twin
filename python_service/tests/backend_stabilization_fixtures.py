@@ -44,6 +44,9 @@ ADDED_METHODS = {
         # Share the existing wait threshold between lane choice and claim;
         # real MySQL fairness/boundary tests live in test_reasoning_job_fences.
         "lane_aged_cutoff",
+        # Operational pending-only telemetry has no historical equivalent;
+        # test_reasoning_worker_bootstrap covers its real SQL and failure path.
+        "runtime_summary",
     }
 }
 
@@ -147,6 +150,15 @@ class ExpandParticipants(ast.NodeTransformer):
         result = self.participant(node.value)
         if result:
             spec, body = result
+            if node.value.func.attr == "upsert_decision_episode":
+                # The owner now writes its compact read model atomically with
+                # the audit. Preserve both executable writes in the reviewed
+                # coordinator fingerprint; only its unused return is omitted.
+                assert spec["kind"] == "sql" and len(body) == 3
+                assert isinstance(body[0], ast.Assign)
+                assert isinstance(body[-1], ast.Return)
+                assert ast.unparse(body[0].targets[0]) == ast.unparse(body[-1].value) == "result"
+                return body[:-1]
             assert spec["kind"] == "sql" and len(body) == 1
             return ast.Expr(value=body[0].value)
         return self.generic_visit(node)

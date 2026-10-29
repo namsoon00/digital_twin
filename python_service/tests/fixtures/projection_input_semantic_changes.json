@@ -10,5 +10,11 @@
     "bodyHash": "a66cce5cdcbeba5ae8c6744253b2370f949b60065ce1966f875aef6e36eb4c84",
     "reason": "Retain observed instrument-to-market identity independently of active RuleBox predicates so paired releases consume identical factual ABoxes. Do not fabricate a missing market or traverse a market hub to unrelated instruments. Graph assembly cache v25 prevents reuse of the old shape.",
     "regressionTest": "test_rule_strategy_contract.RuleStrategyContractTests.test_operational_strategy_release_owns_market_clock_schema_and_complete_bundle"
+  },
+  "decision_episode_projection_context": {
+    "baselineHash": "cfbd8d06748d03e0fa1fab10cdb9582606fc9006aa8c2f5c08a6c7b23c3ecb0f",
+    "bodyHash": "0d5b5a257d94a2b3eaf413cfe5239db399b04c29eca1ef36ab355ddaa8f4c683",
+    "reason": "Use the atomically maintained decision-memory projection with exact source revision and legacy fallback; preserve the same outcomes, source cutoff and ABox fields. Outcome observation remains synchronous and unchanged.",
+    "regressionTest": "test_realtime_decision_inputs.DecisionProjectionStorageTests.test_compact_read_preserves_native_input_outcomes_cutoff_and_subject"
   }
 }

@@ -10,6 +10,7 @@ import threading
 import time
 
 from .operational_error_reporting import operational_error_reporter, report_runtime_error
+from .background_capacity import managed_background_call, managed_background_should_retire
 
 
 MIN_REALTIME_INTERVAL_SECONDS = 3 * 60
@@ -646,10 +647,12 @@ class ModelReviewScheduler:
         while self.running:
             started = time.monotonic()
             try:
-                self.runner.run_once(limit=limit)
+                managed_background_call(lambda: self.runner.run_once(limit=limit))
             except Exception as error:  # noqa: BLE001 - worker must continue after a cycle failure.
                 print("Python model review worker error: " + str(error))
                 report_runtime_error(self.error_reporter, "Python model review worker", error, "review cycle")
+            if managed_background_should_retire():
+                return
             end_at = time.monotonic() + max(1.0, self.interval_seconds - (time.monotonic() - started))
             wait_until_running(lambda: self.running, end_at)
 
@@ -670,7 +673,7 @@ class HistoricalReplayScheduler:
         while self.running:
             started = time.monotonic()
             try:
-                processed = self.runner.run_once(limit=limit)
+                processed = managed_background_call(lambda: self.runner.run_once(limit=limit), 0)
                 if processed:
                     print("Processed historical replay jobs: " + str(processed))
             except Exception as error:  # noqa: BLE001 - worker must survive one failed replay.
@@ -681,6 +684,8 @@ class HistoricalReplayScheduler:
                     error,
                     "historical replay cycle",
                 )
+            if managed_background_should_retire():
+                return
             end_at = time.monotonic() + max(1.0, self.interval_seconds - (time.monotonic() - started))
             wait_until_running(lambda: self.running, end_at)
 
@@ -1455,31 +1460,35 @@ class OntologyLabScheduler:
         while self.running:
             started = time.monotonic()
             try:
-                result = self.service.run_once(limit=limit, force=force)
-                if result.get("processedCount"):
-                    print(
-                        "Ontology lab "
-                        + str(result.get("status"))
-                        + " processed="
-                        + str(result.get("processedCount", 0))
-                        + " runs="
-                        + str(result.get("runCount", 0))
-                        + " skipped="
-                        + str(result.get("skippedCount", 0))
-                    )
-                if self.auto_suggest_due(started):
-                    auto_result = self.run_auto_suggest()
-                    print(
-                        "Ontology lab auto-suggest "
-                        + str(auto_result.get("status"))
-                        + " created="
-                        + str(auto_result.get("createdCount", 0))
-                        + " skipped="
-                        + str(auto_result.get("skippedCount", 0))
-                    )
+                def run_turn():
+                    result = self.service.run_once(limit=limit, force=force)
+                    if result.get("processedCount"):
+                        print(
+                            "Ontology lab "
+                            + str(result.get("status"))
+                            + " processed="
+                            + str(result.get("processedCount", 0))
+                            + " runs="
+                            + str(result.get("runCount", 0))
+                            + " skipped="
+                            + str(result.get("skippedCount", 0))
+                        )
+                    if self.auto_suggest_due(started):
+                        auto_result = self.run_auto_suggest()
+                        print(
+                            "Ontology lab auto-suggest "
+                            + str(auto_result.get("status"))
+                            + " created="
+                            + str(auto_result.get("createdCount", 0))
+                            + " skipped="
+                            + str(auto_result.get("skippedCount", 0))
+                        )
+                managed_background_call(run_turn)
             except Exception as error:  # noqa: BLE001 - long-running lab worker must continue after a cycle failure.
                 print("Python ontology lab worker error: " + str(error))
                 report_runtime_error(self.error_reporter, "Python ontology lab worker", error, "lab cycle")
+            if managed_background_should_retire():
+                return
             end_at = time.monotonic() + max(1.0, self.interval_seconds - (time.monotonic() - started))
             wait_until_running(lambda: self.running, end_at)
 
@@ -1724,7 +1733,7 @@ class NewsAnalysisEnrichmentScheduler:
         while self.running:
             started = time.monotonic()
             try:
-                result = self.runner.run_once()
+                result = managed_background_call(self.runner.run_once, {})
                 if result.get("processedCount") or result.get("pendingCount"):
                     print(
                         "News analysis "
@@ -1742,6 +1751,8 @@ class NewsAnalysisEnrichmentScheduler:
             except Exception as error:  # noqa: BLE001 - analysis must not stop collection or later retries.
                 print("Python news analysis worker error: " + str(error), flush=True)
                 report_runtime_error(self.error_reporter, "Python news analysis worker", error, "analysis cycle")
+            if managed_background_should_retire():
+                return
             end_at = time.monotonic() + max(1.0, self.interval_seconds - (time.monotonic() - started))
             wait_until_running(lambda: self.running, end_at)
 
@@ -1763,7 +1774,7 @@ class InvestmentResearchScheduler:
         while self.running:
             started = time.monotonic()
             try:
-                result = self.runner.run_once(limit=self.batch_size)
+                result = managed_background_call(lambda: self.runner.run_once(limit=self.batch_size), {})
                 if result.get("processedCount"):
                     print(
                         "Investment research processed="
@@ -1775,6 +1786,8 @@ class InvestmentResearchScheduler:
             except Exception as error:  # noqa: BLE001 - research queue must continue after one failed task.
                 print("Python investment research worker error: " + str(error), flush=True)
                 report_runtime_error(self.error_reporter, "Python investment research worker", error, "research cycle")
+            if managed_background_should_retire():
+                return
             end_at = time.monotonic() + max(1.0, self.interval_seconds - (time.monotonic() - started))
             wait_until_running(lambda: self.running, end_at)
 

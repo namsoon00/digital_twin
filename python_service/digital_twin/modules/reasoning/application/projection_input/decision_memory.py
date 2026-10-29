@@ -71,7 +71,12 @@ def decision_episode_projection_context(
     per_symbol_limit = int(projection["perSymbolLimit"] or 1)
     maximum_episode_count = int(projection["maximumEpisodeCount"] or 1)
     try:
-        if symbols and hasattr(_inputs.decision_episode_store, "list_for_symbols"):
+        if symbols and callable(getattr(type(_inputs.decision_episode_store), "list_projection_for_symbols", None)):
+            source_episodes = _inputs.decision_episode_store.list_projection_for_symbols(
+                symbols, account_id=snapshot.account_id,
+                limit_per_symbol=per_symbol_limit, as_of=str(snapshot.generated_at or ""),
+            )
+        elif symbols and hasattr(_inputs.decision_episode_store, "list_for_symbols"):
             source_episodes = _inputs.decision_episode_store.list_for_symbols(
                 symbols,
                 account_id=snapshot.account_id,

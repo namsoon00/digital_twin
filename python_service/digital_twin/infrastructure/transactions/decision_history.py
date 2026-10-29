@@ -453,6 +453,16 @@ class MySQLInvestmentDecisionEpisodeStore(MySQLOperationalConnection):
             _hydrate_outcomes=self.hydrate_outcomes,
         )
 
+    def list_projection_for_symbols(
+        self, symbols: Iterable[str], account_id: str = "",
+        limit_per_symbol: int = 20, as_of: str = "",
+    ) -> List[DecisionEpisode]:
+        return episode_queries.list_for_symbols(
+            symbols, account_id, limit_per_symbol, as_of,
+            _connect=self.connect, _episode_from_row=self.episode_from_row,
+            _hydrate_outcomes=self.hydrate_outcomes, projection_only=True,
+        )
+
     def performance(
         self,
         account_id: str = "",

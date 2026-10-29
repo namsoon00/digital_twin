@@ -460,6 +460,7 @@ def notifications_command(args) -> int:
 
 def ai_control_command(args) -> int:
     from digital_twin.infrastructure.service_factory import build_ai_control_service, ai_control_status
+    from digital_twin.infrastructure.background_capacity import managed_background_call, managed_background_should_retire
     import threading
     if args.ai_control_action == "status":
         print(json.dumps(ai_control_status(), ensure_ascii=False))
@@ -467,11 +468,13 @@ def ai_control_command(args) -> int:
     stop = threading.Event()
     while True:
         try:
-            result = build_ai_control_service().run_once()
+            result = managed_background_call(
+                lambda: build_ai_control_service().run_once(), {"status": "resource-deferred"},
+            )
             print(json.dumps(result, ensure_ascii=False), flush=True)
         except Exception as error:
             print(json.dumps({"status": "unavailable", "reason": type(error).__name__}), flush=True)
-        if args.ai_control_action == "once":
+        if args.ai_control_action == "once" or managed_background_should_retire():
             return 0
         stop.wait(60)
 
@@ -1360,7 +1363,9 @@ def reasoning_engine_platform_command(args) -> int:
 
     configured = runtime_settings()
     platform = build_reasoning_engine_platform(configured)
-    state = platform.initialize()
+    state = platform.initialize(include_diagnostics=args.reasoning_engine_action not in {
+        "v2-watch", "v2-once", "shadow-watch", "shadow-once",
+    })
     if args.reasoning_engine_action == "status":
         print(json.dumps(
             platform.current_status(
@@ -1651,6 +1656,12 @@ def run_mysql_operational_cleanup(
             stage = "calibration-repair"
             result["decisionCalibrationInputs"] = (
                 MySQLDecisionCalibrationInputStore(settings).repair()
+                if include_legacy else {"status": "deferred", "reason": "bounded-retention-turn"}
+            )
+            from digital_twin.modules.decisions.infrastructure.mysql_projection_inputs import MySQLDecisionProjectionInputStore
+            stage = "decision-memory-repair"
+            result["decisionProjectionInputs"] = (
+                MySQLDecisionProjectionInputStore(settings).repair()
                 if include_legacy else {"status": "deferred", "reason": "bounded-retention-turn"}
             )
             if connection_retries:

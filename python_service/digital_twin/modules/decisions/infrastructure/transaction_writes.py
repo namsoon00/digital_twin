@@ -7,6 +7,7 @@ import gzip
 from digital_twin.modules.decisions.domain.ai_inference_queue import AI_INFERENCE_COMPLETED, AI_INFERENCE_SUPERSEDED, AIInferenceRequest
 from digital_twin.infrastructure.operational_common import json_dumps
 from digital_twin.infrastructure.ai_usage_metrics import ai_execution_usage
+from .projection_input_write import upsert_decision_projection_input
 
 
 def insert_ai_request(
@@ -237,7 +238,7 @@ def upsert_decision_episode(
     payload: Any,
     stamp: Any,
 ):
-    return connection.execute(
+    result = connection.execute(
         """
                 INSERT INTO investment_decision_episodes (
                     episode_id, account_id, symbol, subject_name, question_id,
@@ -275,6 +276,8 @@ def upsert_decision_episode(
             stamp,
         ),
     )
+    upsert_decision_projection_input(connection, episode.episode_id, payload, stamp)
+    return result
 
 
 def advance_current_decision_flow(

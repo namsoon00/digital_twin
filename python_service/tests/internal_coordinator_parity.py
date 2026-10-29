@@ -45,7 +45,7 @@ def decision_history_members():
     for method in cls.body:
         if not isinstance(method, ast.FunctionDef):
             continue
-        if method.name in {"outcome_collection_targets", "record_outcome_baselines", "ontology_evolution_comparison", "experiment_observation_plans", "experiment_inference_coverage", "experiment_outcome_schedule"}:
+        if method.name in {"outcome_collection_targets", "record_outcome_baselines", "ontology_evolution_comparison", "experiment_observation_plans", "experiment_inference_coverage", "experiment_outcome_schedule", "list_projection_for_symbols"}:
             # New closed-loop entry points have no pre-extraction equivalent.
             continue
         if method.name == "save":

@@ -72,3 +72,41 @@ class BackgroundCapacityTests(unittest.TestCase):
         self.assertNotIn("ORBIT_BACKGROUND_ADMISSION", specs["monitor"]["env"])
         self.assertEqual("1", specs["investment-research"]["env"]["ORBIT_BACKGROUND_ADMISSION"])
         self.assertEqual("512", specs["investment-research"]["env"]["ORBIT_WORKER_MAX_MEMORY_MB"])
+
+
+class ReadyDeliveryPriorityTests(unittest.TestCase):
+    def runner(self):
+        from types import SimpleNamespace
+        from digital_twin.modules.reasoning.application.independent_reasoning_engine import IndependentReasoningJobRunner
+        class Queue:
+            lane = "REALTIME"
+            fail = False
+            def next_lane(self, deployment_id):
+                if self.fail:
+                    raise TimeoutError("advisory probe unavailable")
+                return self.lane
+        engine = Mock()
+        engine.descriptor.return_value = SimpleNamespace(deployment_id="active")
+        return IndependentReasoningJobRunner(Queue(), engine, Mock(), deployment_role="delivery")
+
+    def test_ready_delivery_gets_two_turns_then_background_cannot_starve(self):
+        runner = self.runner()
+        result = {"status": "completed", "processedCount": 1}
+        self.assertEqual([True, True, False, True], [runner.defer_background_for_ready_delivery(result) for _ in range(4)])
+
+    def test_missing_source_and_failed_probe_leave_background_repair_available(self):
+        runner = self.runner()
+        result = {"status": "completed", "processedCount": 1}
+        runner.queue.lane = None
+        self.assertFalse(runner.defer_background_for_ready_delivery(result))
+        runner.queue.fail = True
+        self.assertFalse(runner.defer_background_for_ready_delivery(result))
+        self.assertEqual(0, runner._consecutive_background_deferrals)
+
+    def test_failed_idle_and_candidate_turns_never_defer_background(self):
+        runner = self.runner()
+        for result in ({"status": "idle"}, {"status": "deferred"},
+                       {"status": "completed", "processedCount": 1, "result": {"retryable": True}}):
+            self.assertFalse(runner.defer_background_for_ready_delivery(result))
+        runner.deployment_role = "candidate"
+        self.assertFalse(runner.defer_background_for_ready_delivery({"status": "completed", "processedCount": 1}))

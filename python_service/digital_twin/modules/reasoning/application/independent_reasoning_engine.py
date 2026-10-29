@@ -2054,6 +2054,7 @@ class IndependentReasoningJobRunner:
         self._queue_preparation_at = 0.0
         self._queue_preparation: Dict[str, object] = {}
         self._consecutive_delivery_turns = 0
+        self._consecutive_background_deferrals = 0
 
     def enabled(self) -> bool:
         return str(self.settings.get("reasoningEngineV2IndependentEnabled") or "1").strip().lower() not in {"0", "false", "no", "off", "disabled"}
@@ -2281,6 +2282,7 @@ class IndependentReasoningJobRunner:
             and result.get("reasonCode") != "typedb-graph-writer-owned"
             and not result.get("graphWriterBackoff")
             and self.background_graph_tasks
+            and not self.defer_background_for_ready_delivery(result)
         ):
             ownership = self.acquire_graph_writer_ownership()
             if ownership.get("acquired"):
@@ -2292,6 +2294,35 @@ class IndependentReasoningJobRunner:
             else:
                 self._last_background_graph_turn = self.graph_writer_deferred_result(ownership)
         return result
+
+    def defer_background_for_ready_delivery(self, result) -> bool:
+        """Give ready delivery two turns, then retain background progress.
+
+        next_lane uses the normal source/availability filters without claiming
+        work. A source-blocked queue therefore still receives world repair
+        immediately. This changes scheduling only, never graph authority.
+        """
+        probe = getattr(type(self.queue), "next_lane", None)
+        eligible = (
+            self.deployment_role in {"delivery", "active"}
+            and result.get("status") == "completed" and result.get("processedCount")
+            and not result.get("retryAfterSeconds")
+            and not dict(result.get("result") or {}).get("retryable")
+        )
+        if eligible and self._consecutive_background_deferrals < 2 and callable(probe):
+            try:
+                lane = probe(self.queue, self.engine.descriptor().deployment_id)
+            except Exception:
+                lane = None
+            if lane:
+                self._consecutive_background_deferrals += 1
+                self._last_background_graph_turn = {
+                    "status": "deferred-ready-delivery", "nextLane": str(lane),
+                    "consecutiveDeferrals": self._consecutive_background_deferrals,
+                }
+                return True
+        self._consecutive_background_deferrals = 0
+        return False
 
     def publish_released_writer_state(self) -> None:
         if getattr(self, "_last_published_graph_writer_acquired", False):

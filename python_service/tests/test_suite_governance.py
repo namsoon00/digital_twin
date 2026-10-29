@@ -466,7 +466,8 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # Lossless decision inputs, capacity admission, and execution-only startup
         # preserve sixteen additional production boundaries.
         # Seven startup/history isolation, bounded repair and rollback contracts.
-        self.assertLessEqual(total, 2841)
+        # Three bounded delivery/background fairness and repair fallback contracts.
+        self.assertLessEqual(total, 2844)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

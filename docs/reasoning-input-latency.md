@@ -961,3 +961,19 @@ idempotence and comparison cursor wrap against isolated MySQL. The first bounded
 production decision-memory repair restored 25 rows in 1,744.717 ms without
 changing the original decision audits. This is a repair measurement, not an
 end-to-end alert timing result.
+
+After recovery the first two actual jobs completed in 90,378 and 45,707 ms;
+they had already accumulated more than an hour of queue debt. The first native
+rule execution reported 7,242 ms, and a separate read-only performance profile
+(with profiling instrumentation enabled) spent 8,901 ms reading/evaluating the
+existing account history. One intervening
+graph maintenance turn consumed 7,420 ms. These are measured residual costs,
+not evidence that the 10-second target has been reached.
+
+Ready delivery now receives at most two successful turns before background
+graph maintenance runs again. A failed/unknown ready-queue probe, idle queue,
+source wait or retry keeps repair immediately available. The graph writer is
+still released between turns and candidate polling fairness is unchanged.
+Historical scoring and native source/admissibility checks remain synchronous;
+further removal from the live path requires an exact source-revision and
+point-in-time report contract, not a stale TTL cache or skipped qualification.

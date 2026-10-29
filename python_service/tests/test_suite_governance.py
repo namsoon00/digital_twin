@@ -456,7 +456,9 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # Six producer-to-transport, frozen scope and rule-cause presentation regressions.
         # Price-context discovery, partial evidence, bounded reads, replay and delivery proof.
         # Eight fixed-price survey, source-clock, bounded-read, outcome and receipt contracts.
-        self.assertLessEqual(total, 2784)
+        # Three collection-clock and dispatch-reason regressions span stored
+        # source facts, native condition evidence and the final expiry gate.
+        self.assertLessEqual(total, 2787)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

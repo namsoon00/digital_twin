@@ -1155,7 +1155,9 @@ def observation_metadata(properties: Dict[str, object], observed_value: object, 
     elif freshness != "fresh":
         gate_reason = str(properties.get("freshnessReason") or "원천 데이터가 허용 시간보다 오래되었습니다.")
     elif not judgement_usable:
-        gate_reason = str(properties.get("freshnessGateReason") or properties.get("marketSessionReason") or "현재 거래 세션에서는 판단 근거로 사용하지 않습니다.")
+        gate_reason = str(properties.get("freshnessGateReason") or properties.get("marketSessionReason")
+                          or properties.get("eventDecisionReason")
+                          or "원천 자료의 품질 또는 사용 가능 여부가 확인되지 않았습니다.")
     else:
         gate_reason = str(properties.get("freshnessGateReason") or "원천 시각과 거래 세션 기준을 통과했습니다.")
     result = {

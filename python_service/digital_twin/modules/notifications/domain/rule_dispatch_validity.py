@@ -6,7 +6,7 @@ import math
 from digital_twin.modules.market_data.contracts import max_age_minutes_for_message_type
 
 
-VERSION = "rule-notice-dispatch-validity-v2"
+VERSION = "rule-notice-dispatch-validity-v3"
 
 
 def rule_event_proof(event, current):
@@ -58,6 +58,33 @@ def timestamp(value):
         return None
 
 
+def failure_description(check):
+    """Explain the recorded failure without treating every rejection as age."""
+    code = check.get("reasonCode")
+    if code == "rule_dispatch_transition_conflict":
+        return "현재도 성립한 규칙 근거와 해제 기록이 서로 달라 변화 내용을 확인해야 합니다."
+    if code in {"rule_dispatch_proof_missing", "rule_dispatch_group_proof_missing"}:
+        return "규칙이 성립한 개별 조건의 원본 근거를 확인할 수 없습니다."
+    subject = str(check.get("source") or "규칙 근거") + " 자료"
+    kind = check.get("failureKind")
+    if kind == "missing-source-clock":
+        return subject + "의 원천 기준 시각을 확인할 수 없습니다."
+    if kind == "future-source-clock":
+        return subject + "의 원천 기준 시각이 발송 확인 시각보다 뒤여서 사용할 수 없습니다."
+    if kind == "invalid-validity-contract":
+        return subject + "의 허용 경과 시간 또는 유효 종료 시각이 올바르게 기록되지 않았습니다."
+    if kind == "source-age-exceeded":
+        return (subject + "의 원천 확인 후 " + str(check["ageMinutes"]) + "분이 지나 "
+                + str(check["maxAgeMinutes"]) + "분의 허용 시간을 초과했습니다.")
+    if kind == "validity-ended":
+        return subject + "의 유효 종료 시각이 지났습니다."
+    if kind == "quality-rejected":
+        return subject + "가 분석에 사용할 수 없는 상태로 기록됐습니다." + (
+            " 사유: " + str(check["freshnessGateReason"]) if check.get("freshnessGateReason") else
+            " 원천 품질 판정 사유를 확인해야 합니다.")
+    return subject + "의 신선도 상태가 사용 가능한 것으로 확인되지 않았습니다."
+
+
 def rule_dispatch_validity(packet, settings=None, now=None):
     """Outcome/source-status replies retain their historical observation clock.
 
@@ -81,7 +108,10 @@ def rule_dispatch_validity(packet, settings=None, now=None):
             if condition.get("kind") == "any-condition-group":
                 continue  # Its measured members, not the structural marker, own validity.
             row = {"ruleId": rid, "conditionId": condition.get("conditionId"), "field": condition.get("field"),
-                   "observedAt": condition.get("observedAt"), "source": condition.get("source")}
+                   "observedAt": condition.get("observedAt"), "source": condition.get("source"),
+                   "freshnessStatus": condition.get("freshnessStatus"),
+                   "judgementEvidenceUsable": condition.get("judgementEvidenceUsable"),
+                   "freshnessGateReason": condition.get("freshnessGateReason")}
             static = condition.get("freshnessRequired") is False or condition.get("freshnessStatus") == "not-applicable"
             if static and condition.get("judgementEvidenceUsable") is not False:
                 checks.append({**row, "status": "not-applicable"})
@@ -100,14 +130,28 @@ def rule_dispatch_validity(packet, settings=None, now=None):
                        or age is None or age < -1 or not math.isfinite(maximum) or maximum <= 0
                        or bool(condition.get("validUntil") and until is None))
             expired = not invalid and (age > maximum or (until is not None and clock > until))
+            failure_kind = (
+                "quality-rejected" if static and condition.get("judgementEvidenceUsable") is False else
+                "missing-source-clock" if age is None else
+                "future-source-clock" if age < -1 else
+                "invalid-validity-contract" if not math.isfinite(maximum) or maximum <= 0
+                    or bool(condition.get("validUntil") and until is None) else
+                "source-age-exceeded" if age > maximum else
+                "validity-ended" if until is not None and clock > until else
+                "quality-rejected" if condition.get("judgementEvidenceUsable") is False else
+                "freshness-unconfirmed" if invalid else ""
+            )
             checks.append({**row, "status": "unusable" if invalid else "expired" if expired else "fresh",
                            "ageMinutes": round(age, 2) if age is not None else None, "maxAgeMinutes": maximum,
+                           "failureKind": failure_kind,
                            "reasonCode": "rule_evidence_unavailable_at_dispatch" if invalid else
                                          "rule_evidence_expired_at_dispatch" if expired else ""})
     failed = [c for c in checks if c["status"] not in {"fresh", "not-applicable"}]
+    for check in failed:
+        check["reason"] = failure_description(check)
     return {"version": VERSION, "applies": bool(events), "allowed": not failed,
             "checkedAt": clock.isoformat().replace("+00:00", "Z"),
             "reasonCode": failed[0]["reasonCode"] if failed else "",
-            "reason": ("알림에 사용한 규칙 근거의 유효기간이 지났거나 원천 시각을 확인할 수 없어 새 자료로 재분석합니다."
+            "reason": (failed[0]["reason"]
                        if failed else "알림에 사용한 규칙 근거의 원천 시각과 유효기간을 확인했습니다."),
             "checks": checks}

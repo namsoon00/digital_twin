@@ -63,6 +63,7 @@ _EXPORTS.update({
     'crypto_freshness': ('digital_twin.modules.market_data.domain.crypto_market_signals', 'crypto_freshness'),
     'crypto_freshness_is_usable': ('digital_twin.modules.market_data.domain.crypto_market_signals', 'crypto_freshness_is_usable'),
     'crypto_market_observation_events': ('digital_twin.modules.market_data.domain.crypto_market_signals', 'crypto_market_observation_events'),
+    'crypto_collection_clock': ('digital_twin.modules.market_data.domain.crypto_market_signals', 'crypto_collection_clock'),
     'crypto_market_positions': ('digital_twin.modules.market_data.domain.crypto_market_signals', 'crypto_market_positions'),
     'crypto_market_transitions': ('digital_twin.modules.market_data.domain.crypto_market_signals', 'crypto_market_transitions'),
     'crypto_markets_by_symbol': ('digital_twin.modules.market_data.domain.crypto_market_signals', 'crypto_markets_by_symbol'),

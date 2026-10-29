@@ -9,7 +9,7 @@ meaningfully changed.
 from __future__ import annotations
 
 from copy import deepcopy
-from datetime import timezone
+from datetime import datetime, timezone
 from typing import Dict, Iterable, List, Mapping
 
 from digital_twin.modules.market_data.domain.external_signal_quality import parse_iso_datetime
@@ -50,6 +50,30 @@ def _timestamp_key(value: object) -> float:
 def _latest_timestamp(values: Iterable[object]) -> str:
     rows = [str(value or "").strip() for value in values if str(value or "").strip()]
     return max(rows, key=_timestamp_key) if rows else ""
+
+
+def crypto_collection_clock(markets: object) -> str:
+    """Return the capture clock shared by one complete CoinGecko response.
+
+    A fact's persistence/adapter clock is not the vendor response's capture
+    clock. Recover the latter from the unchanged rows, including legacy facts;
+    never join mixed captures by rounding or a timestamp tolerance.
+    """
+    if not isinstance(markets, Mapping) or not markets:
+        return ""
+    clocks = []
+    for item in markets.values():
+        if not isinstance(item, Mapping) or str(item.get("provider") or "").casefold() != "coingecko":
+            return ""
+        stamp = str(item.get("sourceFetchedAt") or item.get("fetchedAt") or "")
+        try:
+            parsed = datetime.fromisoformat(stamp.replace("Z", "+00:00"))
+        except ValueError:
+            return ""
+        if parsed.tzinfo is None:
+            return ""
+        clocks.append((stamp, parsed))
+    return clocks[0][0] if all(clock == clocks[0][1] for _, clock in clocks) else ""
 
 
 def crypto_market_snapshot(external_signals: Mapping[str, object] = None) -> Dict[str, object]:

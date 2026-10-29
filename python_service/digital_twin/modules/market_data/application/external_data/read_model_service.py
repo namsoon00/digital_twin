@@ -9,6 +9,7 @@ from digital_twin.modules.news_intelligence.contracts import (
     source_reference_from_fact_row,
 )
 from digital_twin.modules.market_data.domain.external_data_fitness import evaluate_external_data_fitness
+from digital_twin.modules.market_data.domain.crypto_market_signals import crypto_collection_clock
 from digital_twin.modules.market_data.domain.market_index_observations import merge_market_index_maps
 
 
@@ -468,7 +469,13 @@ class ExternalSignalsReadModelService:
                 stale.add(dataset_id)
             result["fetchedAt"] = max_timestamp(result.get("fetchedAt"), row.get("fetchedAt"))
             if dataset_id == "coingecko.market":
-                result["cryptoFetchedAt"] = str(row.get("fetchedAt") or "")
+                # Legacy fact envelopes were timestamped after their response
+                # rows. Preserve row clocks and lineage, and derive collection
+                # freshness from that response rather than its later storage.
+                result["cryptoFetchedAt"] = (
+                    crypto_collection_clock(fragment.get("cryptoMarkets"))
+                    or str(row.get("fetchedAt") or "")
+                )
                 result["cryptoLastAttemptAt"] = str(row.get("updatedAt") or row.get("fetchedAt") or "")
         # Document extraction may refer to an older filing. It does not own
         # the current full-statement response or its reporting basis.

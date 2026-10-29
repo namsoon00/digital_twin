@@ -1,5 +1,7 @@
+from dataclasses import replace
 from typing import Dict, Iterable, List
 
+from digital_twin.modules.market_data.contracts import crypto_collection_clock
 from digital_twin.modules.market_data.public import CollectionJob, CollectionPartition, DatasetDescriptor, ExternalSubject
 from .base import empty_signals, global_partition, legacy_provider, observation, require_payload, source_as_of
 
@@ -31,10 +33,14 @@ class CoinGeckoMarketAdapter:
         markets = require_payload(signals, "cryptoMarkets")
         fragment = {"cryptoMarkets": markets}
         as_of = source_as_of(markets, signals.get("cryptoSourceAsOf") or signals.get("cryptoFetchedAt"))
-        return observation(
+        captured_at = crypto_collection_clock(markets)
+        if not captured_at:
+            raise ValueError("CoinGecko response has no consistent collection clock")
+        result = observation(
             self.descriptor,
             "global",
             fragment,
             preferred_source_as_of=as_of,
             watermark={"sourceAsOf": as_of},
         )
+        return replace(result, fetched_at=captured_at)

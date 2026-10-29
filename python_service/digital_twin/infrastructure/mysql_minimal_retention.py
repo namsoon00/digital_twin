@@ -97,8 +97,9 @@ def _research_audit_expired_sql() -> str:
 class MySQLMinimalRetentionRepository:
     """Low-priority, idempotent MySQL compaction adapter."""
 
-    def __init__(self, connection):
+    def __init__(self, connection, *, candidate_query_timeout_ms: int = 0):
         self.connection = connection
+        self.candidate_query_timeout_ms = max(0, int(candidate_query_timeout_ms))
 
     def preview(self, policy: MySQLMinimalRetentionPolicy, now: datetime = None) -> Dict[str, object]:
         cutoffs = policy_cutoffs(policy, now=now)
@@ -960,11 +961,16 @@ class MySQLMinimalRetentionRepository:
         return self._result("verified_reasoning_source_snapshots", deleted, bytes_deleted)
 
     def _delete_reasoning_comparisons(self, policy, budget, cutoff_iso) -> Dict[str, object]:
+        # Materialize only indexed IDs before touching potentially large JSON.
+        # LIMIT inside the derived table prevents merging it into a payload scan.
         candidates = self._byte_bounded_candidates(
-            "SELECT comparison_id, OCTET_LENGTH(payload_json) AS payload_bytes "
-            "FROM `reasoning_engine_comparisons` WHERE created_at < " + _cutoff_sql()
-            + " ORDER BY created_at, comparison_id LIMIT %s",
-            (cutoff_iso, policy.batch_size),
+            "SELECT comparison.comparison_id, OCTET_LENGTH(comparison.payload_json) AS payload_bytes "
+            "FROM (SELECT comparison_id, created_at FROM `reasoning_engine_comparisons` "
+            "WHERE created_at < " + _cutoff_sql()
+            + " ORDER BY created_at, comparison_id LIMIT %s) candidate "
+            "JOIN `reasoning_engine_comparisons` comparison ON comparison.comparison_id = candidate.comparison_id "
+            "ORDER BY candidate.created_at, candidate.comparison_id",
+            (cutoff_iso, min(8, policy.batch_size)),
             "comparison_id",
             policy,
             budget,
@@ -1647,6 +1653,16 @@ class MySQLMinimalRetentionRepository:
     ) -> List[object]:
         if not self._has_budget(budget):
             return []
+        if self.candidate_query_timeout_ms:
+            remaining_ms = int(1000 * (float(budget["maxSeconds"])
+                                      - (time.monotonic() - float(budget["started"]))))
+            timeout_ms = min(self.candidate_query_timeout_ms, remaining_ms)
+            if timeout_ms <= 0:
+                return []
+            # A socket timeout alone can leave the SELECT running on MySQL.
+            # Scope this server deadline to the read, without changing pooled
+            # session settings or applying a SELECT-only hint to mutations.
+            sql = sql.replace("SELECT ", "SELECT /*+ MAX_EXECUTION_TIME(" + str(timeout_ms) + ") */ ", 1)
         rows = _fetchall(_execute(self.connection, sql, params))
         return self._bounded_candidate_rows(rows, identifier, policy, budget, compound_key=compound_key)
 

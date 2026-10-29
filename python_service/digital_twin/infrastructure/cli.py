@@ -1601,7 +1601,7 @@ def run_mysql_operational_cleanup(
                 )
                 stage = "minimal-retention"
                 minimal_retention = MySQLMinimalRetentionService(
-                    MySQLMinimalRetentionRepository(connection),
+                    MySQLMinimalRetentionRepository(connection, candidate_query_timeout_ms=1500),
                     settings,
                 ).run_once()
                 retention_completed = True

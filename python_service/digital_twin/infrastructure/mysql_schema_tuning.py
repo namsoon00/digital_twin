@@ -181,6 +181,11 @@ MYSQL_OPERATIONAL_INDEXES: Dict[str, Sequence[MySQLIndexDefinition]] = {
     "reasoning_engine_comparisons": (
         MySQLIndexDefinition(
             "reasoning_engine_comparisons",
+            "idx_reasoning_comparison_retention",
+            "`created_at`, `comparison_id`",
+        ),
+        MySQLIndexDefinition(
+            "reasoning_engine_comparisons",
             "idx_reasoning_comparison_release_time",
             "`candidate_deployment_id`, `candidate_release_fingerprint`, `created_at`",
         ),

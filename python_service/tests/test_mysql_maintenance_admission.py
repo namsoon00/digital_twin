@@ -51,11 +51,11 @@ class MySQLMaintenanceAdmissionTests(unittest.TestCase):
     def test_cleanup_timeout_does_not_replay_bounded_or_completed_retention(self):
         from unittest.mock import Mock, patch
         from digital_twin.infrastructure import cli
-        for include_legacy in (False, True):
-            with self.subTest(include_legacy=include_legacy):
-                error = RuntimeError(2013, "read operation timed out")
-                store, service = Mock(), Mock()
-                store.connect.return_value.__enter__ = Mock(return_value=Mock())
+        for include_legacy, error_code in ((False, 2013), (True, 2013), (False, 3024)):
+            with self.subTest(include_legacy=include_legacy, error_code=error_code):
+                error = RuntimeError(error_code, "query timed out")
+                store, service, connection = Mock(), Mock(), Mock()
+                store.connect.return_value.__enter__ = Mock(return_value=connection)
                 store.connect.return_value.__exit__ = Mock(return_value=False)
                 inventory = [{}, error] if include_legacy else [{}]
                 service.run_once.side_effect = None if include_legacy else error
@@ -64,6 +64,7 @@ class MySQLMaintenanceAdmissionTests(unittest.TestCase):
                      patch.object(cli, "observe_operational_storage_capacity"), \
                      patch.object(cli, "MySQLOperationalConnection", return_value=store) as factory, \
                      patch.object(cli, "apply_mysql_operational_history_retention", return_value={}), \
+                     patch.object(cli, "MySQLMinimalRetentionRepository") as repository, \
                      patch.object(cli, "MySQLMinimalRetentionService", return_value=service), \
                      patch("digital_twin.modules.outcomes.infrastructure.mysql_decision_calibration_inputs.MySQLDecisionCalibrationInputStore"), \
                      patch.object(cli.time, "sleep") as sleep, \
@@ -75,6 +76,28 @@ class MySQLMaintenanceAdmissionTests(unittest.TestCase):
                 factory.assert_called_once()
                 service.run_once.assert_called_once()
                 sleep.assert_not_called()
+                repository.assert_called_once_with(connection, candidate_query_timeout_ms=1500)
+        self._assert_candidate_read_deadline_obeys_remaining_turn_budget()
+
+    def _assert_candidate_read_deadline_obeys_remaining_turn_budget(self):
+        from unittest.mock import Mock, patch
+        from digital_twin.infrastructure.mysql_minimal_retention import MySQLMinimalRetentionRepository
+        from digital_twin.platform.domain.mysql_minimal_retention import mysql_minimal_retention_policy
+        connection = Mock()
+        connection.execute.return_value.fetchall.return_value = []
+        repository = MySQLMinimalRetentionRepository(connection, candidate_query_timeout_ms=1500)
+        policy = mysql_minimal_retention_policy({})
+        budget = {'started': 100, 'maxSeconds': 5, 'remainingBytes': 100, 'deletedBytes': 0}
+        for clock, deadline in ((101, 1500), (104.75, 250), (105, None)):
+            with self.subTest(clock=clock), patch('digital_twin.infrastructure.mysql_minimal_retention.time.monotonic', return_value=clock):
+                connection.reset_mock()
+                repository._byte_bounded_candidates('SELECT id, payload_bytes FROM candidates', (), 'id', policy, budget)
+                if deadline is None:
+                    connection.execute.assert_not_called()
+                else:
+                    sql = connection.execute.call_args.args[0]
+                    self.assertIn('MAX_EXECUTION_TIME(' + str(deadline) + ')', sql)
+                    self.assertEqual(1, connection.execute.call_count)
 
     def test_retention_lock_distinguishes_contention_from_database_failure(self):
         from unittest.mock import Mock

@@ -579,6 +579,11 @@ class IndexedRetentionExecutionTests(unittest.TestCase):
                       "investment_subject_decision_cases"):
             for index in MYSQL_OPERATIONAL_INDEXES[table]:
                 self.db.execute("CREATE INDEX " + index.name + " ON " + table + " (" + index.columns_sql + ")")
+        self.db.execute("CREATE TABLE reasoning_engine_comparisons "
+                        "(comparison_id TEXT PRIMARY KEY, created_at TEXT, payload_json TEXT)")
+        index = next(index for index in MYSQL_OPERATIONAL_INDEXES["reasoning_engine_comparisons"]
+                     if index.name == "idx_reasoning_comparison_retention")
+        self.db.execute("CREATE INDEX " + index.name + " ON " + index.table + " (" + index.columns_sql + ")")
         self.policy = replace(mysql_minimal_retention_policy({}), batch_size=3)
         self.budget = {"started": time.monotonic(), "maxSeconds": 30,
                        "remainingBytes": 100, "deletedBytes": 0}
@@ -662,7 +667,7 @@ class IndexedRetentionExecutionTests(unittest.TestCase):
         self.assertEqual(7, len(self.remaining("decision_candidate_snapshots", "candidate_set_id")))
         self.assertEqual(6, len(self.remaining("decision_publications", "publication_id")))
 
-    def test_case_ranges_keep_active_recent_and_missing_completion_and_make_progress(self):
+    def test_case_and_comparison_ranges_keep_current_rows_and_make_bounded_progress(self):
         expired = {"COMPLETED", "PUBLISHED", "BLOCKED", "FAILED", "SUPPRESSED", "SUPERSEDED", "EXPIRED", "VALIDATED"}
         for stage in expired:
             self.add_case(stage, stage)
@@ -679,8 +684,24 @@ class IndexedRetentionExecutionTests(unittest.TestCase):
         self.assertEqual(8, total)
         self.assertEqual({"CREATED", "PROCESSING", "UNKNOWN", "no-clock", "recent", "boundary"},
                          self.remaining("investment_reasoning_cases", "case_id"))
+        from dataclasses import replace
+        for number in range(20):
+            self.db.execute("INSERT INTO reasoning_engine_comparisons VALUES (?,?,?)",
+                            (f"old-{number:02d}", "2026-01-01", "x" * 40))
+        for key, date in (("boundary", "2026-10-01"), ("recent", "2026-10-12")):
+            self.db.execute("INSERT INTO reasoning_engine_comparisons VALUES (?,?,?)", (key, date, "{}"))
+        measured = []
+        self.db.create_function("OCTET_LENGTH", 1, lambda value: measured.append(len(value)) or len(value))
+        self.budget.update(remainingBytes=100, deletedBytes=0)
+        result = self.repo._delete_reasoning_comparisons(replace(self.policy, batch_size=500), self.budget, "2026-10-01")
+        self.assertEqual(8, len(measured))  # Payload reads stay small even with a large configured batch.
+        self.assertEqual(2, result["deleted"])
+        self.assertEqual(80, result["estimatedBytes"])
+        self.assertEqual(20, self.budget["remainingBytes"])
+        self.assertEqual({f"old-{number:02d}" for number in range(2, 20)} | {"boundary", "recent"},
+                         self.remaining("reasoning_engine_comparisons", "comparison_id"))
 
-    def test_case_delete_rechecks_state_and_clock_after_candidate_selection(self):
+    def test_case_and_comparison_delete_rechecks_state_and_clock_after_candidate_selection(self):
         self.add_case("reactivated", "FAILED")
         self.add_case("renewed", "VALIDATED")
         self.add_case("expired", "COMPLETED")
@@ -691,6 +712,13 @@ class IndexedRetentionExecutionTests(unittest.TestCase):
         result = self.repo._delete_investment_reasoning_cases(self.policy, self.budget, "2026-10-01")
         self.assertEqual(1, result["deleted"])
         self.assertEqual({"reactivated", "renewed"}, self.remaining("investment_reasoning_cases", "case_id"))
+        for key in ("renewed", "expired"):
+            self.db.execute("INSERT INTO reasoning_engine_comparisons VALUES (?, '2026-01-01', '{}')", (key,))
+        self.before_delete = lambda: self.db.execute(
+            "UPDATE reasoning_engine_comparisons SET created_at='2026-10-12' WHERE comparison_id='renewed'")
+        result = self.repo._delete_reasoning_comparisons(self.policy, self.budget, "2026-10-01")
+        self.assertEqual(1, result["deleted"])
+        self.assertEqual({"renewed"}, self.remaining("reasoning_engine_comparisons", "comparison_id"))
 
     def test_case_union_shares_one_byte_budget_across_stages(self):
         for stage in ("FAILED", "VALIDATED", "EXPIRED"):
@@ -819,6 +847,17 @@ class MySQLReasoningLineageRetentionChecks(unittest.TestCase):
         self.assertEqual(0, self.budget["remainingBytes"])
         self.budget.update(remainingBytes=10000, started=time.monotonic() - 31)
         self.assertEqual(0, self.repo._delete_reasoning_job_sources(self.policy, self.budget)["deleted"])
+        self.assertEqual({("orphan", "b")}, self.remaining())
+        # The server must interrupt a slow candidate read before the socket
+        # expires, leave the row untouched, and keep the connection usable.
+        from pymysql.err import OperationalError
+        self.budget["started"] = time.monotonic()
+        bounded = MySQLMinimalRetentionRepository(self.connection, candidate_query_timeout_ms=50)
+        with self.assertRaises(OperationalError) as raised:
+            bounded._byte_bounded_candidates(
+                "SELECT survivor_job_id, 1 AS payload_bytes FROM reasoning_engine_job_sources WHERE SLEEP(1) = 0 LIMIT 1",
+                (), "survivor_job_id", self.policy, self.budget)
+        self.assertEqual(3024, raised.exception.args[0])
         self.assertEqual({("orphan", "b")}, self.remaining())
 
 

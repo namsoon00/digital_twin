@@ -2,7 +2,7 @@
   "version": 1,
   "status": "available",
   "provider": "cloudflared",
-  "baseUrl": "https://vbulletin-adopt-prophet-matrix.trycloudflare.com",
+  "baseUrl": "https://hunting-dts-reduction-occasional.trycloudflare.com",
   "revision": "fec72b0f21b2",
-  "updatedAt": "2026-10-28T21:42:56.384Z"
+  "updatedAt": "2026-10-29T02:42:48.064Z"
 }

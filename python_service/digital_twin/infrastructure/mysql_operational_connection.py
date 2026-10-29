@@ -465,6 +465,15 @@ class MySQLOperationalConnection:
 
 MYSQL_SCHEMA = [
     """
+    CREATE TABLE IF NOT EXISTS investment_decision_projection_inputs (
+        episode_id VARCHAR(191) PRIMARY KEY,
+        format_version VARCHAR(96) NOT NULL,
+        source_updated_at VARCHAR(40) NOT NULL,
+        payload_json LONGTEXT NOT NULL,
+        KEY idx_decision_projection_retention (source_updated_at)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
+    """
     CREATE TABLE IF NOT EXISTS service_accounts (
         id VARCHAR(191) PRIMARY KEY,
         label VARCHAR(255) NOT NULL,

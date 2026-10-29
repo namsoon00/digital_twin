@@ -8,6 +8,7 @@ from digital_twin.infrastructure.mysql_operational_helpers import _json_loads
 from digital_twin.infrastructure.operational_common import json_dumps
 from .ports import ConnectionFactory
 from digital_twin.modules.outcomes.infrastructure.transaction_writes import upsert_decision_calibration_input
+from digital_twin.modules.decisions.infrastructure.transaction_writes import upsert_decision_projection_input
 
 
 def supersede_noncurrent_follow_ups(
@@ -111,6 +112,7 @@ def quarantine_invalid_legacy_outcomes(
                 (quarantine_status, json_dumps(payload), stamp, episode_id),
             )
             upsert_decision_calibration_input(connection, episode_id, payload, stamp)
+            upsert_decision_projection_input(connection, episode_id, payload, stamp)
             episode_ids.append(episode_id)
         if not episode_ids:
             return {

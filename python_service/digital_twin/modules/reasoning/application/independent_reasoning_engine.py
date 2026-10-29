@@ -2092,7 +2092,7 @@ class IndependentReasoningJobRunner:
             release.get("warmed")
         ):
             return {"status": "release-not-ready"}
-        queue = self.queue_summary(deployment_id)
+        queue = self.queue_summary(deployment_id, include_history=True)
         bootstrap_runs = int(queue.get("successfulRunCount") or 0)
         if bootstrap_runs < 1:
             return {
@@ -3185,7 +3185,17 @@ class IndependentReasoningJobRunner:
                 lease_lost.set()
                 return
 
-    def queue_summary(self, deployment_id: str) -> Dict[str, object]:
+    def queue_summary(self, deployment_id: str, *, include_history: bool = False) -> Dict[str, object]:
+        runtime_summary = getattr(type(self.queue), "runtime_summary", None)
+        if not include_history and callable(runtime_summary):
+            try:
+                return runtime_summary(self.queue, deployment_id)
+            except Exception as error:
+                # Diagnostic failure cannot retry an already-settled job or
+                # fabricate an empty/healthy queue. Promotion never uses this
+                # bounded operational read; its full release cohort is intact.
+                return {"deploymentId": deployment_id, "status": "unavailable",
+                        "historyIncluded": False, "reason": str(error)[:180]}
         release_provider = getattr(self.engine, "release_identity", None)
         release = dict(release_provider() or {}) if callable(release_provider) else {}
         parameters = inspect.signature(self.queue.summary).parameters

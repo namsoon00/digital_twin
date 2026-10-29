@@ -14,6 +14,10 @@ from digital_twin.modules.portfolio.contracts import AccountSnapshot
 
 
 class DecisionMemoryReader(Protocol):
+    def list_projection_for_symbols(
+        self, symbols: Iterable[str], *, account_id: str,
+        limit_per_symbol: int, as_of: str,
+    ) -> list: ...
     def list(self, account_id: str, symbol: str = "", limit: int = 40) -> list: ...
     def list_for_symbols(
         self,

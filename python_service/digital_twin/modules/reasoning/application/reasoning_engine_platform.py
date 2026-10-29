@@ -568,7 +568,7 @@ class ReasoningEnginePlatformService:
             updated.append(deployment_id)
         return {"status": "synchronized", "updatedDeploymentIds": updated}
 
-    def initialize(self) -> Dict[str, object]:
+    def initialize(self, *, include_diagnostics: bool = True) -> Dict[str, object]:
         descriptors = self.descriptors()
         control = self.registry.control()
         for descriptor in descriptors:
@@ -625,6 +625,12 @@ class ReasoningEnginePlatformService:
             "deploymentRetirement": retirement,
             "controlCapabilitySync": capability_sync,
         }
+        if not include_diagnostics:
+            # A worker needs immutable release/control reconciliation, not a
+            # historical dashboard. Never make claim-loop startup contingent
+            # on scanning terminal jobs, comparisons or old result packets.
+            response["diagnosticsStatus"] = "not-requested"
+            return response
         candidate_id = str(control.candidate_deployment_id or "")
         configured_v2_id = str(
             self.settings.get("reasoningEngineV2DeploymentId") or ""

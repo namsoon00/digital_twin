@@ -861,3 +861,77 @@ incremental market events retain their existing omission semantics. Incoming and
 persisted logical scope fingerprints must still match across deployments.
 Regression coverage: `test_paired_portfolio_input`, `test_reasoning_logical_inputs`
 and `test_projection_input_preflight`, including real isolated MySQL cutoff reads.
+
+## Decision memory and host admission (2026-10-30)
+
+The Oct 30 investigation found a direct restart loop: the worker command called
+`platform.initialize()` with historical queue/comparison diagnostics before
+entering its claim loop. `summary()` read up to thousands of terminal jobs and
+their result packets; its timeout killed startup, so the supervisor retried the
+same scan. Every settled/idle/deferred execution also called the full summary
+while still holding its graph-writer turn. Historical reporting had become an
+execution dependency.
+
+Worker commands now initialize immutable release/control state without those
+diagnostics. The claim loop's `runtime_summary` reads only indexed pending state
+for its deployment and retains queue age, source age and lane counts. It never
+claims a successful history or P95 from a partial query; `historyIncluded` is
+false. A telemetry exception is explicitly unavailable and cannot retry an
+already-settled job. Candidate bootstrap evidence, status queries and promotion
+continue to read the full release/cohort history. No promotion or source audit
+gate is bypassed. This separation addresses restart and inter-job waiting, not
+the duration of TypeDB rule execution itself.
+
+Repeated historical decision audit reads and sustained host memory pressure
+also amplified MySQL and native TypeDB work. A process heartbeat or a fast
+isolated query does not establish that the full delivery path is healthy.
+
+`investment_decision_projection_inputs` now holds the lossless input to the
+bounded decision-memory ABox projection. Decision creation, observed outcomes
+and legacy quarantine maintain it on the **same transaction** as the original
+episode. Reads first select the bounded account/subject/time identities, then
+join the projection by exact `source_updated_at` and format version. Only a
+missing or stale projection reads the large audit. Historical outcomes still
+use the original cutoff-aware hydration, and outcome observation still executes
+synchronously. This is not a new investment evaluator, a TTL approximation of
+history, or permission to skip calibration, audit or candidate validation.
+
+Bounded maintenance backfills recent decisions first, skips locked source rows,
+and removes orphan projections. Until it finishes, legacy fallback is correct
+but slower. Private historical replay must compare the resulting ABox memory
+fields, not merely labels or notification text.
+
+Managed research, model review, historical replay, ontology lab, news analysis
+and central AI share one background execution slot. Their next turn is deferred
+under critical host memory pressure; queued work is not claimed, failed or
+discarded. Recovery must remain clear for 30 seconds. An active turn finishes
+and releases its file lock even on exception. The kernel releases locks on a
+process crash. Manual commands and realtime collection, inference and delivery
+are outside this admission gate. A supervised background worker can retire at
+a completed-turn boundary after its 512 MiB memory budget; its supervisor defers
+restarting it while critical pressure persists. Realtime workers use normal
+process priority instead of the background priority.
+
+On macOS the pressure probe reads the dispatch flags returned by
+`kern.memorystatus_vm_pressure_level` (1/2/4), not the different internal enum.
+See [Apple's sysctl implementation](https://github.com/apple-oss-distributions/xnu/blob/main/bsd/kern/kern_memorystatus_notify.c).
+Linux uses `MemAvailable / MemTotal`; an unsupported/failed probe is explicitly
+unknown and does not turn into a zero-memory reading. Admission limits project
+background concurrency but cannot reserve RAM against other applications or
+preempt a job already running. Extended pressure can therefore delay research;
+`background-capacity` logs distinguish that state from an empty queue.
+
+The 10-second P95 target remains an acceptance criterion, not a consequence of
+these changes. Report cold bootstrap, queue delay, native publication and actual
+transport separately. Source-clock freshness and account/action safety gates
+remain unchanged. A local read-model speedup alone must not be reported as a
+successful end-to-end latency reduction.
+
+The bounded historical check on 12 existing decision audits reproduced every
+decision-memory projection field at hypothesis limits 1, 3 and 16. Serialized
+input fell from 1,523,217 to 343,160 bytes (77.47%). Local decode/projection P95
+was 4.099 ms versus 3.376 ms; this small CPU difference is **not** an explanation
+for minutes of delay. The pending-only query on the active production deployment
+took 81.461 ms while preserving seven pending jobs and their original queue and
+source ages. It did not load terminal results. These measurements isolate the
+changes and do not measure native rule execution or customer delivery.

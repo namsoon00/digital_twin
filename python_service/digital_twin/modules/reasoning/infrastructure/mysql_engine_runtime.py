@@ -3127,6 +3127,47 @@ class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
             and jobs_by_id.get(str(row.get("candidate_job_id") or ""))
         ]
 
+    def runtime_summary(self, deployment_id: str) -> Dict[str, object]:
+        """Only indexed pending state; no terminal history or result payloads."""
+        if not str(deployment_id or "").strip():
+            raise ValueError("runtime summary requires a deployment")
+        with self.connect() as connection:
+            rows = connection.execute(
+                "SELECT job_status, reasoning_lane, current_stage, COUNT(*) AS row_count, MIN(created_at) AS oldest, "
+                "MIN(NULLIF(source_snapshot_at, '')) AS oldest_source_at, "
+                "SUM(CASE WHEN source_snapshot_at = '' THEN 1 ELSE 0 END) AS missing_source_clock_count "
+                "FROM reasoning_engine_jobs WHERE deployment_id = %s "
+                "AND job_status IN ('queued', 'retry', 'processing', 'awaiting_source', 'awaiting_world_projection') "
+                "GROUP BY job_status, reasoning_lane, current_stage", (deployment_id,),
+            ).fetchall()
+        counts = {status: sum(int(row.get("row_count") or 0) for row in rows
+                              if row.get("job_status") == status)
+                  for status in ("queued", "retry", "processing", "awaiting_source", "awaiting_world_projection")}
+        pending = [row for row in rows if row.get("job_status") in {"queued", "retry", "processing"}]
+        oldest = min((str(row.get("oldest") or "") for row in pending), default="")
+        source_at = min((str(row["oldest_source_at"]) for row in pending if row.get("oldest_source_at")), default="")
+        now = utc_now()
+        def age(stamp):
+            try:
+                parsed = datetime.fromisoformat(stamp.replace("Z", "+00:00"))
+                return max(0, int((now - parsed.replace(tzinfo=parsed.tzinfo or timezone.utc)).total_seconds()))
+            except (ValueError, TypeError):
+                return None
+        return {"deploymentId": deployment_id, "status": "ok", "historyIncluded": False,
+                "counts": counts, "jobRowCounts": counts,
+                "queuedCount": counts["queued"], "retryCount": counts["retry"],
+                "processingCount": counts["processing"],
+                "pendingCount": sum(counts[key] for key in ("queued", "retry", "processing")),
+                "awaitingSourceCount": counts["awaiting_source"],
+                "awaitingWorldProjectionCount": counts["awaiting_world_projection"],
+                "oldestPendingAt": oldest, "oldestPendingAgeSeconds": age(oldest),
+                "oldestPendingSourceAt": source_at, "oldestPendingSourceAgeSeconds": age(source_at),
+                "pendingSourceClockMissingCount": sum(int(row["missing_source_clock_count"] or 0) for row in pending),
+                "pendingByLane": {lane: sum(int(row["row_count"]) for row in pending if row["reasoning_lane"] == lane)
+                                  for lane in sorted({row["reasoning_lane"] for row in pending})},
+                "processingStages": [dict(row) for row in pending if row["job_status"] == "processing"],
+                "observedAt": iso_utc(now)}
+
     def summary(
         self,
         deployment_id: str = "",

@@ -21,6 +21,7 @@ from .infrastructure.settings import ROOT_DIR, data_dir, runtime_settings
 from .infrastructure.share_runtime import fixed_entry_url, share_credentials_environment
 from .infrastructure.typedb_storage_guard import typedb_storage_health, typedb_storage_inventory
 from .infrastructure.operational_storage_guard import storage_directory_physical_size_bytes
+from .infrastructure.background_capacity import BACKGROUND_WORKERS, REALTIME_WORKERS, host_memory_pressure
 from .infrastructure.typedb_retired_storage import retired_stores, prune_retired_stores
 from .platform.domain.typedb_capacity_policy import shared_disk_rotation_admission, rotation_candidate_estimate_mb
 from digital_twin.modules.market_data.domain.time_series_storage import canonical_json
@@ -1070,7 +1071,7 @@ def worker_specs() -> Dict[str, Dict[str, object]]:
             "needle": "python_service/service.py ai-control watch",
         }
 
-    background_nice = str((settings or {}).get("managedBackgroundProcessNice") or "5")
+    background_nice = str((settings or {}).get("managedBackgroundProcessNice") or "10")
     local_ai_environment = {
         "ORBIT_LOCAL_AI_MAX_CONCURRENT": str(
             (settings or {}).get("localAiMaxConcurrentProcesses") or "2"
@@ -1085,7 +1086,11 @@ def worker_specs() -> Dict[str, Dict[str, object]]:
     for name, spec in list(workers.items()):
         environment = dict(spec.get("env") or {})
         environment.update(local_ai_environment)
-        if (name in {"reasoning-engine-delivery", "reasoning-engine-shadow", "notifications"}
+        if name in BACKGROUND_WORKERS:
+            environment["ORBIT_BACKGROUND_ADMISSION"] = "1"
+            environment["ORBIT_BACKGROUND_WORKER"] = name
+            environment["ORBIT_WORKER_MAX_MEMORY_MB"] = "512"
+        if (name in {"reasoning-engine-delivery", "reasoning-engine-shadow", "notifications"} | BACKGROUND_WORKERS
                 and (configured_supervisor_available() or supervisor_running())):
             environment["ORBIT_MANAGED_WORKER_LIFETIME"] = "1"
         spec = {**dict(spec), "env": environment}
@@ -1094,7 +1099,8 @@ def worker_specs() -> Dict[str, Dict[str, object]]:
             continue
         workers[name] = {
             **spec,
-            "processNice": str(spec.get("processNice") or background_nice),
+            "processNice": ("0" if name in REALTIME_WORKERS
+                            else str(spec.get("processNice") or background_nice)),
         }
     return workers
 
@@ -2502,6 +2508,9 @@ def status_worker(spec: Dict[str, object]) -> int:
         )
     )
     display_status = "running" if running else "stopped"
+    if (not running and (spec.get("env") or {}).get("ORBIT_BACKGROUND_ADMISSION") == "1"
+            and host_memory_pressure() == "critical"):
+        display_status = "deferred-memory-pressure (durable jobs retained)"
     if running and str(spec.get("role") or "") == "typedb" and not health_ready:
         display_status = "unhealthy"
     print(str(spec["label"]) + ": " + display_status)
@@ -4180,6 +4189,12 @@ def start_worker(spec: Dict[str, object], wait_for_ready: bool = True) -> int:
         return status_worker(spec)
     if existing:
         remove_pid(pid_path)
+    if ((spec.get("env") or {}).get("ORBIT_BACKGROUND_ADMISSION") == "1"
+            and host_memory_pressure() == "critical"):
+        message = "deferred-memory-pressure; durable jobs remain queued; supervisor will retry"
+        append_log(log_path, message)
+        print(str(spec["label"]) + " " + message)
+        return 0
     if role == "questdb":
         recovered = recover_project_questdb_pid(spec)
         if recovered and is_running(recovered, spec):

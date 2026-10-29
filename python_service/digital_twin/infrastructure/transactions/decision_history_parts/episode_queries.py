@@ -262,6 +262,7 @@ def list_for_symbols(
     _connect: ConnectionFactory,
     _episode_from_row: Callable[..., DecisionEpisode],
     _hydrate_outcomes: Callable[..., List[DecisionEpisode]],
+    projection_only: bool = False,
 ) -> List[DecisionEpisode]:
     """Fetch bounded episode history for many symbols without N+1 reads.
 
@@ -293,10 +294,29 @@ def list_for_symbols(
             if normalized_as_of:
                 where += " AND decided_at <= %s"
                 statement_params.append(normalized_as_of)
-            statements.append(
-                "(SELECT payload_json, status, decided_at FROM investment_decision_episodes "
-                "WHERE " + where + " ORDER BY decided_at DESC, episode_id DESC LIMIT %s)"
-            )
+            if projection_only:
+                from digital_twin.modules.decisions.domain.decision_projection_input import DECISION_PROJECTION_INPUT_VERSION
+                # Select only indexed identities before joining the compact
+                # read model. The large audit is physically read solely for a
+                # legacy/missing/stale projection, never as a COALESCE input
+                # on the primary row (which forces an off-page LONGTEXT read).
+                statements.append(
+                    "(SELECT COALESCE(projection.payload_json, audit.payload_json) AS payload_json, "
+                    "selected.status, selected.decided_at FROM ("
+                    "SELECT episode_id, status, decided_at, updated_at FROM investment_decision_episodes "
+                    "WHERE " + where + " ORDER BY decided_at DESC, episode_id DESC LIMIT %s"
+                    ") AS selected LEFT JOIN investment_decision_projection_inputs AS projection "
+                    "ON projection.episode_id = selected.episode_id "
+                    "AND projection.source_updated_at = selected.updated_at "
+                    "AND projection.format_version = '" + DECISION_PROJECTION_INPUT_VERSION + "' "
+                    "LEFT JOIN investment_decision_episodes AS audit ON audit.episode_id = selected.episode_id "
+                    "AND projection.episode_id IS NULL)"
+                )
+            else:
+                statements.append(
+                    "(SELECT payload_json, status, decided_at FROM investment_decision_episodes "
+                    "WHERE " + where + " ORDER BY decided_at DESC, episode_id DESC LIMIT %s)"
+                )
             params.extend(statement_params)
             params.append(per_symbol)
         sql = " UNION ALL ".join(statements)

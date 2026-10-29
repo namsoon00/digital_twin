@@ -1,5 +1,6 @@
 {
   "tests": [
+    {"file": "test_startup_history_separation.py", "tier": "integration", "core": true},
     {"file": "test_observation_abstention.py", "tier": "contract", "core": true},
     {"file": "test_reasoning_worker_bootstrap.py", "tier": "integration", "core": true},
     {"file": "test_realtime_decision_inputs.py", "tier": "integration", "core": true},

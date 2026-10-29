@@ -465,7 +465,8 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # Twelve bounded abstention, source delivery, replay, persistence and omission review contracts.
         # Lossless decision inputs, capacity admission, and execution-only startup
         # preserve sixteen additional production boundaries.
-        self.assertLessEqual(total, 2834)
+        # Seven startup/history isolation, bounded repair and rollback contracts.
+        self.assertLessEqual(total, 2841)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

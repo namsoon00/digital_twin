@@ -1651,6 +1651,9 @@ def run_mysql_operational_cleanup(
                         connection,
                         protected_databases=[str(settings.get("mysqlDatabase") or "")],
                     )
+                from .mysql_schema_tuning import repair_mysql_legacy_metadata
+                stage = "legacy-metadata-repair"
+                result["legacyMetadata"] = repair_mysql_legacy_metadata(connection)
             from digital_twin.modules.outcomes.infrastructure.mysql_decision_calibration_inputs import MySQLDecisionCalibrationInputStore
 
             stage = "calibration-repair"
@@ -1664,6 +1667,12 @@ def run_mysql_operational_cleanup(
                 MySQLDecisionProjectionInputStore(settings).repair()
                 if include_legacy else {"status": "deferred", "reason": "bounded-retention-turn"}
             )
+            from digital_twin.modules.decisions.infrastructure.legacy_flow_projection import MySQLLegacyDecisionFlowRepairStore
+            from digital_twin.modules.notifications.infrastructure.legacy_receipt_repair import MySQLLegacyDecisionReceiptRepairStore
+            stage = "legacy-flow-repair"
+            result["legacyDecisionFlows"] = MySQLLegacyDecisionFlowRepairStore(settings).repair()
+            stage = "legacy-receipt-repair"
+            result["legacyDecisionReceipts"] = MySQLLegacyDecisionReceiptRepairStore(settings).repair()
             if connection_retries:
                 result["transientConnectionRetryCount"] = connection_retries
             if deadlock_retries:

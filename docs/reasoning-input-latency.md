@@ -935,3 +935,29 @@ for minutes of delay. The pending-only query on the active production deployment
 took 81.461 ms while preserving seven pending jobs and their original queue and
 source ages. It did not load terminal results. These measurements isolate the
 changes and do not measure native rule execution or customer delivery.
+
+### Startup data repair is not schema creation
+
+The first production restart exposed a second execution dependency. Several
+worker constructors concurrently executed the legacy `investment_flow_heads`
+history INSERT (observed at 61 seconds), followed by an unbounded comparison
+identity UPDATE in schema tuning. A client timeout could leave the server doing
+that historical work while another startup repeated it.
+
+Schema creation now performs DDL and small control-row seeds only. The original
+legacy expressions remain available to bounded maintenance: decision flow heads
+are restored by selected episode IDs; a missing current head is published only
+after that subject's legacy heads are complete, using the original ranking.
+Existing current decisions and receipt states remain authoritative through
+INSERT IGNORE. Notification receipts use bounded missing job identities.
+Comparison identity repair walks a persisted primary-key cursor, bounds JSON
+work to that batch, and wraps to revisit rows inserted behind the cursor.
+Notification list projections and external fact identities also run in finite
+maintenance turns. No constructor performs these historical repairs.
+
+`test_startup_history_separation` checks startup exclusion, partial-subject
+repair, concurrent-authority preservation, full-batch rollback, receipt
+idempotence and comparison cursor wrap against isolated MySQL. The first bounded
+production decision-memory repair restored 25 rows in 1,744.717 ms without
+changing the original decision audits. This is a repair measurement, not an
+end-to-end alert timing result.

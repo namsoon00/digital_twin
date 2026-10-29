@@ -297,6 +297,13 @@ class MySQLConnectionProxy:
     def __exit__(self, *_args):
         self.close()
 
+def historical_bootstrap_statement(statement: str) -> bool:
+    """History repair belongs to bounded maintenance, never store construction."""
+    return any(statement.lstrip().startswith("INSERT IGNORE INTO " + table + " (")
+               for table in ("investment_flow_heads", "investment_flow_current",
+                             "decision_notification_receipts"))
+
+
 class MySQLOperationalConnection:
     _schema_ready = set()
     _retention_last_run = {}
@@ -423,6 +430,8 @@ class MySQLOperationalConnection:
         with self.transaction() as connection:
             compressed = compression_supported(connection)
             for statement in MYSQL_SCHEMA:
+                if historical_bootstrap_statement(statement):
+                    continue
                 connection.execute(snapshot_schema_statement(statement, compressed))
             ensure_mysql_operational_schema_tuning(connection, self.runtime_settings)
         MySQLOperationalConnection._schema_ready.add(schema_key)

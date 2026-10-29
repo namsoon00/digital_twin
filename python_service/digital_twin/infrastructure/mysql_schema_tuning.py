@@ -3,6 +3,7 @@ import os
 import re
 import warnings
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Dict, List, Mapping, Sequence
 
 from digital_twin.modules.market_data.domain.external_data_contracts import (
@@ -1318,17 +1319,29 @@ def ensure_mysql_column_compatibility(
     return modified
 
 
-def backfill_reasoning_comparison_identity(connection) -> int:
+def backfill_reasoning_comparison_identity(connection, limit=25) -> int:
     """Move the hot comparison identity out of the historical JSON payload.
 
-    This is deliberately idempotent. Existing installations pay the JSON
-    extraction cost once during schema tuning; live reconciliation then uses
-    indexed scalar columns only.
+    The durable cursor bounds rows examined as well as rows updated. It wraps
+    after reaching the end, so legacy rows inserted behind it are not lost.
+    JSON extraction never runs as part of schema bootstrap.
     """
 
-    cursor = _execute(
-        connection,
-        """
+    key = "maintenance:comparison-identity-v1"
+    checkpoint = _execute(connection, "SELECT payload_json FROM service_runtime_checkpoints WHERE checkpoint_id = %s", (key,)).fetchone()
+    try:
+        after = str(json.loads(checkpoint["payload_json"]).get("after") or "") if checkpoint else ""
+    except (ValueError, TypeError, AttributeError):
+        after = ""
+    rows = _execute(connection,
+        "SELECT comparison_id FROM reasoning_engine_comparisons WHERE comparison_id > %s ORDER BY comparison_id LIMIT %s",
+        (after, max(1, min(100, int(limit)))),
+    ).fetchall()
+    updated = 0
+    if rows:
+        cursor = _execute(
+            connection,
+            """
         UPDATE reasoning_engine_comparisons
         SET baseline_job_id = LEFT(COALESCE(NULLIF(JSON_UNQUOTE(JSON_EXTRACT(
                 payload_json, '$.sourceInput.baselineJobId'
@@ -1341,9 +1354,16 @@ def backfill_reasoning_comparison_identity(connection) -> int:
             )), 'null'), 'legacy'), 96)
         WHERE comparison_contract_version = ''
           AND JSON_VALID(payload_json)
-        """,
+            """ + " AND comparison_id IN (" + ",".join("%s" for _ in rows) + ")",
+            tuple(row["comparison_id"] for row in rows),
+        )
+        updated = max(0, int(getattr(cursor, "rowcount", 0) or 0))
+    _execute(connection,
+        "INSERT INTO service_runtime_checkpoints (checkpoint_id, payload_json, updated_at) VALUES (%s, %s, %s) "
+        "ON DUPLICATE KEY UPDATE payload_json=VALUES(payload_json),updated_at=VALUES(updated_at)",
+        (key, json.dumps({"after": rows[-1]["comparison_id"] if rows else ""}), datetime.now(timezone.utc).isoformat()),
     )
-    return max(0, int(getattr(cursor, "rowcount", 0) or 0))
+    return updated
 
 
 def ensure_mysql_column_widths(
@@ -1527,126 +1547,130 @@ def backfill_external_fact_revision_identities(connection, batch_size: int = 500
 
     total = 0
     bounded = max(1, min(2000, int(batch_size or 500)))
-    while True:
-        rows = _execute(
+    rows = _execute(
+        connection,
+        """
+        SELECT dataset_id, subject_key, provider_id, source_revision,
+               source_as_of, fetched_at, payload_json, quality_json, updated_at
+        FROM external_fact_current
+        WHERE revision_id = ''
+        ORDER BY dataset_id, subject_key
+        LIMIT %s
+        """,
+        (bounded,),
+    ).fetchall()
+    if not rows:
+        return total
+    for row in rows:
+        try:
+            payload = json.loads(row.get("payload_json") or "{}")
+        except (TypeError, ValueError, json.JSONDecodeError):
+            payload = {}
+        try:
+            quality = json.loads(row.get("quality_json") or "{}")
+        except (TypeError, ValueError, json.JSONDecodeError):
+            quality = {}
+        if not isinstance(payload, dict):
+            payload = {}
+        if not isinstance(quality, dict):
+            quality = {}
+        dataset_id = str(row.get("dataset_id") or "")
+        subject_key = str(row.get("subject_key") or "")
+        provider_id = str(row.get("provider_id") or "")
+        provider_revision = str(row.get("source_revision") or "")
+        source_as_of = str(row.get("source_as_of") or "")
+        try:
+            schema_version = external_dataset_semantics(dataset_id).source_schema_version
+        except KeyError:
+            schema_version = SOURCE_SCHEMA_LEGACY_VERSION
+        content_hash = canonical_payload_hash(payload)
+        availability = normalized_availability(
+            quality.get("availability"),
+            empty_result=bool(quality.get("emptyResult")),
+            quality=quality,
+        )
+        revision_id = source_revision_id(
+            dataset_id=dataset_id,
+            provider_id=provider_id,
+            subject_key=subject_key,
+            provider_revision=provider_revision or content_hash,
+            source_as_of=source_as_of,
+            payload_hash=content_hash,
+            source_schema_version=schema_version,
+            availability=availability,
+            quality=quality,
+        )
+        _execute(
             connection,
             """
-            SELECT dataset_id, subject_key, provider_id, source_revision,
-                   source_as_of, fetched_at, payload_json, quality_json, updated_at
-            FROM external_fact_current
-            WHERE revision_id = ''
-            ORDER BY dataset_id, subject_key
-            LIMIT %s
+            INSERT IGNORE INTO external_fact_revision (
+                revision_id, dataset_id, subject_key, provider_id, source_revision,
+                payload_hash, source_schema_version, availability, source_as_of,
+                fetched_at, payload_json, quality_json, created_at
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             """,
-            (bounded,),
-        ).fetchall()
-        if not rows:
-            return total
-        for row in rows:
-            try:
-                payload = json.loads(row.get("payload_json") or "{}")
-            except (TypeError, ValueError, json.JSONDecodeError):
-                payload = {}
-            try:
-                quality = json.loads(row.get("quality_json") or "{}")
-            except (TypeError, ValueError, json.JSONDecodeError):
-                quality = {}
-            if not isinstance(payload, dict):
-                payload = {}
-            if not isinstance(quality, dict):
-                quality = {}
-            dataset_id = str(row.get("dataset_id") or "")
-            subject_key = str(row.get("subject_key") or "")
-            provider_id = str(row.get("provider_id") or "")
-            provider_revision = str(row.get("source_revision") or "")
-            source_as_of = str(row.get("source_as_of") or "")
-            try:
-                schema_version = external_dataset_semantics(dataset_id).source_schema_version
-            except KeyError:
-                schema_version = SOURCE_SCHEMA_LEGACY_VERSION
-            content_hash = canonical_payload_hash(payload)
-            availability = normalized_availability(
-                quality.get("availability"),
-                empty_result=bool(quality.get("emptyResult")),
-                quality=quality,
-            )
-            revision_id = source_revision_id(
-                dataset_id=dataset_id,
-                provider_id=provider_id,
-                subject_key=subject_key,
-                provider_revision=provider_revision or content_hash,
-                source_as_of=source_as_of,
-                payload_hash=content_hash,
-                source_schema_version=schema_version,
-                availability=availability,
-                quality=quality,
-            )
-            _execute(
-                connection,
-                """
-                INSERT IGNORE INTO external_fact_revision (
-                    revision_id, dataset_id, subject_key, provider_id, source_revision,
-                    payload_hash, source_schema_version, availability, source_as_of,
-                    fetched_at, payload_json, quality_json, created_at
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                """,
-                (
-                    revision_id,
-                    dataset_id,
-                    subject_key,
-                    provider_id,
-                    provider_revision or content_hash,
-                    content_hash,
-                    schema_version,
-                    availability,
-                    source_as_of,
-                    str(row.get("fetched_at") or ""),
-                    json.dumps(payload, ensure_ascii=False, separators=(",", ":"), default=str),
-                    json.dumps(quality, ensure_ascii=False, separators=(",", ":"), default=str),
-                    str(row.get("updated_at") or row.get("fetched_at") or ""),
-                ),
-            )
-            cursor = _execute(
-                connection,
-                """
-                UPDATE external_fact_current
-                SET revision_id = %s, payload_hash = %s, source_schema_version = %s,
-                    availability = %s
-                WHERE dataset_id = %s AND subject_key = %s AND revision_id = ''
-                """,
-                (
-                    revision_id,
-                    content_hash,
-                    schema_version,
-                    availability,
-                    dataset_id,
-                    subject_key,
-                ),
-            )
-            total += int(cursor.rowcount or 0)
+            (
+                revision_id,
+                dataset_id,
+                subject_key,
+                provider_id,
+                provider_revision or content_hash,
+                content_hash,
+                schema_version,
+                availability,
+                source_as_of,
+                str(row.get("fetched_at") or ""),
+                json.dumps(payload, ensure_ascii=False, separators=(",", ":"), default=str),
+                json.dumps(quality, ensure_ascii=False, separators=(",", ":"), default=str),
+                str(row.get("updated_at") or row.get("fetched_at") or ""),
+            ),
+        )
+        cursor = _execute(
+            connection,
+            """
+            UPDATE external_fact_current
+            SET revision_id = %s, payload_hash = %s, source_schema_version = %s,
+                availability = %s
+            WHERE dataset_id = %s AND subject_key = %s AND revision_id = ''
+            """,
+            (
+                revision_id,
+                content_hash,
+                schema_version,
+                availability,
+                dataset_id,
+                subject_key,
+            ),
+        )
+        total += int(cursor.rowcount or 0)
+    return total
 
 
 def ensure_mysql_operational_schema_tuning(connection, settings: Mapping[str, object] = None) -> Dict[str, object]:
     columns = ensure_mysql_columns(connection, MYSQL_OPERATIONAL_COLUMNS)
-    from digital_twin.modules.notifications.infrastructure.list_projection import backfill_list_presentations
-    notification_list_backfill_count = backfill_list_presentations(connection)
-    comparison_identity_backfill_count = backfill_reasoning_comparison_identity(connection)
     primary_keys = ensure_reasoning_rule_slot_namespace_primary_key(connection)
     indexes = ensure_mysql_indexes(connection, MYSQL_OPERATIONAL_INDEXES)
     retired_unique_indexes = retire_mysql_unique_indexes(connection, MYSQL_OPERATIONAL_UNIQUE_INDEX_RETIREMENTS)
-    external_fact_revision_backfill_count = backfill_external_fact_revision_identities(connection)
     return {
         "columns": columns,
-        "comparisonIdentityBackfillCount": comparison_identity_backfill_count,
-        "notificationListBackfillCount": notification_list_backfill_count,
+        "historicalBackfillsStatus": "deferred-to-bounded-maintenance",
         "primaryKeys": primary_keys,
         "compatibleColumns": ensure_mysql_column_compatibility(connection, MYSQL_OPERATIONAL_COLUMN_COMPATIBILITY),
         "widenedColumns": ensure_mysql_column_widths(connection, MYSQL_OPERATIONAL_COLUMN_WIDTHS),
         "retiredColumns": retire_mysql_columns(connection, MYSQL_OPERATIONAL_RETIRED_COLUMNS),
         "retiredUniqueIndexes": retired_unique_indexes,
-        "externalFactRevisionBackfillCount": external_fact_revision_backfill_count,
         "indexes": indexes,
         "partitions": ensure_mysql_key_partitions(connection, MYSQL_OPERATIONAL_KEY_PARTITIONS, settings),
+    }
+
+
+def repair_mysql_legacy_metadata(connection, limit=25):
+    """One finite maintenance turn; never invoked from store constructors."""
+    from digital_twin.modules.notifications.infrastructure.list_projection import backfill_list_presentations
+    return {
+        "comparisonIdentityBackfillCount": backfill_reasoning_comparison_identity(connection, limit),
+        "notificationListBackfillCount": backfill_list_presentations(connection, limit=limit),
+        "externalFactRevisionBackfillCount": backfill_external_fact_revision_identities(connection, batch_size=limit),
     }
 
 

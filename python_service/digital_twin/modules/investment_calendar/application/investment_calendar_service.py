@@ -131,6 +131,8 @@ class InvestmentCalendarService:
         symbol_repository=None,
         reasoning_source_fact_store=None,
         release_reader=None,
+        candidate_reader=None,
+        sync_status_reader=None,
     ):
         self.repository = repository
         self.account_repository = account_repository
@@ -140,6 +142,8 @@ class InvestmentCalendarService:
         self.symbol_repository = symbol_repository
         self.reasoning_source_fact_store = reasoning_source_fact_store
         self.release_reader = release_reader
+        self.candidate_reader = candidate_reader
+        self.sync_status_reader = sync_status_reader
 
     def enabled(self) -> bool:
         return truthy(self.settings.get("investmentCalendarEnabled"), True)
@@ -152,6 +156,11 @@ class InvestmentCalendarService:
 
     def get_event(self, event_id):
         from digital_twin.modules.investment_calendar.domain.release_information import calendar_release_information
+        if str(event_id).startswith("candidate:") and self.candidate_reader:
+            from digital_twin.modules.investment_calendar.domain.earnings_schedule_projection import candidate_calendar_row
+            candidate = self.candidate_reader.get(str(event_id).removeprefix("candidate:"))
+            row = candidate_calendar_row(candidate) if candidate else None
+            return enrich_symbol_display_records([row], self.symbol_repository)[0] if row else None
         event = self.repository.get(event_id)
         if not event:
             return None
@@ -190,25 +199,11 @@ class InvestmentCalendarService:
         if not requested_status and not include_inactive:
             events = [event for event in events if event.status in DEFAULT_VISIBLE_EVENT_STATUSES]
         events = unique_calendar_events(events)
+        official_rows = [event.to_dict() for event in events]
         events = events[:limit]
         summary = dict(self.repository.summary() or {})
         summary["storedTotal"] = int(summary.get("total") or 0)
         summary["storedByType"] = list(summary.get("byType") or [])
-        summary["total"] = len(events)
-        visible_by_type = {}
-        for event in events:
-            visible_by_type[event.event_type] = visible_by_type.get(event.event_type, 0) + 1
-        summary["byType"] = [
-            {"eventType": event_type, "count": count}
-            for event_type, count in sorted(visible_by_type.items(), key=lambda item: (-item[1], item[0]))
-        ]
-        upcoming_events = [
-            event
-            for event in events
-            if event.starts_datetime() and event.starts_datetime() >= now
-        ]
-        summary["upcoming"] = len(upcoming_events)
-        summary["nextStartsAt"] = upcoming_events[0].starts_at if upcoming_events else ""
         event_rows = enrich_symbol_display_records(
             [event.to_dict() for event in events],
             self.symbol_repository,
@@ -227,6 +222,46 @@ class InvestmentCalendarService:
                 enabled=truthy(self.settings.get("externalOfficialReleaseEnabled"), True)
                 and truthy(self.settings.get("externalDataPlatformEnabled"), True),
             )
+        candidate_error = ""
+        if truthy(query.get("includeCandidates"), False) and self.candidate_reader and requested_status in {"", "tentative"}:
+            from digital_twin.modules.investment_calendar.domain.earnings_schedule_projection import earnings_candidate_projection
+            try:
+                candidates = self.candidate_reader.list(status="pending", limit=500)
+                candidate_rows = earnings_candidate_projection(
+                    candidates, official_rows, from_at=from_at, to_at=to_at,
+                    symbol=clean_text(query.get("symbol")).upper(),
+                    event_type=clean_text(query.get("eventType") or query.get("event_type")), now=now,
+                )
+                event_rows.extend(enrich_symbol_display_records(candidate_rows, self.symbol_repository))
+                event_rows.sort(key=lambda row: (row["startsAt"], -int(row.get("importance") or 0), row["eventId"]))
+                event_rows = event_rows[:limit]
+            except Exception:
+                candidate_error = "미확정 일정 조회 실패"
+        summary["total"] = len(event_rows)
+        summary["unconfirmed"] = sum(bool((row.get("payload") or {}).get("candidatePresentation")) for row in event_rows)
+        visible_by_type = {}
+        for row in event_rows:
+            visible_by_type[row["eventType"]] = visible_by_type.get(row["eventType"], 0) + 1
+        summary["byType"] = [{"eventType": key, "count": value} for key, value in sorted(visible_by_type.items(), key=lambda item: (-item[1], item[0]))]
+        upcoming_rows = [row for row in event_rows if parse_utc(row["startsAt"]) and parse_utc(row["startsAt"]) >= now]
+        summary["upcoming"] = len(upcoming_rows)
+        summary["nextStartsAt"] = upcoming_rows[0]["startsAt"] if upcoming_rows else ""
+        collection = {}
+        if self.sync_status_reader:
+            try:
+                checkpoint = dict(self.sync_status_reader() or {})
+                last = checkpoint.get("lastResult") or {}
+                collection = {
+                    "lastRunAt": checkpoint.get("lastRunAt"),
+                    "lastResult": {
+                        "status": last.get("status"),
+                        "sources": [{key: source.get(key) for key in ("source", "status", "fetchedCount", "savedCount")}
+                                    for source in last.get("sources") or []],
+                        "unsupportedSymbols": list(last.get("unsupportedSymbols") or []),
+                    },
+                }
+            except Exception:
+                collection = {"status": "unavailable"}
         return {
             "generatedAt": utc_now_iso(),
             "events": event_rows,
@@ -235,6 +270,8 @@ class InvestmentCalendarService:
             "from": from_at,
             "to": to_at,
             "limit": limit,
+            "candidateError": candidate_error,
+            "officialCollection": collection,
         }
 
     def save_event(self, payload: Dict[str, object]) -> Dict[str, object]:

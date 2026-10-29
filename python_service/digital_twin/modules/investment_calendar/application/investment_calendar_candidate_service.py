@@ -232,6 +232,7 @@ class InvestmentCalendarCandidateService:
         return {symbol for symbol in related if symbol}
 
     def reconcile_official_event(self, official_event, window_days: int = 14) -> Dict[str, object]:
+        from digital_twin.modules.investment_calendar.domain.earnings_schedule_projection import same_earnings_schedule
         if not official_event or not getattr(official_event, "symbols", None):
             return {"superseded": 0, "candidateIds": []}
         official_at = parse_utc(getattr(official_event, "starts_at", ""))
@@ -247,11 +248,15 @@ class InvestmentCalendarCandidateService:
         candidate_ids = []
         for candidate in rows:
             candidate_at = parse_utc(candidate.starts_at)
+            if candidate.event_type == official_event.event_type == "earnings":
+                matches = same_earnings_schedule(candidate.to_dict(), official_event.to_calendar_payload(), window_days)
+            else:
+                matches = bool(candidate_at and abs((candidate_at - official_at).total_seconds()) <= max(1, int(window_days)) * 86400)
             if (
                 candidate.event_type != official_event.event_type
                 or not symbols.intersection(self.related_symbols(candidate.symbols))
                 or not candidate_at
-                or abs((candidate_at - official_at).total_seconds()) > max(1, int(window_days)) * 86400
+                or not matches
             ):
                 continue
             updated = self.candidate_repository.mark_status(

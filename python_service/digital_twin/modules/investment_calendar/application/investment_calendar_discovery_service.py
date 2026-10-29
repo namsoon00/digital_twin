@@ -57,6 +57,7 @@ class InvestmentCalendarDiscoveryService:
         settings: Dict[str, object] = None,
         now=None,
         checkpoint_store=None,
+        target_reader=None,
     ):
         self.calendar_service = calendar_service
         self.candidate_repository = candidate_repository
@@ -66,6 +67,7 @@ class InvestmentCalendarDiscoveryService:
         self.settings = dict(settings or {})
         self.now = now or (lambda: datetime.now(timezone.utc))
         self.checkpoint_store = checkpoint_store
+        self.target_reader = target_reader
         self.last_run_at = None
         self.last_result: Dict[str, object] = {}
         self.checkpoint_error = ""
@@ -139,6 +141,10 @@ class InvestmentCalendarDiscoveryService:
         if requested:
             symbols.append(requested)
         else:
+            if self.target_reader:
+                priority = self.target_reader() or {}
+                symbols.extend(priority.get("holdingSymbols") or [])
+                symbols.extend(priority.get("watchlistSymbols") or [])
             for account in self.accounts():
                 symbols.extend(getattr(account, "watchlist_symbols", []) or [])
             symbols.extend(str(self.settings.get("watchlistSymbols") or "").replace("\n", ",").split(","))
@@ -152,9 +158,15 @@ class InvestmentCalendarDiscoveryService:
             market = "KOSPI" if symbol.isdigit() else ""
             currency = "KRW" if symbol.isdigit() else "USD"
             targets.append(NewsCollectionTarget(symbol=symbol, name=symbol, market=market, currency=currency))
-            if len(targets) >= self.max_symbols(payload):
-                break
-        return targets
+        # Continue after the preceding batch so a long watchlist cannot starve.
+        maximum = self.max_symbols(payload)
+        if not requested and len(targets) > maximum:
+            self.restore_checkpoint()
+            previous = list(self.last_result.get("symbols") or [])
+            names = [target.symbol for target in targets]
+            start = (names.index(previous[-1]) + 1) % len(names) if previous and previous[-1] in names else 0
+            targets = targets[start:] + targets[:start]
+        return targets[:maximum]
 
     def account_ids_for_candidate(self, candidate) -> List[str]:
         accounts = self.accounts()

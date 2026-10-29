@@ -460,7 +460,9 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # source facts, native condition evidence and the final expiry gate.
         # Eleven alert-recovery contracts cover exact article proof, scoped gaps,
         # bounded repeats, quote expiry, protected budget and persisted read replay.
-        self.assertLessEqual(total, 2798)
+        # Earnings source clocks, review-only projection, period reconciliation,
+        # isolated collection failures and bounded target rotation add eight contracts.
+        self.assertLessEqual(total, 2806)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

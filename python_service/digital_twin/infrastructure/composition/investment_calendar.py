@@ -31,6 +31,8 @@ def build_investment_calendar_service(settings=None, event_publisher=None) -> In
         symbol_repository=stores.symbol_universe_store(configured_settings),
         reasoning_source_fact_store=stores.reasoning_source_fact_store(configured_settings),
         release_reader=stores.external_data_store(configured_settings).calendar_release_facts,
+        candidate_reader=stores.investment_calendar_candidate_store(configured_settings),
+        sync_status_reader=lambda: stores.runtime_checkpoint_store(configured_settings).load("investment-calendar:official-sync:v1"),
     )
 
 
@@ -41,6 +43,7 @@ def build_official_calendar_sync_service(settings=None, event_publisher=None) ->
     from digital_twin.modules.investment_calendar.infrastructure.bok_calendar_source import BokPolicyDecisionCalendarSource
     from digital_twin.modules.investment_calendar.infrastructure.opendart_calendar_source import OpenDartEarningsCalendarSource
     from digital_twin.modules.investment_calendar.infrastructure.samsung_ir_calendar_source import SamsungIrEarningsCalendarSource
+    from digital_twin.modules.investment_calendar.infrastructure.us_issuer_calendar_source import ISSUER_PAGES, UsIssuerEarningsCalendarSource
     from digital_twin.modules.investment_calendar.infrastructure.us_macro_calendar_source import (
         BeaMacroReleaseCalendarSource,
         BlsMacroReleaseCalendarSource,
@@ -71,10 +74,13 @@ def build_official_calendar_sync_service(settings=None, event_publisher=None) ->
             BeaMacroReleaseCalendarSource(configured_settings),
             OpenDartEarningsCalendarSource(configured_settings, target_symbols=calendar_symbols),
             SamsungIrEarningsCalendarSource(configured_settings),
-        ],
+        ] + [UsIssuerEarningsCalendarSource(symbol, configured_settings)
+             for symbol in dict.fromkeys(calendar_symbols) if symbol in ISSUER_PAGES],
         candidate_service=candidate_service,
         settings=configured_settings,
         checkpoint_store=stores.runtime_checkpoint_store(configured_settings),
+        unsupported_symbols=[symbol for symbol in dict.fromkeys(calendar_symbols)
+                             if symbol.isalpha() and symbol not in ISSUER_PAGES],
     )
 
 
@@ -117,6 +123,7 @@ def build_investment_calendar_discovery_service(settings=None, event_publisher=N
     from digital_twin.infrastructure.investment_research_gateway import ExistingApiResearchGateway
     from digital_twin.infrastructure.settings import runtime_settings
     from digital_twin.modules.investment_calendar.public import InvestmentCalendarDiscoveryService
+    from digital_twin.infrastructure.composition.instruments import ontology_reasoning_priority_symbols
 
     configured_settings = settings or runtime_settings()
     return InvestmentCalendarDiscoveryService(
@@ -127,6 +134,7 @@ def build_investment_calendar_discovery_service(settings=None, event_publisher=N
         research_gateway=ExistingApiResearchGateway(configured_settings),
         settings=configured_settings,
         checkpoint_store=stores.runtime_checkpoint_store(configured_settings),
+        target_reader=lambda: ontology_reasoning_priority_symbols(stores.account_reader(configured_settings), configured_settings),
     )
 
 

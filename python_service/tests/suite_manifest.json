@@ -147,6 +147,7 @@
     {"file": "test_abox_lifecycle.py", "tier": "unit", "core": true},
     {"file": "test_ontology_fact_slots.py", "tier": "unit", "core": true},
     {"file": "test_investment_calendar_identity.py", "tier": "unit", "core": true},
+    {"file": "test_earnings_calendar_coverage.py", "tier": "contract", "core": true},
     {"file": "test_investment_calendar_reasoning_facts.py", "tier": "unit", "core": true},
     {"file": "test_ontology_rule_manifest.py", "tier": "unit", "core": true},
     {"file": "test_rule_claim_contract.py", "tier": "unit", "core": true},

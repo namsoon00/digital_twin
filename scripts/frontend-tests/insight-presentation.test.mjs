@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { investmentBrief, investmentReading, renderInvestmentBrief } from "../../public/modules/decisions/brief.mjs";
 import { groupTodayTasks, todayTaskNeedsAction } from "../../public/modules/overview/task-groups.mjs";
-import { calendarEventCanBeDeleted, mergeCalendarEvents } from "../../public/modules/calendar/presentation.mjs";
+import { calendarEventCanBeDeleted, calendarScheduleQualifier, mergeCalendarEvents } from "../../public/modules/calendar/presentation.mjs";
 import { opinionRecency, decisionInView } from "../../public/modules/decisions/recency.mjs";
 import { evidenceSummary, evidenceResolutionLabel } from "../../public/modules/decisions/evidence-summary.mjs";
 import { notificationEventSummary } from "../../public/modules/notifications/summary.mjs";
@@ -362,6 +362,10 @@ test("calendar combines registered and detected schedules without duplicate or d
   assert.equal(calendarEventCanBeDeleted(merged[0]), true);
   assert.equal(merged[1].calendarOrigin, "detected");
   assert.equal(calendarEventCanBeDeleted(merged[1]), false);
+  const candidate = { eventId: "candidate:aapl", readOnly: true, payload: { candidatePresentation: true, timeState: "dateOnly" } };
+  assert.equal(calendarEventCanBeDeleted(candidate), false);
+  assert.equal(calendarScheduleQualifier(candidate), "미확정 · 시각 미확인");
+  assert.equal(calendarScheduleQualifier({ payload: { timeState: "dateOnly", officialSource: true } }), "시각 미확인");
 });
 
 test("an unfinished current analysis belongs to preparation, not investment opinions", () => {

@@ -44,6 +44,7 @@ def investment_calendar_query_payload(query: Dict[str, List[str]]) -> Dict[str, 
         "to": first_query(query, "to") or first_query(query, "toAt"),
         "status": first_query(query, "status"),
         "includeInactive": first_query(query, "includeInactive"),
+        "includeCandidates": first_query(query, "includeCandidates"),
         "symbol": first_query(query, "symbol"),
         "eventType": first_query(query, "eventType") or first_query(query, "event_type"),
         "limit": first_query(query, "limit") or "200",
@@ -55,6 +56,8 @@ def investment_calendar_payload(query: Dict[str, List[str]]) -> Dict[str, object
 
 
 def investment_calendar_observation_payload(event):
+    if (event.get("payload") or {}).get("candidatePresentation"):
+        return event
     from digital_twin.infrastructure import operational_store as stores
     from digital_twin.modules.market_data.public import InformationObservationService
     from digital_twin.modules.model_registry.contracts import information_event_lifecycle

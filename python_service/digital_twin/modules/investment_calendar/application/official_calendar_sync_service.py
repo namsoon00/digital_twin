@@ -34,6 +34,7 @@ class OfficialCalendarSyncService:
         settings: Dict[str, object] = None,
         now=None,
         checkpoint_store=None,
+        unsupported_symbols=None,
     ):
         self.calendar_service = calendar_service
         self.sources = list(sources or [])
@@ -41,6 +42,7 @@ class OfficialCalendarSyncService:
         self.settings = dict(settings or {})
         self.now = now or (lambda: datetime.now(timezone.utc))
         self.checkpoint_store = checkpoint_store
+        self.unsupported_symbols = list(unsupported_symbols or [])
         self.last_synced_at = None
         self.last_result: Dict[str, object] = {}
         self.checkpoint_error = ""
@@ -121,7 +123,7 @@ class OfficialCalendarSyncService:
             except Exception as error:  # noqa: BLE001 - official schedules still have priority.
                 errors.append("legacy-candidate-repair: " + str(error)[:240])
         for source in self.sources:
-            label = source.__class__.__name__
+            label = getattr(source, "label", source.__class__.__name__)
             try:
                 events = source.events()
             except Exception as error:  # noqa: BLE001 - one official source should not block reminders.
@@ -170,6 +172,7 @@ class OfficialCalendarSyncService:
             "candidateSupersededCount": candidate_superseded,
             "eventIds": event_ids[:200],
             "sources": source_results,
+            "unsupportedSymbols": self.unsupported_symbols,
             "errors": errors[:10],
         }
         self.last_result = dict(result)

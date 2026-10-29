@@ -21,6 +21,14 @@ PLAN_REASONS = {
 # Only developer-authored messages are admitted; arbitrary exception text must
 # never become a diagnostic or a model correction instruction.
 COMPONENT_REASONS = {
+    "priceExplanation": (
+        "price explanation requires an explicit investigated outcome",
+        "price explanation requires the frozen dated price anchor",
+        "price explanation summary must cite its observed price",
+        "price explanation sources must be selected and cited",
+        "possible price explanation requires source-backed conditional company influence",
+        "price explanation cannot use derived AI summaries as original evidence",
+    ),
     "businessResearch": (
         "invalid business research contract", "business research requires bounded actionless explanation",
         "business research requires captured evidence", "business research exceeds work budget",

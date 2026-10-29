@@ -113,6 +113,10 @@ class ObservationEvidenceSession:
         return {"sourceSnapshots": deepcopy(self._packet["sourceSnapshots"]),
                 "coverage": deepcopy(self._packet["coverage"]), "ordering": "source-time-descending-then-id"}
 
+    def price_investigation(self):
+        from .price_investigation_sources import build
+        return build(self._facts.values(), self._packet)
+
     def event_index(self):
         from .observation_event_index import build
         quote = next((row for row in self._packet["facts"] if row["kind"] in OBSERVATION_QUOTE_KINDS

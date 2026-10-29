@@ -58,6 +58,8 @@ def local_quality(result, *, causal_guard_version=CAUSAL_GUARD_VERSION):
     errors.extend(contribution_errors(result))
     from .external_influence import quality_errors as influence_errors
     errors.extend(influence_errors(result))
+    from .price_investigation import quality_errors as investigation_errors
+    errors.extend(investigation_errors(result))
     if result["input"].get("retrieval", {}).get("status") in {"deferred", "repeated-read", "context-budget"}:
         errors.append("내부 조회를 충분히 완료하지 못해 발송을 보류했습니다.")
     from .company_value import explains_value
@@ -101,6 +103,8 @@ def accept_review(result, review, input_id):
     errors.extend(influence_review_errors(result, review))
     from .market_explanation import review_errors as explanation_review_errors
     errors.extend(explanation_review_errors(result, review))
+    from .price_investigation import review_errors as price_review_errors
+    errors.extend(price_review_errors(result, review))
     if not isinstance(review, dict) or review.get("version") != REVIEW_VERSION or set(review.get("sections", {})) != set(SECTIONS):
         errors.append("독립 검토 응답이 완전하지 않습니다.")
     else:

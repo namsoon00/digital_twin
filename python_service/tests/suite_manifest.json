@@ -1,5 +1,6 @@
 {
   "tests": [
+    {"file": "test_price_investigation_flow.py", "tier": "contract", "core": true},
     {"file": "test_market_explanation_flow.py", "tier": "contract", "core": true},
     {"file": "test_external_influence_flow.py", "tier": "contract", "core": true},
     {"file": "test_notification_message_roles.py", "tier": "contract", "core": true},

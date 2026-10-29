@@ -340,4 +340,6 @@ def narrative_digest(result):
         content["notificationContribution"] = result["notificationContribution"]
     if "externalInfluences" in result:
         content["externalInfluences"] = result["externalInfluences"]
+    if "priceExplanation" in result:
+        content["priceExplanation"] = result["priceExplanation"]
     return content_hash(content)

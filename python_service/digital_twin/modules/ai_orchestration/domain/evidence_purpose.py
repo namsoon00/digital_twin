@@ -41,6 +41,9 @@ def validate(packet):
 
 
 def author_version(packet):
+    from . import price_investigation_prompt
+    if price_investigation_prompt.enabled(packet):
+        return price_investigation_prompt.PROMPT_VERSION
     from . import market_explanation_prompt
     if market_explanation_prompt.enabled(packet):
         return market_explanation_prompt.PROMPT_VERSION
@@ -75,6 +78,9 @@ def author_version(packet):
 
 
 def repair_version(packet):
+    from . import price_investigation_prompt
+    if price_investigation_prompt.enabled(packet):
+        return price_investigation_prompt.REPAIR_VERSION
     from . import market_explanation_prompt
     if market_explanation_prompt.enabled(packet):
         return market_explanation_prompt.REPAIR_VERSION
@@ -109,6 +115,9 @@ def repair_version(packet):
 
 
 def review_version(packet):
+    from . import price_investigation_prompt
+    if price_investigation_prompt.enabled(packet):
+        return price_investigation_prompt.REVIEW_VERSION
     from . import market_explanation_prompt
     if market_explanation_prompt.enabled(packet):
         return market_explanation_prompt.REVIEW_VERSION

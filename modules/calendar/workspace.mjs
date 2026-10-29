@@ -1,6 +1,6 @@
 import { currentInvestmentCalendar, currentInvestmentCalendarCandidates, defaultInvestmentCalendarDraft, investmentCalendarCandidateById, investmentCalendarEventTypes } from "./commands.mjs";
 import { INVESTMENT_CALENDAR_CANDIDATE_PAGE_SIZE } from "./constants.mjs";
-import { calendarEventCanBeDeleted, mergeCalendarEvents } from "./presentation.mjs";
+import { calendarEventCanBeDeleted, calendarScheduleQualifier, mergeCalendarEvents } from "./presentation.mjs";
 import { renderCalendarReleaseInformation } from "./results.mjs";
 import { decisionStateMeta } from "../decisions/signals.mjs";
 import { stockDisplayName, textWithDisplaySymbol } from "../instruments/catalog.mjs";
@@ -86,10 +86,11 @@ function investmentCalendarEventDayKey(event) {
 }
 
 function investmentCalendarScheduleLabel(event) {
+  var qualifier = calendarScheduleQualifier(event);
   if ((event || {}).allDay) {
-    return (investmentCalendarEventDayKey(event) || "날짜 미정") + " · 종일";
+    return (investmentCalendarEventDayKey(event) || "날짜 미정") + (qualifier ? " · 현지 날짜 · " + qualifier : " · 종일");
   }
-  return formatClock((event || {}).startsAt);
+  return formatClock((event || {}).startsAt) + (qualifier ? " · " + qualifier : "");
 }
 
 function investmentCalendarMonthDate() {
@@ -119,6 +120,7 @@ function investmentCalendarDayLabel(key) {
 }
 
 function investmentCalendarEventTimeLabel(event) {
+  if (calendarScheduleQualifier(event)) return calendarScheduleQualifier(event);
   if ((event || {}).allDay) return "종일";
   var parts = appDateTimeParts((event || {}).startsAt);
   return parts ? parts.hour + ":" + parts.minute : "시간 미정";
@@ -129,7 +131,7 @@ function investmentCalendarTimeStateLabel(event) {
   var value = String(payload.timeState || "");
   if (value === "userConfirmed") return "사용자 확인 시각";
   if (value === "sourceProvided") return "출처 제공 시각";
-  if (value === "estimatedDefault") return "확인 전 기본 시각";
+  if (value === "estimatedDefault" || value === "dateOnly") return "발표 시각 미확인";
   if (value === "operationalDefault") return "발표시각 미확정 · 알림 기준";
   if (value === "official") return "공식 발표 시각";
   if (payload.autoDetected && payload.scheduleState === "estimated") return "확인 전 기본 시각";
@@ -172,7 +174,7 @@ function investmentCalendarTargetLabel(event) {
 }
 
 function investmentCalendarReminderLabel(event) {
-  if (String((event || {}).status || "").toLowerCase() === "tentative") return "검증 전 알림 대기";
+  if (String((event || {}).status || "").toLowerCase() === "tentative") return "미확정 · 알림 제외";
   var offsets = Array.isArray((event || {}).reminderOffsetsMinutes) ? event.reminderOffsetsMinutes : [];
   return offsets.length ? "알림 " + offsets.join(", ") + "분 전" : "알림 없음";
 }
@@ -265,7 +267,10 @@ function renderInvestmentCalendarSummaryPanel() {
   var payload = currentInvestmentCalendar();
   var summary = payload.summary || {};
   var events = investmentCalendarEvents();
-  var registeredCount = events.filter(function (event) { return event.calendarOrigin !== "detected"; }).length;
+  var registeredCount = events.filter(function (event) { return event.calendarOrigin !== "detected" && !event.readOnly; }).length;
+  var collection = (payload.officialCollection || {}).lastResult || {};
+  var unavailable = (collection.sources || []).filter(function (source) { return source.status === "error"; }).map(function (source) { return source.source; });
+  var unsupported = collection.unsupportedSymbols || [];
   var upcoming = investmentCalendarUpcomingEvents();
   var next = upcoming[0] || {};
   var important = investmentCalendarEvents().filter(function (event) {
@@ -290,8 +295,11 @@ function renderInvestmentCalendarSummaryPanel() {
     '</div>',
     '</div>',
     calendarState.investmentCalendarError ? '<p class="form-error">' + escapeHtml(calendarState.investmentCalendarError) + '</p>' : '',
+    payload.candidateError ? '<p class="form-error">' + escapeHtml(payload.candidateError) + '</p>' : '',
+    unavailable.length ? '<p class="subtle">공식 일정 수집 실패: ' + escapeHtml(unavailable.join(", ")) + ' · 일정이 없다는 뜻은 아닙니다.</p>' : '',
+    unsupported.length ? '<p class="subtle">공식 일정 자동 수집 미지원: ' + escapeHtml(unsupported.join(", ")) + ' · 제공자 후보와 직접 등록으로 확인할 수 있습니다.</p>' : '',
     '<details class="oa-secondary-details" id="disclosure-calendar-metrics"><summary><strong>일정 현황</strong></summary><div class="investment-calendar-kpis">',
-    renderCalendarKpi("전체", events.length, registeredCount + "건 등록 · " + (events.length - registeredCount) + "건 자동 감지", "metric-cell", "hold", { type: "anchor", value: "calendar-events" }),
+    renderCalendarKpi("전체", events.length, registeredCount + "건 등록 · " + Number(summary.unconfirmed || 0) + "건 미확정", "metric-cell", "hold", { type: "anchor", value: "calendar-events" }),
     renderCalendarKpi("예정", summary.upcoming || upcoming.length || 0, "표시 일정", "metric-cell", upcoming.length ? "watch" : "hold", { type: "anchor", value: "calendar-events" }),
     renderCalendarKpi("중요", important, "중요도 80+", "metric-cell", important ? "caution" : "hold", { type: "anchor", value: "calendar-events" }),
     renderCalendarKpi("다음", next.startsAt ? investmentCalendarScheduleLabel(next) : "대기", next.startsAt ? investmentCalendarEventTypeLabel(next.eventType) + " · " + investmentCalendarTargetLabel(next) : "등록 필요", "metric-cell", next.startsAt ? "watch" : "hold", next.startsAt ? { type: "detail", value: "investment-calendar-event", key: next.eventId || next.id || next.title || "" } : { type: "calendar-entry" }),
@@ -481,7 +489,7 @@ function renderInvestmentCalendarEvent(event) {
     '<span>중요도 ' + escapeHtml(event.importance || 0) + '</span>',
     '<span>' + escapeHtml(investmentCalendarTargetLabel(event)) + '</span>',
     investmentCalendarSymbolMetaLabel(event) ? '<span>' + escapeHtml(investmentCalendarSymbolMetaLabel(event)) + '</span>' : '',
-    event.calendarOrigin === "detected" ? '<span>자동 감지 일정</span>' : (String(event.status || "").toLowerCase() === "tentative" ? '<span>검토 전 일정</span>' : ''),
+    event.calendarOrigin === "detected" ? '<span>자동 감지 일정</span>' : (String(event.status || "").toLowerCase() === "tentative" ? '<span>미확정 일정</span>' : ''),
     investmentCalendarPayload(event).timeState === "operationalDefault" ? '<span>시각은 알림 기준</span>' : '',
     event.releaseInformation ? '<span>' + escapeHtml(event.releaseInformation.statusLabel) + '</span>' : '',
     '<span>' + escapeHtml(investmentCalendarReminderLabel(event)) + '</span>',
@@ -647,7 +655,9 @@ function renderInvestmentCalendarCandidate(candidate) {
   var needsScheduleConfirmation = automaticCandidate && (payload.reviewRequired || payload.scheduleState !== "confirmed");
   var timeState = String(payload.timeState || (candidate.allDay ? "estimatedDefault" : "sourceProvided"));
   var scheduleText = candidate.startsAt
-    ? formatClock(candidate.startsAt) + (timeState === "estimatedDefault" ? " · 시각 확인 필요" : "")
+    ? (candidate.allDay || timeState === "estimatedDefault" || timeState === "dateOnly"
+      ? (candidate.localDate || String(candidate.startsAt).slice(0, 10)) + " · 미확정 · 시각 미확인"
+      : formatClock(candidate.startsAt) + " · 미확정")
     : "날짜 필요";
   var reviewReason = String(candidate.reviewReason || "");
   var reason = {
@@ -824,7 +834,7 @@ function investmentCalendarEventWorkDetailPayload(key) {
   return {
     kicker: "Calendar Event",
     title: investmentCalendarDisplayTitle(event, "투자 이벤트"),
-    meta: [investmentCalendarEventTypeLabel(event.eventType), event.startsAt ? formatClock(event.startsAt) : "", investmentCalendarTargetLabel(event), investmentCalendarSymbolMetaLabel(event)].filter(Boolean).join(" · "),
+    meta: [investmentCalendarEventTypeLabel(event.eventType), event.startsAt ? investmentCalendarScheduleLabel(event) : "", investmentCalendarTargetLabel(event), investmentCalendarSymbolMetaLabel(event)].filter(Boolean).join(" · "),
     body: [
       renderInstrumentWorkspaceLink((event.symbols || [])[0], "종목 전체 흐름"),
       renderCalendarReleaseInformation(event),
@@ -856,7 +866,7 @@ function investmentCalendarEventWorkDetailPayload(key) {
     ].join(""),
     footer: calendarEventCanBeDeleted(event)
       ? '<button class="mini-button danger" type="button" data-calendar-delete="' + escapeHtml(event.eventId || "") + '">삭제</button>'
-      : '<span class="work-detail-origin-note">오늘 요약에서 자동 감지한 일정입니다.</span>'
+      : '<span class="work-detail-origin-note">' + (payload.candidatePresentation ? "미확정 후보입니다. 공식 출처 확인 후 후보 검토에서 등록할 수 있습니다." : "오늘 요약에서 자동 감지한 일정입니다.") + '</span>'
   };
 }
 

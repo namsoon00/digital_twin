@@ -113,6 +113,7 @@ function investmentCalendarQueryString() {
   var windowRange = investmentCalendarQueryWindow();
   params.set("from", windowRange.from);
   params.set("to", windowRange.to);
+  params.set("includeCandidates", "true");
   if (String(filters.symbol || "").trim()) params.set("symbol", String(filters.symbol || "").trim().toUpperCase());
   if (String(filters.eventType || "").trim()) params.set("eventType", String(filters.eventType || "").trim());
   if (String(filters.limit || "").trim()) params.set("limit", String(filters.limit || "").trim());

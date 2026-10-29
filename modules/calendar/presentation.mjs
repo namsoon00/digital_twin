@@ -40,7 +40,14 @@ function mergeCalendarEvents(registeredEvents, detectedEvents) {
 }
 
 function calendarEventCanBeDeleted(event) {
-  return Boolean(event && event.calendarOrigin !== "detected" && event.eventId);
+  return Boolean(event && !event.readOnly && !(event.payload || {}).candidatePresentation && event.calendarOrigin !== "detected" && event.eventId);
 }
 
-export { calendarEventCanBeDeleted, calendarEventKeys, mergeCalendarEvents };
+function calendarScheduleQualifier(event) {
+  var payload = (event || {}).payload || {};
+  var candidate = payload.candidatePresentation || payload.scheduleState === "estimated";
+  var dateOnly = payload.timeState === "dateOnly" || payload.timeState === "estimatedDefault";
+  return [candidate ? "미확정" : "", dateOnly ? "시각 미확인" : ""].filter(Boolean).join(" · ");
+}
+
+export { calendarEventCanBeDeleted, calendarEventKeys, calendarScheduleQualifier, mergeCalendarEvents };

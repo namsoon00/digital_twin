@@ -2,7 +2,7 @@
   "version": 1,
   "status": "available",
   "provider": "cloudflared",
-  "baseUrl": "https://guards-efforts-rover-clear.trycloudflare.com",
+  "baseUrl": "https://audit-wolf-atmosphere-electron.trycloudflare.com",
   "revision": "589e21006a76",
-  "updatedAt": "2026-10-30T17:07:42.014Z"
+  "updatedAt": "2026-10-30T23:07:40.731Z"
 }

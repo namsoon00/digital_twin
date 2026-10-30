@@ -1049,13 +1049,17 @@ below its configured 12 GiB floor. A successfully replaced 16 GiB graph copy was
 still within its 120-minute rollback period. Neither cache reuse nor a reduced
 query time can restore inference while this storage guard blocks the server.
 
-The supervisor previously pruned expired rollback stores only while the graph
-was ready. Low disk could therefore stop the graph before expiry and prevent
-cleanup even after expiry. It now also allows the existing pruning owner to run
-when the graph is specifically blocked by low disk. Rotation/maintenance locks,
-completed-cutover checks, active/staged/failed-store protection, symlink checks
-and the configured retention period remain in force. Other graph failures do
-not authorize cleanup. Early removal of a still-retained rollback copy requires
-an explicit owner decision; this change does not shorten retention or lower the
-write-safety threshold. `test_typedb_service_manager` covers low-disk recovery,
-concurrent rotation/maintenance and retained-path protection.
+The restart exposed a second failure: TypeDB aborted because its checkpoint was
+ahead of the durability log. This means low disk alone cannot justify deleting
+a rollback store: it may be the remaining recoverable graph. Retired-store
+cleanup therefore retains the existing healthy-graph requirement, as well as
+rotation/maintenance locks, completed-cutover checks, path protections and the
+configured retention period. A low-disk-only cleanup exception was withdrawn
+after this live recovery evidence. The failed active store is preserved during
+rollback; restoring a retained copy does not by itself prove runtime health.
+
+A related startup wait treated an exited, unreaped child as alive because
+`kill(pid, 0)` succeeds for a zombie. Startup now polls the owned child and
+returns failure immediately after its exit. It does not wait for the full
+readiness timeout or grant graph readiness. `test_typedb_service_manager`
+checks both the zombie failure and retention while a low-disk graph is unready.

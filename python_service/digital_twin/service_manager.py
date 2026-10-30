@@ -2986,13 +2986,19 @@ def bootstrap_typedb_credentials_after_reset(spec: Dict[str, object]) -> bool:
     return True
 
 
-def wait_for_typedb_ready(spec: Dict[str, object]) -> bool:
+def wait_for_typedb_ready(spec: Dict[str, object], process=None) -> bool:
     wait_seconds = int_value(spec.get("startupWaitSeconds"), 600, 0)
     address = spec.get("healthAddress") or spec.get("typedbAddress") or "127.0.0.1:1729"
     if wait_seconds <= 0:
         return True
     deadline = time.monotonic() + wait_seconds
     while time.monotonic() <= deadline:
+        # kill(pid, 0) still succeeds for an exited, unreaped child. Poll the
+        # child we started so a startup panic cannot consume the whole timeout.
+        if process is not None and process.poll() is not None:
+            append_log(spec["log"], "not-ready process-exited")
+            print(str(spec["label"]) + " did not become ready because the process exited.")
+            return False
         pid = read_pid(spec["pid"])
         if pid and not pid_exists(pid):
             append_log(spec["log"], "not-ready process-exited")
@@ -4263,7 +4269,7 @@ def start_worker(spec: Dict[str, object], wait_for_ready: bool = True) -> int:
             append_log(log_path, "recovery started asynchronously")
             print(str(spec["label"]) + " recovery continues under supervisor monitoring.")
             return 0
-        if not wait_for_typedb_ready(spec):
+        if not wait_for_typedb_ready(spec, process=process):
             return 1
         if not ensure_typedb_startup_seed_contract(spec):
             return 1
@@ -5873,12 +5879,9 @@ def prune_retired_typedb_data_paths(spec: Dict[str, object]) -> List[str]:
 
 def typedb_capacity_maintenance_decisions(spec: Dict[str, object], *, graph_ready: bool):
     """Reclaim expired rollback stores before measuring/dispatching replacement."""
-    # Low disk can stop the graph before the rollback retention period ends.
-    # Requiring a running graph to prune expired copies then prevents recovery
-    # forever. The existing prune owner still enforces age, completed cutover,
-    # active-path and symlink guards; other graph failures retain the old gate.
-    cleanup_ready = graph_ready or typedb_storage_preflight(spec).get("status") == "blocked-low-disk"
-    if (cleanup_ready and not typedb_auto_rotation_worker_running().get("running")
+    # Low disk can hide an unreadable active store. Keep its rollback copies
+    # until the active graph has actually recovered, even after retention ends.
+    if (graph_ready and not typedb_auto_rotation_worker_running().get("running")
             and not supervisor_maintenance_active()):
         prune_retired_typedb_data_paths(spec)
     # Both decisions read fresh disk usage after cleanup, including on paths

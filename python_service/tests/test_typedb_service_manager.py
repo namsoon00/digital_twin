@@ -694,6 +694,16 @@ class TypeDBServiceManagerTests(unittest.TestCase):
                     patch.object(service_manager.time, "sleep", return_value=None):
                 self.assertTrue(service_manager.wait_for_typedb_ready(spec))
 
+            # An owned child can be a zombie: kill(pid, 0) remains successful
+            # although startup has panicked and no health probe can succeed.
+            with patch.object(service_manager, "pid_exists", return_value=True), \
+                    patch.object(service_manager, "typedb_service_ready") as probe, \
+                    patch.object(service_manager.time, "sleep") as sleep:
+                self.assertFalse(service_manager.wait_for_typedb_ready(
+                    spec, process=SimpleNamespace(poll=lambda: 1)))
+                probe.assert_not_called()
+                sleep.assert_not_called()
+
         bootstrap.assert_called_once_with(spec)
         # Successful credential bootstrap owns and clears the pending marker.
         clear.assert_not_called()
@@ -1149,7 +1159,7 @@ class TypeDBReclaimAdmissionTests(unittest.TestCase):
                     patch.object(service_manager, 'typedb_reset_needed', side_effect=lambda *a, **k: calls.append('reset') or {}), \
                     patch.object(service_manager, 'typedb_auto_rotation_needed', side_effect=lambda _: calls.append('automatic') or {}):
                 service_manager.typedb_capacity_maintenance_decisions({}, graph_ready=ready)
-            expected = ['prune'] if (ready or low_disk) and not rotating and not maintenance else []
+            expected = ['prune'] if ready and not rotating and not maintenance else []
             self.assertEqual(expected + ['reset', 'automatic'], calls)
 
     def test_pruning_preserves_active_recent_failed_staged_and_unknown_paths(self):

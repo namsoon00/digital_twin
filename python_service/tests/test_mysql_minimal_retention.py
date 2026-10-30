@@ -197,7 +197,7 @@ class MySQLMinimalRetentionTests(unittest.TestCase):
             def execute(self, sql, params=()):
                 if "SELECT run_id" in str(sql) and "investment_research_runs" in str(sql):
                     self.calls.append((str(sql), tuple(params)))
-                    return Cursor(rows=[{"run_id": "expired-audit", "payload_bytes": 128}])
+                    return Cursor(rows=[{"run_id": "expired-audit", "updated_at": "2026-09-01T00:00:00Z", "payload_bytes": 128}])
                 return super().execute(sql, params)
 
         connection = ResearchConnection()
@@ -208,12 +208,154 @@ class MySQLMinimalRetentionTests(unittest.TestCase):
         result = repository.apply(policy, now=now)
         self.assertEqual("ok", result["status"])
         queries = [(sql, params) for sql, params in connection.calls if "investment_research_runs" in sql]
-        self.assertEqual(3, len(queries))
+        self.assertEqual(4, len(queries))
         for sql, params in queries:
-            self.assertIn("$.auditRetainUntil", sql)
-            self.assertIn("status NOT IN", sql)
+            if "SELECT run_id, updated_at" in sql:
+                self.assertNotIn("payload_json", sql)
+                self.assertLessEqual(params[-1], 8)
+            else:
+                self.assertIn("$.auditRetainUntil", sql)
+                self.assertIn("status NOT IN", sql)
             self.assertIn("2026-09-23T00:00:00Z", params)
             self.assertEqual(sql.count("%s"), len(params))
+
+    def _assert_research_scan_resumes_without_losing_protected_or_unprocessed_rows(self):
+        import os
+        from dataclasses import replace
+        from unittest.mock import patch
+        from pymysql.cursors import DictCursor
+        from pymysql.err import OperationalError
+        from mysql_fixtures import mysql_test_connection
+        from digital_twin.infrastructure.mysql_operational_connection import MYSQL_SCHEMA, MySQLConnectionProxy
+
+        with patch.dict(os.environ, {"MYSQL_TEST_DATABASE": "orbit_alpha_test_research_retention"}):
+            raw = mysql_test_connection()
+        raw.cursorclass = DictCursor
+        raw.autocommit(True)
+        connection = MySQLConnectionProxy(raw)
+        self.addCleanup(connection.close)
+        for table in ("mysql_retention_scan_cursors", "investment_research_runs"):
+            connection.execute("DROP TABLE IF EXISTS " + table)
+            connection.execute(next(sql for sql in MYSQL_SCHEMA if "CREATE TABLE IF NOT EXISTS " + table + " (" in sql))
+        policy = replace(mysql_minimal_retention_policy({}), batch_size=100)
+        cutoff = "2026-10-01T00:00:00Z"
+        old = "2026-01-01T00:00:00Z"
+        def budget(**overrides):
+            return {"started": time.monotonic(), "maxSeconds": 30,
+                    "remainingBytes": 1000000, "deletedBytes": 0, **overrides}
+        def insert(key, status="completed", audit="", completed=old, updated=old):
+            connection.execute("INSERT INTO investment_research_runs "
+                "(run_id,status,started_at,completed_at,payload_json,created_at,updated_at) "
+                "VALUES (%s,%s,%s,%s,%s,%s,%s)",
+                (key, status, old, completed, json.dumps({"auditRetainUntil": audit, "body": "x" * 128}), old, updated))
+        def remaining():
+            return {row["run_id"] for row in connection.execute("SELECT run_id FROM investment_research_runs").fetchall()}
+        def position():
+            return connection.execute("SELECT after_time,after_id FROM mysql_retention_scan_cursors "
+                "WHERE profile=%s AND policy_name='research:terminalRuns'", (policy.profile,)).fetchone()
+        def reset():
+            connection.execute("DELETE FROM investment_research_runs")
+            connection.execute("DELETE FROM mysql_retention_scan_cursors")
+        execute = connection.execute
+        reads = []
+        def trace(sql, params=()):
+            if sql.startswith("SELECT") and "investment_research_runs" in sql:
+                reads.append((sql, params))
+            return execute(sql, params)
+        def turn(turn_budget=None):
+            # A fresh repository models the isolated maintenance worker.
+            with patch.object(connection, "execute", side_effect=trace):
+                return MySQLMinimalRetentionRepository(connection, candidate_query_timeout_ms=1500)._delete_terminal_research_runs(
+                    policy, turn_budget if turn_budget is not None else budget(), cutoff)
+
+        with self.subTest(case="protected prefix and same-time keyset survive worker replacement"):
+            protected = {"audit-" + str(i).zfill(2) for i in range(12)}
+            for key in protected:
+                insert(key, audit="2027-01-01T00:00:00Z")
+            for status in ("queued", "processing", "reasoning-queued"):
+                insert(status, status=status)
+            insert("unfinished", completed="")
+            insert("recent", updated=cutoff)
+            for i in range(5):
+                insert("zz-expired-" + str(i))
+            self.assertEqual(0, turn()["deleted"])
+            self.assertEqual("audit-07", position()["after_id"])
+            self.assertEqual(5, sum(turn()["deleted"] for _ in range(6)))
+            self.assertEqual(protected | {"queued", "processing", "reasoning-queued", "unfinished", "recent"}, remaining())
+            for sql, params in reads:
+                if "payload_json" in sql:
+                    self.assertIn("WHERE run_id IN (", sql)
+                    self.assertLessEqual(len(params) - 5, 8)
+                else:
+                    self.assertEqual(8, params[-1])
+            for metadata_sql, metadata_params in (reads[0], reads[2]):
+                self.assertNotIn("CAST(", metadata_sql)
+                plan = str(execute("EXPLAIN " + metadata_sql, metadata_params).fetchall())
+                self.assertIn("idx_research_runs_retention", plan)
+                self.assertNotIn("filesort", plan.lower())
+                self.assertNotIn("Table scan on investment_research_runs", plan)
+            # Previously protected rows must be reconsidered after wrap.
+            for key in protected:
+                execute("UPDATE investment_research_runs SET payload_json='{}' WHERE run_id=%s", (key,))
+            self.assertEqual(12, sum(turn()["deleted"] for _ in range(6)))
+
+        with self.subTest(case="delete rechecks audit horizon, status, completion and updated clock"):
+            reset()
+            for key in ("audit", "active", "unfinished", "renewed", "expired"):
+                insert(key)
+            raced = False
+            def race(sql, params=()):
+                nonlocal raced
+                if sql.startswith("DELETE FROM `investment_research_runs`") and not raced:
+                    raced = True
+                    execute("UPDATE investment_research_runs SET payload_json=%s WHERE run_id='audit'", ('{"auditRetainUntil":"2027-01-01T00:00:00Z"}',))
+                    execute("UPDATE investment_research_runs SET status='processing' WHERE run_id='active'")
+                    execute("UPDATE investment_research_runs SET completed_at='' WHERE run_id='unfinished'")
+                    execute("UPDATE investment_research_runs SET updated_at=%s WHERE run_id='renewed'", (cutoff,))
+                return execute(sql, params)
+            with patch.object(connection, "execute", side_effect=race):
+                result = MySQLMinimalRetentionRepository(connection)._delete_terminal_research_runs(policy, budget(), cutoff)
+            self.assertEqual(1, result["deleted"])
+            self.assertEqual({"audit", "active", "unfinished", "renewed"}, remaining())
+
+        with self.subTest(case="byte budget leaves the cursor before unprocessed candidates"):
+            reset()
+            insert("expired")
+            self.assertEqual(0, turn(budget(remainingBytes=1, deletedBytes=20))["deleted"])
+            self.assertIsNone(position())
+            self.assertEqual({"expired"}, remaining())
+            self.assertEqual(1, turn()["deleted"])
+
+        for failure in ("read-deadline", "partial-delete", "time-budget"):
+            with self.subTest(case=failure):
+                reset()
+                insert("expired-1")
+                insert("expired-2")
+                turn_budget = budget()
+                count = 0
+                def fail(sql, params=()):
+                    nonlocal count
+                    if sql.startswith("SELECT") and "OCTET_LENGTH(payload_json)" in sql:
+                        if failure == "read-deadline":
+                            raise OperationalError(3024, "deadline")
+                        if failure == "time-budget":
+                            turn_budget["started"] -= 100
+                    if sql.startswith("DELETE FROM `investment_research_runs`"):
+                        count += 1
+                        if failure == "partial-delete" and count == 2:
+                            raise OperationalError(1213, "deadlock")
+                    return execute(sql, params)
+                with patch.object(connection, "execute", side_effect=fail):
+                    repository = MySQLMinimalRetentionRepository(connection, candidate_query_timeout_ms=1500)
+                    if failure == "time-budget":
+                        self.assertEqual(0, repository._delete_terminal_research_runs(policy, turn_budget, cutoff)["deleted"])
+                    else:
+                        with self.assertRaises(OperationalError):
+                            repository._delete_terminal_research_runs(policy, turn_budget, cutoff)
+                self.assertIsNone(position())
+                expected = 1 if failure == "partial-delete" else 2
+                self.assertEqual(expected, len(remaining()))
+                self.assertEqual(expected, turn()["deleted"])
 
     def test_snapshot_history_preserves_live_sources_and_rechecks_before_delete(self):
         from mysql_fixtures import mysql_test_connection
@@ -407,8 +549,9 @@ class MySQLMinimalRetentionTests(unittest.TestCase):
         self.assertNotIn("monitor_snapshot_history", sql_text)
         self.assertNotIn("investment_research_runs", sql_text)
 
-    def test_repository_deletes_only_terminal_projection_primary_keys(self):
+    def test_repository_deletes_only_expired_terminal_primary_keys(self):
         self._assert_research_audit_expiry_is_rechecked_at_preview_selection_and_delete()
+        self._assert_research_scan_resumes_without_losing_protected_or_unprocessed_rows()
         connection = ApplyConnection()
         repository = MySQLMinimalRetentionRepository(connection)
         policy = mysql_minimal_retention_policy({

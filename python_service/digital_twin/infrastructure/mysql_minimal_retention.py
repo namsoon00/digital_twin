@@ -1559,26 +1559,59 @@ class MySQLMinimalRetentionRepository:
         return self._result("research_evidence", deleted, bytes_deleted)
 
     def _delete_terminal_research_runs(self, policy, budget, cutoff_iso) -> Dict[str, object]:
-        candidates = self._byte_bounded_candidates(
-            """
-            SELECT run_id, OCTET_LENGTH(payload_json) AS payload_bytes
-            FROM `investment_research_runs`
-            WHERE completed_at <> '' AND status NOT IN (""" + _status_placeholders(ACTIVE_RESEARCH_RUN_STATUSES) + ")"
-            " AND updated_at < " + _cutoff_sql() + " AND " + _research_audit_expired_sql() + " ORDER BY updated_at, run_id LIMIT %s",
-            tuple(ACTIVE_RESEARCH_RUN_STATUSES) + (cutoff_iso, cutoff_iso, policy.batch_size),
-            "run_id",
-            policy,
-            budget,
+        # LIMIT after a JSON predicate still reads every protected audit body.
+        # Walk a covering metadata index first, then inspect at most eight
+        # primary keys. Persist the position so protected prefixes cannot
+        # starve later expired rows when a worker is replaced between turns.
+        cursors = self._candidate_rows(
+            "SELECT after_time, after_id FROM mysql_retention_scan_cursors "
+            "WHERE profile = %s AND policy_name = %s",
+            (policy.profile, "research:terminalRuns"), budget,
         )
+        cursor = cursors[0] if cursors else {}
+        after_time = str(_row_value(cursor, "after_time", fallback="") or "")
+        after_id = str(_row_value(cursor, "after_id", 1, "") or "")
+        window = self._candidate_rows(
+            "SELECT run_id, updated_at FROM `investment_research_runs` "
+            "WHERE updated_at < %s AND (updated_at > %s OR (updated_at = %s AND run_id > %s)) "
+            "ORDER BY updated_at, run_id LIMIT %s",
+            (cutoff_iso, after_time, after_time, after_id, min(8, policy.batch_size)), budget,
+        )
+        if not window:
+            if (after_time or after_id) and self._has_budget(budget):
+                # Revisit audits on the next sweep as their horizons expire.
+                self._save_research_scan_cursor(policy.profile, "", "")
+            return self._result("investment_research_runs", 0, 0)
+        identifiers = tuple(str(_row_value(row, "run_id") or "") for row in window)
+        guard = ("completed_at <> '' AND status NOT IN ("
+                 + _status_placeholders(ACTIVE_RESEARCH_RUN_STATUSES)
+                 + ") AND updated_at < " + _cutoff_sql() + " AND " + _research_audit_expired_sql())
+        guard_params = tuple(ACTIVE_RESEARCH_RUN_STATUSES) + (cutoff_iso, cutoff_iso)
+        rows = self._candidate_rows(
+            "SELECT run_id, OCTET_LENGTH(payload_json) AS payload_bytes "
+            "FROM `investment_research_runs` WHERE run_id IN ("
+            + _status_placeholders(identifiers) + ") AND " + guard
+            + " ORDER BY updated_at, run_id",
+            identifiers + guard_params, budget,
+        )
+        candidates = self._bounded_candidate_rows(rows, "run_id", policy, budget)
         deleted, bytes_deleted = self._delete_candidates(
-            "investment_research_runs",
-            "run_id",
-            candidates,
-            "completed_at <> '' AND status NOT IN (" + _status_placeholders(ACTIVE_RESEARCH_RUN_STATUSES) + ") AND updated_at < " + _cutoff_sql() + " AND " + _research_audit_expired_sql(),
-            tuple(ACTIVE_RESEARCH_RUN_STATUSES) + (cutoff_iso, cutoff_iso),
-            budget,
+            "investment_research_runs", "run_id", candidates, guard, guard_params, budget,
         )
+        # Do not advance past candidates excluded by byte/time budgets, or a
+        # failed DELETE. Already committed deletions are harmless to revisit.
+        if len(candidates) == len(rows) and self._has_budget(budget):
+            self._save_research_scan_cursor(
+                policy.profile, str(_row_value(window[-1], "updated_at", 1) or ""), identifiers[-1],
+            )
         return self._result("investment_research_runs", deleted, bytes_deleted)
+
+    def _save_research_scan_cursor(self, profile, after_time, after_id):
+        _execute(self.connection,
+            "INSERT INTO mysql_retention_scan_cursors (profile,policy_name,after_time,after_id,updated_at) "
+            "VALUES (%s,%s,%s,%s,%s) ON DUPLICATE KEY UPDATE "
+            "after_time=VALUES(after_time),after_id=VALUES(after_id),updated_at=VALUES(updated_at)",
+            (profile, "research:terminalRuns", after_time, after_id, self._iso()))
 
     def _delete_market_time_series(self, policy, budget, granularity, cutoff_iso) -> Dict[str, object]:
         candidates = self._byte_bounded_candidates(
@@ -1651,6 +1684,10 @@ class MySQLMinimalRetentionRepository:
         budget: Dict[str, object],
         compound_key: Sequence[str] = (),
     ) -> List[object]:
+        rows = self._candidate_rows(sql, params, budget)
+        return self._bounded_candidate_rows(rows, identifier, policy, budget, compound_key=compound_key)
+
+    def _candidate_rows(self, sql: str, params: Sequence[object], budget: Dict[str, object]) -> List[object]:
         if not self._has_budget(budget):
             return []
         if self.candidate_query_timeout_ms:
@@ -1663,8 +1700,7 @@ class MySQLMinimalRetentionRepository:
             # Scope this server deadline to the read, without changing pooled
             # session settings or applying a SELECT-only hint to mutations.
             sql = sql.replace("SELECT ", "SELECT /*+ MAX_EXECUTION_TIME(" + str(timeout_ms) + ") */ ", 1)
-        rows = _fetchall(_execute(self.connection, sql, params))
-        return self._bounded_candidate_rows(rows, identifier, policy, budget, compound_key=compound_key)
+        return _fetchall(_execute(self.connection, sql, params))
 
     def _bounded_candidate_rows(
         self,

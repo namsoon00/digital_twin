@@ -3057,6 +3057,16 @@ MYSQL_SCHEMA = [
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     """,
     """
+    CREATE TABLE IF NOT EXISTS mysql_retention_scan_cursors (
+        profile VARCHAR(96) NOT NULL,
+        policy_name VARCHAR(96) NOT NULL,
+        after_time VARCHAR(40) NOT NULL DEFAULT '',
+        after_id VARCHAR(191) NOT NULL DEFAULT '',
+        updated_at VARCHAR(40) NOT NULL,
+        PRIMARY KEY (profile, policy_name)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
+    """
     CREATE TABLE IF NOT EXISTS mysql_retention_runs (
         run_id VARCHAR(191) PRIMARY KEY,
         profile VARCHAR(96) NOT NULL DEFAULT '',
@@ -3104,7 +3114,8 @@ MYSQL_SCHEMA = [
         created_at VARCHAR(40) NOT NULL,
         updated_at VARCHAR(40) NOT NULL,
         KEY idx_investment_research_runs_symbol_time (account_id, symbol, started_at),
-        KEY idx_investment_research_runs_status_time (status, updated_at)
+        KEY idx_investment_research_runs_status_time (status, updated_at),
+        KEY idx_research_runs_retention (updated_at, run_id)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     """,
     """

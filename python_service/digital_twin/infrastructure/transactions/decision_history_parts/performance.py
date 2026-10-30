@@ -22,6 +22,7 @@ def performance(
     _performance_episodes: Callable[..., List[Dict[str, object]]],
     _runtime_settings: Mapping[str, object],
     evaluate_decision_performance: Callable[..., Dict[str, object]],
+    _prepare_history: Callable = None,
 ) -> Dict[str, object]:
     try:
         minimum_samples = int(
@@ -29,17 +30,19 @@ def performance(
         )
     except ValueError:
         minimum_samples = 5
-    episodes = _performance_episodes(
-        account_id=account_id,
-        symbol=symbol,
-        limit=max(1, min(2000, int(limit or 500))),
-        as_of=as_of,
-    )
-    result = PERFORMANCE_REPORT_CACHE.evaluate(
-        episodes,
-        minimum_sample_count=max(2, min(100, minimum_samples)),
-        evaluator=evaluate_decision_performance,
-    )
+    minimum_samples = max(2, min(100, minimum_samples))
+    history_limit = max(1, min(2000, int(limit or 500)))
+
+    def evaluate_history():
+        episodes = _performance_episodes(
+            account_id=account_id, symbol=symbol, limit=history_limit, as_of=as_of,
+        )
+        return PERFORMANCE_REPORT_CACHE.evaluate(
+            episodes, minimum_sample_count=minimum_samples, evaluator=evaluate_decision_performance,
+        )
+
+    result = (_prepare_history(evaluate_history, history_limit, minimum_samples)
+              if _prepare_history else evaluate_history())
     archive_count = _performance_archive_episode_count(account_id, symbol, as_of=as_of)
     evaluated_count = int(result.get("episodeCount") or 0)
     result["evaluatedEpisodeCount"] = evaluated_count
@@ -254,7 +257,7 @@ def performance_episodes(
             "JSON_EXTRACT(raw_episodes.payload_json, '$.hypothesisSet.hypotheses')) AS hypotheses_json "
             "FROM ("
             "SELECT episode_id, MAX(observed_at) AS latest_observed_at "
-            "FROM investment_decision_outcomes"
+            "FROM investment_decision_outcomes FORCE INDEX (idx_outcome_calibration_selection)"
             + where
             + " GROUP BY episode_id ORDER BY latest_observed_at DESC LIMIT %s"
             ") AS selected STRAIGHT_JOIN investment_decision_episodes AS episodes FORCE INDEX (PRIMARY) "

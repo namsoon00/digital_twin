@@ -45,8 +45,10 @@ def decision_history_members():
     for method in cls.body:
         if not isinstance(method, ast.FunctionDef):
             continue
-        if method.name in {"outcome_collection_targets", "record_outcome_baselines", "ontology_evolution_comparison", "experiment_observation_plans", "experiment_inference_coverage", "experiment_outcome_schedule", "list_projection_for_symbols"}:
+        if method.name in {"outcome_collection_targets", "record_outcome_baselines", "ontology_evolution_comparison", "experiment_observation_plans", "experiment_inference_coverage", "experiment_outcome_schedule", "list_projection_for_symbols", "outcome_input_revision", "prepared_outcome_input", "performance", "performance_episodes"}:
             # New closed-loop entry points have no pre-extraction equivalent.
+            # Prepared-input coordinators are retained verbatim: replacing them
+            # with the old direct delegate would hide cache/invalidation logic.
             continue
         if method.name == "save":
             helper = declarations(parts / "decision_write.py")

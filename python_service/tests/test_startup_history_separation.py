@@ -35,8 +35,10 @@ class StartupHistorySeparationTests(unittest.TestCase):
         store.transaction = lambda: nullcontext(connection)
         with patch.object(database.MySQLOperationalConnection, "_schema_ready", set()), \
              patch.object(database, "ensure_mysql_operational_schema_tuning"), \
+             patch("digital_twin.modules.outcomes.infrastructure.prepared_input_schema.ensure_prepared_input_schema") as prepared_schema, \
              patch("digital_twin.infrastructure.mysql_snapshot_storage.compression_supported", return_value=False):
             store.ensure_schema()
+            prepared_schema.assert_called_once_with(connection)
             executed = [call.args[0] for call in connection.execute.call_args_list]
             self.assertFalse(any(database.historical_bootstrap_statement(sql) for sql in executed))
             self.assertTrue(any("INSERT IGNORE INTO reasoning_engine_control" in sql for sql in executed))

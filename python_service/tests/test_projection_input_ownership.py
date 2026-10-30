@@ -446,6 +446,31 @@ for name in sys.modules:
             self.assertEqual("miss", context_cache.get("one", 20)["status"])
             self.assertEqual("miss", graph_cache.get("one", 20)["status"])
 
+    def test_same_source_outcome_revision_invalidates_outer_context_cache(self):
+        class History:
+            revision = "history:one"
+            def outcome_input_revision(self):
+                return self.revision
+            def list_for_symbols(self, *args, **kwargs):
+                return []
+            def performance(self, *args, **kwargs):
+                return {"fixtureRevision": self.revision}
+        snapshot = source_snapshot()
+        instance = recorder(api, snapshot, cache=True, overrides=False)
+        history = History()
+        instance.decision_episode_store = history
+        instance.market_time_series_store = SimpleNamespace(load_temporal_windows=lambda *args, **kwargs: {})
+        first = instance.runtime_context(snapshot)
+        instance.runtime_context(snapshot)
+        self.assertEqual("hit", instance.last_runtime_context_cache_status[snapshot.account_id]["status"])
+        history.revision = "history:two"
+        second = instance.runtime_context(snapshot)
+        self.assertNotEqual(first["decisionPerformance"], second["decisionPerformance"])
+        self.assertEqual("miss", instance.last_runtime_context_cache_status[snapshot.account_id]["status"])
+        history.revision = ""
+        instance.runtime_context(snapshot)
+        self.assertEqual("disabled", instance.last_runtime_context_cache_status[snapshot.account_id]["status"])
+
     def test_projection_cache_identity_includes_source_release_clock_account_and_scope(
         self,
     ):

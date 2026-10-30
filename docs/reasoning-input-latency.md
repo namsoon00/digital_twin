@@ -977,3 +977,85 @@ still released between turns and candidate polling fairness is unchanged.
 Historical scoring and native source/admissibility checks remain synchronous;
 further removal from the live path requires an exact source-revision and
 point-in-time report contract, not a stale TTL cache or skipped qualification.
+
+### Prepared historical inputs before the expensive read
+
+`outcomes/infrastructure/prepared_inputs.py` now owns a durable read model for
+account performance and bounded subject calibration history. The account report
+is shared by subject jobs and process restarts. A hit skips both historical SQL
+payload reads and evaluation; the older content cache remains available on a
+miss. This is synchronous preparation on the first use, not another worker or
+a second investment-rule evaluator.
+
+Reuse requires the same account, subject, requested limit, outcome limit,
+minimum sample policy and prepared-input contract. It also requires an unchanged
+committed history revision. Database triggers cover insert/update/delete of
+outcomes, observed decision/observation episodes, compact calibration rows and
+adopted qualification cases, including direct repair SQL and same-clock edits.
+The revision commits or rolls back with the authoritative change. Pending-only
+episode writes do not flush calibration. The revision is deliberately DB-wide
+to cover legacy rows with inconsistent account metadata; values remain strictly
+account/subject scoped. This can cause conservative extra misses across accounts.
+
+A report may be shared across source timestamps only inside its proven
+visibility interval. The next stored outcome clock and next qualification
+assessment clock bound that interval separately: outcome SQL retains its
+existing lexical timestamp semantics, while qualification uses parsed UTC
+instants, including offsets and fractional seconds. A backwards cutoff reloads.
+Archive counts and due/observed coverage are read afresh, so crossing an outcome
+deadline cannot reuse an obsolete denominator. Quote/freshness/market-session
+facts, rule releases, source packets and TypeDB action authority are unchanged.
+The outer source-context cache also checks the outcome revision before reuse.
+
+Readers check the revision again after a hit or cold preparation. A concurrent
+commit prevents reuse/publication under the old revision. Cache failures fall
+back to the authoritative loader; loader failures still propagate to the existing
+caller policy. No failed read is stored as an empty successful history. Payloads
+are capped at 4 MiB. Old entries are removed in at most 32-row batches on a cold
+write; expiry is storage hygiene, never authorization to reuse stale data.
+`outcomePreparedInputsEnabled=false` disables reuse for parity measurements.
+Operational `decision_performance.done` progress reports hit/miss and history-read
+status without adding telemetry to factual ABox inputs.
+
+Schema bootstrap installs the small cache tables and 18 invalidation triggers
+under a DB-local lock. Partial installation has no ready marker. Repairing a
+missing trigger rotates the cache generation. Installation requires MySQL
+TRIGGER permission; it does not backfill history. Change both the prepared
+contract and trigger version when changing dependencies or their meaning.
+Administrative TRUNCATE/drop/import operations must rebuild the cache contract
+or clear prepared inputs; application retention uses transactional DELETE.
+
+`test_prepared_outcome_inputs` covers persistent reuse before history reads,
+account/subject/policy isolation, future and backwards cutoffs, fractional clocks,
+qualification adoption/revocation, pending-vs-observed changes, direct correction,
+delete/backfill, rollback, concurrent commits, cache corruption and schema repair.
+`test_projection_input_ownership` preserves the factual execution golden and
+checks same-source revision invalidation. Cold preparation and revision churn
+still cost time. These read-model improvements do not establish queue/native/
+transport latency or the 10-second end-to-end P95 target.
+
+The production cold-read EXPLAIN also showed that selecting episode identities
+used `idx_decision_outcomes_symbol_time` without covering `episode_id`, forcing
+base-row access before calibration payload selection. The added
+`idx_outcome_calibration_selection(account_id, symbol, observed_at, episode_id)`
+lets that unchanged selection run from a covering index. Isolated MySQL EXPLAIN
+checks the covering access; no selection limit, ordering or outcome meaning is
+changed. This index reduces cold identity-read I/O independently of cache hits.
+
+### Disk-blocked recovery remains a separate prerequisite
+
+During the 2026-10-30 check, production TypeDB was stopped because free disk was
+below its configured 12 GiB floor. A successfully replaced 16 GiB graph copy was
+still within its 120-minute rollback period. Neither cache reuse nor a reduced
+query time can restore inference while this storage guard blocks the server.
+
+The supervisor previously pruned expired rollback stores only while the graph
+was ready. Low disk could therefore stop the graph before expiry and prevent
+cleanup even after expiry. It now also allows the existing pruning owner to run
+when the graph is specifically blocked by low disk. Rotation/maintenance locks,
+completed-cutover checks, active/staged/failed-store protection, symlink checks
+and the configured retention period remain in force. Other graph failures do
+not authorize cleanup. Early removal of a still-retained rollback copy requires
+an explicit owner decision; this change does not shorten retention or lower the
+write-safety threshold. `test_typedb_service_manager` covers low-disk recovery,
+concurrent rotation/maintenance and retained-path protection.

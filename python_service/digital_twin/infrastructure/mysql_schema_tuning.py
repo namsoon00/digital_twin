@@ -132,6 +132,7 @@ class MySQLKeyPartitionDefinition:
 MYSQL_OPERATIONAL_INDEXES: Dict[str, Sequence[MySQLIndexDefinition]] = {
     "investment_decision_outcomes": (
         MySQLIndexDefinition("investment_decision_outcomes", "idx_outcome_recovery_candidate", "`recovery_candidate`, `outcome_id`"),
+        MySQLIndexDefinition("investment_decision_outcomes", "idx_outcome_calibration_selection", "`account_id`, `symbol`, `observed_at`, `episode_id`"),
     ),
     "investment_hypothesis_observation_outcomes": (
         MySQLIndexDefinition("investment_hypothesis_observation_outcomes", "idx_outcome_recovery_candidate", "`recovery_candidate`, `outcome_id`"),

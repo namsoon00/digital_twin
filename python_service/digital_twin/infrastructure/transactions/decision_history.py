@@ -98,6 +98,34 @@ from .decision_history_parts.outcome_policy import (
 
 
 class MySQLInvestmentDecisionEpisodeStore(MySQLOperationalConnection):
+    def outcome_input_revision(self):
+        from digital_twin.modules.outcomes.infrastructure.prepared_inputs import revision_token
+        with self.connect() as connection:
+            return revision_token(connection)
+
+    def prepared_outcome_input(self, kind, account_id, symbol, as_of, parameters, load):
+        from digital_twin.modules.outcomes.infrastructure.prepared_inputs import prepared_input
+        # This operational switch supports controlled parity/latency replay. It
+        # changes only reuse, never the underlying evaluation or admission rules.
+        self.last_prepared_outcome_input = {"status": "loading", "kind": kind, "historyRead": True}
+        try:
+            if str(self.runtime_settings.get("outcomePreparedInputsEnabled", "true")).lower() in {"0", "false", "off"}:
+                value = load()
+                receipt = {"status": "disabled", "kind": kind, "historyRead": True}
+            else:
+                value, receipt = prepared_input(
+                    connect=self.connect, account_id=account_id, symbol=symbol, as_of=as_of,
+                    kind=kind, parameters={**parameters, "outcomeEpisodeLimit": str(
+                        self.runtime_settings.get("investmentBrainPerformanceOutcomeEpisodeLimit") or "2000")}, load=load,
+                )
+        except Exception:
+            # The caller may fall back after a read error. Never report an old
+            # successful hit as the receipt for that failed attempt.
+            self.last_prepared_outcome_input = {"status": "failed", "kind": kind, "historyRead": True}
+            raise
+        self.last_prepared_outcome_input = receipt
+        return value
+
     def save(self, episode: DecisionEpisode, connection=None) -> DecisionEpisode:
         prepared = decision_write.prepare_decision(episode, utc_now_iso=utc_now_iso)
         transaction = self.transaction() if connection is None else nullcontext(connection)
@@ -480,6 +508,10 @@ class MySQLInvestmentDecisionEpisodeStore(MySQLOperationalConnection):
             _performance_episodes=self.performance_episodes,
             _runtime_settings=self.runtime_settings,
             evaluate_decision_performance=evaluate_decision_performance,
+            _prepare_history=lambda load, history_limit, minimum: self.prepared_outcome_input(
+                "performance", account_id, symbol, as_of,
+                {"limit": history_limit, "minimumSamples": minimum}, load,
+            ),
         )
 
     def outcome_coverage_population(
@@ -516,14 +548,19 @@ class MySQLInvestmentDecisionEpisodeStore(MySQLOperationalConnection):
         limit: int = 500,
         as_of: str = "",
     ) -> List[Dict[str, object]]:
-        return performance.performance_episodes(
-            account_id,
-            symbol,
-            limit,
-            as_of,
-            _connect=self.connect,
-            _runtime_settings=self.runtime_settings,
-            _shadow_performance_episodes=self.shadow_performance_episodes,
+        def load():
+            return performance.performance_episodes(
+                account_id, symbol, limit, as_of, _connect=self.connect,
+                _runtime_settings=self.runtime_settings,
+                _shadow_performance_episodes=self.shadow_performance_episodes,
+            )
+        # Account-wide histories can contain thousands of rows. Reuse their
+        # evaluated report; persist raw compact history only for bounded subject
+        # calibration, which is also consumed by the factual ABox assembler.
+        if not symbol:
+            return load()
+        return self.prepared_outcome_input(
+            "subject-history", account_id, symbol, as_of, {"limit": max(1, min(5000, int(limit or 500)))}, load,
         )
 
     def shadow_performance_episodes(

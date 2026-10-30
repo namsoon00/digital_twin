@@ -53,6 +53,19 @@ def runtime_context(
         if cache_enabled
         else ""
     )
+    # Same-source repairs/qualification changes must also invalidate the outer
+    # context cache, before it can bypass the outcomes owner's prepared inputs.
+    revision_reader = getattr(type(_inputs.decision_episode_store), "outcome_input_revision", None)
+    if cache_enabled and callable(revision_reader):
+        try:
+            revision = _inputs.decision_episode_store.outcome_input_revision()
+        except Exception:
+            revision = ""
+        if revision:
+            cache_key = hashlib.sha256((cache_key + ":" + revision).encode()).hexdigest()
+        else:
+            cache_enabled = False
+            cache_key = ""
     cache_result = (
         _inputs.runtime_cache.get(
             cache_key,
@@ -236,7 +249,9 @@ def runtime_context(
         decision_performance, decision_performance_ms = futures[
             "decisionPerformance"
         ].result()
-        emit("decision_performance.done", runtimeMs=decision_performance_ms)
+        reuse = getattr(_inputs.decision_episode_store, "last_prepared_outcome_input", {})
+        emit("decision_performance.done", runtimeMs=decision_performance_ms,
+             **({"preparedInput": dict(reuse)} if isinstance(reuse, dict) and reuse else {}))
         hypothesis_proposals, hypothesis_proposals_ms = futures[
             "hypothesisProposals"
         ].result()

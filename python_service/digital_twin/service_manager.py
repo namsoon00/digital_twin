@@ -5873,7 +5873,12 @@ def prune_retired_typedb_data_paths(spec: Dict[str, object]) -> List[str]:
 
 def typedb_capacity_maintenance_decisions(spec: Dict[str, object], *, graph_ready: bool):
     """Reclaim expired rollback stores before measuring/dispatching replacement."""
-    if (graph_ready and not typedb_auto_rotation_worker_running().get("running")
+    # Low disk can stop the graph before the rollback retention period ends.
+    # Requiring a running graph to prune expired copies then prevents recovery
+    # forever. The existing prune owner still enforces age, completed cutover,
+    # active-path and symlink guards; other graph failures retain the old gate.
+    cleanup_ready = graph_ready or typedb_storage_preflight(spec).get("status") == "blocked-low-disk"
+    if (cleanup_ready and not typedb_auto_rotation_worker_running().get("running")
             and not supervisor_maintenance_active()):
         prune_retired_typedb_data_paths(spec)
     # Both decisions read fresh disk usage after cleanup, including on paths

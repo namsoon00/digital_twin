@@ -471,7 +471,10 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # retry persistence, collection coverage and bounded discovery fairness.
         # Two collection-scope contracts keep unrelated provider health and
         # other issuers' failures out of automatic calendar retries.
-        self.assertLessEqual(total, 2856)
+        # Sixteen prepared-history regressions cover committed invalidation,
+        # point-in-time visibility, bounded reuse, corruption and covering reads.
+        # One outer-context contract prevents reuse after same-source repairs.
+        self.assertLessEqual(total, 2873)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

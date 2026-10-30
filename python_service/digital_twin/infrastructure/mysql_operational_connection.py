@@ -434,6 +434,8 @@ class MySQLOperationalConnection:
                     continue
                 connection.execute(snapshot_schema_statement(statement, compressed))
             ensure_mysql_operational_schema_tuning(connection, self.runtime_settings)
+            from digital_twin.modules.outcomes.infrastructure.prepared_input_schema import ensure_prepared_input_schema
+            ensure_prepared_input_schema(connection)
         MySQLOperationalConnection._schema_ready.add(schema_key)
 
     def ensure_history_retention(self) -> None:

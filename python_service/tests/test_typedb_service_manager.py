@@ -1135,16 +1135,21 @@ class TypeDBReclaimAdmissionTests(unittest.TestCase):
                     self.assertTrue(self.decision(root, **kwargs)['needed'])
 
     def test_cleanup_precedes_both_measurements_but_waits_for_safe_runtime(self):
-        for ready, rotating, maintenance in [(True, False, False), (False, False, False), (True, True, False), (True, False, True)]:
+        for ready, rotating, maintenance, low_disk in [
+                (True, False, False, False), (False, False, False, False),
+                (True, True, False, False), (True, False, True, False),
+                (False, False, False, True), (False, True, False, True),
+                (False, False, True, True)]:
             calls = []
             with self.subTest(ready=ready, rotating=rotating, maintenance=maintenance), \
                     patch.object(service_manager, 'typedb_auto_rotation_worker_running', return_value={'running': rotating, 'pid': 123 if rotating else 0}), \
                     patch.object(service_manager, 'supervisor_maintenance_active', return_value=maintenance), \
+                    patch.object(service_manager, 'typedb_storage_preflight', return_value={'status': 'blocked-low-disk' if low_disk else 'unavailable'}), \
                     patch.object(service_manager, 'prune_retired_typedb_data_paths', side_effect=lambda _: calls.append('prune')), \
                     patch.object(service_manager, 'typedb_reset_needed', side_effect=lambda *a, **k: calls.append('reset') or {}), \
                     patch.object(service_manager, 'typedb_auto_rotation_needed', side_effect=lambda _: calls.append('automatic') or {}):
                 service_manager.typedb_capacity_maintenance_decisions({}, graph_ready=ready)
-            expected = ['prune'] if ready and not rotating and not maintenance else []
+            expected = ['prune'] if (ready or low_disk) and not rotating and not maintenance else []
             self.assertEqual(expected + ['reset', 'automatic'], calls)
 
     def test_pruning_preserves_active_recent_failed_staged_and_unknown_paths(self):

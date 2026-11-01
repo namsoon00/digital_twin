@@ -120,3 +120,20 @@ provider bodies. Current-fact paging read 206 rows in 0.894 seconds. A separate
 215-row comparison of old and new current-fact queries in the same read-only
 snapshot preserved every output field. These are individual local measurements,
 not a latency guarantee or a completed continuous-operation verification.
+
+## Database bootstrap boundary (2026-11-01)
+
+`_skipOperationalSchemaBootstrap` skips both database existence/creation probes
+and schema DDL in the common operational and monitoring store constructors.
+Read adapters and already initialized workers connect directly to the prepared
+database when an operation actually runs. A missing database raises the driver
+error; reading it must not create an empty replacement. The normal bootstrap
+owner still creates an absent database and initializes its schema.
+
+Bootstrap sockets and monitoring queue sockets now use the same bounded
+`mysqlOperationTimeoutSeconds` policy as operational queries (default 10 seconds,
+range 1–120). Monitoring pools separate connections with different timeout
+settings. These are socket timeouts, not a deadline for an entire HTTP request.
+The bootstrap flag does not grant SQL read-only permissions or disable worker
+writes. This closes an initialization side effect; it does not establish the
+cause of every earlier HTTP 502 or slow response.

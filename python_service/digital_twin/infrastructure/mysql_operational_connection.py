@@ -15,7 +15,7 @@ from .mysql_retention import (
     operational_history_retention_enabled,
 )
 from .mysql_schema_tuning import ensure_mysql_operational_schema_tuning, mysql_partitioning_mode
-from .mysql_connection_pool import pooled_mysql_connection
+from .mysql_connection_pool import mysql_operation_timeout_seconds, pooled_mysql_connection
 
 
 _FALSEY_VALUES = {"", "0", "false", "no", "off", "disabled"}
@@ -221,11 +221,12 @@ def mysql_transaction_deadlock_retry(operation: str):
 
 
 def mysql_operational_schema_bootstrap_enabled(settings: Dict[str, str] = None) -> bool:
-    """Whether this connection may run the full schema bootstrap.
+    """Whether this connection may initialize the database and its schema.
 
     Short-lived, isolated workers already run behind the service manager's
     schema bootstrap. Repeating DDL and index checks in every child adds
-    avoidable startup work to the realtime reasoning path.
+    avoidable startup work to the realtime reasoning path. Read-side adapters
+    must also skip database creation/probing and use the bounded runtime socket.
     """
     value = str((settings or {}).get("_skipOperationalSchemaBootstrap") or "").strip().lower()
     return value in _FALSEY_VALUES
@@ -240,14 +241,6 @@ def mysql_operational_constructor_retention_enabled(settings: Dict[str, str] = N
     """
     value = str((settings or {}).get("_runOperationalHistoryRetentionOnInit") or "").strip().lower()
     return value not in _FALSEY_VALUES
-
-
-def mysql_operation_timeout_seconds(settings: Dict[str, str]) -> int:
-    try:
-        parsed = int(float(str((settings or {}).get("mysqlOperationTimeoutSeconds") or "").strip()))
-    except ValueError:
-        parsed = 10
-    return max(1, min(120, parsed))
 
 
 class MySQLConnectionProxy:
@@ -313,8 +306,9 @@ class MySQLOperationalConnection:
         self.runtime_settings = dict(settings or {})
         self.mysql_config = mysql_settings(settings)
         self.last_transaction_retry: Dict[str, object] = {}
-        ensure_mysql_database_exists(self.mysql_config)
         if mysql_operational_schema_bootstrap_enabled(self.runtime_settings):
+            ensure_mysql_database_exists(self.mysql_config,
+                timeout_seconds=mysql_operation_timeout_seconds(self.runtime_settings))
             self.ensure_schema()
         if mysql_operational_constructor_retention_enabled(self.runtime_settings):
             self.ensure_history_retention()

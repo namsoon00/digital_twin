@@ -11,6 +11,82 @@ from stabilization_database import StabilizationDatabaseCase
 from test_internal_decision_history import episode
 
 
+class MySQLBootstrapBoundaryTests(unittest.TestCase):
+    def test_preinitialized_stores_do_not_open_bootstrap_connections(self):
+        from digital_twin.infrastructure import mysql_monitoring as monitoring
+        settings = {"mysqlDatabase": "orbit_alpha_test_read_boundary",
+                    "_skipOperationalSchemaBootstrap": "1"}
+        for store_class in (database.MySQLOperationalConnection, monitoring.MySQLMonitorAccountJobStore):
+            with self.subTest(store=store_class.__name__), \
+                 patch.object(monitoring, "_MYSQL_DATABASE_READY", set()), \
+                 patch("pymysql.connect", side_effect=AssertionError("constructor opened a bootstrap socket")), \
+                 patch.object(store_class, "ensure_schema", side_effect=AssertionError("constructor ran DDL")):
+                store = store_class(settings)
+                self.assertEqual(settings, store.runtime_settings)
+
+    def test_bootstrap_bounds_every_connection_in_missing_database_recovery(self):
+        import pymysql
+        from digital_twin.infrastructure import mysql_monitoring as monitoring
+        admin, ready = Mock(), Mock()
+        admin.cursor.return_value = nullcontext(Mock())
+        config = {"host": "fixture", "database": "orbit_alpha_test_bootstrap", "user": "fixture"}
+        with patch.object(monitoring, "_MYSQL_DATABASE_READY", set()), \
+             patch("pymysql.connect", side_effect=[pymysql.err.OperationalError(1049, "unknown database"), admin, ready]) as connect:
+            monitoring.ensure_mysql_database_exists(config, timeout_seconds=3)
+            self.assertEqual(3, connect.call_count)
+            for call in connect.call_args_list:
+                self.assertEqual((3, 3, 3), tuple(call.kwargs[key] for key in ("connect_timeout", "read_timeout", "write_timeout")))
+            self.assertNotIn("database", connect.call_args_list[1].kwargs)
+            monitoring.ensure_mysql_database_exists(config, timeout_seconds=3)
+            self.assertEqual(3, connect.call_count)
+        admin.close.assert_called_once()
+        ready.close.assert_called_once()
+
+    def test_bootstrap_failure_is_not_cached_or_reinterpreted_as_missing_database(self):
+        from digital_twin.infrastructure import mysql_monitoring as monitoring
+        import pymysql
+        config = {"host": "fixture", "database": "orbit_alpha_test_bootstrap", "user": "fixture"}
+        for error in (TimeoutError("database unavailable"), pymysql.err.OperationalError(1045, "access denied")):
+            with self.subTest(error=type(error).__name__), \
+                 patch.object(monitoring, "_MYSQL_DATABASE_READY", set()), \
+                 patch("pymysql.connect", side_effect=[error, Mock()]) as connect:
+                with self.assertRaises(type(error)) as caught:
+                    monitoring.ensure_mysql_database_exists(config)
+                self.assertIs(error, caught.exception)
+                self.assertEqual(set(), monitoring._MYSQL_DATABASE_READY)
+                monitoring.ensure_mysql_database_exists(config)
+                self.assertEqual(2, connect.call_count)
+                self.assertTrue(all(call.kwargs.get("database") == config["database"] for call in connect.call_args_list))
+
+    def test_normal_bootstrap_uses_the_configured_timeout_before_schema(self):
+        from digital_twin.infrastructure import mysql_monitoring as monitoring
+        for module, store_class in ((database, database.MySQLOperationalConnection),
+                                    (monitoring, monitoring.MySQLMonitorAccountJobStore)):
+            calls = []
+            with self.subTest(store=store_class.__name__), \
+                 patch.object(module, "ensure_mysql_database_exists", side_effect=lambda *args, **kwargs: calls.append(("database", kwargs))), \
+                 patch.object(store_class, "ensure_schema", side_effect=lambda: calls.append(("schema", {}))):
+                store_class({"mysqlDatabase": "orbit_alpha_test_bootstrap", "mysqlOperationTimeoutSeconds": "3"})
+            self.assertEqual([("database", {"timeout_seconds": 3}), ("schema", {})], calls)
+
+    def test_monitor_sockets_and_pool_identity_obey_operation_timeout(self):
+        from digital_twin.infrastructure import mysql_monitoring as monitoring
+        keys = []
+        with patch("pymysql.connect") as connect, patch.object(monitoring, "pooled_mysql_connection", side_effect=lambda key, *args, **kwargs: keys.append(key)):
+            for timeout in (3, 8):
+                store = monitoring.MySQLMonitorAccountJobStore({"_skipOperationalSchemaBootstrap": "1",
+                    "mysqlDatabase": "orbit_alpha_test_bootstrap", "mysqlOperationTimeoutSeconds": str(timeout)})
+                store.raw_connection()
+                self.assertEqual((timeout, timeout, timeout), tuple(connect.call_args.kwargs[key] for key in ("connect_timeout", "read_timeout", "write_timeout")))
+                store.connect()
+        self.assertNotEqual(keys[0], keys[1])
+
+    def test_operation_timeout_always_has_a_finite_bound(self):
+        for value, expected in ((None, 10), ("", 10), ("bad", 10), ("inf", 10), ("nan", 10), ("3", 3), ("500", 120), ("-4", 1)):
+            with self.subTest(value=value):
+                self.assertEqual(expected, database.mysql_operation_timeout_seconds({"mysqlOperationTimeoutSeconds": value}))
+
+
 class StartupHistorySeparationTests(unittest.TestCase):
     def test_tuning_does_not_replay_comparisons_notifications_or_external_facts(self):
         from digital_twin.infrastructure import mysql_schema_tuning as tuning
@@ -44,6 +120,54 @@ class StartupHistorySeparationTests(unittest.TestCase):
             self.assertTrue(any("INSERT IGNORE INTO reasoning_engine_control" in sql for sql in executed))
             self.assertTrue(any("CREATE TABLE IF NOT EXISTS investment_flow_heads" in sql for sql in executed))
             self.assertEqual(3, sum(database.historical_bootstrap_statement(sql) for sql in database.MYSQL_SCHEMA))
+
+
+class PreinitializedStoreIntegrationTests(StabilizationDatabaseCase):
+    def test_readers_preserve_calendar_data_queue_state_and_source_lineage(self):
+        from types import SimpleNamespace
+        from digital_twin.infrastructure import mysql_monitoring as monitoring
+        from digital_twin.modules.investment_calendar.infrastructure.mysql_investment_calendar import MySQLInvestmentCalendarStore
+        from digital_twin.modules.investment_calendar.domain.investment_calendar import InvestmentCalendarEvent
+        calendar = MySQLInvestmentCalendarStore(self.settings)
+        event = calendar.upsert(InvestmentCalendarEvent.from_payload({
+            "eventId": "calendar:bootstrap-boundary", "title": "Preserved source event",
+            "startsAt": "2030-01-02T03:00:00Z", "eventType": "earnings", "symbols": ["AAPL"],
+            "accountIds": ["fixture"], "source": "fixture", "payload": {"sourceRevision": "original:1"},
+        }))
+        queue = monitoring.MySQLMonitorAccountJobStore(self.settings)
+        queue.sync_accounts([SimpleNamespace(account_id="fixture"), SimpleNamespace(account_id="other")], 60)
+        source = self.source(suffix="bootstrap-boundary")
+        self.events.handle(source)
+        queue_before = self.sql("SELECT * FROM monitor_account_jobs ORDER BY account_id", all_rows=True)
+        lineage_before = self.sql("SELECT * FROM reasoning_engine_job_sources WHERE source_event_id=%s", (source.event_id,), all_rows=True)
+        self.assertTrue(lineage_before)
+        settings = {**self.settings, "_skipOperationalSchemaBootstrap": "1"}
+        with patch.object(database, "ensure_mysql_database_exists", side_effect=AssertionError("bootstrap on read")), \
+             patch.object(monitoring, "ensure_mysql_database_exists", side_effect=AssertionError("bootstrap on read")), \
+             patch.object(database.MySQLOperationalConnection, "ensure_schema", side_effect=AssertionError("DDL on read")), \
+             patch.object(monitoring.MySQLMonitorAccountJobStore, "ensure_schema", side_effect=AssertionError("DDL on read")):
+            self.assertEqual(event.to_dict(), MySQLInvestmentCalendarStore(settings).get(event.event_id).to_dict())
+            self.assertEqual(2, monitoring.MySQLMonitorAccountJobStore(settings).summary()["total"])
+        self.assertEqual(queue_before, self.sql("SELECT * FROM monitor_account_jobs ORDER BY account_id", all_rows=True))
+        self.assertEqual(lineage_before, self.sql("SELECT * FROM reasoning_engine_job_sources WHERE source_event_id=%s", (source.event_id,), all_rows=True))
+
+    def test_missing_database_stays_missing_after_read_failure(self):
+        import uuid
+        import pymysql
+        from digital_twin.infrastructure.mysql_monitoring import MySQLMonitorAccountJobStore
+        from mysql_fixtures import mysql_test_database_config, register_mysql_test_database
+        for store_class in (database.MySQLOperationalConnection, MySQLMonitorAccountJobStore):
+            name = "orbit_alpha_test_missing_" + uuid.uuid4().hex[:12]
+            settings = {**self.settings, "mysqlDatabase": name, "_skipOperationalSchemaBootstrap": "1"}
+            # Also clean up an incorrectly created schema if this regression fails.
+            register_mysql_test_database(mysql_test_database_config(settings))
+            with self.subTest(store=store_class.__name__):
+                store = store_class(settings)
+                with self.assertRaises(pymysql.err.OperationalError) as caught:
+                    connection = store.raw_connection()
+                    connection.close()
+                self.assertEqual(1049, caught.exception.args[0])
+                self.assertIsNone(self.sql("SELECT SCHEMA_NAME FROM information_schema.SCHEMATA WHERE SCHEMA_NAME=%s", (name,)))
 
 
 class BoundedLegacyRepairTests(StabilizationDatabaseCase):

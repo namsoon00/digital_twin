@@ -15,6 +15,15 @@ import time
 from typing import Callable, Dict, Tuple
 
 
+def mysql_operation_timeout_seconds(settings: Dict[str, object] = None) -> int:
+    """One finite socket timeout policy for bootstrap and runtime connections."""
+    try:
+        parsed = int(float(str((settings or {}).get("mysqlOperationTimeoutSeconds") or "").strip()))
+    except (TypeError, ValueError, OverflowError):
+        parsed = 10
+    return max(1, min(120, parsed))
+
+
 def mysql_pool_size(settings: Dict[str, object] = None) -> int:
     try:
         parsed = int(float(str((settings or {}).get("mysqlConnectionPoolSize") or "2").strip()))

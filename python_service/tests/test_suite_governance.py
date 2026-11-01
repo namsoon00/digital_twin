@@ -481,7 +481,11 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # AI lineage, candidate cold restart and exact process ownership.
         # Fourteen scheduling/recovery and activity contracts added since that
         # boundary protect fairness, read-only status, receipts and fenced rechecks.
-        self.assertLessEqual(total, 2918)
+        # Twelve reviewed-opinion contracts protect immutable memory, scoped
+        # evidence retrieval and notification contributions (2026-11-01).
+        # Eight bootstrap-boundary contracts cover side-effect-free construction,
+        # bounded sockets, failure recovery, and stored data/lineage preservation.
+        self.assertLessEqual(total, 2938)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

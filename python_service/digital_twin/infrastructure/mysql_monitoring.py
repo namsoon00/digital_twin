@@ -7,7 +7,7 @@ from typing import Dict, Iterable, List
 from digital_twin.modules.accounts.domain.accounts import AccountConfig
 from digital_twin.modules.portfolio.contracts import MonitorAccountJob
 from .mysql_schema_tuning import ensure_mysql_monitoring_schema_tuning
-from .mysql_connection_pool import pooled_mysql_connection
+from .mysql_connection_pool import mysql_operation_timeout_seconds, pooled_mysql_connection
 from .settings import utc_now
 
 
@@ -20,7 +20,7 @@ _FALSEY_VALUES = {"", "0", "false", "no", "off", "disabled"}
 
 
 def mysql_monitoring_schema_bootstrap_enabled(settings: Dict[str, str] = None) -> bool:
-    """Avoid repeating monitor-job DDL in isolated realtime children."""
+    """Keep database creation and DDL in the bootstrap owner."""
     value = str((settings or {}).get("_skipOperationalSchemaBootstrap") or "").strip().lower()
     return value in _FALSEY_VALUES
 
@@ -49,7 +49,7 @@ def mysql_settings(settings: Dict[str, str] = None) -> Dict[str, object]:
     }
 
 
-def ensure_mysql_database_exists(settings: Dict[str, object]) -> None:
+def ensure_mysql_database_exists(settings: Dict[str, object], *, timeout_seconds: int = 10) -> None:
     database = str((settings or {}).get("database") or "").strip()
     if not database:
         raise MySQLDependencyError("MySQL database name is required. Set MYSQL_DATABASE.")
@@ -66,6 +66,7 @@ def ensure_mysql_database_exists(settings: Dict[str, object]) -> None:
         import pymysql
     except ImportError as error:
         raise MySQLDependencyError("MySQL backend requires pymysql. Install with: python3 -m pip install pymysql") from error
+    timeout_seconds = mysql_operation_timeout_seconds({"mysqlOperationTimeoutSeconds": timeout_seconds})
     kwargs = {
         "host": settings.get("host") or "127.0.0.1",
         "port": int(settings.get("port") or 3306),
@@ -73,6 +74,9 @@ def ensure_mysql_database_exists(settings: Dict[str, object]) -> None:
         "password": settings.get("password") or "",
         "charset": "utf8mb4",
         "autocommit": True,
+        "connect_timeout": timeout_seconds,
+        "read_timeout": timeout_seconds,
+        "write_timeout": timeout_seconds,
     }
     if settings.get("unix_socket"):
         kwargs["unix_socket"] = settings["unix_socket"]
@@ -129,8 +133,9 @@ class MySQLMonitorAccountJobStore:
     def __init__(self, settings: Dict[str, str] = None):
         self.runtime_settings = dict(settings or {})
         self.settings = mysql_settings(settings)
-        ensure_mysql_database_exists(self.settings)
         if mysql_monitoring_schema_bootstrap_enabled(self.runtime_settings):
+            ensure_mysql_database_exists(self.settings,
+                timeout_seconds=mysql_operation_timeout_seconds(self.runtime_settings))
             self.ensure_schema()
 
     def raw_connection(self, autocommit: bool = False):
@@ -139,6 +144,7 @@ class MySQLMonitorAccountJobStore:
             from pymysql.cursors import DictCursor
         except ImportError as error:
             raise MySQLDependencyError("MySQL backend requires pymysql. Install with: python3 -m pip install pymysql") from error
+        timeout_seconds = mysql_operation_timeout_seconds(self.runtime_settings)
         kwargs = {
             "host": self.settings["host"],
             "port": int(self.settings["port"] or 3306),
@@ -148,6 +154,9 @@ class MySQLMonitorAccountJobStore:
             "charset": "utf8mb4",
             "cursorclass": DictCursor,
             "autocommit": autocommit,
+            "connect_timeout": timeout_seconds,
+            "read_timeout": timeout_seconds,
+            "write_timeout": timeout_seconds,
         }
         if self.settings.get("unix_socket"):
             kwargs["unix_socket"] = self.settings["unix_socket"]
@@ -161,6 +170,7 @@ class MySQLMonitorAccountJobStore:
             str(self.settings.get("user") or ""),
             str(self.settings.get("database") or ""),
             str(self.settings.get("unix_socket") or ""),
+            mysql_operation_timeout_seconds(self.runtime_settings),
         )
         return pooled_mysql_connection(
             key,

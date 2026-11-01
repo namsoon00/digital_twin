@@ -15,7 +15,7 @@ from digital_twin.modules.ai_orchestration.domain.observation_wording import OBS
 
 
 INSIGHT_VERSION = "observation-insight-v1"
-CAUSAL_GUARD_VERSION = "observation-causality-v4"
+CAUSAL_GUARD_VERSION = "observation-causality-v5"
 SECTIONS = ("summary", "comparison", "hypothesis", "portfolioImpact", "counterEvidence", "notificationReason")
 METRICS = {
     "change24h": ("24시간 변동률", "%"), "change7d": ("7일 변동률", "%"),
@@ -180,7 +180,7 @@ def unsupported_cause_v3(sentence, section):
     return not bool(uncertain_past and not asserted_clause)
 
 
-def unsupported_cause(sentence, section):
+def unsupported_cause_v4(sentence, section):
     # Remove only explicit uncertainty predicates attached to the cause. A
     # separate disclaimer cannot excuse another affirmative attribution.
     uncertain = re.sub(
@@ -192,8 +192,20 @@ def unsupported_cause(sentence, section):
     return any(unsupported_cause_v3(clause, section) for clause in clauses)
 
 
+def unsupported_cause(sentence, section):
+    # "하락 원인으로 채택하지 않았습니다" explicitly declines an attribution.
+    # Remove only the complete negative predicate, not the rest of the sentence:
+    # an earlier affirmative cause still has to pass the historical clause guard.
+    denied = re.sub(
+        r"원인으로\s*(?:채택|간주|판단|확정|단정)하지\s*"
+        r"(?:않았습니다|않았어요|않았다|않습니다|않아요|않는다|못했습니다|못했다|못합니다|못한다)"
+        r"(?=\s*(?:$|[.!?。;]|,\s*(?:하지만|그러나|다만)))", "", sentence)
+    return unsupported_cause_v4(denied, section)
+
+
 def insight_errors(result, packet, *, causal_guard_version=CAUSAL_GUARD_VERSION):
-    guards = {CAUSAL_GUARD_VERSION: unsupported_cause, "observation-causality-v3": unsupported_cause_v3,
+    guards = {CAUSAL_GUARD_VERSION: unsupported_cause, "observation-causality-v4": unsupported_cause_v4,
+              "observation-causality-v3": unsupported_cause_v3,
               "observation-causality-v2": unsupported_cause_v2,
               "observation-causality-v1": unsupported_cause_v1}
     if causal_guard_version not in guards:

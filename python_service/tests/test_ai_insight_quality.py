@@ -115,7 +115,7 @@ class InsightGroundingTests(unittest.TestCase):
         new = local_quality(result)
         self.assertTrue(any('원인으로 단정' in error for error in old['errors']))
         self.assertFalse(new['errors'])
-        self.assertEqual('observation-causality-v4', new['causalGuardVersion'])
+        self.assertEqual('observation-causality-v5', new['causalGuardVersion'])
         from judgment_quality_checks import check_causality
         check_causality(self)
         for text in ('제품 구성이나 원가 부담 때문에 이익으로 연결되지 않았을 수 있습니다.',
@@ -128,6 +128,23 @@ class InsightGroundingTests(unittest.TestCase):
                      '기관 매도 때문에 가격이 하락했고 공식 자료가 다른 원인으로 밝히면 다시 검토합니다.'):
             result['hypothesis'] = text
             self.assertTrue(any('원인으로 단정' in e for e in local_quality(result)['errors']), text)
+
+    def test_declining_a_cause_is_not_an_assertion_or_an_excuse_for_another_cause(self):
+        from digital_twin.modules.ai_orchestration.domain.insight_contract import unsupported_cause, unsupported_cause_v4
+        denial = '기사 발췌는 전달됐지만 판단용 사용이 차단돼 기업 실적 변화나 하락 원인으로 채택하지 않았습니다'
+        self.assertTrue(unsupported_cause_v4(denial, 'counterEvidence'))
+        self.assertFalse(unsupported_cause(denial, 'counterEvidence'))
+        for text in ('금리 상승을 하락 원인으로 채택하지 않습니다',
+                     '기사 발췌를 하락 원인으로 간주하지 않았습니다'):
+            self.assertFalse(unsupported_cause(text, 'counterEvidence'), text)
+        for text in ('금리 상승을 하락 원인으로 채택했습니다',
+                     '금리 상승을 하락 원인으로 채택하지 않았다는 뜻은 아닙니다',
+                     '금리 때문에 가격이 하락했고 기사 발췌는 하락 원인으로 채택하지 않았습니다',
+                     '기사는 하락 원인으로 채택하지 않았습니다, 하지만 금리 때문에 가격이 하락했습니다'):
+            self.assertTrue(unsupported_cause(text, 'counterEvidence'), text)
+        result = observation(); result['counterEvidence'] = denial
+        self.assertTrue(any('원인으로 단정' in e for e in local_quality(result, causal_guard_version='observation-causality-v4')['errors']))
+        self.assertFalse(any('원인으로 단정' in e for e in local_quality(result)['errors']))
 
     def test_repair_rebudgets_memory_but_preserves_required_facts_and_parent(self):
         from digital_twin.modules.ai_orchestration.domain.execution_input import freeze_review_input, prompt_budget

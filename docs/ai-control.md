@@ -2663,3 +2663,9 @@ reviewed answer status, remaining requirements and review input ID. Reading a
 source never automatically closes a requirement. The prompt asks for competing
 explanations and supported links to company cash flows and holding relevance;
 it cannot manufacture an economic cause, recommendation or delivery approval.
+
+Live rollout also exposed a causal-guard false positive on the explicit phrase
+"하락 원인으로 채택하지 않았습니다". Guard v5 removes only a complete negative
+attribution predicate before the existing clause checks. An affirmative cause
+elsewhere in the sentence and double negation remain rejected. Guard v4 is
+retained for historical replay; no source, review or delivery gate is bypassed.

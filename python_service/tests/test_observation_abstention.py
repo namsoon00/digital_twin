@@ -219,7 +219,8 @@ class ObservationAbstentionTests(unittest.TestCase):
         result = store.complete.call_args.args[1]
         self.assertEqual("cause-unconfirmed", result["abstention"]["reasonCode"])
         self.assertEqual("completed", result["abstentionReview"]["status"])
-        self.assertEqual(abstention_prompt.PROMPT_VERSION, result["executionPromptVersion"])
+        from digital_twin.modules.ai_orchestration.domain.compact_opinion_prompt import PROMPT_VERSION
+        self.assertEqual(PROMPT_VERSION, result["executionPromptVersion"])
 
 
 @unittest.skipUnless(os.environ.get("MYSQL_DATABASE") == "orbit_alpha_test", "isolated MySQL required")

@@ -150,15 +150,15 @@ function card(task, scheduling = {}) {
   ${task.status === "pending" ? `<p class="muted">다음 확인 ${escape(date(scheduling.status === "budget-wait" && Date.parse(scheduling.nextCheckAt) > Date.parse(task.nextCheckAt) ? scheduling.nextCheckAt : task.nextCheckAt))}</p>` : ""}
   ${facts.length ? `<details><summary>사용한 사실 ${facts.length}개 · 시점과 출처 보기</summary><pre>${escape(JSON.stringify(r.input,null,2))}</pre></details>` : ""}</article>`;
 }
-const healthLabels = {"runtime-unconfirmed":"워커 생존 미확인","awaiting-result":"관찰 저장 확인 중",healthy:"호출 정상",recovering:"복구 확인 중",unavailable:"실행 오류 · 재시도 대기",degraded:"오류 확인 필요",delayed:"관찰 지연",paused:"일시 중지",idle:"예약 대기"};
+const healthLabels = {"resource-wait":"실행 자리·메모리 대기","runtime-unconfirmed":"워커 생존 미확인","awaiting-result":"관찰 저장 확인 중",healthy:"호출 정상",recovering:"복구 확인 중",unavailable:"실행 오류 · 재시도 대기",degraded:"오류 확인 필요",delayed:"관찰 지연",paused:"일시 중지",idle:"예약 대기"};
 function queueView(scheduling) {
   if (!scheduling) return "";
   const names = {recovery:"중단 작업 복구","market-observe":"시장 관찰",observe:"질문 연구",research:"자료 수집","research-plan":"조사 계획"};
   const queues = scheduling.queues || [];
   const expired = queues.reduce((sum, row) => sum + Number(row.expiredLeases || 0), 0);
-  return `<p>실행 차례: ${(scheduling.cycle || []).map(lane => escape(names[lane] || lane)).join(" → ")}. 준비된 작업이 없는 차례는 건너뜁니다.<br>${queues.map(row => `${escape(names[row.capability] || row.capability)}: 실행 시각 도래 ${escape(row.due)}건 · 진행 ${escape(row.processing)}건`).join(" / ")}<br><strong>실행 기한이 지나 복구할 작업 ${escape(expired)}건</strong><br><small>각 작업 종류에서 대기 순서와 중요도를 번갈아 반영합니다. 한 번에 대기 작업 최대 20건을 비교하며, 보유 노출과 기존 답변 진행 상태를 사용합니다. 호출 한도와 자료 재수집 대기 시간은 유지됩니다. 순서는 작업 시작 차례이며, 각 작업의 소요 시간에 따라 대기 시간이 달라집니다.</small></p>`;
+  return `<p>실행 차례: ${(scheduling.cycle || []).map(lane => escape(names[lane] || lane)).join(" → ")}. 준비된 작업이 없는 차례는 건너뜁니다.<br>${queues.map(row => `${escape(names[row.capability] || row.capability)}: 실행 시각 도래 ${escape(row.due)}건 · 진행 ${escape(row.processing)}건 · 제공처 대기 ${escape(row.providerWaiting || 0)}건${row.oldestPendingAt ? ` · 가장 오래된 예약 ${escape(date(row.oldestPendingAt))}` : ""}`).join("<br>")}<br><strong>실행 기한이 지나 복구할 작업 ${escape(expired)}건</strong><br><small>각 작업 종류에서 대기 순서와 중요도를 번갈아 반영합니다. 한 번에 대기 작업 최대 20건을 비교하며, 보유 노출과 기존 답변 진행 상태를 사용합니다. 호출 한도와 자료 재수집 대기 시간은 유지됩니다. 순서는 작업 시작 차례이며, 각 작업의 소요 시간에 따라 대기 시간이 달라집니다.</small></p>`;
 }
-function lanesView(value) {
+function lanesView(value, health) {
   if (!value?.lanes) return "";
   const outcomes = {"data-wait":"필요한 자료 대기","retrieval-blocked":"조회 범위·입력 한도 확인 필요","output-invalid":"출력·검증 실패",ready:"판단 저장","research-reviewed":"질문 연구 검토 완료","research-review-required":"질문 답변 검토 대기","research-only":"내부 연구만 기록"};
   const states = {unchanged:"새 근거 없음 · AI 호출 생략","unchanged-wait":"같은 자료의 반복 호출을 막고 변경 대기","awaiting-evidence":"자료·조회 조건 대기",retired:"관찰 대상에서 제외",superseded:"중복 예약 정리"};
@@ -167,7 +167,8 @@ function lanesView(value) {
     const latest = lane.latestTask;
     const judgment = lane.latestJudgment;
     const outcome = latest?.processingOutcome;
-    const reason = latest?.failure ? "실행·검증 오류로 판단을 저장하지 못했습니다." : states[latest?.resultStatus] || outcomes[outcome?.status] || (latest?.status === "processing" ? "처리 중 · 결과 저장 전" : latest?.status === "pending" ? "다음 예약 대기" : latest ? "처리 기록 확인" : "최근 실행 기록 없음");
+    const blocked = ["paused", "unavailable", "recovering", "resource-wait", "runtime-unconfirmed"].includes(health?.status);
+    const reason = blocked ? health.reason : latest?.failure ? "실행·검증 오류로 판단을 저장하지 못했습니다." : states[latest?.resultStatus] || outcomes[outcome?.status] || (latest?.status === "processing" ? "처리 중 · 결과 저장 전" : latest?.status === "pending" ? "다음 예약 대기" : latest ? "처리 기록 확인" : "최근 실행 기록 없음");
     const alert = lane.latestAlert?.publication;
     const receipt = alert?.receipt;
     const delivery = receipt ? `실제 발송 확인 ${date(receipt.deliveredAt)}` : alert ? `${publicationLabels[alert.deliveryStatus || alert.status] || "전송 상태 확인 필요"} · 실제 발송 영수증 미확인` : "최근 24시간 시장 알림 발송 기록 없음";
@@ -179,8 +180,11 @@ function healthView(health) {
   const failure = health.sharedExecution?.lastFailure;
   const runtime = health.runtime;
   const coverage = health.runtimeCoverage;
+  const activityLabels = {checking:"상태 점검", running:"작업 진행", "resource-deferred":"실행 자리·메모리 대기", "recovery-wait":"제공처 복구 대기", "budget-wait":"내부 예산 대기", idle:"예약 대기", paused:"일시 중지", completed:"작업 완료", "unchanged-wait":"새 자료 대기", unchanged:"변화 없음", "awaiting-evidence":"자료 대기", deferred:"재시도 대기", failed:"실행 실패", unavailable:"실행 오류"};
+  const activity = health.workerActivity;
+  const activityText = activity?.activity ? `<p>워커 상태: ${escape(activityLabels[activity.activity] || "처리 상태 확인")} · ${escape(date(activity.activityAt))}. 생존 확인과 새 판단 완료는 별도로 집계합니다.</p>` : "";
   const runtimeText = runtime ? `<p class="muted">이번 생존 확인 구간 시작 ${escape(date(runtime.startedAt))} · 마지막 생존 확인 ${escape(date(runtime.lastSeenAt))}<br>이번 구간에서 판단 저장 ${health.judgmentSavedSinceResume ? '확인' : '미확인'} · 관찰 확인 ${health.observationCheckedSinceResume ? '확인' : '미확인'}${health.carriedOverdueObservationTasks ? `<br>재시작 전 이월 예약 ${escape(health.carriedOverdueObservationTasks)}건 · 재시작 후 20분부터 처리 지연을 평가합니다.` : ''}${coverage && coverage.observedActiveSeconds != null ? `<br>최근 24시간 워커 생존 기록 ${escape(Math.round(coverage.observedActiveSeconds / 60))}분 · 기록 공백 ${escape(Math.round(coverage.unobservedSeconds / 60))}분. 기록 공백은 정확한 중단 시간이나 AI 실패 횟수를 뜻하지 않습니다.` : ''}</p>` : '';
-  return `<div role="status"><p><strong>${escape(healthLabels[health.status] || "상태 미확인")}</strong> · ${escape(health.reason)}</p>${runtimeText}<p>최근 ${escape(health.callWindowMinutes)}분 ${health.executionLane === "market-observe" ? "시장 관찰" : "중앙 AI"} 호출: 성공 ${escape(health.centralCallsCompleted)}회 · 실패 ${escape(health.centralCallsFailed)}회<br>마지막 ${health.executionLane === "market-observe" ? "시장 " : ""}판단 저장 ${escape(date(health.lastJudgmentAt))} · 마지막 관찰 확인 ${escape(date(health.lastObservationCheckAt))}${health.retryAt ? `<br>복구 재시도 ${escape(date(health.retryAt))}` : ""}</p>${failure ? `<p class="muted">마지막 실행 오류: ${escape(failure.message)} · ${escape(date(health.sharedExecution.lastFailureAt))}</p>` : ""}</div>`;
+  return `<div role="status"><p><strong>${escape(healthLabels[health.status] || "상태 미확인")}</strong> · ${escape(health.reason)}</p>${runtimeText}${activityText}<p>최근 ${escape(health.callWindowMinutes)}분 ${health.executionLane === "market-observe" ? "시장 관찰" : "중앙 AI"} 호출: 성공 ${escape(health.centralCallsCompleted)}회 · 실패 ${escape(health.centralCallsFailed)}회<br>마지막 ${health.executionLane === "market-observe" ? "시장 " : ""}판단 저장 ${escape(date(health.lastJudgmentAt))} · 마지막 관찰 확인 ${escape(date(health.lastObservationCheckAt))}${health.retryAt ? `<br>복구 재시도 ${escape(date(health.retryAt))}` : ""}</p>${failure ? `<p class="muted">마지막 실행 오류: ${escape(failure.message)} · ${escape(date(health.sharedExecution.lastFailureAt))}</p>` : ""}</div>`;
 }
 function tokenUsageView(usage) {
   if (!usage) return '';
@@ -198,7 +202,7 @@ async function load() {
     const waiting = data.enabled && scheduling.status === "budget-wait";
     $("overview").innerHTML = `${healthView(data.executionHealth)}${waiting ? `<p role="status"><strong>AI 관찰이 사용 한도로 대기 중입니다.</strong> ${scheduling.reason === "ai-token-budget-exhausted" ? "전체 AI의 토큰 예산 여유가 부족합니다." : scheduling.reason === "ai-task-budget-exhausted" ? "오늘 작업 시작 한도에 도달했습니다." : "새 분석과 독립 검토에 필요한 호출 여유가 없습니다."} 한도 갱신 ${escape(date(scheduling.nextCheckAt))}. 설정에서 한도를 늘리면 다음 실행부터 다시 확인합니다.</p>` : ""}<p>문장 검토 통과 ${escape(data.qualitySummary?.accepted ?? 0)}건 · 보류 ${escape(data.qualitySummary?.rejected ?? 0)}건. 검토 통과는 투자 가설의 적중이나 유료 가치 인증을 뜻하지 않습니다.</p><p>시장 AI는 마지막 실제 발송과 비교해 새로운 의미가 있을 때 알립니다. 질문 연구 메시지와 별도 TypeDB 알림은 시장 AI의 발송 성과와 구분합니다. 같은 종목은 일반 관찰 3시간, 등록한 반증 조건의 새 전환은 1시간 간격이며 하루 최대 2회 · 계정당 하루 최대 8회입니다. 일일 한도는 UTC 기준입니다.</p><div class="metrics"><div class="metric">독립 관찰 상태<strong>${!data.enabled ? "일시 중지" : waiting ? "사용 한도 대기" : escape(healthLabels[data.executionHealth?.status] || "상태 미확인")}</strong></div><div class="metric">오늘 시작한 작업<strong>${escape(data.tasksStartedToday)} / ${data.budgetEnabled === false ? "제한 없음" : escape(data.dailyTaskBudget)}</strong></div><div class="metric">오늘 독립 AI 호출<strong>${escape(data.modelCallsUsedToday ?? 0)} / ${data.budgetEnabled === false ? "제한 없음" : escape(data.dailyCallBudget)}</strong></div><div class="metric">대기·진행 작업<strong>${escape(data.activeTaskCount)}</strong></div></div><p class="muted">관찰 분석과 발송 전 검토는 각각 호출을 사용합니다. 뉴스 분석 등 별도 작업의 호출은 아래 이력에 표시되며 독립 AI 한도와 구분됩니다.</p>`;
     $("overview").insertAdjacentHTML("beforeend", queueView(data.taskScheduling));
-    $("overview").insertAdjacentHTML("beforeend", lanesView(data.executionLanes) + tokenUsageView(data.tokenUsageToday));
+    $("overview").insertAdjacentHTML("beforeend", lanesView(data.executionLanes, data.executionHealth) + tokenUsageView(data.tokenUsageToday));
     if (!dirty) { $("enabled").checked = data.configuredEnabled; $("budgetEnabled").checked = data.budgetEnabled !== false; syncBudgetFields(); $("taskBudget").value = data.dailyTaskBudget; $("callBudget").value = data.dailyCallBudget; $("tokenBudgetEnabled").checked = data.tokenUsageToday?.enabled !== false; $("tokenBudget").value = data.tokenUsageToday?.dailyLimit ?? 1000000; }
     if (!brainDirty) $("brain").innerHTML = brainView(data.brain);
     const analyses = data.tasks.filter((task) => task.result?.summary);

@@ -8,8 +8,11 @@ from ..domain import memory_reference
 
 
 class ObservationReadTools:
-    def __init__(self, session, history, research, indexed=False):
+    def __init__(self, session, history, research, indexed=False, memory_search=None, memory_scope=None):
         self.session = session
+        self.memory_search = memory_search
+        self.memory_scope = memory_scope or {}
+        self.search_cache = {}
         self.memories = {"analyses": deepcopy(history), "memories": deepcopy(research)}
         self.indexed = indexed
         self.memory_index = memory_reference.index(history, research) if indexed else []
@@ -38,6 +41,8 @@ class ObservationReadTools:
     def resolve(self, request, index=0):
         scope = {key: value for key, value in request.items() if key != "cursor"}
         path = "requests[" + str(index) + "]"
+        if request["tool"] == "search_memory" and not self.memory_search:
+            raise ReadRequestError([issue(path, "archive search is unavailable")])
         if request["tool"] == "read_memory":
             key = (request["category"], request["memoryId"], request["path"])
             if not self.indexed or key not in self.memory_paths:
@@ -57,6 +62,21 @@ class ObservationReadTools:
     def preview(self, plan, page_size=PAGE_SIZE):
         """Read the immutable local inventory without issuing a cursor."""
         scope, offset = plan["scope"], plan["offset"]
+        if scope["tool"] == "search_memory":
+            cache_key = content_hash([scope, offset])
+            if cache_key not in self.search_cache:
+                result = self.memory_search(scope["query"], offset, min(4, page_size))
+                for row in result.get("records", []):
+                    if (any(row.get(k) != self.memory_scope.get(k) for k in ("accountId", "symbol", "worldId"))
+                            or not row.get("knownAt") or row["knownAt"] > self.memory_scope["asOf"]
+                            or row.get("authority") != "historical-reviewed-opinion-only"):
+                        raise ValueError("archive search returned unapproved or out-of-scope memory")
+                    self.memory_sources[("memories", "memory:" + content_hash(row))] = deepcopy(row)
+                self.search_cache[cache_key] = result
+            result = deepcopy(self.search_cache[cache_key])
+            result["records"] = [memory_reference.brief(row, "memories") for row in result.get("records", [])]
+            result["memoryKind"] = "memories"
+            return result
         if scope["tool"] == "read_memory":
             source = self.memory_sources[(scope["category"], scope["memoryId"])]
             value = memory_reference.pointer(source, scope["path"])
@@ -94,6 +114,14 @@ class ObservationReadTools:
         return result
 
     def admit(self, result):
+        for row in result.get("records", []):
+            key = ("memories", row.get("memoryId"))
+            source = self.memory_sources.get(key)
+            if source and source.get("kind") == "opinion-memory":
+                parts = memory_reference.children(source)
+                self.memory_paths.update((key[0], key[1], part["path"]) for part in parts)
+                if not any(item["memoryId"] == key[1] for item in self.memory_index):
+                    self.memory_index.extend(memory_reference.index([], [source]))
         self.known.update({row["id"]: row["evidenceCategory"] for row in result.get("facts", [])})
         if result.get("status") == "section-index":
             self.memory_paths.update((result["memoryKind"], result["memoryId"], row["path"]) for row in result["sections"])

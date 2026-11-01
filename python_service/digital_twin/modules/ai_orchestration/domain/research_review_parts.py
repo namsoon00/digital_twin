@@ -4,6 +4,14 @@ from .insight_schema import obj, choice
 from .question_purpose import enabled
 
 VERSION = "research-assessment-review-v8-separate-knowledge"
+OPINION_VERSION = "research-assessment-review-v9-opinion-change"
+VERSIONS = {VERSION, OPINION_VERSION}
+
+
+def version_for(packet):
+    from .opinion_memory import enabled as opinion_enabled
+    return OPINION_VERSION if opinion_enabled(packet) else VERSION
+
 INSTRUCTIONS = """독립 검토를 assessment와 knowledge 두 부분으로 반환하세요. 각 부분은 {accepted,reason}입니다.
 assessment는 원래 질문의 답·부족 항목·judgmentImpact, businessResearch, 새 질문의 목적·자료 작업 및 questionContinuations를 함께 검토합니다. 이 안에서 서로 의존하는 변경은 묶어서 승인하거나 거부하세요.
 knowledge는 knowledgeResearch만 검토합니다. 관련 없는 지식 메모리의 오류만으로 타당한 질문 답변을 거부하지 마세요. 반대로 질문 승인이 잘못된 지식 변경을 승인하지도 않습니다. 각 부분에 이유를 쓰고, 해당 제안이 없으면 변경 없음으로 승인하세요.
@@ -12,14 +20,14 @@ JSON만 반환하세요: {version,assessment:{accepted,reason},knowledge:{accept
 """
 
 
-def schema():
+def schema(version=VERSION):
     part = obj({"accepted": {"type": "boolean"}, "reason": {"type": "string", "minLength": 8, "maxLength": 600}})
-    return obj({"version": choice([VERSION]), "assessment": deepcopy(part), "knowledge": deepcopy(part)})
+    return obj({"version": choice([version]), "assessment": deepcopy(part), "knowledge": deepcopy(part)})
 
 
 def admissions(result, review):
     if (not isinstance(review, dict) or set(review) != {"version", "assessment", "knowledge"}
-            or review.get("version") != VERSION or not enabled(result.get("input", {}))):
+            or review.get("version") != version_for(result.get("input", {})) or not enabled(result.get("input", {}))):
         return {"assessment": False, "knowledge": False}
     for key in ("assessment", "knowledge"):
         row = review[key]
@@ -37,7 +45,7 @@ def admissions(result, review):
 
 def approved(result, section="assessment"):
     quality = result.get("researchQuality") or {}
-    if quality.get("version") == VERSION:
+    if quality.get("version") in VERSIONS:
         return (quality.get("status") in {"accepted", "partially-accepted"}
                 and quality.get("admissions", {}).get(section) is True)
     return quality.get("status") == "accepted"
@@ -45,4 +53,4 @@ def approved(result, section="assessment"):
 
 def reason(quality, section):
     review = quality.get("review") or {}
-    return review.get(section, {}).get("reason", "") if quality.get("version") == VERSION else review.get("reason", "")
+    return review.get(section, {}).get("reason", "") if quality.get("version") in VERSIONS else review.get("reason", "")

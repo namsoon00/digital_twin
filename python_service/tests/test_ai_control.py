@@ -364,7 +364,7 @@ class AIControlStorageTests(unittest.TestCase):
 
     def clean(self):
         with self.store.transaction() as c:
-            for table in ("ai_control_runtime_intervals", "ai_control_call_metrics", "ai_control_input_calls", "ai_control_inputs", "ai_control_tasks", "ai_control_budget", "ai_control_calls", "ai_control_execution_state"):
+            for table in ("ai_opinion_records", "ai_control_runtime_intervals", "ai_control_call_metrics", "ai_control_input_calls", "ai_control_inputs", "ai_control_tasks", "ai_control_budget", "ai_control_calls", "ai_control_execution_state"):
                 c.execute("DELETE FROM " + table)
 
     def tearDown(self):
@@ -478,7 +478,8 @@ class AIControlStorageTests(unittest.TestCase):
                  "value": 99.0, "unit": "2020=100", "observationDate": "2026-08"}
         facts = [{"id": "quote", "kind": "stock", "currentPrice": 100},
                  *[{"id": "flow-" + str(i), "kind": "flow-metric"} for i in range(20)], macro]
-        self.assertTrue(self.store.complete(new, {"summary": "saved", "input": {"facts": facts}}, [child]))
+        self.assertTrue(self.store.complete(new, {"summary": "saved", "input": {"facts": facts},
+                                                "quality": {"status": "observation-only", "errors": []}}, [child]))
         self.assertFalse(self.store.complete(new, {}, [child]))
         self.assertEqual(2, len(self.store.status()["tasks"]))
         self.assertEqual("saved", self.store.memory(SUBJECT["accountId"], "TEST")[0]["summary"])

@@ -63,7 +63,9 @@ def assessment(case, job, result, review, resolution, now):
     if not selected.intersection(review["evidenceIds"]):
         raise ValueError("question assessment must cite its own selected source evidence")
     from . import question_purpose
+    from . import opinion_memory
     return {**({"questionPurposePolicy": question_purpose.VERSION} if question_purpose.enabled(packet) else {}),
+        **({"basis": opinion_memory.basis(packet, review["evidenceIds"])} if opinion_memory.enabled(packet) else {}),
         "version": VERSION, "status": review["action"] if review["action"] in {"answered", "dismissed"} else "partial",
         "reviewAction": review["action"],
         **({"answerParts": deepcopy(resolution["answerParts"]), "answerPartsVersion": packet["questionAnswerPolicy"]}

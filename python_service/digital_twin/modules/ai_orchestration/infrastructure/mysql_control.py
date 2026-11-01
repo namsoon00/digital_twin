@@ -3,6 +3,7 @@ from digital_twin.modules.reasoning.contracts import OBSERVATION_QUOTE_KINDS
 
 import json
 import gzip
+from ..domain import opinion_retrieval, opinion_memory
 from copy import deepcopy
 import threading
 import uuid
@@ -29,6 +30,7 @@ from .mysql_diagnostic_progress import DiagnosticProgressPersistence, SCHEMA as 
 from .mysql_token_usage import AITokenUsagePersistence
 from ..domain.token_budget import usage_counts, RESERVATION, execution_pool
 from .mysql_activity import AIActivityPersistence, SCHEMA as ACTIVITY_SCHEMA
+from .mysql_opinion_memory import OpinionMemoryPersistence, SCHEMA as OPINION_SCHEMA, APPROVED_RESULT_SQL
 
 
 STATUS_INDEXES = (
@@ -37,6 +39,7 @@ STATUS_INDEXES = (
 )
 
 SCHEMA = (
+    OPINION_SCHEMA,
     ACTIVITY_SCHEMA,
     *DIAGNOSTIC_SCHEMA,
     EXECUTION_SCHEMA,
@@ -83,7 +86,7 @@ SCHEMA = (
 )
 
 
-class MySQLAIControlStore(AIActivityPersistence, AITokenUsagePersistence, DiagnosticProgressPersistence, AITaskDispatchPersistence, AIRuntimePersistence, AIExecutionPersistence, MySQLOperationalConnection):
+class MySQLAIControlStore(OpinionMemoryPersistence, AIActivityPersistence, AITokenUsagePersistence, DiagnosticProgressPersistence, AITaskDispatchPersistence, AIRuntimePersistence, AIExecutionPersistence, MySQLOperationalConnection):
     def __init__(self, settings=None, *, initialize=True):
         configured = dict(settings or {})
         if not initialize:
@@ -218,6 +221,7 @@ class MySQLAIControlStore(AIActivityPersistence, AITokenUsagePersistence, Diagno
             writer = getattr(self, "outbox_writer", None)
             if writer is not None and job["capability"] in OBSERVATIONS and saved_result.get("summary"):
                 saved_result["publication"] = writer(connection, job, saved_result)
+            saved_result["opinionRecordIds"] = self.record_opinions(connection, job, saved_result)
             connection.execute("UPDATE ai_control_tasks SET result_json=%s WHERE task_id=%s",
                                (json.dumps(saved_result, ensure_ascii=False), job["taskId"]))
             for child in saved_children:
@@ -368,12 +372,25 @@ class MySQLAIControlStore(AIActivityPersistence, AITokenUsagePersistence, Diagno
                 "ORDER BY updated_at DESC,task_id DESC LIMIT 8", (account_id, symbol, capability)).fetchall()
         return next((json.loads(row["outcome_json"]) for row in rows if row["outcome_json"]), {})
 
-    def memory(self, account_id, symbol, capability="observe"):
+    def reviewed_memory(self, account_id, symbol, world_id, capability="observe"):
+        return self.memory(account_id, symbol, capability, world_id)
+
+    def memory(self, account_id, symbol, capability="observe", world_id=None):
+        # Completed includes rejected drafts. Admission is checked before LIMIT,
+        # so failed/rejected recent runs cannot displace a prior approved opinion.
+        admitted = APPROVED_RESULT_SQL
+        scope = "account_id=%s AND symbol=%s AND capability=%s AND status='completed'"
+        params = [account_id, symbol, capability]
+        if world_id:
+            scope += " AND JSON_UNQUOTE(JSON_EXTRACT(payload_json,'$.worldId'))=%s"
+            params.append(world_id)
         with self.connect() as connection:
-            rows = connection.execute("SELECT result_json,updated_at FROM ai_control_tasks WHERE account_id=%s AND symbol=%s AND capability=%s AND status='completed' AND JSON_EXTRACT(result_json,'$.summary') IS NOT NULL ORDER BY updated_at DESC LIMIT 3", (account_id, symbol, capability)).fetchall()
-            condition_state = connection.execute("SELECT result_json FROM ai_control_tasks WHERE account_id=%s AND symbol=%s "
-                "AND capability=%s AND status='completed' AND JSON_EXTRACT(result_json,'$.followUpEvaluations') IS NOT NULL "
-                "ORDER BY updated_at DESC,task_id DESC LIMIT 1", (account_id, symbol, capability)).fetchone()
+            rows = connection.execute("SELECT result_json,updated_at FROM ai_control_tasks WHERE " + scope +
+                " AND JSON_EXTRACT(result_json,'$.summary') IS NOT NULL AND " + admitted +
+                " ORDER BY updated_at DESC,task_id DESC LIMIT 3", params).fetchall()
+            condition_state = connection.execute("SELECT result_json FROM ai_control_tasks WHERE " + scope +
+                " AND JSON_EXTRACT(result_json,'$.followUpEvaluations') IS NOT NULL "
+                "ORDER BY updated_at DESC,task_id DESC LIMIT 1", params).fetchone()
         result = []
         for row in rows:
             saved = json.loads(row["result_json"])
@@ -435,9 +452,9 @@ class MySQLAIControlStore(AIActivityPersistence, AITokenUsagePersistence, Diagno
                 raise ValueError("retrieval audit requires owned frozen input")
             envelope = json.loads(gzip.decompress(frozen["artifact_gzip"]))
             validate_execution_input(envelope)
-            if envelope["promptVersion"] not in {price_investigation_retrieval.VERSION, market_explanation_retrieval.VERSION, external_influence_retrieval.VERSION, efficient_retrieval.VERSION, question_gap_retrieval.VERSION, company_retrieval.VERSION, business_retrieval.VERSION, completion_retrieval.VERSION, quality_retrieval.VERSION, compact_retrieval.VERSION, *purpose_retrieval.SUPPORTED_VERSIONS, bounded_retrieval.VERSION, lane_retrieval.VERSION, RETRIEVAL_PROMPT_VERSION, working_retrieval.VERSION, scoped_retrieval.VERSION, indexed_retrieval.VERSION, question_retrieval.VERSION}:
+            if envelope["promptVersion"] not in {opinion_retrieval.VERSION, price_investigation_retrieval.VERSION, market_explanation_retrieval.VERSION, external_influence_retrieval.VERSION, efficient_retrieval.VERSION, question_gap_retrieval.VERSION, company_retrieval.VERSION, business_retrieval.VERSION, completion_retrieval.VERSION, quality_retrieval.VERSION, compact_retrieval.VERSION, *purpose_retrieval.SUPPORTED_VERSIONS, bounded_retrieval.VERSION, lane_retrieval.VERSION, RETRIEVAL_PROMPT_VERSION, working_retrieval.VERSION, scoped_retrieval.VERSION, indexed_retrieval.VERSION, question_retrieval.VERSION}:
                 raise ValueError("retrieval audit requires retrieval input")
-            validator = (question_gap_retrieval.validate_trace if envelope["promptVersion"] == question_gap_retrieval.VERSION else price_investigation_retrieval.validate_trace if envelope["promptVersion"] == price_investigation_retrieval.VERSION else market_explanation_retrieval.validate_trace if envelope["promptVersion"] == market_explanation_retrieval.VERSION else external_influence_retrieval.validate_trace if envelope["promptVersion"] == external_influence_retrieval.VERSION else efficient_retrieval.validate_trace if envelope["promptVersion"] == efficient_retrieval.VERSION else company_retrieval.validate_trace if envelope["promptVersion"] == company_retrieval.VERSION else
+            validator = (opinion_retrieval.validate_trace if envelope["promptVersion"] == opinion_retrieval.VERSION else question_gap_retrieval.validate_trace if envelope["promptVersion"] == question_gap_retrieval.VERSION else price_investigation_retrieval.validate_trace if envelope["promptVersion"] == price_investigation_retrieval.VERSION else market_explanation_retrieval.validate_trace if envelope["promptVersion"] == market_explanation_retrieval.VERSION else external_influence_retrieval.validate_trace if envelope["promptVersion"] == external_influence_retrieval.VERSION else efficient_retrieval.validate_trace if envelope["promptVersion"] == efficient_retrieval.VERSION else company_retrieval.validate_trace if envelope["promptVersion"] == company_retrieval.VERSION else
                          business_retrieval.validate_trace if envelope["promptVersion"] == business_retrieval.VERSION else
                          completion_retrieval.validate_trace if envelope["promptVersion"] == completion_retrieval.VERSION else
                          quality_retrieval.validate_trace if envelope["promptVersion"] == quality_retrieval.VERSION else
@@ -451,8 +468,8 @@ class MySQLAIControlStore(AIActivityPersistence, AITokenUsagePersistence, Diagno
                          working_retrieval.validate_trace if envelope["promptVersion"] == working_retrieval.VERSION else validate_trace)
             full_trace = [*envelope["retrievalContext"].get("trace", []), step]
             validator(full_trace)
-            if envelope["promptVersion"] in {compact_retrieval.VERSION, quality_retrieval.VERSION, completion_retrieval.VERSION, business_retrieval.VERSION, company_retrieval.VERSION, efficient_retrieval.VERSION, question_gap_retrieval.VERSION, external_influence_retrieval.VERSION, price_investigation_retrieval.VERSION, market_explanation_retrieval.VERSION}:
-                (efficient_retrieval.context_view if envelope["promptVersion"] in {efficient_retrieval.VERSION, question_gap_retrieval.VERSION, external_influence_retrieval.VERSION, price_investigation_retrieval.VERSION, market_explanation_retrieval.VERSION} else retrieval_view).paths(envelope["current"], {**envelope["retrievalContext"], "trace": full_trace})
+            if envelope["promptVersion"] in {compact_retrieval.VERSION, quality_retrieval.VERSION, completion_retrieval.VERSION, business_retrieval.VERSION, company_retrieval.VERSION, efficient_retrieval.VERSION, question_gap_retrieval.VERSION, external_influence_retrieval.VERSION, price_investigation_retrieval.VERSION, market_explanation_retrieval.VERSION, opinion_retrieval.VERSION}:
+                (efficient_retrieval.context_view if envelope["promptVersion"] in {efficient_retrieval.VERSION, question_gap_retrieval.VERSION, external_influence_retrieval.VERSION, price_investigation_retrieval.VERSION, market_explanation_retrieval.VERSION, opinion_retrieval.VERSION} else retrieval_view).paths(envelope["current"], {**envelope["retrievalContext"], "trace": full_trace})
             connection.execute("INSERT IGNORE INTO ai_control_retrieval_rounds "
                 "(input_id,task_id,attempt,round_status,artifact_hash,artifact_gzip,created_at) VALUES (%s,%s,%s,%s,%s,%s,%s)",
                 (step["inputId"], job["taskId"], job["attempts"], step["status"], digest, gzip.compress(raw, mtime=0), stamp()))

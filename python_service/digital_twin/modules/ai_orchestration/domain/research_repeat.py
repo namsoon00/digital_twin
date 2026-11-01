@@ -115,6 +115,17 @@ def observation_key(packet, research):
                    "researchPlan", "researchRepeat", "researchSourceState", "answerMemory", "evidenceProgress"}
     work = [{key: value for key, value in row.items() if key not in operational}
             if row.get("kind") == "brain-case" else row for row in research]
+    from .opinion_memory import enabled
+    if enabled(packet):
+        from .question_evidence import source_identity
+        work = []
+        for row in research:
+            if row.get("kind") == "brain-case":
+                work.append({"caseId": row["caseId"], "questionContract": row.get("questionContract"),
+                    "capability": row.get("capability"), "sourceAnswer": source_identity(row)})
+            elif row.get("kind") == "business-thesis":
+                work.append({"caseId": row["caseId"], "contract": row.get("contract"),
+                    "expiresAt": row.get("expiresAt"), "observations": row.get("observations", [])})
     source = evidence_change_identity(packet, work, packet.get("questionsToCheck", []))
     if packet.get("researchKnowledge"):
         from digital_twin.modules.research_knowledge.contracts import knowledge_context_identity

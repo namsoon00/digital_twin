@@ -70,6 +70,8 @@ def closure(case, answer, assessment, assessed, active, wait):
             ("원래 질문에 필요한 새 원문·수치 또는 지원 경로가 확인되면 재검토" if stop else ""))[:500],
         "stopReason": stop, "activeTaskId": active.get("taskId", ""), "executionWait": wait.get("label", ""),
         "judgmentEffect": (assessment.get("judgmentImpact") or {}).get("effect", "unknown") if assessed else "unknown",
+        "evidenceRelation": (assessment.get("judgmentImpact") or {}).get("evidenceRelation", "unknown") if assessed else "unknown",
+        "opinionChange": (assessment.get("judgmentImpact") or {}).get("opinionChange", "unknown") if assessed else "unknown",
         "qualification": "recorded-evidence-progress-not-investment-accuracy"}
 
 
@@ -85,6 +87,9 @@ def summarize(cases):
         "reviewedJudgmentLinks": len(assessed), "judgmentChanged": effects.count("weakens"),
         "judgmentSupported": effects.count("supports"), "judgmentUnchanged": effects.count("unchanged"),
         "judgmentInsufficient": effects.count("insufficient"),
+        "evidenceRelations": dict(Counter(w.get("closure", {}).get("evidenceRelation", "unknown") for w in assessed)),
+        "opinionChanges": dict(Counter(w.get("closure", {}).get("opinionChange", "unknown") for w in assessed)),
+        "unclassifiedChangeCount": sum(w.get("closure", {}).get("opinionChange", "unknown") == "unknown" for w in assessed),
         "providerWaiting": sum(w.get("wait", {}).get("scope") == "model-provider" for w in rows),
         "confirmedPartialAnswers": sum(w.get("closure", {}).get("answerState") == "confirmed-parts" for w in rows),
         "executionStates": dict(Counter(w.get("closure", {}).get("execution", {}).get("code", "unknown") for w in rows)),

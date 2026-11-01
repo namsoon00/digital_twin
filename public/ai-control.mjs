@@ -1,4 +1,4 @@
-import { questionAssessmentView, questionPerformanceView } from "./modules/research/question-assessment.mjs?v=4ad5625007a4819e";
+import { questionAssessmentView, questionPerformanceView } from "./modules/research/question-assessment.mjs?v=0a0b8e7984eef273";
 
 const $ = (id) => document.getElementById(id);
 const escape = (value) => String(value ?? "").replace(/[&<>"']/g, (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));

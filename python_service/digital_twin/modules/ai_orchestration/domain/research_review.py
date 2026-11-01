@@ -14,12 +14,12 @@ QUANTITATIVE_VERSION = "research-assessment-review-v4-quantitative"
 ANSWER_VERSION = "research-assessment-review-v5-answer-parts"
 PARTIAL_VERSION = "research-assessment-review-v6-partial-judgment"
 CHAIN_VERSION = "research-assessment-review-v7-answer-led-research"
-SUPPORTED_VERSIONS = {VERSION, KNOWLEDGE_VERSION, LEGACY_VERSION, QUANTITATIVE_VERSION, ANSWER_VERSION, PARTIAL_VERSION, CHAIN_VERSION, parts.VERSION}
+SUPPORTED_VERSIONS = {VERSION, KNOWLEDGE_VERSION, LEGACY_VERSION, QUANTITATIVE_VERSION, ANSWER_VERSION, PARTIAL_VERSION, CHAIN_VERSION, *parts.VERSIONS}
 
 
 def version_for(packet):
     if parts.enabled(packet):
-        return parts.VERSION
+        return parts.version_for(packet)
     from .research_chain import enabled as chain_enabled
     if chain_enabled(packet):
         return CHAIN_VERSION
@@ -60,8 +60,8 @@ def needed(result):
 
 
 def schema(version=VERSION):
-    if version == parts.VERSION:
-        return parts.schema()
+    if version in parts.VERSIONS:
+        return parts.schema(version)
     return obj({"version": choice([version]), "accepted": {"type": "boolean"},
                 "reason": {"type": "string", "minLength": 8, "maxLength": 600}})
 
@@ -96,6 +96,9 @@ JSON만 반환하세요: {version,accepted,reason}.
     if parts.enabled(current):
         value = question_purpose.INSTRUCTIONS + value.replace(
             "모든 연구 변경이 근거와 일치할 때만 accepted=true입니다. 하나라도 부족하면 이유를 명시하고 false로 답하세요.\nJSON만 반환하세요: {version,accepted,reason}.\n", parts.INSTRUCTIONS)
+    from . import opinion_memory
+    if opinion_memory.enabled(current):
+        value = opinion_memory.INSTRUCTIONS + value
     return value + json.dumps({"current": current, "researchMemory": memories, "proposal": draft}, ensure_ascii=False)
 
 
@@ -131,15 +134,15 @@ def validate_input(envelope):
         fields.add("questionContinuations")
     if parts.enabled(envelope["current"]):
         fields.add("questionPurposes")
-    if (version == parts.VERSION) != parts.enabled(envelope["current"]):
+    if (version in parts.VERSIONS) != parts.enabled(envelope["current"]) or (version in parts.VERSIONS and version != parts.version_for(envelope["current"])):
         raise EvidenceContractError("separate research review version mismatch")
-    if version != parts.VERSION and (version == CHAIN_VERSION) != chained:
+    if version not in parts.VERSIONS and (version == CHAIN_VERSION) != chained:
         raise EvidenceContractError("answer-led research review version mismatch")
-    if version != parts.VERSION and not chained and (version == PARTIAL_VERSION) != partial_judgment(envelope["current"]):
+    if version not in parts.VERSIONS and not chained and (version == PARTIAL_VERSION) != partial_judgment(envelope["current"]):
         raise EvidenceContractError("partial judgment review version mismatch")
-    if version != parts.VERSION and (version in {ANSWER_VERSION, PARTIAL_VERSION, CHAIN_VERSION, parts.VERSION}) != answer_parts(envelope["current"]):
+    if version not in parts.VERSIONS and (version in {ANSWER_VERSION, PARTIAL_VERSION, CHAIN_VERSION, *parts.VERSIONS}) != answer_parts(envelope["current"]):
         raise EvidenceContractError("question answer review version mismatch")
-    if version != parts.VERSION and not answer_parts(envelope["current"]) and (version == QUANTITATIVE_VERSION) != quantitative(envelope["current"]):
+    if version not in parts.VERSIONS and not answer_parts(envelope["current"]) and (version == QUANTITATIVE_VERSION) != quantitative(envelope["current"]):
         raise EvidenceContractError("quantitative research review version mismatch")
     if (envelope.get("protocolVersion") != EXECUTION_INPUT_PROTOCOL or version not in SUPPORTED_VERSIONS
             or not envelope.get("parentInputId") or set(envelope["proposal"]) != fields
@@ -154,11 +157,11 @@ def accept(result, review, input_id):
     if parts.enabled(result.get("input", {})):
         admission = parts.admissions(result, review)
         status = "accepted" if all(admission.values()) else "partially-accepted" if any(admission.values()) else "rejected"
-        return {"version": parts.VERSION, "status": status, "admissions": admission,
+        return {"version": parts.version_for(result.get("input", {})), "status": status, "admissions": admission,
             "reviewInputId": input_id, "proposalHash": content_hash(proposal(result)), "review": deepcopy(review),
             "authority": "research-assessment-only", "qualification": "not-empirically-qualified"}
     valid = (isinstance(review, dict) and set(review) == {"version", "accepted", "reason"}
-             and review["version"] in SUPPORTED_VERSIONS - {parts.VERSION} and review["accepted"] is True
+             and review["version"] in SUPPORTED_VERSIONS - parts.VERSIONS and review["accepted"] is True
              and ("knowledgeResearch" not in result or review["version"] != LEGACY_VERSION)
              and (not result.get("input", {}).get("questionWorkPolicy") or review["version"] == version_for(result.get("input", {})))
              and (version_for(result.get("input", {})) != QUANTITATIVE_VERSION or review["version"] == QUANTITATIVE_VERSION)

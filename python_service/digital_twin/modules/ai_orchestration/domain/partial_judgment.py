@@ -34,7 +34,11 @@ schema, review_schema = previous.schema, previous.review_schema
 
 
 def validate_impact(packet, resolution, result, facts):
-    if not enabled(packet) or resolution["judgmentImpact"]["effect"] not in {"supports", "weakens"}:
+    from .opinion_memory import enabled as opinion_enabled
+    impact = resolution["judgmentImpact"]
+    linked = impact["effect"] in {"supports", "weakens"} or (opinion_enabled(packet)
+        and impact.get("evidenceRelation") in {"supports", "contradicts", "mixed"})
+    if not (enabled(packet) or opinion_enabled(packet)) or not linked:
         return
     from .research_evidence_use import usable_fact
     from .business_progress import business_ref

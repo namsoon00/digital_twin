@@ -1,6 +1,7 @@
 from digital_twin.modules._exports import resolve_export
 
 _EXPORTS = {
+    "opinion_question_contributions": ("digital_twin.modules.ai_orchestration.domain.opinion_memory", "contribution"),
     "AI_ACTIVITY_VERSION": ("digital_twin.modules.ai_orchestration.domain.activity", "VERSION"),
     "ai_activity_notifications_enabled": ("digital_twin.modules.ai_orchestration.domain.activity", "enabled"),
     "observation_judgment_focus": ("digital_twin.modules.ai_orchestration.domain.business_progress", "focus"),

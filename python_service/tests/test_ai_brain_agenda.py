@@ -126,7 +126,7 @@ class BrainAgendaStorageTests(unittest.TestCase):
 
     def clean(self):
         with self.control.transaction() as c:
-            for table in ("ai_brain_case_events", "ai_brain_cases", "ai_control_input_calls", "ai_control_inputs", "ai_control_tasks", "ai_control_calls", "ai_control_budget", "ai_control_call_metrics", "ai_control_execution_state"):
+            for table in ("ai_opinion_records", "ai_brain_case_events", "ai_brain_cases", "ai_control_input_calls", "ai_control_inputs", "ai_control_tasks", "ai_control_calls", "ai_control_budget", "ai_control_call_metrics", "ai_control_execution_state"):
                 c.execute("DELETE FROM " + table)
 
     def tearDown(self):

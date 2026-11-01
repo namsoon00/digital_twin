@@ -1,5 +1,53 @@
 # Central AI control
 
+## Approved opinions and targeted memory (2026-11-01)
+
+`reviewed-opinion-memory-v1` uses author v35, repair v31, observation review v24,
+research review v9 and retrieval v21. Previously frozen prompt versions retain
+their original contracts. A completed task alone is not an approved opinion:
+history reads filter approved observation quality or independently approved
+question assessments before applying the result limit, within account/symbol/world.
+Rejected drafts and knowledge-only approvals cannot displace the latest approved
+answer. `approvedOpinion` projects the question's admitted assessment for the UI
+and memory; the latest attempted `hypothesisResolution` remains separate.
+
+`judgmentImpact.evidenceRelation` describes support, contradiction, mixed evidence
+or insufficient evidence. `opinionChange` separately describes a first opinion,
+retention, strengthening, weakening or withdrawal relative to an approved baseline.
+Unchanged question material cannot strengthen or weaken the opinion. Legacy
+`effect` remains a compatibility field; old records are explicitly unclassified on
+the new change axis rather than retrospectively relabelled.
+
+Task completion appends compact approved records to `ai_opinion_records` in the
+same transaction as the agenda and publication outbox. Records carry input/review
+IDs, source material hashes, report periods and known-at time. Full prompts and
+source artifacts remain in the existing immutable execution store. No historical
+task or delivery body is rewritten. `search_memory` provides bounded keyword and
+period searches within the captured subject and time cutoff: at most 80 metadata
+rows per page and four selected PK payload reads. Older approved question/task
+records have a read-only fallback. A next cursor or bounded empty page is not a
+claim that all memory has been searched. Search results are historical context;
+only issued `read_memory` paths reveal details, never current facts.
+
+For an essential `unread-source` gap, the runtime first reads up to two available
+linked documents or period-matched report excerpts. `gapReadWork` records the
+requirements, actual requests and source IDs. These reads still require assessment;
+they cannot mark a question complete or prove that an absent source is unpublished.
+Further source acquisition continues through the existing bounded research owner.
+Self-authored status/revision changes do not renew research, and a valid empty
+research plan is reused until its material gaps or due work change. Missing a
+usable source clock in the price-investigation lane now parks before paid routing
+and authoring. Dated quotes remain usable where the existing purpose contract
+allows them; original-question research is unaffected.
+
+The research page shows evidence relation and opinion change separately. New AI
+observation messages include admitted question contributions, or prior confirmed
+answer parts only when the current observation cites the same unchanged source
+basis. Prior research is dated and labelled as context, not a new answer or proof
+of causal impact. Existing validation, delivery deduplication and activity notices
+continue to apply. These changes establish traceability and avoid repeat work;
+investment accuracy, token savings and financial performance require live samples.
+
 ## Operational activity notifications (2026-11-01)
 
 `aiActivityNotificationsEnabled=true` records central task starts, evidence and

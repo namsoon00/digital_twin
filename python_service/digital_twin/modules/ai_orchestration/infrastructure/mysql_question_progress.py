@@ -33,5 +33,7 @@ def attach_question_progress(connection, cases, now=None):
     row = connection.execute("SELECT state_json FROM ai_control_execution_state FORCE INDEX(PRIMARY) WHERE scope_key=%s LIMIT 1",
                              ("shared-local-model",)).fetchone()
     execution = json.loads(row["state_json"]) if row else {}
+    from ..domain.opinion_memory import current_question
     for case in questions:
+        case["approvedOpinion"] = current_question(case)
         case["workflow"] = question_progress(case, tasks, execution, now)

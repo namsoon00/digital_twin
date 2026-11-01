@@ -26,9 +26,13 @@ def brief(row, category):
     if category == "analyses":
         fields = ("executionInputId", "observedAt", "completedAt", "accountId", "symbol", "worldId",
                   "summary", "hypothesis", "counterEvidence", "followUpConditions", "companyValue", "externalInfluences", "priceExplanation")
+    elif row.get("kind") == "opinion-memory":
+        fields = ("kind", "recordId", "caseId", "accountId", "symbol", "worldId", "question", "questionContract",
+                  "answerStatus", "summary", "judgment", "judgmentImpact", "missingRequirements", "knownAt", "asOf",
+                  "executionInputId", "researchReviewInputId", "reviewInputId")
     elif row.get("kind") == "brain-case":
         fields = ("kind", "caseId", "accountId", "symbol", "worldId", "question", "capability", "status",
-                  "revision", "reviewDue", "nextCheckAt", "completionCriterion", "researchAttempts", "questionContract", "inquiryLineage", "inquiryContinuation", "questionPurpose")
+                  "revision", "reviewDue", "nextCheckAt", "completionCriterion", "researchAttempts", "questionContract", "inquiryLineage", "inquiryContinuation", "questionPurpose", "approvedOpinion", "questionWorkKey", "questionWorkUnchanged")
     elif row.get("kind") == "business-thesis":
         # Checkpoint baselines are an exact deterministic observation contract.
         fields = ("kind", "caseId", "accountId", "symbol", "worldId", "revision", "status", "reviewDue",
@@ -48,6 +52,10 @@ def brief(row, category):
         result["quality"] = {"status": row.get("quality", {}).get("status"),
                              "errorCount": len(row.get("quality", {}).get("errors") or [])}
     if row.get("kind") == "brain-case":
+        if row.get("approvedOpinion"):
+            result["approvedOpinion"] = {k: deepcopy(row["approvedOpinion"][k]) for k in
+                ("status", "answerStatus", "judgmentImpact", "executionInputId", "researchReviewInputId", "at", "workKey")
+                if k in row["approvedOpinion"]}
         if row.get("inquiryLineage"):
             from .research_chain import memory_lineage
             result["inquiryLineage"] = memory_lineage(row["inquiryLineage"])

@@ -569,6 +569,10 @@ class MySQLBrainAgendaStore(MySQLOperationalConnection):
             case = json.loads(row["payload_json"])
             records.append({**{key: case[key] for key in ("caseId", "category", "status", "problem", "proposal", "verification")},
                             "kind": "service-feedback", "ownerReview": case.get("ownerReview", {}), "authority": "unverified-proposal"})
+        from ..domain.opinion_memory import current_question
+        for record in records:
+            if record.get("kind") == "brain-case":
+                record["approvedOpinion"] = current_question(record)
         return records
 
     @staticmethod

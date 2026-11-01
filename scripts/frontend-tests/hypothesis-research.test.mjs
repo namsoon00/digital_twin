@@ -3,6 +3,17 @@ import assert from 'node:assert/strict';
 import { renderHypothesisStudyReadiness, renderHypothesisQualityReport } from '../../public/modules/experiments/evolution.mjs';
 import { questionAssessmentView, questionPerformanceView } from '../../public/modules/research/question-assessment.mjs';
 
+test('approved opinion view keeps evidence support separate from change and excludes the latest rejected draft', () => {
+  const row = {approvedOpinion:{status:'reviewed', answerStatus:'partial', answer:'승인된 답변',
+    judgmentImpact:{evidenceRelation:'supports', opinionChange:'unchanged', reason:'같은 원문이 기존 설명을 계속 지지합니다.'}},
+    questionAssessment:{status:'answered', answer:'채택되지 않은 새 초안'}};
+  const html = questionAssessmentView(row);
+  assert.match(html,/승인된 답변/); assert.match(html,/근거가 설명을 뒷받침/); assert.match(html,/이전 의견 유지/);
+  assert.doesNotMatch(html,/채택되지 않은 새 초안/);
+  row.approvedOpinion = {status:'unavailable'};
+  assert.doesNotMatch(questionAssessmentView(row),/채택되지 않은 새 초안/);
+});
+
 test('question progress distinguishes provider quota and internal budget without claiming delivery', () => {
   const workflow = {stages:[{label:'자료 확보',detail:'질문에 연결된 근거 1건'},
     {label:'질문 답변',detail:'부분 답변 보존 · 남은 항목 확인 필요'}],

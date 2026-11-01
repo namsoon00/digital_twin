@@ -1,5 +1,7 @@
 {
   "tests": [
+    {"file": "test_reviewed_opinion_memory.py", "tier": "contract", "core": true},
+    {"file": "test_reviewed_opinion_storage.py", "tier": "integration", "core": true},
     {"file": "test_history_archive.py", "tier": "integration", "core": true},
     {"file": "test_storage_durability.py", "tier": "unit", "core": true},
     {"file": "test_prepared_outcome_inputs.py", "tier": "integration", "core": true},

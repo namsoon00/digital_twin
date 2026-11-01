@@ -161,6 +161,25 @@ def render_ai_observation(result, *, sent_at="", debug_number=""):
             citations.append("• " + title + " · " + source_label(fact) + dated_suffix)
     if citations:
         lines += ["", "함께 확인한 근거", *citations[:3]]
+    from digital_twin.modules.ai_orchestration.contracts import opinion_question_contributions
+    contributions = opinion_question_contributions(result)
+    if contributions:
+        lines += ["", "질문에서 확인한 내용"]
+        changes = {"new": "첫 검토 의견", "unchanged": "이전 의견 유지", "strengthened": "이전 의견 강화",
+                   "weakened": "이전 의견 약화", "withdrawn": "이전 의견 철회"}
+        relations = {"supports": "근거가 설명을 뒷받침", "contradicts": "근거가 설명과 충돌",
+                     "mixed": "지지·반대 근거 공존", "insufficient": "판단 근거 부족"}
+        for row in contributions[:2]:
+            lines += ["• 질문: " + row["question"], "확인한 답: " + row["answer"]]
+            if row["kind"] == "prior-answer-context":
+                lines.append("연구 기준 " + clock_label(row["at"]) + " · 이번 설명도 같은 원문을 인용했습니다.")
+            else:
+                impact = row["impact"]
+                lines.append(relations.get(impact.get("evidenceRelation"), "근거 관계 미분류") + " · "
+                             + changes.get(impact.get("opinionChange"), "이전 의견과의 변화 미분류"))
+                lines.append(impact.get("reason", ""))
+            if row["missingRequirements"]:
+                lines.append("아직 확인할 항목: " + " / ".join(row["missingRequirements"][:2]))
     business = {} if focus in {"market", "none"} else result.get("businessResearch") or {}
     if business.get("theses"):
         lines += ["", "사업 가설과 확인할 실적"]

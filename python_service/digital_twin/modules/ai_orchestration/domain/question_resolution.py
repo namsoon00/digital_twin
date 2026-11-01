@@ -42,6 +42,9 @@ def resolution_schema(packet, research):
         item["properties"]["judgmentImpact"] = obj({"effect": choice(["supports", "weakens", "unchanged", "insufficient"]),
             "reason": {"type": "string", "minLength": 8, "maxLength": 500}})
         item["properties"]["missingRequirements"] = {**array({"type": "string", "minLength": 1, "maxLength": 600}), "maxItems": 8}
+        from . import opinion_memory
+        if opinion_memory.enabled(packet):
+            item["properties"]["judgmentImpact"] = opinion_memory.impact_schema()
         item["required"] += ["judgmentImpact", "missingRequirements"]
         from . import question_answer
         if question_answer.enabled(packet):
@@ -94,7 +97,12 @@ def validate_resolutions(value, packet, research, result, required=False):
         elif index != -1:
             raise ValueError("deferred question cannot name a target")
         if current_policy:
-            validate_impact(row["judgmentImpact"])
+            from . import opinion_memory
+            if opinion_memory.enabled(packet):
+                opinion_memory.validate_impact(row["judgmentImpact"], case, packet)
+                validate_impact({k: row["judgmentImpact"][k] for k in ("effect", "reason")})
+            else:
+                validate_impact(row["judgmentImpact"])
             if (case.get("capability") == "research" and reviews[key]["action"] == "answered"
                     and not all((case.get("questionContract") or {}).get(field) for field in ("target", "period", "answerCriterion"))):
                 raise ValueError("question answer requires its original completion contract")

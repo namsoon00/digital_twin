@@ -2,7 +2,8 @@
 import re
 from copy import deepcopy
 
-from ..domain import opinion_memory, execution_lanes, evidence_purpose
+from ..domain import opinion_memory, execution_lanes, evidence_purpose, reliable_retrieval
+from digital_twin.modules.reasoning.contracts import content_hash
 
 
 def quote_blocker(packet):
@@ -33,7 +34,11 @@ def gap_reads(session, packet, research, documents, reports, already_read):
         for gap in unread:
             index = gap.get("requirementIndex", -1)
             if type(index) is int and 0 <= index < len(missing):
-                requirements.append({"caseId": case["caseId"], "requirement": missing[index], "nextAction": gap.get("nextAction", "")})
+                requirement = {"caseId": case["caseId"], "requirement": missing[index], "nextAction": gap.get("nextAction", "")}
+                if reliable_retrieval.enabled(packet):
+                    requirement.update(requirementId=content_hash({"caseId": case["caseId"],
+                        "contract": case.get("questionContract"), "requirement": missing[index]}), requirementIndex=index)
+                requirements.append(requirement)
                 case_ids.add(case["caseId"])
         if unread:
             periods.update(re.findall(r"20\d{2}(?:-\d{2}(?:-\d{2})?)?", str(case.get("questionContract", {}).get("period", ""))))
@@ -62,7 +67,11 @@ def gap_reads(session, packet, research, documents, reports, already_read):
         value = session.read_document(request["factId"]) if request["tool"] == "read_document" else session.read_report(request["factId"], request["metrics"])
         for fact in value.get("facts", []):
             views[fact["id"]] = fact
-        receipts.append({"request": request, "factIds": [r["id"] for r in value.get("facts", [])], "status": "read-needs-assessment"})
-    return views, {"version": "bounded-question-gap-reads-v1", "requirements": deepcopy(requirements[:8]),
+        receipt = {"request": request, "factIds": [r["id"] for r in value.get("facts", [])], "status": "read-needs-assessment"}
+        if reliable_retrieval.enabled(packet):
+            linked_cases = next((set(row.get("caseIds", [])) for row in documents if row["factId"] == request["factId"]), case_ids)
+            receipt["requirementIds"] = [r["requirementId"] for r in requirements[:8] if r["caseId"] in linked_cases]
+        receipts.append(receipt)
+    return views, {"version": "bounded-question-gap-reads-v2" if reliable_retrieval.enabled(packet) else "bounded-question-gap-reads-v1", "requirements": deepcopy(requirements[:8]),
         "reads": receipts, "status": "read-needs-assessment" if receipts else "no-additional-issued-source",
         "authority": "source-read-only-not-answer-completion"}

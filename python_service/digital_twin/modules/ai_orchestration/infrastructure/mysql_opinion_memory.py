@@ -49,6 +49,10 @@ class OpinionMemoryPersistence:
             current = opinion_memory.current_question(case)
             if case.get("worldId") == job["worldId"] and current.get("executionInputId") == result["executionInputId"]:
                 records.append({**current, "kind": "question", "summary": current.get("judgment", {}).get("summary", "")})
+                from ..domain.gap_read_progress import reviewed
+                progress = reviewed(packet, current)
+                if progress:
+                    records[-1]["gapReadProgress"] = progress
         if (result.get("quality", {}).get("status") in {"accepted", "observation-only"}
                 and not result.get("quality", {}).get("errors")):
             records.append({"kind": "market" if job["capability"] == "market-observe" else "research",

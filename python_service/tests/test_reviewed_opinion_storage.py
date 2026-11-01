@@ -17,7 +17,49 @@ class ReviewedOpinionStorageTests(unittest.TestCase):
         self.storage = BrainAgendaStorageTests(); self.storage.setUp(); self.addCleanup(self.storage.tearDown)
         self.control, self.agenda = self.storage.control, self.storage.brain
 
-    def draft(self):
+    def test_opinion_read_receipts_v21_and_v22_survive_progress_storage_and_reject_tampering(self):
+        from test_reliable_opinion_completion import packet
+        from test_efficient_retrieval import decision
+        from digital_twin.modules.ai_orchestration.application.working_retrieval import retrieve_working_evidence
+        from digital_twin.modules.ai_orchestration.domain import reliable_retrieval, opinion_retrieval
+        from digital_twin.modules.reasoning.contracts import ObservationEvidenceSession, quote_clock_assessment
+        from digital_twin.infrastructure.transactions.ai_control_research_knowledge import AIControlResearchKnowledge
+        with self.control.transaction() as connection:
+            self.control.insert(connection, {**self.storage.subject, "capability": "market-observe", "taskId": "opinion-read-proof"})
+        job = self.control.claim()
+        self.control.runtime_settings.update(aiDailyTokenBudget=10000000, aiControlDailyCallBudget=32)
+        for protocol in (opinion_retrieval, reliable_retrieval):
+            value = packet(); value.update(self.storage.subject, taskId=job["taskId"])
+            if protocol is opinion_retrieval:
+                value.pop("retrievalReliabilityPolicy")
+            value["sourceSnapshots"] = {value["worldId"]: value["sourceSnapshotId"]}
+            for fact in value["facts"]:
+                fact.update(symbol=value["symbol"], sourceWorldId=value["worldId"], sourceSnapshotId=value["sourceSnapshotId"])
+                if fact.get("accountId"): fact["accountId"] = value["accountId"]
+            value["quoteAssessment"] = quote_clock_assessment(value["facts"], value["capturedAt"])
+            def save(env):
+                key = self.control.save_execution_input(job, env)
+                call = self.control.begin_call("independent-observation", env["promptHash"], job["taskId"], key)
+                self.control.finish_call(call)
+                return key
+            def choose(env, _):
+                if not env["retrievalContext"]["trace"]:
+                    path = next(p for p in env["retrievalContext"]["readableContextPaths"] if p.endswith("/metricProvenance"))
+                    return decision("read", [{"tool": "read_context", "path": path}])
+                return {**decision("defer"), "missingEvidence": ["비교 기간 원문 주석이 필요합니다."], "blocker": "required-source"}
+            final, _, _, trace = retrieve_working_evidence(ObservationEvidenceSession(value, value["facts"]),
+                value, [], [], choose, save, 262144, max_rounds=2,
+                record_round=lambda step: self.control.save_retrieval_round(job, step))
+            self.assertEqual(protocol.VERSION, final["retrieval"]["version"])
+            result = {"input": final, "retrievalInputIds": [step["inputId"] for step in trace]}
+            with self.control.connect() as connection:
+                self.assertEqual(trace, AIControlResearchKnowledge.read_proof(connection, job, result))
+                forged = deepcopy(result); forged["input"]["retrieval"]["traceHash"] = "changed"
+                with self.assertRaises(ValueError): AIControlResearchKnowledge.read_proof(connection, job, forged)
+                forged = deepcopy(result); forged["input"]["opinionMemoryPolicy"] = "changed"
+                with self.assertRaises(ValueError): AIControlResearchKnowledge.read_proof(connection, job, forged)
+
+    def draft(self, reliable=False):
         from digital_twin.modules.ai_orchestration.domain.insight_quality import local_quality
         p, memories, trace, case, raw = fixture()
         self.control.seed(self.storage.subject); job = self.control.claim(); p["taskId"] = job["taskId"]
@@ -26,6 +68,15 @@ class ReviewedOpinionStorageTests(unittest.TestCase):
                         for key in ("taskId", "executionInputId", "capturedAt", "summary", "hypothesis", "counterEvidence", "quality")})
         with self.agenda.transaction() as connection: self.agenda.save(connection, case, "initial", "created")
         memories[0]["revision"] = case["revision"]; p["questionEvidenceIndex"][0]["revision"] = case["revision"]
+        if reliable:
+            from digital_twin.modules.ai_orchestration.domain import reliable_retrieval, gap_read_progress
+            p["retrievalReliabilityPolicy"] = reliable_retrieval.MARKER
+            p["gapReadWork"] = {"version": "bounded-question-gap-reads-v2", "requirements": [{
+                "caseId": case["caseId"], "requirementId": "original-gap", "requirementIndex": 0,
+                "requirement": "보고 기간의 원문을 확인합니다.", "nextAction": "연결된 원문을 읽습니다."}],
+                "reads": [{"requirementIds": ["original-gap"], "factIds": ["official-document"],
+                    "request": {"tool": "read_document", "factId": "official-document"}, "status": "read-needs-assessment"}]}
+            p["gapReadProgress"] = gap_read_progress.coverage(p)
         author = freeze_execution_input(p, [], memories, retrieval_trace=trace)
         author_id = self.control.save_execution_input(job, author)
         call = self.control.begin_call("independent-observation", author["promptHash"], job["taskId"], author_id)
@@ -40,7 +91,7 @@ class ReviewedOpinionStorageTests(unittest.TestCase):
         return job, case, result
 
     def test_approved_question_is_archived_in_same_transaction_and_rejected_draft_does_not_replace_it(self):
-        job, case, result = self.draft()
+        job, case, result = self.draft(reliable=True)
         original = self.control.record_opinions
         def fail(connection, job, result):
             original(connection, job, result)
@@ -59,6 +110,9 @@ class ReviewedOpinionStorageTests(unittest.TestCase):
         self.assertEqual("partial", saved["answerStatus"])
         self.assertEqual(result["executionInputId"], saved["executionInputId"])
         self.assertEqual("new", saved["judgmentImpact"]["opinionChange"])
+        self.assertEqual("partial", saved["gapReadProgress"]["answerStatus"])
+        self.assertEqual(saved["missingRequirements"], saved["gapReadProgress"]["remainingRequirements"])
+        self.assertEqual(saved["researchReviewInputId"], saved["gapReadProgress"]["reviewInputId"])
         # Several newer rejected completions must not occupy the LIMIT slots.
         with self.control.transaction() as c:
             for i in range(5):

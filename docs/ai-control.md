@@ -2626,3 +2626,40 @@ wait counts, the oldest reservation and current worker activity separately
 from the existing saved-judgment timestamps and verified delivery receipts.
 Status reads reuse the existing schema; managed startup owns initialization
 and index migration. A dashboard request does not repeat schema setup.
+
+## Reliable opinion completion (2026-11-01)
+
+New executions use retrieval v22 and author/repair/review v36/v32/v25. Frozen
+v21/v35 and earlier artifacts retain their original prompts and schemas.
+The progress transaction now accepts both opinion retrieval versions, verifies
+their completed-call receipts, issued context paths, source scope and immutable
+trace, and rejects changed evidence. A successful read is not an authored answer.
+
+Single-question `defer` copies the exact scoped missing requirements into the
+legacy global list, just as `assess` does. No requirement is invented, dropped or
+semantically rewritten and no model correction is spent on this normalization.
+The final retrieval round permits completion or deferral, with no further reads.
+The remaining trace reserve shrinks as the trace grows for question research as
+well as market work; the required baseline does not pay a second discovery
+reserve. Source and prompt size limits still apply. An oversized required
+baseline becomes an explicit `required-input-budget` wait before any model call;
+safe byte counts and a packet hash explain the limit without storing raw errors.
+The versioned policy renews failed work once; clocks and self-authored text do
+not reopen unchanged research repeatedly.
+
+The new prompt encoding minifies JSON and represents exact repeated containers
+with backward `$sameInput` JSON pointers. A deterministic expansion must equal
+the original payload; original facts, contrary evidence, question contracts and
+memory stay in the frozen artifact. A source-supplied reserved key disables
+reference encoding. Author, repair and independent review share this contract,
+and retain the prior citation and publication validators. This reduces duplicate
+input, not evidence coverage, and does not establish model accuracy or token
+savings until actual usage is recorded.
+
+Targeted gap reads carry stable requirement IDs and source receipts. The author
+input distinguishes read-but-unselected, selected-but-unassessed and no additional
+issued source. Approved question archives retain this coverage alongside the
+reviewed answer status, remaining requirements and review input ID. Reading a
+source never automatically closes a requirement. The prompt asks for competing
+explanations and supported links to company cash flows and holding relevance;
+it cannot manufacture an economic cause, recommendation or delivery approval.

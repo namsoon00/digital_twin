@@ -58,6 +58,8 @@ def material_key(packet, research, *, evidence_identity=None):
               "authorPolicy": LANE_PROMPT_VERSION,
               "account": packet["accountId"], "symbol": packet["symbol"], "world": packet["worldId"],
               "binding": packet.get("reasoningBinding", {}).get("deploymentId")}
+    if packet.get("retrievalReliabilityPolicy"):
+        common["retrievalReliabilityPolicy"] = packet["retrievalReliabilityPolicy"]
     if packet.get("evidenceReadPolicy"):
         common["readPolicy"] = packet["evidenceReadPolicy"]
     if packet.get("evidenceReadCompletionPolicy"):

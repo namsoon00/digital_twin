@@ -165,6 +165,8 @@ class AIControlService:
                         packet["questionPurposePolicy"] = purpose_policy
                         from ..domain.opinion_memory import VERSION as opinion_policy
                         packet["opinionMemoryPolicy"] = opinion_policy
+                        from ..domain.reliable_retrieval import MARKER as completion_policy
+                        packet["retrievalReliabilityPolicy"] = completion_policy
                         if lanes.market(packet):
                             packet["reviewedQuestionContext"] = opinion_memory.question_context(research)
                         if not lanes.market(packet):
@@ -252,12 +254,14 @@ class AIControlService:
                                 missing or ["조회 범위 또는 호출 한도 안에서 필요한 근거를 선택하지 못했습니다."])
                             state.update(evidence_purpose.waiting_metadata(waiting_source_packet, retrieval_trace, waiting_source_research))
                             return self.complete_wait(job, packet, state, retrieval_trace)
+                    stage = "pre-author-quote-check"
                     expired_quote = evidence_purpose.expired_current_quote(packet, stamp())
                     if expired_quote:
                         state = disposition(packet, retry_identity, "data-wait", ["조회 중 시세 유효시간이 지나 새 원천 시세를 기다립니다."])
                         state.update(reasonCode="current-quote", stage="pre-author-quote-check",
                             quoteWaitKey=evidence_purpose.quote_wait_key({**waiting_source_packet, "quoteAssessment": expired_quote}, waiting_source_research))
                         return self.complete_wait(job, packet, state, retrieval_trace)
+                    stage = "business-memory-refresh"
                     from ..domain.business_research import evaluate_thesis
                     from copy import deepcopy
                     business_memory = []
@@ -269,6 +273,7 @@ class AIControlService:
                             business_memory.append(deepcopy(memory))
                     packet["businessThesisMemory"] = business_memory
                     if knowledge:
+                        stage = "knowledge-refresh"
                         refreshed = self.knowledge_refresh(knowledge, packet)
                         packet["researchKnowledge"] = lanes.compact_knowledge(refreshed) if lanes.identified(packet) else refreshed
                     stage = "input-freeze"
@@ -461,11 +466,19 @@ class AIControlService:
         except Exception as error:
             # Persist a safe category, never raw provider/credential-bearing errors.
             reason, diagnostic = task_failure(stage, error)
+            if isinstance(error, EvidenceContractError) and getattr(error, "required_baseline_budget", False):
+                state = disposition(packet, retry_identity, "retrieval-blocked",
+                    ["필수 근거와 기억을 보존한 입력이 용량 한도를 넘어 조회를 시작하지 않았습니다."])
+                state.update(reasonCode="required-input-budget", stage="baseline-admission",
+                    budget=getattr(error, "budget_diagnostic", {}), modelCalled=False)
+                return self.complete_wait(job, packet, state, [])
             if isinstance(error, (EvidenceContractError, EvidenceReadError, AIExecutionError)):
                 reason = error.code
             if isinstance(error, (EvidenceContractError, EvidenceReadError)):
                 diagnostic.update(category="evidence-read" if isinstance(error, EvidenceReadError) else "evidence-contract",
                                   reasonCode=error.code)
+                if getattr(error, "budget_diagnostic", None):
+                    diagnostic["budget"] = error.budget_diagnostic
             failure_result = {"failure": diagnostic}
             stable_failure = ("packet" in locals() and lanes.identified(packet) and "retry_identity" in locals()
                               and (diagnostic.get("category") == "validation" or isinstance(error, EvidenceContractError)))

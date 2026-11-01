@@ -2,7 +2,7 @@
 from ..domain import external_influence, market_explanation, price_investigation
 from digital_twin.modules.reasoning.contracts import OBSERVATION_QUOTE_KINDS
 
-from ..domain import opinion_retrieval, opinion_memory
+from ..domain import reliable_retrieval, opinion_retrieval, opinion_memory
 from copy import deepcopy
 import json
 from digital_twin.modules.reasoning.contracts import EvidenceContractError, content_hash, validate_evidence_packet, EVIDENCE_PACKET_MAX_BYTES, source_packet_bytes
@@ -44,14 +44,14 @@ def author_packet(session, packet, ids, seen, research, trace, status, reserve=0
         result = evidence_purpose.annotate(result)
         decision = next((row["decision"] for row in reversed(trace) if row.get("decision")), {})
         result["analysisPurpose"] = decision.get("purpose", "")
-    if contract in {scoped_retrieval, indexed_retrieval, question_retrieval, lane_retrieval, bounded_retrieval, purpose_retrieval, compact_retrieval, quality_retrieval, completion_retrieval, business_retrieval, company_retrieval, efficient_retrieval, question_gap_retrieval, external_influence_retrieval, price_investigation_retrieval, market_explanation_retrieval, opinion_retrieval}:
+    if contract in {scoped_retrieval, indexed_retrieval, question_retrieval, lane_retrieval, bounded_retrieval, purpose_retrieval, compact_retrieval, quality_retrieval, completion_retrieval, business_retrieval, company_retrieval, efficient_retrieval, question_gap_retrieval, external_influence_retrieval, price_investigation_retrieval, market_explanation_retrieval, opinion_retrieval, reliable_retrieval}:
         result["researchScope"] = contract.research_scope(trace, status)
     if question_purpose.enabled(result):
         result["questionSourceHandoff"] = source_handoff
     result["businessThesisMemory"] = []
     for row in research:
         if row.get("kind") == "business-thesis":
-            value = memory_reference.brief(row, "memories") if contract in {indexed_retrieval, question_retrieval, lane_retrieval, bounded_retrieval, purpose_retrieval, compact_retrieval, quality_retrieval, completion_retrieval, business_retrieval, company_retrieval, efficient_retrieval, question_gap_retrieval, external_influence_retrieval, price_investigation_retrieval, market_explanation_retrieval, opinion_retrieval} else deepcopy(row)
+            value = memory_reference.brief(row, "memories") if contract in {indexed_retrieval, question_retrieval, lane_retrieval, bounded_retrieval, purpose_retrieval, compact_retrieval, quality_retrieval, completion_retrieval, business_retrieval, company_retrieval, efficient_retrieval, question_gap_retrieval, external_influence_retrieval, price_investigation_retrieval, market_explanation_retrieval, opinion_retrieval, reliable_retrieval} else deepcopy(row)
             observations = evaluate_thesis(row, result)
             value.update(reviewDue=value.get("reviewDue", False) or observations != value.get("observations", []), observations=observations)
             result["businessThesisMemory"].append(value)
@@ -76,7 +76,20 @@ def author_packet(session, packet, ids, seen, research, trace, status, reserve=0
             packet["priceInvestigationScope"], seen, {row["id"] for row in result["facts"]})
     if reserve:
         result["pendingTraceBudget"] = " " * reserve
-    validate_evidence_packet(result)
+    from ..domain.gap_read_progress import coverage as gap_coverage
+    if result.get("gapReadWork", {}).get("version") == "bounded-question-gap-reads-v2":
+        result["gapReadProgress"] = gap_coverage(result)
+    try:
+        validate_evidence_packet(result)
+    except EvidenceContractError as error:
+        if "exceeds-context-budget" in error.code:
+            # Safe numeric diagnostics survive even before the first frozen
+            # model input. Never persist rejected source text as an error.
+            error.budget_diagnostic = {"scope": "source-packet", "limitBytes": EVIDENCE_PACKET_MAX_BYTES,
+                "usedBytes": source_packet_bytes(result), "factCount": len(result["facts"]),
+                "factBytes": byte_size(result["facts"]), "reservedBytes": reserve,
+                "packetHash": content_hash(result), "snapshotId": result.get("sourceSnapshotId")}
+        raise
     return result
 
 
@@ -88,8 +101,8 @@ def retrieve_working_evidence(session, packet, history, research, decide, save_i
         packet = {**packet, "priceMoveAnchor": anchor, "priceInvestigationScope": scope}
     indexed = packet.get("memoryReadPolicy") == memory_reference.VERSION
     question_work = question_assessment.enabled(packet)
-    contract = opinion_retrieval if opinion_memory.enabled(packet) else question_gap_retrieval if packet.get("questionGapPolicy") == question_gap_retrieval.MARKER else price_investigation_retrieval if price_investigation.enabled(packet) else market_explanation_retrieval if market_explanation.enabled(packet) else external_influence_retrieval if external_influence.enabled(packet) else efficient_retrieval if packet.get("companyResearchPolicy") == "company-research-cycle-v1" else business_retrieval if business_insight.enabled(packet) else completion_retrieval if evidence_completion.enabled(packet) else quality_retrieval if judgment_policy.enabled(packet) else compact_retrieval if evidence_purpose.enabled(packet) else bounded_retrieval if evidence_readiness.enabled(packet) else lane_retrieval if execution_lanes.identified(packet) else question_retrieval if question_work else indexed_retrieval if indexed else scoped_retrieval if packet.get("researchKnowledge") else legacy_contract
-    scoped = contract in {scoped_retrieval, indexed_retrieval, question_retrieval, lane_retrieval, bounded_retrieval, purpose_retrieval, compact_retrieval, quality_retrieval, completion_retrieval, business_retrieval, company_retrieval, efficient_retrieval, question_gap_retrieval, external_influence_retrieval, price_investigation_retrieval, market_explanation_retrieval, opinion_retrieval}
+    contract = reliable_retrieval if reliable_retrieval.enabled(packet) else opinion_retrieval if opinion_memory.enabled(packet) else question_gap_retrieval if packet.get("questionGapPolicy") == question_gap_retrieval.MARKER else price_investigation_retrieval if price_investigation.enabled(packet) else market_explanation_retrieval if market_explanation.enabled(packet) else external_influence_retrieval if external_influence.enabled(packet) else efficient_retrieval if packet.get("companyResearchPolicy") == "company-research-cycle-v1" else business_retrieval if business_insight.enabled(packet) else completion_retrieval if evidence_completion.enabled(packet) else quality_retrieval if judgment_policy.enabled(packet) else compact_retrieval if evidence_purpose.enabled(packet) else bounded_retrieval if evidence_readiness.enabled(packet) else lane_retrieval if execution_lanes.identified(packet) else question_retrieval if question_work else indexed_retrieval if indexed else scoped_retrieval if packet.get("researchKnowledge") else legacy_contract
+    scoped = contract in {scoped_retrieval, indexed_retrieval, question_retrieval, lane_retrieval, bounded_retrieval, purpose_retrieval, compact_retrieval, quality_retrieval, completion_retrieval, business_retrieval, company_retrieval, efficient_retrieval, question_gap_retrieval, external_influence_retrieval, price_investigation_retrieval, market_explanation_retrieval, opinion_retrieval, reliable_retrieval}
     if question_work:
         research = question_assessment.prepare(research, session.question_work_inventory())
     if scoped:
@@ -105,11 +118,11 @@ def retrieve_working_evidence(session, packet, history, research, decide, save_i
             for source in question_source_handoff.source_references(case):
                 if source.get("evidenceId"):
                     sources.setdefault(source["evidenceId"], []).append(case["caseId"])
-    documents = session.question_document_index(sources, document_views=True) if question_work or contract in {lane_retrieval, bounded_retrieval, purpose_retrieval, compact_retrieval, quality_retrieval, completion_retrieval, business_retrieval, company_retrieval, efficient_retrieval, question_gap_retrieval, external_influence_retrieval, price_investigation_retrieval, market_explanation_retrieval, opinion_retrieval} else session.question_document_index(sources)
+    documents = session.question_document_index(sources, document_views=True) if question_work or contract in {lane_retrieval, bounded_retrieval, purpose_retrieval, compact_retrieval, quality_retrieval, completion_retrieval, business_retrieval, company_retrieval, efficient_retrieval, question_gap_retrieval, external_influence_retrieval, price_investigation_retrieval, market_explanation_retrieval, opinion_retrieval, reliable_retrieval} else session.question_document_index(sources)
     if business_insight.enabled(packet):
         baseline = session.business_baseline(documents, document_views=True, period_priority=True)
     else:
-        baseline = session.business_baseline(documents, document_views=True) if question_work or contract in {lane_retrieval, bounded_retrieval, purpose_retrieval, compact_retrieval, quality_retrieval, completion_retrieval, business_retrieval, company_retrieval, efficient_retrieval, question_gap_retrieval, external_influence_retrieval, price_investigation_retrieval, market_explanation_retrieval, opinion_retrieval} else session.business_baseline(documents)
+        baseline = session.business_baseline(documents, document_views=True) if question_work or contract in {lane_retrieval, bounded_retrieval, purpose_retrieval, compact_retrieval, quality_retrieval, completion_retrieval, business_retrieval, company_retrieval, efficient_retrieval, question_gap_retrieval, external_influence_retrieval, price_investigation_retrieval, market_explanation_retrieval, opinion_retrieval, reliable_retrieval} else session.business_baseline(documents)
     packet = {**packet, "businessEvidence": baseline}
     from ..domain.research_evidence_use import answered_research_scope
     scope = answered_research_scope(research)
@@ -192,6 +205,8 @@ def retrieve_working_evidence(session, packet, history, research, decide, save_i
         reserve = 16384 if evidence_completion.enabled(packet) else 8192  # Reserve the final decision's reason, selection and audit metadata.
         if market_explanation.enabled(packet):
             reserve = market_explanation.trace_reserve(contract, trace)
+        if reliable_retrieval.enabled(packet):
+            reserve = reliable_retrieval.reserve(trace)
         candidate = author_packet(session, packet, selected, {**seen, **active}, research, trace, "round-limit", contract=contract)
         source_bytes = source_packet_bytes(candidate)
         context.update(tools.context(), trace=trace, callsRemainingAfterThis=rounds-index-1,
@@ -206,7 +221,7 @@ def retrieve_working_evidence(session, packet, history, research, decide, save_i
             selectedFactIds=sorted(selected),
             knownFacts=[{"factId": key, "category": row["evidenceCategory"], "kind": row["kind"],
                          "bytes": byte_size(row), "view": row.get("evidenceView", {})} for key, row in seen.items()])
-        if contract in {bounded_retrieval, purpose_retrieval, compact_retrieval, quality_retrieval, completion_retrieval, business_retrieval, company_retrieval, efficient_retrieval, question_gap_retrieval, external_influence_retrieval, price_investigation_retrieval, market_explanation_retrieval, opinion_retrieval}:
+        if contract in {bounded_retrieval, purpose_retrieval, compact_retrieval, quality_retrieval, completion_retrieval, business_retrieval, company_retrieval, efficient_retrieval, question_gap_retrieval, external_influence_retrieval, price_investigation_retrieval, market_explanation_retrieval, opinion_retrieval, reliable_retrieval}:
             context.update(tools.issued_context())
         try:
             envelope = contract.freeze(current, context, prompt_bytes)
@@ -236,6 +251,8 @@ def retrieve_working_evidence(session, packet, history, research, decide, save_i
                     admission_status = {"finish": "ready", "research": "research-ready", "assess": "assessment-ready",
                                         "defer": "deferred"}.get(decision["action"], "round-limit")
                 admission_reserve = market_explanation.trace_reserve(contract, admission_trace) if market_explanation.enabled(packet) else reserve
+                if reliable_retrieval.enabled(packet):
+                    admission_reserve = reliable_retrieval.reserve(admission_trace)
                 proposed = author_packet(session, packet, chosen, seen, research, admission_trace, admission_status, admission_reserve, contract)
                 adjusted = {row["caseId"]: row for row in proposed["businessThesisMemory"]}
                 required_research = [adjusted.get(row.get("caseId"), row) if row.get("kind") == "business-thesis" else row
@@ -246,7 +263,7 @@ def retrieve_working_evidence(session, packet, history, research, decide, save_i
             except EvidenceContractError as error:
                 if "exceeds-context-budget" not in error.code:
                     raise
-                if contract in {lane_retrieval, bounded_retrieval, purpose_retrieval, compact_retrieval, quality_retrieval, completion_retrieval, business_retrieval, company_retrieval, efficient_retrieval, question_gap_retrieval, external_influence_retrieval, price_investigation_retrieval, market_explanation_retrieval, opinion_retrieval}:
+                if contract in {lane_retrieval, bounded_retrieval, purpose_retrieval, compact_retrieval, quality_retrieval, completion_retrieval, business_retrieval, company_retrieval, efficient_retrieval, question_gap_retrieval, external_influence_retrieval, price_investigation_retrieval, market_explanation_retrieval, opinion_retrieval, reliable_retrieval}:
                     # This is an admission limit, not malformed model output.
                     # Save the valid choice and stop without a paid correction.
                     step.update(status="valid", decision=decision)
@@ -256,7 +273,7 @@ def retrieve_working_evidence(session, packet, history, research, decide, save_i
                 raise ReadRequestError([issue("selectedFactIds", "최종 입력 한도 초과: 질문과 관계 없는 선택을 해제하거나 보고서 지표를 발췌하세요")])
             plans = []
             for i, request in enumerate(decision["requests"]):
-                if request["tool"] == "read_context" and contract in {compact_retrieval, quality_retrieval, completion_retrieval, business_retrieval, company_retrieval, efficient_retrieval, question_gap_retrieval, external_influence_retrieval, price_investigation_retrieval, market_explanation_retrieval, opinion_retrieval}:
+                if request["tool"] == "read_context" and contract in {compact_retrieval, quality_retrieval, completion_retrieval, business_retrieval, company_retrieval, efficient_retrieval, question_gap_retrieval, external_influence_retrieval, price_investigation_retrieval, market_explanation_retrieval, opinion_retrieval, reliable_retrieval}:
                     getattr(contract, "context_view", retrieval_view).read(current, context, request)  # Validate issued path before any reads.
                     plans.append(None)
                 elif request["tool"] == "read_document":
@@ -287,7 +304,7 @@ def retrieve_working_evidence(session, packet, history, research, decide, save_i
         if decision["action"] != "read":
             status = "ready" if decision["action"] == "finish" else "assessment-ready" if decision["action"] == "assess" else "research-ready" if decision["action"] == "research" else "deferred"
             if status == "ready" and not company_value.available(proposed) and (bounded_retrieval.price_only_finish(decision, seen)
-                    if contract in {bounded_retrieval, purpose_retrieval, compact_retrieval, quality_retrieval, completion_retrieval, business_retrieval, company_retrieval, efficient_retrieval, question_gap_retrieval, external_influence_retrieval, price_investigation_retrieval, market_explanation_retrieval, opinion_retrieval} else not any(seen[key]["kind"] not in OBSERVATION_QUOTE_KINDS for key in selected)):
+                    if contract in {bounded_retrieval, purpose_retrieval, compact_retrieval, quality_retrieval, completion_retrieval, business_retrieval, company_retrieval, efficient_retrieval, question_gap_retrieval, external_influence_retrieval, price_investigation_retrieval, market_explanation_retrieval, opinion_retrieval, reliable_retrieval} else not any(seen[key]["kind"] not in OBSERVATION_QUOTE_KINDS for key in selected)):
                 status = "deferred"
             if status == "ready" and business_progress.report_gaps(packet, [seen[key] for key in selected], decision.get("purpose")):
                 status = "deferred"
@@ -321,6 +338,8 @@ def retrieve_working_evidence(session, packet, history, research, decide, save_i
                         trial_trace = trace + [{**step, "reads": step["reads"] + [{"request": request, "result": result}]}]
                         try:
                             trial_reserve = market_explanation.trace_reserve(contract, trial_trace) if market_explanation.enabled(packet) else reserve
+                            if reliable_retrieval.enabled(packet):
+                                trial_reserve = reliable_retrieval.reserve(trial_trace)
                             trial = author_packet(session, packet, selected, prospective, research, trial_trace,
                                 "round-limit", trial_reserve, contract)
                             trial_memories = merge_recalled(continuity["researchResults"], recalled["memories"])
@@ -349,7 +368,7 @@ def retrieve_working_evidence(session, packet, history, research, decide, save_i
         if evidence_completion.enabled(packet) and any(read["result"].get("status") == "context-budget" for read in step["reads"]):
             status = "context-budget"
             break
-        if contract in {compact_retrieval, quality_retrieval, completion_retrieval, business_retrieval, company_retrieval, efficient_retrieval, question_gap_retrieval, external_influence_retrieval, price_investigation_retrieval, market_explanation_retrieval, opinion_retrieval} and step["reads"] and all(
+        if contract in {compact_retrieval, quality_retrieval, completion_retrieval, business_retrieval, company_retrieval, efficient_retrieval, question_gap_retrieval, external_influence_retrieval, price_investigation_retrieval, market_explanation_retrieval, opinion_retrieval, reliable_retrieval} and step["reads"] and all(
                 read["result"].get("status") == "repeated-read" for read in step["reads"]):
             status = "repeated-read"
             break  # Identical requests cannot create a paid third decision.

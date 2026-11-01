@@ -14,6 +14,12 @@ PLAN_REASONS = {
     "at most one hypothesis development question is allowed": "development-count",
     "current verified graph facts unavailable": "current-facts-unavailable",
     "research progress disposition changed": "retrieval-receipt-disposition",
+    "research progress input scope or trace mismatch": "retrieval-receipt-scope",
+    "research progress requires bounded completed reads": "retrieval-receipt-missing",
+    "research progress requires completed frozen read proof": "retrieval-receipt-call-proof",
+    "research progress evidence changed after capture": "retrieval-receipt-evidence",
+    "research progress question scope changed": "retrieval-receipt-question",
+    "research progress report requirements changed": "retrieval-receipt-requirements",
     **{"AI plan requires bounded " + key: "narrative-shape" for key in
        ("summary", "hypothesis", "counterEvidence", "comparison")},
 }

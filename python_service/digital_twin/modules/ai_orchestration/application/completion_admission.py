@@ -14,8 +14,9 @@ def admit_baseline(session, packet, views, research, history, prompt_bytes, cont
     from .working_retrieval import author_packet, byte_size
     from ..domain.execution_input import freeze_execution_input
     original = deepcopy(packet)
-    from ..domain import market_explanation
-    reserve = RESERVE_BYTES + (market_explanation.DISCOVERY_RESERVE_BYTES if market_explanation.enabled(packet) else 0)
+    from ..domain import market_explanation, reliable_retrieval
+    reserve = (reliable_retrieval.reserve([]) if reliable_retrieval.enabled(packet) else
+               RESERVE_BYTES + (market_explanation.DISCOVERY_RESERVE_BYTES if market_explanation.enabled(packet) else 0))
     business = original['businessEvidence']['factIds']
     value = original.get('companyValueEvidence', {})
     value_ids = value.get('factIds', [])
@@ -54,7 +55,12 @@ def admit_baseline(session, packet, views, research, history, prompt_bytes, cont
         return result
 
     # Required clocks, prior delivery and question contracts are never truncated.
-    accepted = build()
+    try:
+        accepted = build()
+    except EvidenceContractError as error:
+        if reliable_retrieval.enabled(packet) and budget_error(error):
+            error.required_baseline_budget = True
+        raise
     available = [group for group in groups if views[group[0]].get('valuationDecisionEligible') is True]
     blocked = [group for group in groups if group not in available]
     # Usable values and original business sources precede blocked calculations.

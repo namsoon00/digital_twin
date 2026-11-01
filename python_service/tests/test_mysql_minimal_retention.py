@@ -192,6 +192,161 @@ class LifecycleBaselineConnection(LifecycleArchiveConnection):
 
 
 class MySQLMinimalRetentionTests(unittest.TestCase):
+    def test_source_snapshot_scan_preserves_lineage_and_resumes_bounded_packets(self):
+        import os
+        import tempfile
+        from pathlib import Path
+        from dataclasses import replace
+        from unittest.mock import patch
+        from pymysql.cursors import DictCursor
+        from pymysql.err import OperationalError
+        from mysql_fixtures import mysql_test_connection
+        from digital_twin.infrastructure.mysql_operational_connection import MYSQL_SCHEMA, MySQLConnectionProxy
+        from digital_twin.infrastructure.history_archive import LocalHistoryArchive
+        from digital_twin.infrastructure.mysql_history_archive import read_archived_row
+
+        with patch.dict(os.environ, {'MYSQL_TEST_DATABASE': 'orbit_alpha_test_source_retention'}):
+            raw = mysql_test_connection()
+        raw.cursorclass = DictCursor
+        raw.autocommit(True)
+        connection = MySQLConnectionProxy(raw)
+        self.addCleanup(connection.close)
+        tables = ('verified_reasoning_source_snapshots', 'storage_archive_records',
+                  'mysql_retention_scan_cursors', 'reasoning_engine_jobs', 'ontology_reasoning_mailbox_events')
+        for table in tables:
+            connection.execute('DROP TABLE IF EXISTS ' + table)
+        for table in tables[:3]:
+            connection.execute(next(sql for sql in MYSQL_SCHEMA if 'CREATE TABLE IF NOT EXISTS ' + table + ' (' in sql))
+        connection.execute('CREATE TABLE reasoning_engine_jobs (job_id VARCHAR(191) PRIMARY KEY, '
+            'source_snapshot_id VARCHAR(191), job_status VARCHAR(40), '
+            'KEY source_status (source_snapshot_id,job_status)) ENGINE=InnoDB')
+        connection.execute('CREATE TABLE ontology_reasoning_mailbox_events (event_id VARCHAR(191) PRIMARY KEY, '
+            'source_snapshot_id VARCHAR(191), state VARCHAR(40), '
+            'KEY source_state (source_snapshot_id,state)) ENGINE=InnoDB')
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        archive = LocalHistoryArchive(Path(temporary.name), minimum_free_bytes=0)
+        archive_factory = patch('digital_twin.infrastructure.mysql_history_archive.archive_for_connection', return_value=archive)
+        archive_factory.start()
+        self.addCleanup(archive_factory.stop)
+        policy = replace(mysql_minimal_retention_policy({}), batch_size=100)
+        old, cutoff = '2026-01-01T00:00:00Z', '2026-10-01T00:00:00Z'
+        execute, reads = connection.execute, []
+        def budget(**overrides):
+            return {'started': time.monotonic(), 'maxSeconds': 30,
+                    'remainingBytes': 1000000, 'deletedBytes': 0, **overrides}
+        def insert(key, account='account-a', created=old):
+            execute('INSERT INTO verified_reasoning_source_snapshots '
+                '(snapshot_id,account_id,generated_at,fingerprint,symbols_json,payload_json,created_at,updated_at) '
+                'VALUES (%s,%s,%s,%s,%s,%s,%s,%s)',
+                (key, account, key, 'a' * 64, '[]', json.dumps({'source': key, 'body': 'x' * 2048}), created, created))
+        def remaining():
+            return {r['snapshot_id'] for r in execute('SELECT snapshot_id FROM verified_reasoning_source_snapshots').fetchall()}
+        def position():
+            return execute('SELECT after_id FROM mysql_retention_scan_cursors WHERE profile=%s AND policy_name=%s',
+                (policy.profile, 'reasoningSourceSnapshots:terminal')).fetchone()
+        def reset():
+            for table in tables:
+                execute('DELETE FROM ' + table)
+        def trace(sql, params=()):
+            if sql.startswith('SELECT') and 'verified_reasoning_source_snapshots' in sql and ('OCTET_LENGTH' in sql or 'SELECT snapshot_id, created_at' in sql or '*/ snapshot_id, created_at' in sql):
+                reads.append((sql, params))
+            return execute(sql, params)
+        def turn(turn_budget=None):
+            with patch.object(connection, 'execute', side_effect=trace):
+                return MySQLMinimalRetentionRepository(connection, candidate_query_timeout_ms=1500)._delete_reasoning_source_snapshots(
+                    policy, turn_budget if turn_budget is not None else budget(), cutoff)
+
+        with self.subTest(case='protected prefixes, account evidence and exact archive readback'):
+            protected = set()
+            for index in range(12):
+                key = 'protected-' + str(index).zfill(2)
+                protected.add(key)
+                insert(key, 'account-' + str(index % 2))
+                if index < 8:
+                    status = ('queued', 'retry', 'processing', 'awaiting_world_projection')[index % 4]
+                    execute('INSERT INTO reasoning_engine_jobs VALUES (%s,%s,%s)', (key, key, status))
+                else:
+                    execute('INSERT INTO ontology_reasoning_mailbox_events VALUES (%s,%s,%s)',
+                        (key, key, ('pending', 'direct-pending')[index % 2]))
+            originals = {}
+            for key, account in (('z-expired-a', 'account-a'), ('z-expired-b', 'account-b')):
+                insert(key, account)
+                originals[key] = execute('SELECT * FROM verified_reasoning_source_snapshots WHERE snapshot_id=%s', (key,)).fetchone()
+            insert('recent', created=cutoff)
+            self.assertEqual(0, turn()['deleted'])
+            self.assertEqual('protected-07', position()['after_id'])
+            self.assertEqual(2, turn()['deleted'])
+            self.assertEqual(protected | {'recent'}, remaining())
+            self.assertEqual(0, turn()['deleted'])
+            self.assertEqual('', position()['after_id'])
+            for key, original in originals.items():
+                self.assertEqual(original, read_archived_row(connection, 'verified_reasoning_source_snapshots',
+                                                            {'snapshot_id': key}, archive=archive))
+            self.assertEqual(2, execute('SELECT COUNT(*) AS n FROM storage_archive_records WHERE evicted=1').fetchone()['n'])
+            for sql, params in reads:
+                if 'OCTET_LENGTH' in sql:
+                    self.assertIn('WHERE snapshot_id = %s', sql)
+                    self.assertEqual(2, len(params))
+                else:
+                    self.assertNotIn('payload_json', sql)
+                    self.assertNotIn('NOT EXISTS', sql)
+                    self.assertLessEqual(params[-1], 8)
+            execute("UPDATE reasoning_engine_jobs SET job_status='completed'")
+            execute("UPDATE ontology_reasoning_mailbox_events SET state='done'")
+            self.assertEqual(12, turn()['deleted'] + turn()['deleted'])
+            self.assertEqual({'recent'}, remaining())
+
+        with self.subTest(case='claims and clock changes after selection block eviction'):
+            reset()
+            for key in ('claim-job', 'claim-mailbox', 'renewed'):
+                insert(key)
+            def race(sql, params=()):
+                if sql.startswith('DELETE FROM `verified_reasoning_source_snapshots`'):
+                    key = params[0]
+                    if key == 'claim-job':
+                        execute("INSERT INTO reasoning_engine_jobs VALUES (%s,%s,'processing')", (key, key))
+                    elif key == 'claim-mailbox':
+                        execute("INSERT INTO ontology_reasoning_mailbox_events VALUES (%s,%s,'direct-pending')", (key, key))
+                    else:
+                        execute('UPDATE verified_reasoning_source_snapshots SET created_at=%s WHERE snapshot_id=%s', (cutoff, key))
+                return execute(sql, params)
+            with patch.object(connection, 'execute', side_effect=race):
+                result = MySQLMinimalRetentionRepository(connection)._delete_reasoning_source_snapshots(policy, budget(), cutoff)
+            self.assertEqual(0, result['deleted'])
+            self.assertEqual({'claim-job', 'claim-mailbox', 'renewed'}, remaining())
+            self.assertEqual(0, execute('SELECT COUNT(*) AS n FROM storage_archive_records WHERE evicted=1').fetchone()['n'])
+
+        for failure in ('byte-budget', 'time-budget', 'read-deadline', 'partial-delete'):
+            with self.subTest(case=failure):
+                reset()
+                insert('expired-a'); insert('expired-b')
+                turn_budget = budget(remainingBytes=1, deletedBytes=20) if failure == 'byte-budget' else budget()
+                def fail(sql, params=()):
+                    if sql.startswith('SELECT') and 'OCTET_LENGTH(payload_json)' in sql:
+                        if failure == 'read-deadline':
+                            raise OperationalError(3024, 'server deadline')
+                        if failure == 'time-budget':
+                            turn_budget['started'] -= 100
+                    if failure == 'partial-delete' and sql.startswith('DELETE FROM `verified_reasoning_source_snapshots`') and params[0] == 'expired-b':
+                        raise OperationalError(1213, 'injected deadlock')
+                    return execute(sql, params)
+                with patch.object(connection, 'execute', side_effect=fail):
+                    repo = MySQLMinimalRetentionRepository(connection, candidate_query_timeout_ms=1500)
+                    if failure in ('read-deadline', 'partial-delete'):
+                        with self.assertRaises(OperationalError):
+                            repo._delete_reasoning_source_snapshots(policy, turn_budget, cutoff)
+                    else:
+                        self.assertEqual(0, repo._delete_reasoning_source_snapshots(policy, turn_budget, cutoff)['deleted'])
+                if failure == 'partial-delete':
+                    self.assertEqual('expired-a', position()['after_id'])
+                    self.assertEqual({'expired-b'}, remaining())
+                else:
+                    self.assertIsNone(position())
+                    self.assertEqual({'expired-a', 'expired-b'}, remaining())
+                self.assertEqual(len(remaining()), turn()['deleted'])
+                self.assertEqual(set(), remaining())
+
     def _assert_research_audit_expiry_is_rechecked_at_preview_selection_and_delete(self):
         class ResearchConnection(ApplyConnection):
             def execute(self, sql, params=()):

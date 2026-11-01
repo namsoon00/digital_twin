@@ -102,8 +102,8 @@ class MySQLMaintenanceAdmissionTests(unittest.TestCase):
         connection.execute.return_value.fetchall.return_value = []
         repository = MySQLMinimalRetentionRepository(connection, candidate_query_timeout_ms=1500)
         policy = mysql_minimal_retention_policy({})
-        budget = {'started': 100, 'maxSeconds': 5, 'remainingBytes': 100, 'deletedBytes': 0}
-        for clock, deadline in ((101, 1500), (104.75, 250), (105, None)):
+        for clock, deadline in ((101, 1500), (104.75, None), (105, None)):
+            budget = {'started': 100, 'maxSeconds': 5, 'remainingBytes': 100, 'deletedBytes': 0}
             with self.subTest(clock=clock), patch('digital_twin.infrastructure.mysql_minimal_retention.time.monotonic', return_value=clock):
                 connection.reset_mock()
                 repository._byte_bounded_candidates('SELECT id, payload_bytes FROM candidates', (), 'id', policy, budget)
@@ -113,6 +113,72 @@ class MySQLMaintenanceAdmissionTests(unittest.TestCase):
                     sql = connection.execute.call_args.args[0]
                     self.assertIn('MAX_EXECUTION_TIME(' + str(deadline) + ')', sql)
                     self.assertEqual(1, connection.execute.call_count)
+        # A deliberately short turn still admits work at its beginning.
+        with patch('digital_twin.infrastructure.mysql_minimal_retention.time.monotonic', return_value=100.1):
+            connection.reset_mock()
+            repository._candidate_rows('SELECT id FROM candidates', (),
+                {'started': 100, 'maxSeconds': 1, 'remainingBytes': 100})
+            connection.execute.assert_called_once()
+
+    def test_short_tail_yields_and_resumes_same_policy_without_hiding_read_failures(self):
+        import json
+        from dataclasses import replace
+        from unittest.mock import patch
+        from pymysql.err import OperationalError
+        from test_mysql_minimal_retention import ApplyConnection, Cursor
+        from digital_twin.infrastructure.mysql_minimal_retention import MySQLMinimalRetentionRepository
+        from digital_twin.platform.domain.mysql_minimal_retention import mysql_minimal_retention_policy
+        class Connection(ApplyConnection):
+            next_policy = 'reasoningSourceSnapshots:terminal'
+            def execute(self, sql, params=()):
+                if 'SELECT next_policy' in sql:
+                    return Cursor(one={'next_policy': self.next_policy})
+                if 'INSERT INTO mysql_retention_progress' in sql:
+                    self.next_policy = params[1]
+                return super().execute(sql, params)
+        connection = Connection()
+        repository = MySQLMinimalRetentionRepository(connection, candidate_query_timeout_ms=1500)
+        policy = replace(mysql_minimal_retention_policy({}), max_run_seconds=5)
+        clock = 100
+        def delayed_read(_policy, budget, *_args):
+            nonlocal clock
+            clock = 104.75
+            repository._candidate_rows('SELECT snapshot_id FROM verified_reasoning_source_snapshots', (), budget)
+            return {'deleted': 0, 'tables': {}}
+        with patch('digital_twin.infrastructure.mysql_minimal_retention.time.monotonic', side_effect=lambda: clock), \
+             patch.object(repository, '_delete_reasoning_source_snapshots', side_effect=delayed_read):
+            result = repository.apply(policy)
+        self.assertEqual(0, result['deleted'])
+        self.assertEqual('candidate-query-budget', result['progress']['yieldReason'])
+        self.assertEqual('reasoningSourceSnapshots:terminal', connection.next_policy)
+        self.assertFalse(any('SELECT snapshot_id' in sql for sql, _ in connection.calls))
+        clock = 100
+        def partial_read(_policy, budget, *_args):
+            nonlocal clock
+            repository._candidate_rows('SELECT snapshot_id FROM verified_reasoning_source_snapshots', (), budget)
+            clock = 104.75
+            repository._candidate_rows('SELECT snapshot_id FROM verified_reasoning_source_snapshots', (), budget)
+            return {'deleted': 2, 'tables': {'verified_reasoning_source_snapshots': 2}}
+        with patch('digital_twin.infrastructure.mysql_minimal_retention.time.monotonic', side_effect=lambda: clock), \
+             patch.object(repository, '_delete_reasoning_source_snapshots', side_effect=partial_read):
+            result = repository.apply(policy)
+        self.assertEqual(2, result['deleted'])
+        self.assertEqual('candidate-query-budget', result['progress']['yieldReason'])
+        self.assertNotEqual('reasoningSourceSnapshots:terminal', connection.next_policy)
+        repository.record_run(result)
+        report = next(json.loads(params[7]) for sql, params in connection.calls
+                      if 'INSERT INTO `mysql_retention_runs`' in sql)
+        self.assertEqual(result['progress'], report['progress'])
+        # A real read timeout with a fresh budget is still an error and moves
+        # the policy cursor forward so other cleanup policies get their turn.
+        error = OperationalError(3024, 'server deadline')
+        connection.next_policy = 'reasoningSourceSnapshots:terminal'
+        with patch.object(repository, '_delete_reasoning_source_snapshots', side_effect=error), \
+             self.assertRaises(OperationalError) as raised:
+            repository.apply(policy)
+        self.assertIs(error, raised.exception)
+        self.assertEqual('reasoningSourceSnapshots:terminal', error.orbit_retention_policy)
+        self.assertNotEqual('reasoningSourceSnapshots:terminal', connection.next_policy)
 
     def test_retention_lock_distinguishes_contention_from_database_failure(self):
         from unittest.mock import Mock

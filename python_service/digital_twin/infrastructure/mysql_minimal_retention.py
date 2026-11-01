@@ -419,6 +419,7 @@ class MySQLMinimalRetentionRepository:
                     "ON DUPLICATE KEY UPDATE next_policy=VALUES(next_policy),updated_at=VALUES(updated_at)",
                     (policy.profile, next_policy, self._iso()))
                 attempted.append(name)
+                reads_before = _integer(budget.get("candidateReads"))
                 try:
                     result = action(policy, budget, *arguments)
                 except Exception as error:
@@ -436,6 +437,17 @@ class MySQLMinimalRetentionRepository:
                 )
                 for table, count in dict(result.get("tables") or {}).items():
                     tables[table] = tables.get(table, 0) + _integer(count)
+                if budget.get("candidateReadDeferred"):
+                    # Give an unstarted policy a fresh turn. A policy that
+                    # already read candidates keeps its scan cursor but yields
+                    # to the next policy, preserving round-robin fairness.
+                    if _integer(budget.get("candidateReads")) == reads_before:
+                        next_policy = name
+                        _execute(self.connection,
+                            "INSERT INTO mysql_retention_progress (profile,next_policy,updated_at) VALUES (%s,%s,%s) "
+                            "ON DUPLICATE KEY UPDATE next_policy=VALUES(next_policy),updated_at=VALUES(updated_at)",
+                            (policy.profile, next_policy, self._iso()))
+                    break
 
         finally:
             self._release_lock()
@@ -449,7 +461,9 @@ class MySQLMinimalRetentionRepository:
             "tables": tables,
             "policies": policies,
             "progress": {"attemptedPolicies": attempted, "nextPolicy": next_policy,
-                         "remainingPolicies": len(actions) - len(attempted)},
+                         "remainingPolicies": len(actions) - len(attempted)
+                            + int(bool(budget.get("candidateReadDeferred")) and next_policy == attempted[-1]),
+                         "yieldReason": "candidate-query-budget" if budget.get("candidateReadDeferred") else ""},
         }
 
     def compact_delivered_payloads(
@@ -528,6 +542,7 @@ class MySQLMinimalRetentionRepository:
             "estimatedBytes": _integer((result or {}).get("estimatedBytes")),
             "tables": dict((result or {}).get("tables") or {}),
             "policies": dict((result or {}).get("policies") or {}),
+            "progress": dict((result or {}).get("progress") or {}),
             "preview": self._compact_preview((result or {}).get("preview")),
         }
         try:
@@ -906,36 +921,56 @@ class MySQLMinimalRetentionRepository:
         return self._result("reasoning_engine_job_sources", deleted, bytes_deleted)
 
     def _delete_reasoning_source_snapshots(self, policy, budget, cutoff_iso) -> Dict[str, object]:
-        candidates = self._byte_bounded_candidates(
-            "SELECT source.snapshot_id, OCTET_LENGTH(source.payload_json) AS payload_bytes "
-            "FROM `verified_reasoning_source_snapshots` source WHERE source.created_at < "
-            + _cutoff_sql()
-            + " AND NOT EXISTS (SELECT 1 FROM `reasoning_engine_jobs` job "
-            "WHERE job.source_snapshot_id = source.snapshot_id "
-            "AND job.job_status IN ('queued', 'retry', 'processing', 'awaiting_world_projection')) "
-            "AND NOT EXISTS (SELECT 1 FROM `ontology_reasoning_mailbox_events` mailbox "
-            "WHERE mailbox.source_snapshot_id = source.snapshot_id "
-            "AND mailbox.state IN ('pending', 'direct-pending')) "
-            "ORDER BY source.created_at, source.snapshot_id LIMIT %s",
-            (cutoff_iso, min(8, policy.batch_size)),
-            "snapshot_id",
-            policy,
-            budget,
+        scan_policy = "reasoningSourceSnapshots:terminal"
+        cursors = self._candidate_rows(
+            "SELECT after_time, after_id FROM mysql_retention_scan_cursors "
+            "WHERE profile = %s AND policy_name = %s", (policy.profile, scan_policy), budget,
         )
-        deleted, bytes_deleted = self._delete_candidates(
-            "verified_reasoning_source_snapshots",
-            "snapshot_id",
-            candidates,
-            "created_at < " + _cutoff_sql()
+        cursor = cursors[0] if cursors else {}
+        after_time = str(_row_value(cursor, "after_time", fallback="") or "")
+        after_id = str(_row_value(cursor, "after_id", 1, "") or "")
+        # Covering metadata only. Applying anti-joins before LIMIT lets MySQL
+        # materialize whole job/mailbox tables, even with source indexes.
+        window = self._candidate_rows(
+            "SELECT snapshot_id, created_at FROM `verified_reasoning_source_snapshots` "
+            "WHERE created_at < %s AND (created_at > %s OR (created_at = %s AND snapshot_id > %s)) "
+            "ORDER BY created_at, snapshot_id LIMIT %s",
+            (cutoff_iso, after_time, after_time, after_id, min(8, policy.batch_size)), budget,
+        )
+        if not window:
+            if (after_time or after_id) and self._has_budget(budget):
+                self._save_scan_cursor(policy.profile, scan_policy, "", "")
+            return self._result("verified_reasoning_source_snapshots", 0, 0)
+        guard = ("created_at < " + _cutoff_sql()
             + " AND NOT EXISTS (SELECT 1 FROM `reasoning_engine_jobs` job "
             "WHERE job.source_snapshot_id = `verified_reasoning_source_snapshots`.snapshot_id "
             "AND job.job_status IN ('queued', 'retry', 'processing', 'awaiting_world_projection')) "
             "AND NOT EXISTS (SELECT 1 FROM `ontology_reasoning_mailbox_events` mailbox "
             "WHERE mailbox.source_snapshot_id = `verified_reasoning_source_snapshots`.snapshot_id "
-            "AND mailbox.state IN ('pending', 'direct-pending'))",
-            (cutoff_iso,),
-            budget,
-        )
+            "AND mailbox.state IN ('pending', 'direct-pending'))")
+        deleted = bytes_deleted = 0
+        for item in window:
+            # A single source packet can be many megabytes. Do not fetch eight
+            # cold/compressed payloads under one SELECT deadline.
+            key = str(_row_value(item, "snapshot_id") or "")
+            rows = self._candidate_rows(
+                "SELECT snapshot_id, OCTET_LENGTH(payload_json) AS payload_bytes "
+                "FROM `verified_reasoning_source_snapshots` WHERE snapshot_id = %s AND " + guard,
+                (key, cutoff_iso), budget,
+            )
+            candidates = self._bounded_candidate_rows(rows, "snapshot_id", policy, budget)
+            count, size = self._delete_candidates(
+                "verified_reasoning_source_snapshots", "snapshot_id", candidates, guard, (cutoff_iso,), budget,
+            )
+            deleted += count
+            bytes_deleted += size
+            if len(candidates) != len(rows) or not self._has_budget(budget):
+                break
+            # Protected prefixes must not starve later rows. Rewind at the end
+            # of each sweep to revisit sources whose consumers finish later.
+            # Failed reads/deletes and exhausted budgets cannot advance here.
+            self._save_scan_cursor(policy.profile, scan_policy,
+                                   str(_row_value(item, "created_at", 1) or ""), key)
         return self._result("verified_reasoning_source_snapshots", deleted, bytes_deleted)
 
     def _delete_reasoning_comparisons(self, policy, budget, cutoff_iso) -> Dict[str, object]:
@@ -1516,11 +1551,14 @@ class MySQLMinimalRetentionRepository:
         return self._result("investment_research_runs", deleted, bytes_deleted)
 
     def _save_research_scan_cursor(self, profile, after_time, after_id):
+        self._save_scan_cursor(profile, "research:terminalRuns", after_time, after_id)
+
+    def _save_scan_cursor(self, profile, policy_name, after_time, after_id):
         _execute(self.connection,
             "INSERT INTO mysql_retention_scan_cursors (profile,policy_name,after_time,after_id,updated_at) "
             "VALUES (%s,%s,%s,%s,%s) ON DUPLICATE KEY UPDATE "
             "after_time=VALUES(after_time),after_id=VALUES(after_id),updated_at=VALUES(updated_at)",
-            (profile, "research:terminalRuns", after_time, after_id, self._iso()))
+            (profile, policy_name, after_time, after_id, self._iso()))
 
     def _delete_market_time_series(self, policy, budget, granularity, cutoff_iso) -> Dict[str, object]:
         candidates = self._byte_bounded_candidates(
@@ -1602,6 +1640,14 @@ class MySQLMinimalRetentionRepository:
         if self.candidate_query_timeout_ms:
             remaining_ms = int(1000 * (float(budget["maxSeconds"])
                                       - (time.monotonic() - float(budget["started"]))))
+            # Reserve a useful read window instead of starting a large packet
+            # read with only e.g. 250 ms left and reporting normal turn expiry
+            # as a database outage. Short configured turns must still progress.
+            admission_ms = min(self.candidate_query_timeout_ms,
+                               max(1, int(500 * float(budget["maxSeconds"]))))
+            if remaining_ms < admission_ms:
+                budget["candidateReadDeferred"] = True
+                return []
             timeout_ms = min(self.candidate_query_timeout_ms, remaining_ms)
             if timeout_ms <= 0:
                 return []
@@ -1609,6 +1655,7 @@ class MySQLMinimalRetentionRepository:
             # Scope this server deadline to the read, without changing pooled
             # session settings or applying a SELECT-only hint to mutations.
             sql = sql.replace("SELECT ", "SELECT /*+ MAX_EXECUTION_TIME(" + str(timeout_ms) + ") */ ", 1)
+        budget["candidateReads"] = _integer(budget.get("candidateReads")) + 1
         return _fetchall(_execute(self.connection, sql, params))
 
     def _bounded_candidate_rows(
@@ -1692,7 +1739,8 @@ class MySQLMinimalRetentionRepository:
 
     def _has_budget(self, budget: Mapping[str, object]) -> bool:
         return (
-            _integer(budget.get("remainingBytes")) > 0
+            not budget.get("candidateReadDeferred")
+            and _integer(budget.get("remainingBytes")) > 0
             and (time.monotonic() - float(budget.get("started") or 0)) < _integer(budget.get("maxSeconds"), 1)
         )
 

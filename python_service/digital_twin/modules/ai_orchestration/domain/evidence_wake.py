@@ -4,6 +4,13 @@
 def evidence_wake_targets(payload, subjects):
     if not isinstance(payload, dict) or payload.get("status") != "ok":
         return []
+    from digital_twin.modules.reasoning.contracts import OBSERVATION_CHECKPOINT_VERSION
+    if payload.get("checkpointVersion") == OBSERVATION_CHECKPOINT_VERSION:
+        if (payload.get("authority") != "verified-facts-only" or not payload.get("sourceSnapshotId")
+                or not payload.get("materialHash") or not payload.get("reasoningBinding")):
+            return []
+        return [{**subject, "sourceSnapshotId": "checkpoint:" + payload["materialHash"]}
+            for subject in subjects if all(subject.get(k) == payload.get(k) for k in ("accountId", "symbol", "worldId"))]
     targets = {}
     for outcome in payload.get("projectionOutcomes", []):
         if (not isinstance(outcome, dict) or outcome.get("generationAligned") is not True

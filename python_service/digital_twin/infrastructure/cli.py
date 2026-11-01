@@ -458,6 +458,23 @@ def notifications_command(args) -> int:
     return 1
 
 
+def ai_evidence_command(args) -> int:
+    from digital_twin.infrastructure.service_factory import build_ai_evidence_service
+    from digital_twin.infrastructure.background_capacity import managed_background_call, managed_background_should_retire
+    import threading
+    stop = threading.Event()
+    while True:
+        result = {"status": "unavailable"}
+        try:
+            result = managed_background_call(lambda: build_ai_evidence_service().run_once(), {"status": "resource-deferred"})
+            print(json.dumps(result, ensure_ascii=False), flush=True)
+        except Exception as error:
+            print(json.dumps({"status": "unavailable", "reason": type(error).__name__}), flush=True)
+        if args.ai_evidence_action == "once" or managed_background_should_retire():
+            return 0
+        stop.wait(5 if result.get("status") == "prepared" else 15)
+
+
 def ai_control_command(args) -> int:
     from digital_twin.infrastructure.service_factory import build_ai_control_service, ai_control_status
     from digital_twin.infrastructure.background_capacity import managed_background_call, managed_background_should_retire
@@ -2545,6 +2562,12 @@ def build_parser() -> argparse.ArgumentParser:
     notify_watch.add_argument("--limit", default="")
     notification_actions.add_parser("status")
     notifications.set_defaults(func=notifications_command)
+
+    ai_evidence = subparsers.add_parser("ai-evidence", help="Prepare verified evidence independently of AI model execution")
+    evidence_actions = ai_evidence.add_subparsers(dest="ai_evidence_action", required=True)
+    for action in ("once", "watch"):
+        evidence_actions.add_parser(action)
+    ai_evidence.set_defaults(func=ai_evidence_command)
 
     ai_control = subparsers.add_parser("ai-control", help="Run independent central AI observation and research")
     ai_control_actions = ai_control.add_subparsers(dest="ai_control_action", required=True)

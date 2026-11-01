@@ -1,7 +1,7 @@
 """Durable domain-event delivery into the central AI owner's coalescing mailbox."""
 import json
 
-from digital_twin.modules.reasoning.contracts import ONTOLOGY_REASONING_COMPLETED, OBSERVATION_EVIDENCE_READY
+from digital_twin.modules.reasoning.contracts import ONTOLOGY_REASONING_COMPLETED, OBSERVATION_EVIDENCE_READY, OBSERVATION_CHECKPOINT_READY
 from digital_twin.modules.ai_orchestration.domain.evidence_wake import evidence_wake_targets
 from digital_twin.modules.ai_orchestration.domain.planning import stamp
 from digital_twin.modules.ai_orchestration.infrastructure.mysql_evidence_wake import MySQLEvidenceWakeStore
@@ -17,7 +17,7 @@ class AIObservationEvidenceWake:
         # large JSON bodies. A global time scan rereads all retired event bodies
         # when this consumer has no work, blocking the central task queue.
         keys = []
-        for name in (ONTOLOGY_REASONING_COMPLETED, OBSERVATION_EVIDENCE_READY):
+        for name in (ONTOLOGY_REASONING_COMPLETED, OBSERVATION_EVIDENCE_READY, OBSERVATION_CHECKPOINT_READY):
             keys.extend(connection.execute("SELECT /*+ MAX_EXECUTION_TIME(5000) */ e.event_id,e.occurred_at "
                 "FROM domain_events e FORCE INDEX (idx_domain_events_name_time_event) WHERE e.name=%s "
                 "AND NOT EXISTS (SELECT 1 FROM ai_control_evidence_events r WHERE r.event_id=e.event_id) "

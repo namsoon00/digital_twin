@@ -1730,7 +1730,11 @@ class ExternalDataPlatformTest(unittest.TestCase):
         self.assertTrue(transition.material)
         self.assertEqual("source-revision", transition.change_type)
 
-    def _assert_company_facts_collect_without_recent_disclosure(self):
+    @patch("digital_twin.infrastructure.external_signal_provider_market.datetime", wraps=datetime)
+    def _assert_company_facts_collect_without_recent_disclosure(self, clock):
+        # The fixture is a 2026 half-year report; keep its requested period
+        # stable across November and year boundaries.
+        clock.now.return_value = datetime(2026, 10, 15, tzinfo=timezone.utc)
         settings = {
             "opendartApiKey": "test-key",
             "externalDartCorpCodes": "005930=00126380",

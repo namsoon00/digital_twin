@@ -1172,9 +1172,13 @@ class MySQLAIInferenceQueueStore(MySQLOperationalConnection):
                 }
                 audit_json = json_dumps(audit_payload)
                 artifact_fingerprint = hashlib.sha256(audit_json.encode("utf-8")).hexdigest()
+                # The request row above already serializes every writer of
+                # this immutable audit. Locking a missing audit row also locks
+                # its index gap, making unrelated publications deadlock while
+                # inserting into the same empty/sparse audit index.
                 existing_audit = connection.execute(
                     "SELECT artifact_fingerprint FROM ai_inference_execution_audits "
-                    "WHERE request_id = %s FOR UPDATE",
+                    "WHERE request_id = %s",
                     (request.request_id,),
                 ).fetchone()
                 if existing_audit and _clean(existing_audit.get("artifact_fingerprint")) != artifact_fingerprint:

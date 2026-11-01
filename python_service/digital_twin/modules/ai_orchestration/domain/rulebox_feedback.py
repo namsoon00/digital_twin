@@ -3,7 +3,28 @@
 from datetime import datetime, timezone
 
 
-VERSION = "rulebox-improvement-feedback-v1"
+VERSION = "rulebox-improvement-feedback-v2-research-focus"
+
+
+def research_focus(notices, outcomes, unavailable):
+    """Finite, source-linked review tasks; operational failures are not losses."""
+    focus = []
+    for row in outcomes:
+        if row["eligibility"] == "eligible" and row["status"] == "directionally-contradicted":
+            focus.append({"kind": "hypothesis-review", "referenceId": row["outcomeId"],
+                "sourceRuleIds": row["sourceRuleIds"], "contractFingerprint": row["contractFingerprint"],
+                "reason": "관측된 반대 결과를 현재 근거와 대조해 가설의 전제와 적용 범위를 검토합니다."})
+    for row in notices:
+        if row["category"] == "evidence-recheck":
+            focus.append({"kind": "evidence-repair", "referenceId": row["jobId"],
+                "sourceRuleIds": row["sourceRuleIds"],
+                "reason": "자료 유효성 문제를 먼저 확인합니다. 가설이 틀렸다는 의미는 아닙니다."})
+    return {"authority": "review-priority-only", "items": focus[:3], "omittedCount": max(0, len(focus) - 3),
+        "sample": {"eligibleOutcomes": sum(r["eligibility"] == "eligible" for r in outcomes),
+            "excludedOutcomes": sum(r["eligibility"] != "eligible" for r in outcomes),
+            "evidenceRechecks": sum(r["category"] == "evidence-recheck" for r in notices),
+            "deliveryFailures": sum(r["category"] == "delivery-failure" for r in notices)},
+        "unavailableSources": sorted(set(unavailable)), "scope": "displayed-bounded-history"}
 
 
 def at_or_before(value, cutoff):
@@ -70,6 +91,7 @@ def improvement_feedback(packet, notifications, episodes, unavailable=(), cases=
     return [{"kind": "rulebox-feedback", "version": VERSION, **scope,
              "authority": "historical-system-feedback-only", "notifications": notices[:6], "outcomes": results[:8],
              "cases": publications[:6],
+             "researchFocus": research_focus(notices[:6], results[:8], unavailable),
              "unavailableSources": sorted(set(unavailable)), "coverage": "bounded-recent-records; not a complete missed-signal census",
              "use": "원천 재확인·전송 실패·반복 억제와 가설 반증을 구분해 다음 연구를 정합니다. 발송 수와 조건 일치는 예측 성과가 아닙니다. "
                     "규칙 개선이 필요하면 현재 사용 가능한 사실을 인용해 develop-hypothesis로 요청합니다. "

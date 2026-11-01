@@ -585,6 +585,19 @@ The notification is sent through the configured local notifier, usually the acco
 
 ## Central AI orchestration
 
+Owner-approved independent evidence preparation (2026-11-01): the central AI
+consumes bounded, immutable copies of successful TypeDB observation captures.
+The reasoning-owned `ai-evidence` worker prepares them independently from model
+execution and emits `ontology.observation_checkpoint_ready` after committing the
+copy. A copied ABox is not an InferenceBox result or trading authorization.
+Preserve original source clocks, exact account/world/deployment ownership and
+all supported inventory, including prompt-budget exclusions. Reassess source
+usability at consumption time; never renew a source by renewing its copy.
+Keep graph-read failure, missing evidence, model quota wait and hypothesis
+outcome separate. Existing actionless AI observation and graph-backed action
+publication boundaries remain authoritative. Research priority and feedback
+may propose work, never change rules or production strategy automatically.
+
 Owner-approved RuleBox decision explanation (2026-10-13): the decisions-owned
 `rulebox-decision-brief-v1` is a scoped read model of existing graph restrictions,
 candidates and evidence requests. Notifications consume it through the decisions

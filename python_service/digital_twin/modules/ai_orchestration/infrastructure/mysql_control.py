@@ -277,7 +277,7 @@ class MySQLAIControlStore(AITokenUsagePersistence, DiagnosticProgressPersistence
         count = int(job.get("evidenceDeferrals", 0)) + 1
         retry_at = (now + timedelta(seconds=min(900, 60 * 2 ** min(count - 1, 4)))).isoformat().replace("+00:00", "Z")
         started_at = job.get("evidenceWaitStartedAt") or now.isoformat().replace("+00:00", "Z")
-        producer = {}
+        producer = dict(getattr(wait, "producer", {}) or {})
         reader = getattr(self, "projection_status", None)
         if reader is not None and wait.code == "evidence-contract:crypto-quote-projection-not-ready":
             try:

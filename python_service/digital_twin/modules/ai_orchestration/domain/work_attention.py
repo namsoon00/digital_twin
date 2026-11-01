@@ -2,7 +2,8 @@
 from datetime import datetime, timedelta
 import math
 
-VERSION = "central-work-attention-v1"
+VERSION = "central-work-attention-v2-question-purpose"
+LEGACY_VERSION = "central-work-attention-v1"
 WINDOW = 20
 
 
@@ -34,7 +35,7 @@ def attention(task, subject, case, now):
     scoped = all(subject.get(k) == task.get(k) for k in ("accountId", "symbol", "worldId"))
     hint = subject.get("workContext") or {} if scoped else {}
     observed = clock(hint.get("observedAt"))
-    usable = (hint.get("version") == VERSION and hint.get("authority") == "work-order-only"
+    usable = (hint.get("version") in {VERSION, LEGACY_VERSION} and hint.get("authority") == "work-order-only"
               and observed is not None and timedelta(0) <= now - observed <= timedelta(hours=72))
     held = usable and hint.get("held") is True
     weight = number(hint.get("weightPct")) if held else None
@@ -48,13 +49,23 @@ def attention(task, subject, case, now):
     partial = answer.get("status") == "partial"
     counter = (bool(review.get("researchReviewInputId")) and
                (review.get("judgmentImpact") or {}).get("effect") == "weakens")
+    # This only orders existing, bounded jobs. It grants no extra collection,
+    # model calls, answer completion or investment authority.
+    purpose = case.get("questionPurpose") or {} if owned else {}
+    purposeful = (purpose.get("version") == "question-purpose-v1"
+        and purpose.get("authority") == "research-purpose-only"
+        and bool(purpose.get("executionInputId")) and bool(purpose.get("evidenceIds"))
+        and all(isinstance(purpose.get(k), str) and len(purpose[k].strip()) >= 8
+                for k in ("decisionRelevance", "uncertainty", "expectedInsight")))
     reasons = (["확보한 답변의 최종 검토"] if finish else []) + (["보유 종목"] if held else [])
     reasons += (["이전 판단의 반대 근거 확인"] if counter else []) + (["기존 부분 답변 이어가기"] if partial else [])
+    reasons += ["판단에 미치는 영향이 기록된 질문"] if purposeful else []
     return {"version": VERSION, "authority": "work-order-only", "held": bool(held),
         "weightPct": weight if held else None, "contextObservedAt": hint.get("observedAt") if usable else None,
         "sourceAnswerReady": finish, "partialAnswer": partial, "counterEvidenceReview": counter,
+        "decisionPurposeRecorded": purposeful,
         "reasons": reasons or ["기존 작업 순서"],
-        "rank": [int(finish), int(counter), int(held), weight, int(partial)]}
+        "rank": [int(finish), int(counter), int(held), int(purposeful), weight, int(partial)]}
 
 
 def select(rows, subjects, cases, cursor, lane, now):

@@ -54,11 +54,13 @@ class AITaskDispatchPersistence:
                         "JSON_UNQUOTE(JSON_EXTRACT(payload_json,'$.latestSourceAnswer.status')) AS answer_status,"
                         "JSON_UNQUOTE(JSON_EXTRACT(payload_json,'$.questionAssessment.status')) AS review_status,"
                         "JSON_UNQUOTE(JSON_EXTRACT(payload_json,'$.questionAssessment.researchReviewInputId')) AS review_input,"
-                        "JSON_UNQUOTE(JSON_EXTRACT(payload_json,'$.questionAssessment.judgmentImpact.effect')) AS effect "
+                        "JSON_UNQUOTE(JSON_EXTRACT(payload_json,'$.questionAssessment.judgmentImpact.effect')) AS effect, "
+                        "JSON_EXTRACT(payload_json,'$.questionPurpose') AS question_purpose "
                         "FROM ai_brain_cases FORCE INDEX(PRIMARY) WHERE kind='question' AND case_id IN ("
                         + ",".join(["%s"] * len(ids)) + ") LIMIT 20", tuple(ids)).fetchall()
                     cases = {r["case_id"]: {"caseId": r["case_id"], "accountId": r["account_id"], "symbol": r["symbol"],
                         "worldId": r["world_id"], "status": r["status"], "latestSourceAnswer": {"status": r["answer_status"]},
+                        "questionPurpose": json.loads(r["question_purpose"]) if r.get("question_purpose") else {},
                         "questionAssessment": {"status": r["review_status"], "researchReviewInputId": r["review_input"],
                                                "judgmentImpact": {"effect": r["effect"]}}} for r in found}
                 index, attention = select(jobs, subjects, cases, cursor, lane, now)

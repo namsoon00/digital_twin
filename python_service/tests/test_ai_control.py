@@ -556,6 +556,11 @@ class AIControlStorageTests(unittest.TestCase):
         # A new UTC day admits due work without a counter reset or lost task.
         self.store.runtime_settings["aiControlDailyTaskBudget"] = 10
         next_reset = budget_state({}, 0, 0, datetime.now(timezone.utc))["budgetResetAt"]
+        # Near midnight the timeout backoff can extend into tomorrow. This
+        # assertion is about the new day's budget for due work, not that backoff.
+        with self.store.transaction() as connection:
+            connection.execute("UPDATE ai_control_tasks SET available_at=%s WHERE task_id=%s",
+                               (next_reset, job["taskId"]))
         with patch("digital_twin.modules.ai_orchestration.infrastructure.mysql_control.stamp", return_value=next_reset):
             self.assertEqual(job["taskId"], self.store.claim()["taskId"])
 

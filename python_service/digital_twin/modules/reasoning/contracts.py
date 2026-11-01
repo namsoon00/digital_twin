@@ -4,6 +4,8 @@ from digital_twin.modules._exports import resolve_export
 
 
 _EXPORTS = {}
+_EXPORTS['OBSERVATION_CHECKPOINT_VERSION'] = ('digital_twin.modules.reasoning.domain.observation_checkpoint', 'VERSION')
+_EXPORTS['OBSERVATION_CHECKPOINT_READY'] = ('digital_twin.modules.reasoning.domain.observation_checkpoint', 'READY_EVENT')
 _EXPORTS["price_move_anchor"] = ("digital_twin.modules.reasoning.domain.price_investigation_sources", "price_move_anchor")
 _EXPORTS["company_value_context"] = ("digital_twin.modules.reasoning.domain.observation_value", "company_value_context")
 _EXPORTS["OBSERVATION_QUOTE_KINDS"] = ("digital_twin.modules.reasoning.domain.observation_evidence", "OBSERVATION_QUOTE_KINDS")

@@ -43,10 +43,39 @@ def ai_control_subjects(configured):
     return list(result.values())
 
 
+def observation_checkpoint_ports(configured, *, producer=False):
+    from digital_twin.modules.reasoning.infrastructure.mysql_observation_checkpoints import MySQLObservationCheckpointStore
+    from digital_twin.modules.reasoning.infrastructure.observation_binding import active_observation_binding
+    from digital_twin.infrastructure.transactions.observation_checkpoint_publication import publish_checkpoint
+    store = MySQLObservationCheckpointStore(configured, publisher=publish_checkpoint if producer else None)
+    def binding():
+        with store.connect() as connection:
+            return active_observation_binding(connection)
+    return store, binding
+
+
+def build_ai_evidence_service(settings=None):
+    from digital_twin.infrastructure.settings import runtime_settings
+    from digital_twin.infrastructure.typedb_ontology import typedb_repository_from_settings
+    from digital_twin.modules.reasoning.public import (DeploymentObservationEvidenceReader, ObservationEvidenceReader,
+        ObservationCheckpointService, TypeDBObservationEvidenceSource, WorldRoutedObservationEvidenceSource)
+    from digital_twin.modules.ai_orchestration.contracts import enabled
+    configured = dict(settings if settings is not None else runtime_settings())
+    store, binding_reader = observation_checkpoint_ports(configured, producer=True)
+    def factory(binding, job):
+        repository = typedb_repository_from_settings({**configured, "typedbDatabase": binding["graphStoreBinding"]})
+        source = TypeDBObservationEvidenceSource(repository)
+        if job.get("marketWorldId") and binding["sharedGraphStoreBinding"] != binding["graphStoreBinding"]:
+            macro = typedb_repository_from_settings({**configured, "typedbDatabase": binding["sharedGraphStoreBinding"]})
+            source = WorldRoutedObservationEvidenceSource(source, TypeDBObservationEvidenceSource(macro), job["marketWorldId"])
+        return ObservationEvidenceReader(source, macro_world_id=job.get("marketWorldId", ""))
+    return ObservationCheckpointService(store, DeploymentObservationEvidenceReader(binding_reader, factory),
+        binding_reader, lambda: ai_control_subjects(configured), enabled=lambda: enabled(configured))
+
+
 def build_ai_control_service(settings=None):
     from digital_twin.infrastructure.settings import runtime_settings
     from digital_twin.infrastructure.operational_store import investment_research_store
-    from digital_twin.infrastructure.typedb_ontology import typedb_repository_from_settings
     from digital_twin.infrastructure.composition.news_intelligence import build_investment_research_orchestrator
     from digital_twin.modules.ai_orchestration.public import AIControlService
     from digital_twin.modules.ai_orchestration.infrastructure.mysql_control import MySQLAIControlStore
@@ -70,21 +99,9 @@ def build_ai_control_service(settings=None):
     def subjects():
         return ai_control_subjects(configured)
 
-    def evidence_binding():
-        from digital_twin.modules.reasoning.infrastructure.observation_binding import active_observation_binding
-        with store.connect() as connection:
-            return active_observation_binding(connection)
-
-    def evidence_reader(binding, job):
-        from digital_twin.modules.ai_orchestration.infrastructure.observation_reader import GraphObservationReader
-        repository = typedb_repository_from_settings({**configured, "typedbDatabase": binding["graphStoreBinding"]})
-        macro_repository = (repository if binding["sharedGraphStoreBinding"] == binding["graphStoreBinding"] else
-            typedb_repository_from_settings({**configured, "typedbDatabase": binding["sharedGraphStoreBinding"]}))
-        return GraphObservationReader(repository, macro_world_id=job.get("marketWorldId", ""),
-                                      macro_repository=macro_repository)
-
-    from digital_twin.modules.reasoning.public import DeploymentObservationEvidenceReader
-    evidence = DeploymentObservationEvidenceReader(evidence_binding, evidence_reader).capture_session
+    from digital_twin.modules.reasoning.public import CheckpointEvidenceReader
+    evidence_store, evidence_binding = observation_checkpoint_ports(configured)
+    evidence = CheckpointEvidenceReader(evidence_store, evidence_binding).capture_session
 
     def planner(envelope, input_id):
         token = CURRENT_TASK.set(envelope["current"]["taskId"])
@@ -205,7 +222,14 @@ def ai_control_status(settings=None, account_id=""):
     configured["aiObservationLanePolicy"] = lane_policy
     # Dashboard reads must not inherit long worker socket timeouts or its pool.
     configured.update(mysqlOperationTimeoutSeconds=8, _mysqlPoolRole="ai-status")
-    status = MySQLAIControlStore(configured).status(account_id)
+    control_store = MySQLAIControlStore(configured)
+    status = control_store.status(account_id)
+    from digital_twin.modules.reasoning.infrastructure.mysql_observation_checkpoints import checkpoint_status
+    try:
+        with control_store.connect() as connection:
+            status["evidencePreparation"] = checkpoint_status(connection, account_id)
+    except Exception as error:
+        status["evidencePreparation"] = {"status": "unavailable", "reason": type(error).__name__}
     from digital_twin.modules.ai_orchestration.infrastructure.mysql_brain_agenda import MySQLBrainAgendaStore
     status["brain"] = MySQLBrainAgendaStore(configured).status(account_id)
     knowledge_enabled = str(configured.get("aiResearchKnowledgeEnabled", "false")).lower() not in {"false", "0", "off"}

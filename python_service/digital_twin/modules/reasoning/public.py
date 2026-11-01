@@ -56,6 +56,8 @@ _EXPORTS = {'observation_projection_status': ('digital_twin.modules.reasoning.in
 
 _EXPORTS['append_rule_to_release_artifact'] = ('digital_twin.modules.reasoning.infrastructure.static_seed.artifact', 'append_rule_to_release_artifact')
 _EXPORTS['ObservationEvidenceReader'] = ('digital_twin.modules.reasoning.application.observation_evidence', 'ObservationEvidenceReader')
+_EXPORTS['CheckpointEvidenceReader'] = ('digital_twin.modules.reasoning.application.observation_checkpoints', 'CheckpointEvidenceReader')
+_EXPORTS['ObservationCheckpointService'] = ('digital_twin.modules.reasoning.application.observation_checkpoints', 'ObservationCheckpointService')
 _EXPORTS['DeploymentObservationEvidenceReader'] = ('digital_twin.modules.reasoning.application.observation_evidence.deployment', 'DeploymentObservationEvidenceReader')
 _EXPORTS['TypeDBObservationEvidenceSource'] = ('digital_twin.modules.reasoning.infrastructure.observation_evidence', 'TypeDBObservationEvidenceSource')
 _EXPORTS['WorldRoutedObservationEvidenceSource'] = ('digital_twin.modules.reasoning.infrastructure.observation_evidence', 'WorldRoutedObservationEvidenceSource')

@@ -204,6 +204,14 @@ class EvidenceWakeStorageTests(unittest.TestCase):
         self.assertEqual(0, self.waker.run_once([SUBJECT])["tasksWoken"])
         self.assertEqual(row["attempts"], self.row()["attempts"])
         self.assertEqual("repaired-graph", json.loads(self.row()["payload_json"])["evidenceWake"]["sourceSnapshotId"])
+        # A later provider wait retains the old data-wait diagnostic for audit.
+        # Another source event must not mistake that history for a current wait.
+        from digital_twin.modules.ai_orchestration.domain.execution_resilience import AIExecutionDeferred
+        resumed = self.control.claim()
+        self.assertTrue(self.control.defer_execution(resumed, AIExecutionDeferred("2099-01-01T00:00:00Z", "quota")))
+        self.event("after-provider-wait", snapshot="another-source")
+        self.assertEqual(0, self.waker.run_once([SUBJECT])["tasksWoken"])
+        self.assertEqual("2099-01-01T00:00:00Z", self.row()["available_at"])
 
     def test_receipt_and_queue_timing_rollback_together_then_retry_once(self):
         self.task(); self.event()

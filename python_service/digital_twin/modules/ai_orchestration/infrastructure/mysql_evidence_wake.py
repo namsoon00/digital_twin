@@ -19,6 +19,23 @@ SCHEMA = (
 )
 
 
+def wake_checkpoint_waiters(connection, packet):
+    """A ready copy resumes its own data wait, never budget/error backoffs."""
+    now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    rows = connection.execute("SELECT task_id FROM ai_control_tasks WHERE account_id=%s AND symbol=%s "
+        "AND status='pending' AND capability IN ('observe','market-observe') "
+        "AND last_error='evidence-contract:observation-checkpoint-not-ready' "
+        "AND JSON_UNQUOTE(JSON_EXTRACT(payload_json,'$.worldId'))=%s ORDER BY available_at LIMIT 20 FOR UPDATE",
+        (packet["accountId"], packet["symbol"], packet["worldId"])).fetchall()
+    receipt = json.dumps({"reason": "verified-observation-checkpoint", "sourceSnapshotId": packet["sourceSnapshotId"],
+                          "occurredAt": packet["capturedAt"]})
+    for row in rows:
+        connection.execute("UPDATE ai_control_tasks SET available_at=LEAST(available_at,%s),"
+            "payload_json=JSON_SET(payload_json,'$.checkpointReady',CAST(%s AS JSON)) WHERE task_id=%s",
+            (now, receipt, row["task_id"]))
+    return len(rows)
+
+
 class MySQLEvidenceWakeStore(MySQLOperationalConnection):
     def __init__(self, settings=None):
         super().__init__(settings)
@@ -54,6 +71,7 @@ class MySQLEvidenceWakeStore(MySQLOperationalConnection):
             tasks = connection.execute("SELECT task_id,available_at FROM ai_control_tasks WHERE account_id=%s AND symbol=%s "
                 "AND JSON_UNQUOTE(JSON_EXTRACT(payload_json,'$.worldId'))=%s AND capability=%s "
                 "AND status='pending' AND (attempts=0 OR ("
+                "last_error=JSON_UNQUOTE(JSON_EXTRACT(result_json,'$.processingOutcome.reasonCode')) AND "
                 "JSON_UNQUOTE(JSON_EXTRACT(result_json,'$.processingOutcome.stage'))='evidence-capture' "
                 "AND JSON_UNQUOTE(JSON_EXTRACT(result_json,'$.processingOutcome.status')) IN ('data-wait','projection-blocked'))) "
                 "FOR UPDATE", scope).fetchall()

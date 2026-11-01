@@ -25,6 +25,22 @@ def subject(symbol="TEST", held=True, weight=40):
 
 
 class CentralWorkAttentionTests(unittest.TestCase):
+    def test_decision_purpose_orders_work_but_preserves_fair_turn_and_scope(self):
+        target = subject(held=False)
+        tasks = [{**target, "taskId": "plain", "capability": "research"},
+                 {**target, "taskId": "purpose", "capability": "research", "brainCaseId": "case"}]
+        case = {**SUBJECT, "caseId": "case", "status": "open", "questionPurpose": {
+            "version": "question-purpose-v1", "authority": "research-purpose-only", "executionInputId": "input",
+            "evidenceIds": ["filing"], "decisionRelevance": "반복 매출 전망이 달라집니다.",
+            "uncertainty": "일회성 수요인지 확인하지 못했습니다.", "expectedInsight": "반복 수요라면 실적 지속성 설명을 보완합니다."}}
+        chosen, receipt = select(tasks, [target], {"case": case}, {"laneDispatchCounts": {"research": 1}}, "research", NOW)
+        self.assertEqual(1, chosen)
+        self.assertTrue(receipt["decisionPurposeRecorded"])
+        chosen, _ = select(tasks, [target], {"case": case}, {"laneDispatchCounts": {"research": 2}}, "research", NOW)
+        self.assertEqual(0, chosen)
+        case["accountId"] = "other"
+        self.assertFalse(attention(tasks[1], target, case, NOW)["decisionPurposeRecorded"])
+
     def test_fair_turns_and_important_work_preserve_scoping_and_ignore_stale_context(self):
         watch, held = subject("WATCH", False), subject()
         jobs = [{**s, "taskId": s["symbol"]} for s in (watch, held)]

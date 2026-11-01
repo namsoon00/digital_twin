@@ -10,9 +10,16 @@ def task_wait(task, execution, now):
         return {}
     shared = recovery_wait({**execution, "lastFailureCategory": execution.get("lastFailureCategory")
                             or (execution.get("lastFailure") or {}).get("category")}, now)
+    error = task.get("lastError", "")
+    if error == "evidence-contract:observation-checkpoint-not-ready":
+        producer = (task.get("result", {}).get("processingOutcome") or {}).get("producer") or {}
+        return {"status": "evidence-wait", "scope": "verified-evidence", "reason": error,
+            "label": "검증된 근거 준비 대기", "producer": deepcopy(producer),
+            "explanation": "TypeDB에서 확인한 근거 묶음을 준비 중입니다. 원천 자료가 없다는 뜻은 아닙니다.",
+            "nextCheckAt": task.get("nextCheckAt", ""), "retryIsReset": False,
+            "modelWait": shared.result() if shared else {}}
     if shared:
         return {**shared.result(), "label": "AI 제공처 사용 한도 대기" if shared.category == "quota" else "AI 제공처 실행 대기"}
-    error = task.get("lastError", "")
     success, failure = instant(execution.get("lastSuccessAt")), instant(execution.get("lastFailureAt"))
     if error.startswith("ai-execution:") and success and failure and success > failure:
         return {"status": "resuming", "scope": "task-queue", "reason": "model-execution-recovered",

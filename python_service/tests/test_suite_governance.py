@@ -474,7 +474,9 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # Sixteen prepared-history regressions cover committed invalidation,
         # point-in-time visibility, bounded reuse, corruption and covering reads.
         # One outer-context contract prevents reuse after same-source repairs.
-        self.assertLessEqual(total, 2873)
+        # Seventeen evidence-checkpoint, isolated-capacity and question-purpose
+        # contracts cover persistence/fencing, freshness, exact wakeups and fairness.
+        self.assertLessEqual(total, 2890)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

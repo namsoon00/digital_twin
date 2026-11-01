@@ -17,7 +17,7 @@ import time
 
 BACKGROUND_WORKERS = frozenset({
     "investment-research", "model-review", "historical-replay", "ontology-lab",
-    "news-analysis", "ai-control",
+    "news-analysis", "ai-control", "ai-evidence",
 })
 REALTIME_WORKERS = frozenset({
     "monitor", "market-data", "kis-realtime", "reasoning-engine-delivery",
@@ -123,7 +123,9 @@ def managed_background_call(callback, deferred_result=None):
         return callback()
     if _managed_capacity is None:
         from .settings import data_dir
-        _managed_capacity = BackgroundCapacity(data_dir() / "background-capacity")
+        # Bounded graph I/O must not occupy the model/research execution slot.
+        pool = "evidence-capacity" if os.environ.get("ORBIT_BACKGROUND_WORKER") == "ai-evidence" else "background-capacity"
+        _managed_capacity = BackgroundCapacity(data_dir() / pool)
     with _managed_capacity.acquire() as admitted:
         return callback() if admitted else deferred_result
 

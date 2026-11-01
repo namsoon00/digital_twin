@@ -1070,6 +1070,13 @@ def worker_specs() -> Dict[str, Dict[str, object]]:
             "command": [sys.executable, "-u", "python_service/service.py", "ai-control", "watch"],
             "needle": "python_service/service.py ai-control watch",
         }
+        workers["ai-evidence"] = {
+            "label": "Verified AI evidence preparation",
+            "pid": data_dir() / "python-ai-evidence.pid",
+            "log": data_dir() / "python-ai-evidence.log",
+            "command": [sys.executable, "-u", "python_service/service.py", "ai-evidence", "watch"],
+            "needle": "python_service/service.py ai-evidence watch",
+        }
 
     background_nice = str((settings or {}).get("managedBackgroundProcessNice") or "10")
     local_ai_environment = {

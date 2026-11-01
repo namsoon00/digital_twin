@@ -123,6 +123,11 @@ def assert_rulebox_feedback(test):
     records = improvement_feedback(p, notices, episodes, cases=cases)
     test.assertEqual(["evidence-recheck", "repeat-control"], [r["category"] for r in records[0]["notifications"]])
     test.assertEqual(["eligible", "excluded-or-unverified"], [r["eligibility"] for r in records[0]["outcomes"]])
+    focus = records[0]["researchFocus"]
+    test.assertEqual(["hypothesis-review", "evidence-repair"], [r["kind"] for r in focus["items"]])
+    test.assertEqual(["result", "expired"], [r["referenceId"] for r in focus["items"]])
+    test.assertEqual(1, focus["sample"]["excludedOutcomes"])
+    test.assertEqual("review-priority-only", focus["authority"])
     test.assertEqual("historical-account-symbol", records[0]["outcomes"][0]["scope"])
     test.assertEqual("no-job-case", records[0]["cases"][0]["subjectCaseId"])
     test.assertEqual(records, improvement_feedback({**p, "capturedAt": "2026-10-02T01:31:00Z"}, notices, episodes, cases=cases))

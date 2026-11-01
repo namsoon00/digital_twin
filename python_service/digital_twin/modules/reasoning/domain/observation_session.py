@@ -103,6 +103,10 @@ class ObservationEvidenceSession:
     def packet(self):
         return deepcopy(self._packet)
 
+    def checkpoint_inventory(self):
+        """Preserve all supported facts, including prompt-budget exclusions."""
+        return deepcopy(list(self._facts.values()))
+
     def with_reasoning_binding(self, binding):
         from .observation_binding import VERSION
         if binding.get("version") != VERSION:

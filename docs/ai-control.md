@@ -1,5 +1,67 @@
 # Central AI control
 
+## Independent evidence preparation (2026-11-01)
+
+Central observation now reads a reasoning-owned `verified-observation-checkpoint-v1`
+through `CheckpointEvidenceReader`. The separate managed `ai-evidence` worker
+captures the existing TypeDB evidence contract without invoking any model or
+waiting for a matched rule. It retains original facts, source clocks, graph
+binding and the complete supported inventory; raw inputs or AI summaries never
+stand in for a successful graph capture. A failed refresh preserves the last
+verified copy and its original time. Copies are bounded to 12 MiB before
+compression, checked by SHA-256, and scoped to account, symbol, world, public
+market route and active/delivery deployment binding.
+
+The producer seeds monitored subjects even during model quota waits. Idle
+subjects request a refresh after 15 minutes; active observations may request
+one after two minutes. Requests coalesce per exact scope and cannot reset
+failure backoff or steal a lease. One graph preparation turn uses a separate
+capacity slot, still subject to host critical-memory admission. Model/research
+concurrency limits are unchanged. Native graph reads retain their existing
+bounded transaction deadlines. Failed reads retry from one minute up to 30
+minutes; a stale lease is reclaimable, and a late worker cannot replace a newer
+copy or publish an event. Unused pending/ready routes retire after seven days
+in batches of at most ten. These copies are a read model, not historical audit
+storage; the existing frozen model inputs remain authoritative for replay.
+
+Market observation accepts copies captured within 15 minutes, while documentary
+question assessment can use a capture within 24 hours. These are maximum
+capture ages, **not source freshness allowances**. Source quotes are reassessed
+against the consumption clock, and purpose-specific evidence and publication
+gates still apply. Freshness, scope, source completeness and original-document
+requirements are not waived. No copy, an expired copy or an incompatible route
+defers observation without calling a model; source research and research planning
+remain independent. Previously frozen prompts keep their original constructors.
+If a task already knows about a newer committed source, an older copy cannot
+satisfy that wake. The reader requests a refresh without shortening failure
+backoff. Capture start and finish clocks are both retained so a commit during
+the graph read is not hidden by its later completion time.
+
+Preparation commits its event atomically with the verified copy. Only material
+evidence changes create a new event. A refreshed copy can resume its exact
+checkpoint wait even when its sources did not change; this does not bypass
+same-source model suppression, failed-task recovery, quota backoff or active
+leases. The ordinary mailbox still bounds observation wakeups and delivery
+compares successful receipts. A ready copy is neither an authored judgment nor
+an alert. `evidenceCheckpoint` and wait `producer` diagnostics distinguish
+preparation time, original capture time, source age and graph read errors.
+
+Work attention additionally prefers already-scoped questions whose frozen
+purpose records the uncertainty and how an answer would affect judgment. This
+only affects importance turns; oldest-work turns, collection limits, source
+cooldowns and model budgets remain intact. Rule feedback separately exposes up
+to three source-linked hypothesis reviews or evidence repairs. Only eligible,
+observed contradicted outcomes propose hypothesis review; missing observations,
+delivery failures and expired sources never count as failed predictions.
+Neither scheduler priority nor feedback grants rule modification authority.
+
+Validation must cover graph outage reuse, source-clock expiry, cross-scope and
+deployment rejection, full inventory preservation, corruption, lease loss,
+publication rollback, exact wait resumption and independent capacity. Measure
+preparation latency and failures separately from authored judgments, research
+answers, actual delivery receipts and recorded token usage. No improvement in
+forecast accuracy or investment return is established by these contracts.
+
 `modules/ai_orchestration` owns independent observation, research scheduling,
 execution accounting, bounded recall and recurring work. It is the thirteenth
 business module. Domain-specific prompts and validators remain in their owning

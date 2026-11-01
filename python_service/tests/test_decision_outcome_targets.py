@@ -881,12 +881,14 @@ class DecisionOutcomeTargetTests(unittest.TestCase):
 
         self.assertEqual(["episode:historical"], [item["episodeId"] for item in rows])
         self.assertEqual("claim:original", rows[0]["hypothesisSet"]["hypotheses"][0]["claimContract"]["claimContractId"])
-        self.assertIn("SELECT episode_id, MAX(observed_at)", connection.statements[0][0])
-        self.assertEqual(2, connection.statements[0][0].count("observed_at <= %s"))
+        selects = [(sql, params) for sql, params in connection.statements if sql.startswith("SELECT")]
+        self.assertIn("SELECT episode_id, MAX(observed_at)", selects[0][0])
+        self.assertEqual(1, selects[0][0].count("observed_at <= %s"))
         self.assertEqual(
-            ("account:1", "2026-08-25T01:30:00Z", 1, "2026-08-25T01:30:00Z"),
-            connection.statements[0][1],
+            ("account:1", "2026-08-25T01:30:00Z", 1), selects[0][1],
         )
+        self.assertIn("outcomes.observed_at <= %s", selects[1][0])
+        self.assertEqual("2026-08-25T01:30:00Z", selects[1][1][-1])
 
         performance_store = self.store()
         performance_store.performance_episodes = lambda **_kwargs: []

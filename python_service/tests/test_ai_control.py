@@ -25,6 +25,19 @@ PLAN = {"summary": "이전 관찰과 비교할 첫 근거입니다.", "hypothesi
 
 
 class AIControlTests(unittest.TestCase):
+    def test_provider_wait_stops_before_evidence_memory_and_model_input_preparation(self):
+        from digital_twin.modules.ai_orchestration.domain.execution_resilience import AIExecutionDeferred
+        service, store, planner = self.runner()
+        store.execution_wait.side_effect = AIExecutionDeferred("2099-01-01T00:00:00Z", "quota")
+        result = service.run_once()
+        self.assertEqual("recovery-wait", result["status"])
+        service.evidence.assert_not_called()
+        store.memory.assert_not_called()
+        store.save_execution_input.assert_not_called()
+        planner.assert_not_called()
+        store.fail.assert_not_called()
+        store.defer_execution.assert_called_once()
+
     def assert_background_capacity_wait_does_not_inherit_notification_zero(self):
         from digital_twin.modules.model_registry.infrastructure import model_reviewer
         with patch('digital_twin.modules.ai_orchestration.public.execute_ai_work',

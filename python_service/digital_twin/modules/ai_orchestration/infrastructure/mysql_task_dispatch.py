@@ -9,7 +9,7 @@ from ..domain.task_dispatch import AGING_MINUTES, CAPABILITIES, CYCLE, SCOPE, VE
 
 class AITaskDispatchPersistence:
     @staticmethod
-    def select_dispatch(connection, cursor, budget, now, subjects=()):
+    def select_dispatch(connection, cursor, budget, now, subjects=(), *, source_only=False):
         wait = None
         # An observation needs two calls; source work can use the final call.
         eligible = [capability for capability in CAPABILITIES if not admission_wait(budget, capability)]
@@ -17,6 +17,8 @@ class AITaskDispatchPersistence:
         cutoff = stamp(now - timedelta(minutes=AGING_MINUTES))
         clock = stamp(now)
         for slot, lane in [*dispatch_order(cursor), (len(CYCLE) - 1, "other")]:
+            if source_only and lane not in {"recovery", "research"}:
+                continue
             if lane == "recovery":
                 where = "status='processing' AND lease_until<%s"
                 params = (clock,)
@@ -40,6 +42,7 @@ class AITaskDispatchPersistence:
             limit = WINDOW if subjects and lane not in {"recovery", "other"} else 1
             rows = connection.execute("SELECT task_id,account_id,symbol,capability,status,priority,available_at,"
                 "lease_until,attempts,last_error,payload_json FROM ai_control_tasks WHERE " + where
+                + (" AND capability='research'" if source_only else "")
                 + (excluded if eligible else "") + " ORDER BY " + order
                 + f" LIMIT {limit} FOR UPDATE SKIP LOCKED", params).fetchall()
             row = rows[0] if rows else None
@@ -73,7 +76,7 @@ class AITaskDispatchPersistence:
         if wait:
             raise wait
         # With one call left, excluded observations still explain the wait.
-        if excluded and eligible:
+        if excluded and eligible and not source_only:
             pending = connection.execute("SELECT task_id FROM ai_control_tasks WHERE capability IN ('observe','market-observe') AND "
                 "((status='pending' AND (available_at<=%s OR last_error='ai-call-budget-exhausted')) "
                 "OR (status='processing' AND lease_until<%s)) LIMIT 1", (clock, clock)).fetchone()
@@ -88,6 +91,8 @@ class AITaskDispatchPersistence:
             "SUM(status='pending') AS pending,"
             "SUM(status='pending' AND (available_at<=%s OR last_error='ai-call-budget-exhausted')) AS due,"
             "MIN(CASE WHEN status='pending' AND available_at<=%s THEN available_at END) AS oldest_due,"
+            "MIN(CASE WHEN status='pending' THEN created_at END) AS oldest_pending,"
+            "SUM(status='pending' AND last_error='ai-execution:recovery-wait') AS provider_wait,"
             "SUM(status='processing' AND lease_until>=%s) AS processing,"
             "SUM(status='processing' AND lease_until<%s) AS expired "
             "FROM ai_control_tasks WHERE status IN ('pending','processing') "
@@ -101,4 +106,5 @@ class AITaskDispatchPersistence:
                 "recoveredLeaseCount": int(state.get("recoveredLeaseCount", 0)),
                 "queues": [{"capability": r["capability"], "pending": int(r["pending"]), "due": int(r["due"]),
                             "processing": int(r["processing"]), "expiredLeases": int(r["expired"]),
-                            "oldestDueAt": r["oldest_due"] or ""} for r in rows]}
+                            "oldestDueAt": r["oldest_due"] or "", "oldestPendingAt": r["oldest_pending"] or "",
+                            "providerWaiting": int(r["provider_wait"])} for r in rows]}

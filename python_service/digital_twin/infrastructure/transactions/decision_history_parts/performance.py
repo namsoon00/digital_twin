@@ -6,7 +6,7 @@ from typing import Callable, Dict, Iterable, List, Mapping
 from digital_twin.modules.decisions.domain.investment_brain import canonical_investment_timestamp
 from digital_twin.infrastructure.mysql_operational_helpers import _json_loads
 from .ports import ConnectionFactory
-from digital_twin.modules.outcomes.domain.decision_calibration_input import DECISION_CALIBRATION_INPUT_VERSION
+from .calibration_rows import read_calibration_rows
 from digital_twin.modules.outcomes.domain.decision_calibration_input import calibration_ai_judgment
 from digital_twin.modules.outcomes.infrastructure.performance_report_cache import PERFORMANCE_REPORT_CACHE
 
@@ -238,51 +238,8 @@ def performance_episodes(
     outcome_limit = max(1, min(5000, outcome_limit, requested_limit))
     params.append(outcome_limit)
     where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
-    outer_where = " WHERE outcomes.observed_at <= %s" if normalized_as_of else ""
-    if normalized_as_of:
-        params.append(normalized_as_of)
     with _connect() as connection:
-        rows = connection.execute(
-            "SELECT outcomes.episode_id, outcomes.observed_at, outcomes.payload_json AS outcome_json, "
-            "episodes.account_id, episodes.symbol, episodes.subject_name, episodes.action, "
-            "episodes.selected_hypothesis_id, episodes.decided_at, "
-            "COALESCE(JSON_EXTRACT(calibration.hypotheses_json, '$.aiJudgment'), "
-            "JSON_OBJECT('insightAssessment', JSON_EXTRACT(raw_episodes.payload_json, '$.factsAtDecision.aiJudgment.insightAssessment'), "
-            "'insight_assessment', JSON_EXTRACT(raw_episodes.payload_json, '$.factsAtDecision.aiJudgment.insight_assessment'))) AS ai_judgment_json, "
-            "COALESCE(JSON_EXTRACT(calibration.hypotheses_json, '$.insightAssessment'), "
-            "JSON_EXTRACT(raw_episodes.payload_json, '$.insightAssessment')) AS insight_assessment_json, "
-            "COALESCE(JSON_EXTRACT(calibration.hypotheses_json, '$.assistantQualityObservation'), "
-            "JSON_EXTRACT(raw_episodes.payload_json, '$.factsAtDecision.assistantQualityObservation')) AS quality_observation_json, "
-            "COALESCE(JSON_EXTRACT(calibration.hypotheses_json, '$.hypotheses'), "
-            "JSON_EXTRACT(raw_episodes.payload_json, '$.hypothesisSet.hypotheses')) AS hypotheses_json "
-            "FROM ("
-            "SELECT episode_id, MAX(observed_at) AS latest_observed_at "
-            "FROM investment_decision_outcomes FORCE INDEX (idx_outcome_calibration_selection)"
-            + where
-            + " GROUP BY episode_id ORDER BY latest_observed_at DESC LIMIT %s"
-            ") AS selected STRAIGHT_JOIN investment_decision_episodes AS episodes FORCE INDEX (PRIMARY) "
-            "ON episodes.episode_id = selected.episode_id "
-            "STRAIGHT_JOIN investment_decision_outcomes AS outcomes FORCE INDEX (idx_decision_outcomes_episode_time) "
-            "ON outcomes.episode_id = selected.episode_id "
-            "LEFT JOIN investment_decision_calibration_inputs AS calibration "
-            "ON calibration.episode_id = episodes.episode_id "
-            "AND calibration.source_updated_at = episodes.updated_at "
-            "AND calibration.format_version = '" + DECISION_CALIBRATION_INPUT_VERSION + "' "
-            # Referencing the original LONGTEXT on the primary episode join
-            # makes InnoDB load its off-page audit even when COALESCE uses a
-            # valid compact row. Gate that physical read with a separate join.
-            # Missing individual projection fields retain the exact fallback.
-            "LEFT JOIN investment_decision_episodes AS raw_episodes FORCE INDEX (PRIMARY) "
-            "ON raw_episodes.episode_id = episodes.episode_id AND (calibration.episode_id IS NULL "
-            "OR JSON_EXTRACT(calibration.hypotheses_json, '$.aiJudgment') IS NULL "
-            "OR JSON_EXTRACT(calibration.hypotheses_json, '$.insightAssessment') IS NULL "
-            "OR JSON_EXTRACT(calibration.hypotheses_json, '$.assistantQualityObservation') IS NULL "
-            "OR JSON_EXTRACT(calibration.hypotheses_json, '$.hypotheses') IS NULL) "
-            + outer_where
-            + " "
-            "ORDER BY selected.latest_observed_at DESC, outcomes.observed_at ASC, outcomes.outcome_id ASC",
-            tuple(params),
-        ).fetchall()
+        rows = read_calibration_rows(connection, where, params, normalized_as_of)
     grouped: Dict[str, Dict[str, object]] = {}
     for row in rows or []:
         episode_id = str(row.get("episode_id") or "").strip()

@@ -58,6 +58,61 @@ class AIExecutionPersistence:
         if wait:
             raise wait
 
+    def park_model_waiters(self):
+        """Move due model work behind the provider gate without claiming it.
+
+        Independent source collection remains eligible. Only this wait reason
+        may be awakened on provider recovery; later evidence/error waits win.
+        No attempt, model budget, input, result or source clock is manufactured.
+        """
+        now = datetime.now(timezone.utc)
+        clock = stamp(now)
+        def update(connection):
+            state = self._locked_execution_state(connection, SCOPE, now)
+            wait = recovery_wait(state, now)
+            if wait:
+                where = ("status='pending' AND available_at<=%s "
+                         "AND capability IN ('observe','market-observe','research-plan')")
+                params = (clock,)
+            else:
+                where = "status='pending' AND last_error='ai-execution:recovery-wait'"
+                params = ()
+            rows = connection.execute("SELECT task_id FROM ai_control_tasks FORCE INDEX(ai_control_due) WHERE "
+                + where + " ORDER BY available_at,task_id LIMIT 50 FOR UPDATE SKIP LOCKED", params).fetchall()
+            for row in rows:
+                if wait:
+                    connection.execute("UPDATE ai_control_tasks SET "
+                        "payload_json=JSON_SET(payload_json,'$.executionWait',CAST(%s AS JSON),"
+                        "'$.providerParking',COALESCE(JSON_EXTRACT(payload_json,'$.providerParking'),"
+                        "JSON_OBJECT('priorError',last_error,'scheduledAt',available_at))),"
+                        "available_at=%s,last_error=%s,updated_at=%s "
+                        "WHERE task_id=%s AND status='pending' AND available_at<=%s",
+                        (json.dumps(wait.result()), wait.retry_at, wait.code, clock, row["task_id"], clock))
+                else:
+                    connection.execute("UPDATE ai_control_tasks SET available_at=LEAST(available_at,%s),"
+                        "last_error=COALESCE(JSON_UNQUOTE(JSON_EXTRACT(payload_json,'$.providerParking.priorError')),''),"
+                        "updated_at=%s,payload_json=JSON_REMOVE(payload_json,'$.executionWait','$.providerParking') "
+                        "WHERE task_id=%s AND status='pending' AND last_error='ai-execution:recovery-wait'",
+                        (clock, clock, row["task_id"]))
+            return wait
+        return self.transaction_with_deadlock_retry("ai-provider-wait", update)
+
+    def worker_preflight(self):
+        """No full service/graph/research construction for an idle quota wait."""
+        from ..domain.planning import enabled
+        if not enabled(self.runtime_settings):
+            return {"status": "paused"}
+        wait = self.park_model_waiters()
+        if not wait:
+            return None
+        clock = stamp(datetime.now(timezone.utc))
+        with self.connect() as connection:
+            source = connection.execute("SELECT task_id FROM ai_control_tasks FORCE INDEX(ai_control_due) "
+                "WHERE status='pending' AND available_at<=%s AND capability='research' LIMIT 1", (clock,)).fetchone()
+            expired = connection.execute("SELECT task_id FROM ai_control_tasks FORCE INDEX(ai_control_due) "
+                "WHERE status='processing' AND lease_until<%s AND capability='research' LIMIT 1", (clock,)).fetchone()
+        return None if source or expired else wait.result()
+
     def defer_execution(self, job, wait):
         # Frozen input identities include attempts; never decrement or reuse them.
         now = stamp(datetime.now(timezone.utc))
@@ -103,6 +158,16 @@ class AIExecutionPersistence:
                       callWindowMinutes=round((now - since).total_seconds() / 60, 2),
                       carriedOverdueObservationTasks=int(overdue["count"]) if grace else 0,
                       runtimeCoverage=self.runtime_report(connection, now - timedelta(hours=24), now))
+        activity = states.get(RUNTIME, {})
+        health["workerActivity"] = {key: activity.get(key, "") for key in ("activity", "activityAt")}
+        activity_at = instant(activity.get("activityAt"))
+        if (enabled and runtime["live"] and activity.get("activity") == "resource-deferred"
+                and activity_at and timedelta(0) <= now - activity_at <= timedelta(minutes=2)
+                and not recovery_wait(states.get(SCOPE, {}), now)):
+            health.update(status="resource-wait", reason="워커는 실행 중이며 메모리 또는 실행 자리 확보를 기다립니다. 새 판단을 완료한 상태는 아닙니다.")
+        if (enabled and runtime["live"] and activity.get("activity") == "unavailable"
+                and activity_at and timedelta(0) <= now - activity_at <= timedelta(minutes=2)):
+            health.update(status="degraded", reason="최근 작업 실행 중 오류가 발생했습니다. 워커 생존과 판단 완료를 구분해 확인해야 합니다.")
         if enabled and not runtime["live"]:
             health.update(status="runtime-unconfirmed", reason="워커 생존 기록이 없거나 중단됐습니다. 중단 시각과 AI 처리 성과는 구분해 확인해야 합니다.")
         if started:

@@ -117,6 +117,7 @@ class MySQLAIControlStore(AITokenUsagePersistence, DiagnosticProgressPersistence
                 self.insert(connection, {**job, "taskId": identity(latest["task_id"], subject["worldId"], "rejoin")})
 
     def claim(self, subjects=()):
+        provider_wait = self.park_model_waiters()
         now = stamp()
         clock = datetime.fromisoformat(now.replace("Z", "+00:00"))
         day = now[:10]
@@ -131,8 +132,11 @@ class MySQLAIControlStore(AITokenUsagePersistence, DiagnosticProgressPersistence
             budget = connection.execute("SELECT used_count FROM ai_control_budget WHERE day_key=%s FOR UPDATE", (day,)).fetchone()
             calls = connection.execute("SELECT used_count FROM ai_control_budget WHERE day_key=%s", ("calls:" + day,)).fetchone()
             state = budget_state(self.runtime_settings, budget["used_count"], (calls or {}).get("used_count", 0), clock)
-            row, slot, lane = self.select_dispatch(connection, cursor, state, clock, subjects)
+            row, slot, lane = self.select_dispatch(connection, cursor, state, clock, subjects,
+                                                  source_only=bool(provider_wait))
             if not row:
+                if provider_wait:
+                    raise provider_wait
                 return None
             token = uuid.uuid4().hex
             until = (clock + timedelta(minutes=15)).isoformat().replace("+00:00", "Z")
@@ -189,7 +193,7 @@ class MySQLAIControlStore(AITokenUsagePersistence, DiagnosticProgressPersistence
             if not cursor.rowcount:
                 return None
             if job["capability"] in OBSERVATIONS and (saved_result.get("quality", {}).get("status") in {"accepted", "observation-only"}
-                                                    or saved_result.get("status") == "unchanged"):
+                                                    or saved_result.get("status") in {"unchanged", "unchanged-wait"}):
                 saved_result.setdefault("resumption", {})["coalescedTaskCount"] = self.coalesce_observations(connection, job, now)
             development = getattr(self, "development_writer", None)
             if development is not None and job["capability"] in OBSERVATIONS and saved_result.get("summary"):

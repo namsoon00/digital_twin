@@ -83,3 +83,16 @@ test("market judgments, question work and receipt-backed delivery remain separat
   const queue = vm.runInNewContext(source.slice(0, source.indexOf("async function load(")) + '\nqueueView({cycle:["market-observe","observe","research"],queues:[]})', {URL,questionAssessmentView,questionPerformanceView});
   assert.match(queue, /시장 관찰 → 질문 연구 → 자료 수집/);
 });
+
+test("live provider and resource waits override an old lane result without implying delivery", () => {
+  const value = {lanes:[{capability:"market-observe",authored:0,checksWithoutJudgment:0,
+    latestTask:{status:"pending",updatedAt:"2026-11-01T02:00:00Z"}}]};
+  for (const status of ["unavailable", "resource-wait"]) {
+    const health = {status,reason:"실행 대기 <script>",workerActivity:{activity:"resource-deferred",activityAt:"2026-11-01T02:00:00Z"}};
+    const html = vm.runInNewContext(source.slice(0, source.indexOf("async function load(")) + "\nlanesView(value, health) + healthView(health)",
+      {value,health,URL,questionAssessmentView,questionPerformanceView});
+    assert.match(html, /실행 대기 &lt;script&gt;/);
+    assert.match(html, /판단 완료는 별도로/);
+    assert.doesNotMatch(html, /다음 예약 대기|실제 발송 확인|<script>/);
+  }
+});

@@ -2521,3 +2521,30 @@ existing three-hour same-source cost gate remains usable after full input remova
 a policy-version change, new source or meaningful price/condition change still
 reopens observation.
 These checks establish execution behavior, not analyst accuracy or returns.
+
+## Operational waits and progress (2026-11-01)
+
+Central AI has one execution slot separate from historical replay and other
+research workers. Evidence preparation retains its existing separate slot.
+Memory pressure protection and the shared model-process limit still apply.
+The central worker records liveness and activity before and after admission;
+an admission wait is not downtime or a successfully authored judgment. Its
+ledger is initialized once per worker instead of at each admitted turn.
+
+During provider recovery waits, up to 50 due observations and research plans
+are parked at the next retry time without incrementing attempts, consuming
+task/model budgets, or freezing inputs. Source collection remains eligible.
+The gate is checked again before observation evidence and memory preparation.
+Recovery wakes only tasks whose current error is still the provider wait;
+later data/error waits and independent future schedules are retained. Existing
+single-probe recovery and provider backoff remain authoritative. A retry time
+is not a confirmed quota reset; increasing internal budgets does not restore
+provider capacity.
+
+Successful `unchanged-wait` completion may coalesce identical unattempted
+regular reservations. Account, symbol, world, market route and original
+questions must match. Research, evidence wakes and previously attempted tasks
+retain their own records. Coalesced reservations are `superseded`, not authored
+judgments or recovered historical observations. The web view shows provider
+wait counts, the oldest reservation and current worker activity separately
+from the existing saved-judgment timestamps and verified delivery receipts.

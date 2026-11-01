@@ -57,11 +57,11 @@ def host_memory_pressure():
 
 
 class BackgroundCapacity:
-    def __init__(self, directory, slots=1, pressure_reader=host_memory_pressure,
+    def __init__(self, directory, slots=1, pressure_reader=None,
                  clock=time.monotonic, emit=print):
         self.directory = Path(directory)
         self.slots = max(1, min(4, int(slots)))
-        self.pressure_reader, self.clock, self.emit = pressure_reader, clock, emit
+        self.pressure_reader, self.clock, self.emit = pressure_reader or host_memory_pressure, clock, emit
         self.last_pressure_check = None
         self.pressure = "unknown"
         self.resume_after = 0.0
@@ -124,7 +124,11 @@ def managed_background_call(callback, deferred_result=None):
     if _managed_capacity is None:
         from .settings import data_dir
         # Bounded graph I/O must not occupy the model/research execution slot.
-        pool = "evidence-capacity" if os.environ.get("ORBIT_BACKGROUND_WORKER") == "ai-evidence" else "background-capacity"
+        worker = os.environ.get("ORBIT_BACKGROUND_WORKER")
+        # Central reasoning must not wait behind an entire historical replay.
+        # Each pool admits one turn; memory pressure and the shared model-process
+        # limiter still apply. Other research workers retain their shared slot.
+        pool = {"ai-evidence": "evidence-capacity", "ai-control": "central-ai-capacity"}.get(worker, "background-capacity")
         _managed_capacity = BackgroundCapacity(data_dir() / pool)
     with _managed_capacity.acquire() as admitted:
         return callback() if admitted else deferred_result

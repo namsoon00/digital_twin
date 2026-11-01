@@ -8,6 +8,36 @@ from digital_twin.infrastructure import background_capacity as api
 
 
 class BackgroundCapacityTests(unittest.TestCase):
+    def test_long_research_does_not_occupy_central_slot_and_pressure_still_blocks_it(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            background = api.BackgroundCapacity(root / "background-capacity", pressure_reader=lambda: "normal", emit=Mock())
+            with background.acquire() as admitted, patch.dict(os.environ, {"ORBIT_BACKGROUND_ADMISSION": "1", "ORBIT_BACKGROUND_WORKER": "ai-control"}), \
+                    patch('digital_twin.infrastructure.settings.data_dir', return_value=root), \
+                    patch.object(api, "_managed_capacity", None), patch.object(api, "host_memory_pressure", return_value="normal"):
+                self.assertTrue(admitted)
+                self.assertEqual(42, api.managed_background_call(lambda: 42, "deferred"))
+                guard = api._managed_capacity
+                self.assertEqual(root / "central-ai-capacity", guard.directory)
+                guard.pressure_reader = lambda: "critical"
+                guard.last_pressure_check = None
+                callback = Mock()
+                self.assertEqual("deferred", api.managed_background_call(callback, "deferred"))
+                callback.assert_not_called()
+
+    def test_central_heartbeat_survives_denied_admission_without_building_heavy_service(self):
+        from types import SimpleNamespace
+        from digital_twin.infrastructure.cli import ai_control_command
+        store = Mock()
+        store.worker_preflight.return_value = None
+        with patch('digital_twin.infrastructure.service_factory.build_ai_control_runtime', return_value=store), \
+                patch('digital_twin.infrastructure.service_factory.build_ai_control_service') as build, \
+                patch('digital_twin.infrastructure.cli.runtime_settings', return_value={}), \
+                patch.object(api, 'managed_background_call', side_effect=lambda call, fallback: fallback), patch('builtins.print'):
+            self.assertEqual(0, ai_control_command(SimpleNamespace(ai_control_action='once')))
+        build.assert_not_called()
+        self.assertEqual(['checking', 'resource-deferred'], [call.kwargs['activity'] for call in store.record_runtime_pulse.call_args_list])
+
     def test_pressure_defers_before_claim_and_resumes_after_stable_recovery(self):
         with tempfile.TemporaryDirectory() as directory:
             clock = Mock(return_value=0)

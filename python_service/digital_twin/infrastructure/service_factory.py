@@ -161,6 +161,7 @@ _EXPORTS.update({
 })
 
 _EXPORTS["build_ai_control_service"] = ("digital_twin.infrastructure.composition.ai_orchestration", "build_ai_control_service")
+_EXPORTS["build_ai_control_runtime"] = ("digital_twin.infrastructure.composition.ai_orchestration", "build_ai_control_runtime")
 _EXPORTS["build_ai_evidence_service"] = ("digital_twin.infrastructure.composition.ai_orchestration", "build_ai_evidence_service")
 _EXPORTS["ai_control_status"] = ("digital_twin.infrastructure.composition.ai_orchestration", "ai_control_status")
 

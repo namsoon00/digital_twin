@@ -54,7 +54,7 @@ class AIControlService:
         self.evidence_waker(subjects)
         try:
             job = self.store.claim(subjects=subjects)
-        except AIControlBudgetWait as wait:
+        except (AIControlBudgetWait, AIExecutionDeferred) as wait:
             return wait.result()
         if not job:
             return {"status": "idle"}
@@ -67,6 +67,9 @@ class AIControlService:
                 return {"status": "retired", "taskId": job["taskId"]}
             with self.store.keep_alive(job):
                 if job["capability"] in lanes.OBSERVATIONS:
+                    # A provider wait is not an evidence failure. Check before
+                    # reading memories, preparing inputs or opening a retrieval.
+                    self.store.execution_wait()
                     stage = "evidence-capture"
                     capture = self.evidence({**job, "marketWorldId": current_subject.get("marketWorldId", "")})
                     session = capture if isinstance(capture, ObservationEvidenceSession) else None
@@ -362,6 +365,7 @@ class AIControlService:
                     due = (datetime.now(timezone.utc) + timedelta(minutes=result["nextCheckMinutes"])).isoformat().replace("+00:00", "Z")
                     children.append({**self.subject(job), "capability": job["capability"], "watchQuestions": result["questions"], "taskId": identity(job["taskId"], "next"), "availableAt": due})
                 elif job["capability"] == "research-plan":
+                    self.store.execution_wait()
                     # Operational source planning has no dependency on graph
                     # readiness, narrative novelty or notification acceptance.
                     stage = "research-planning"

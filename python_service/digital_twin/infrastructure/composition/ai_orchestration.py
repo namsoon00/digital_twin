@@ -73,7 +73,14 @@ def build_ai_evidence_service(settings=None):
         binding_reader, lambda: ai_control_subjects(configured), enabled=lambda: enabled(configured))
 
 
-def build_ai_control_service(settings=None):
+def build_ai_control_runtime(settings=None):
+    """Initialize the worker ledger once, independently of heavy-turn admission."""
+    from digital_twin.infrastructure.settings import runtime_settings
+    from digital_twin.modules.ai_orchestration.infrastructure.mysql_control import MySQLAIControlStore
+    return MySQLAIControlStore(settings if settings is not None else runtime_settings())
+
+
+def build_ai_control_service(settings=None, *, store=None):
     from digital_twin.infrastructure.settings import runtime_settings
     from digital_twin.infrastructure.operational_store import investment_research_store
     from digital_twin.infrastructure.composition.news_intelligence import build_investment_research_orchestrator
@@ -88,7 +95,8 @@ def build_ai_control_service(settings=None):
     configured["aiEvidenceReadPolicy"] = read_policy
     from digital_twin.modules.ai_orchestration.domain.judgment_policy import VERSION as judgment_policy
     configured["aiJudgmentQualityPolicy"] = judgment_policy
-    store = MySQLAIControlStore(configured)
+    store = store if store is not None else MySQLAIControlStore(configured)
+    store.runtime_settings = configured
     def projection_status(job):
         from digital_twin.modules.reasoning.public import observation_projection_status
         with store.connect() as connection:

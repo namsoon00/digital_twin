@@ -101,18 +101,19 @@ class HypothesisEvaluationV2Tests(unittest.TestCase):
     def test_sql_projection_preserves_original_ai_assessment(self):
         assessment = {"publishable": True, "direction": "positive", "conviction": "moderate"}
         row = {"episode_id": "e", "account_id": "a", "symbol": "TEST", "action": "HOLD",
+               "observed_at": "2026-01-02T00:00:00Z",
                "selected_hypothesis_id": "h", "decided_at": "2026-01-01T00:00:00Z",
                "ai_judgment_json": json.dumps({"insightAssessment": assessment}),
                "hypotheses_json": json.dumps([{"hypothesisId": "h"}]),
                "outcome_json": json.dumps({"observedAt": "2026-01-02T00:00:00Z", "priceChangeFromDecisionPct": 1,
                                            "payload": {"selectedHypothesisId": "h", "horizonMinutes": 1440}})}
         queries = []
-        def execute(sql, args):
+        def execute(sql, args=()):
             queries.append(sql)
             return SimpleNamespace(fetchall=lambda: [row])
         loaded = performance_episodes(_connect=lambda: nullcontext(SimpleNamespace(execute=execute)),
                                       _runtime_settings={}, _shadow_performance_episodes=lambda **kwargs: [])
-        self.assertIn("$.factsAtDecision.aiJudgment", queries[0])
+        self.assertTrue(any("$.factsAtDecision.aiJudgment" in sql for sql in queries))
         self.assertEqual(assessment, loaded[0]["factsAtDecision"]["aiJudgment"]["insightAssessment"])
         self.assertEqual(1, len(investment_insight_performance_observations(loaded)))
 

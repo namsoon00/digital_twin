@@ -476,20 +476,35 @@ def ai_evidence_command(args) -> int:
 
 
 def ai_control_command(args) -> int:
-    from digital_twin.infrastructure.service_factory import build_ai_control_service, ai_control_status
+    from digital_twin.infrastructure.service_factory import build_ai_control_service, build_ai_control_runtime, ai_control_status
     from digital_twin.infrastructure.background_capacity import managed_background_call, managed_background_should_retire
     import threading
     if args.ai_control_action == "status":
         print(json.dumps(ai_control_status(), ensure_ascii=False))
         return 0
     stop = threading.Event()
+    store = build_ai_control_runtime()
     while True:
         try:
-            result = managed_background_call(
-                lambda: build_ai_control_service().run_once(), {"status": "resource-deferred"},
+            # Liveness is recorded even when memory/capacity defers the turn.
+            # Reuse the ledger instead of running schema setup every minute.
+            store.record_runtime_pulse(activity="checking")
+            configured = runtime_settings(fast_operational_read=True, require_store_read=True)
+            store.runtime_settings = configured
+            preflight = store.worker_preflight()
+            def execute_turn():
+                store.record_runtime_pulse(activity="running")
+                return build_ai_control_service(configured, store=store).run_once()
+            result = preflight or managed_background_call(
+                execute_turn, {"status": "resource-deferred"},
             )
+            store.record_runtime_pulse(activity=result.get("status"))
             print(json.dumps(result, ensure_ascii=False), flush=True)
         except Exception as error:
+            try:
+                store.record_runtime_pulse(activity="unavailable")
+            except Exception:
+                pass  # An unavailable DB cannot prove liveness or success.
             print(json.dumps({"status": "unavailable", "reason": type(error).__name__}), flush=True)
         if args.ai_control_action == "once" or managed_background_should_retire():
             return 0

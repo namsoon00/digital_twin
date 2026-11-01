@@ -2,6 +2,7 @@
 
 import unittest
 import uuid
+from contextlib import contextmanager
 from unittest.mock import patch
 
 from stabilization_database import StabilizationDatabaseCase
@@ -14,6 +15,19 @@ from digital_twin.modules.outcomes.infrastructure import transaction_writes
 
 
 class CalibrationInputShapeTests(unittest.TestCase):
+    def test_query_failure_is_not_empty_history_and_rollback_does_not_hide_cause(self):
+        from digital_twin.infrastructure.transactions.decision_history_parts.calibration_rows import read_calibration_rows
+        from unittest.mock import Mock
+        connection = Mock()
+        def execute(sql, *args):
+            if sql.startswith('SELECT'):
+                raise TimeoutError('history query timed out')
+            if sql == 'ROLLBACK':
+                raise RuntimeError('already disconnected')
+        connection.execute.side_effect = execute
+        with self.assertRaisesRegex(TimeoutError, 'history query timed out'):
+            read_calibration_rows(connection, '', [20], '')
+
     def test_calibration_projection_keeps_claims_order_and_never_audit_payload(self):
         source = {"hypothesisSet": {"hypotheses": [
             {"hypothesisId": "a", "claimContract": {"revision": 2}, "trace": "large-audit"},
@@ -38,9 +52,33 @@ class CalibrationInputShapeTests(unittest.TestCase):
 
 
 class CalibrationInputStorageTests(StabilizationDatabaseCase):
-    def create_history(self):
+    def test_large_compact_history_reads_bounded_batches_without_original_audit(self):
+        account_id = "batch:" + uuid.uuid4().hex
+        values = [self.create_history(account_id=account_id) for _ in range(23)]
+        statements = []
+        original = self.decisions.connect
+        @contextmanager
+        def tracked():
+            with original() as connection:
+                execute = connection.execute
+                def record(sql, params=()):
+                    statements.append((sql, params))
+                    return execute(sql, params)
+                connection.execute = record
+                yield connection
+        with patch.object(self.decisions, "connect", tracked):
+            result = self.decisions.performance_episodes(account_id=values[0].account_id, as_of=NOW)
+        self.assertEqual({value.episode_id for value in values}, {row['episodeId'] for row in result})
+        batches = [(sql, params) for sql, params in statements if 'WHERE episodes.episode_id IN (' in sql]
+        self.assertEqual(2, len(batches))
+        self.assertTrue(all(len(params) <= 22 for _, params in batches))
+        self.assertFalse(any("JSON_OBJECT('insightAssessment'" in sql for sql, _ in statements))
+
+    def create_history(self, account_id=None):
         value = episode("calibration:" + uuid.uuid4().hex)
         payload = value.to_dict()
+        if account_id is not None:
+            payload["accountId"] = account_id
         payload["factsAtDecision"]["auditOnly"] = "x" * 50000
         payload["factsAtDecision"]["aiJudgment"] = {"insight_assessment":{"publishable":True,"direction":"positive","conviction":"moderate"},"prompt":"private-full-prompt"}
         payload["factsAtDecision"]["assistantQualityObservation"] = {"sourceTraceComplete":True,"recordedAt":NOW}

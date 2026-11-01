@@ -15,6 +15,79 @@ from digital_twin.modules.ai_orchestration.domain.task_dispatch import SCOPE
 
 @unittest.skipUnless(os.environ.get("MYSQL_DATABASE") == "orbit_alpha_test", "isolated MySQL required")
 class AITaskDispatchTests(unittest.TestCase):
+    def test_provider_wait_does_not_reclaim_expired_model_job_before_source_work(self):
+        self.insert('expired-model', 'observe')
+        self.store.claim()
+        self.insert('source', 'research')
+        with self.store.transaction() as c:
+            c.execute("UPDATE ai_control_tasks SET lease_until='2000-01-01T00:00:00Z' WHERE task_id='expired-model'")
+            c.execute("UPDATE ai_control_execution_state SET state_json=%s WHERE scope_key='shared-local-model'",
+                      (json.dumps({'blockedUntil': '2098-01-01T00:00:00Z', 'lastFailureCategory': 'quota'}),))
+        self.assertEqual('source', self.store.claim()['taskId'])
+        with self.store.connect() as c:
+            row = c.execute("SELECT attempts FROM ai_control_tasks WHERE task_id='expired-model'").fetchone()
+        self.assertEqual(1, row['attempts'])
+
+    def test_provider_wait_parks_without_attempts_and_recovery_preserves_newer_waits(self):
+        from digital_twin.modules.ai_orchestration.domain.execution_resilience import AIExecutionDeferred
+        self.insert("leased", "observe")
+        leased = self.store.claim()
+        for identity, capability in [("observe", "observe"), ("market", "market-observe"), ("plan", "research-plan"), ("source", "research")]:
+            self.insert(identity, capability)
+        self.insert("future", "observe", available_at="2099-01-01T00:00:00Z")
+        retry = "2098-01-01T00:00:00Z"
+        with self.store.transaction() as c:
+            c.execute("UPDATE ai_control_tasks SET last_error='original-read-error' WHERE task_id='observe'")
+            c.execute("UPDATE ai_control_execution_state SET state_json=%s WHERE scope_key='shared-local-model'",
+                      (json.dumps({"blockedUntil": retry, "lastFailureCategory": "quota"}),))
+        self.assertIsNone(self.store.worker_preflight())
+        self.assertEqual("source", self.store.claim()["taskId"])
+        self.assertEqual('recovery-wait', self.store.worker_preflight()['status'])
+        with self.assertRaises(AIExecutionDeferred):
+            self.store.claim()
+        with self.store.connect() as c:
+            rows = {r['task_id']: r for r in c.execute('SELECT task_id,attempts,status,available_at,last_error FROM ai_control_tasks').fetchall()}
+            used = c.execute('SELECT used_count FROM ai_control_budget WHERE day_key=%s', (stamp()[:10],)).fetchone()
+        self.assertEqual(2, used['used_count'])
+        for key in ('observe', 'market', 'plan'):
+            self.assertEqual((0, 'pending', retry, 'ai-execution:recovery-wait'),
+                             tuple(rows[key][k] for k in ('attempts', 'status', 'available_at', 'last_error')))
+        self.assertTrue(self.store.heartbeat(leased))
+        with self.store.transaction() as c:
+            c.execute("UPDATE ai_control_tasks SET last_error='newer-data-wait' WHERE task_id='plan'")
+            c.execute("UPDATE ai_control_execution_state SET state_json='{}' WHERE scope_key='shared-local-model'")
+        self.assertIn(self.store.claim()['taskId'], {'observe', 'market'})
+        with self.store.connect() as c:
+            rows = {r['task_id']: r for r in c.execute('SELECT task_id,available_at,last_error FROM ai_control_tasks').fetchall()}
+        self.assertEqual(retry, rows['plan']['available_at'])
+        self.assertEqual('newer-data-wait', rows['plan']['last_error'])
+        self.assertEqual('original-read-error', rows['observe']['last_error'])
+        self.assertEqual('2099-01-01T00:00:00Z', rows['future']['available_at'])
+
+    def test_unchanged_wait_coalesces_only_identical_regular_observations(self):
+        base = self.insert('a', 'observe')
+        with self.store.transaction() as c:
+            for extra in ({'taskId': 'b'}, {'taskId': 'question', 'watchQuestions': ['different question']},
+                          {'taskId': 'market-route', 'marketWorldId': 'different-route'}, {'taskId': 'wake', 'evidenceWake': {'id': 'new'}}):
+                self.store.insert(c, {**base, **extra})
+        job = self.store.claim()
+        self.assertEqual('a', job['taskId'])
+        result = {'status': 'unchanged-wait'}
+        self.assertTrue(self.store.complete(job, result, []))
+        self.assertEqual(1, result['resumption']['coalescedTaskCount'])
+        with self.store.connect() as c:
+            rows = {r['task_id']: r for r in c.execute('SELECT task_id,status,result_json FROM ai_control_tasks').fetchall()}
+        self.assertEqual('superseded', json.loads(rows['b']['result_json'])['status'])
+        self.assertTrue(all(rows[key]['status'] == 'pending' for key in ['question', 'market-route', 'wake']))
+
+    def test_capacity_wait_has_fresh_liveness_but_never_claims_judgment_success(self):
+        self.store.record_runtime_pulse(activity='resource-deferred')
+        health = self.store.status()['executionHealth']
+        self.assertEqual('resource-wait', health['status'])
+        self.assertTrue(health['runtime']['live'])
+        self.assertFalse(health['judgmentSavedSinceResume'])
+        self.assertEqual('resource-deferred', health['workerActivity']['activity'])
+
     def setUp(self):
         from digital_twin.infrastructure.settings import runtime_settings
         from digital_twin.modules.ai_orchestration.infrastructure.mysql_control import MySQLAIControlStore

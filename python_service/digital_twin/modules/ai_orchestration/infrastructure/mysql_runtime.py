@@ -15,7 +15,7 @@ RUNTIME_SCHEMA = """CREATE TABLE IF NOT EXISTS ai_control_runtime_intervals (
 
 
 class AIRuntimePersistence:
-    def record_runtime_pulse(self, *, now=None, worker_id=None):
+    def record_runtime_pulse(self, *, now=None, worker_id=None, activity=None):
         now, worker = now or datetime.now(timezone.utc), worker_id or WORKER_ID
         with self.transaction() as connection:
             state = self._locked_execution_state(connection, RUNTIME, now)
@@ -33,6 +33,10 @@ class AIRuntimePersistence:
                 connection.execute("UPDATE ai_control_runtime_intervals SET last_seen_at=%s WHERE interval_id=%s",
                                    (stamp(now), state["intervalId"]))
             state["lastSeenAt"] = stamp(now)
+            if activity in {"checking", "running", "resource-deferred", "recovery-wait", "budget-wait",
+                            "idle", "paused", "completed", "unchanged", "unchanged-wait", "awaiting-evidence",
+                            "deferred", "failed", "retired", "lease-lost", "unavailable"}:
+                state.update(activity=activity, activityAt=stamp(now))
             self._save_execution_state(connection, RUNTIME, state, now)
 
     @staticmethod

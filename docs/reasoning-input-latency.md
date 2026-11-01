@@ -1063,3 +1063,15 @@ A related startup wait treated an exited, unreaped child as alive because
 returns failure immediately after its exit. It does not wait for the full
 readiness timeout or grant graph readiness. `test_typedb_service_manager`
 checks both the zombie failure and retention while a low-disk graph is unready.
+
+## Bounded calibration reads (2026-11-01)
+
+Outcome history selects outcome-led episode identities first, then reads
+compact decision metadata and outcomes in batches of at most 20 IDs. Original
+audit JSON is read only for exact selected decisions whose compact projection
+is absent, stale, or missing an individual field. The phases share a
+repeatable-read, read-only snapshot; account scope, cutoff, original claims
+and all outcomes of selected episodes remain intact. Tied episode selection
+is deterministic by episode ID. Existing revision-checked prepared inputs
+remain in use. Query errors propagate instead of becoming empty history, and
+the transaction is rolled back before returning the connection to its pool.

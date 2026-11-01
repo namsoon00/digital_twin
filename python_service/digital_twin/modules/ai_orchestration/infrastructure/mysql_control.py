@@ -82,8 +82,13 @@ SCHEMA = (
 
 
 class MySQLAIControlStore(AITokenUsagePersistence, DiagnosticProgressPersistence, AITaskDispatchPersistence, AIRuntimePersistence, AIExecutionPersistence, MySQLOperationalConnection):
-    def __init__(self, settings=None):
-        super().__init__(settings)
+    def __init__(self, settings=None, *, initialize=True):
+        configured = dict(settings or {})
+        if not initialize:
+            configured["_skipOperationalSchemaBootstrap"] = "1"
+        super().__init__(configured)
+        if not initialize:
+            return
         with self.connect() as connection:
             for sql in SCHEMA:
                 connection.execute(sql)

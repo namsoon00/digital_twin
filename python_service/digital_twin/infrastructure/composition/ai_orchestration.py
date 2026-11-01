@@ -225,12 +225,14 @@ def ai_control_status(settings=None, account_id=""):
     from digital_twin.infrastructure.settings import runtime_settings
     from digital_twin.modules.ai_orchestration.infrastructure.mysql_control import MySQLAIControlStore
     from digital_twin.modules.ai_orchestration.contracts import CAPABILITIES, enabled
-    configured = dict(settings if settings is not None else runtime_settings())
+    configured = dict(settings if settings is not None else runtime_settings(
+        fast_operational_read=True, require_store_read=True))
     from digital_twin.modules.ai_orchestration.domain.execution_lanes import VERSION as lane_policy
     configured["aiObservationLanePolicy"] = lane_policy
     # Dashboard reads must not inherit long worker socket timeouts or its pool.
-    configured.update(mysqlOperationTimeoutSeconds=8, _mysqlPoolRole="ai-status")
-    control_store = MySQLAIControlStore(configured)
+    configured.update(mysqlOperationTimeoutSeconds=8, _mysqlPoolRole="ai-status",
+                      _skipOperationalSchemaBootstrap="1")
+    control_store = MySQLAIControlStore(configured, initialize=False)
     status = control_store.status(account_id)
     from digital_twin.modules.reasoning.infrastructure.mysql_observation_checkpoints import checkpoint_status
     try:
@@ -239,7 +241,7 @@ def ai_control_status(settings=None, account_id=""):
     except Exception as error:
         status["evidencePreparation"] = {"status": "unavailable", "reason": type(error).__name__}
     from digital_twin.modules.ai_orchestration.infrastructure.mysql_brain_agenda import MySQLBrainAgendaStore
-    status["brain"] = MySQLBrainAgendaStore(configured).status(account_id)
+    status["brain"] = MySQLBrainAgendaStore(configured, initialize=False).status(account_id)
     knowledge_enabled = str(configured.get("aiResearchKnowledgeEnabled", "false")).lower() not in {"false", "0", "off"}
     from digital_twin.modules.research_knowledge.public import ResearchKnowledgeService
     from digital_twin.modules.research_knowledge.infrastructure.mysql_repository import MySQLResearchKnowledgeRepository

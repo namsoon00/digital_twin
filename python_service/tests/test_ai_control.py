@@ -308,6 +308,23 @@ class AIControlTests(unittest.TestCase):
 
 @unittest.skipUnless(os.environ.get("MYSQL_DATABASE") == "orbit_alpha_test", "isolated MySQL required")
 class AIControlStorageTests(unittest.TestCase):
+    def test_dashboard_reads_existing_schema_without_initializing_or_mutating_it(self):
+        from digital_twin.infrastructure.composition.ai_orchestration import ai_control_status
+        from digital_twin.infrastructure.mysql_operational_connection import MySQLConnectionProxy
+        from digital_twin.modules.ai_orchestration.infrastructure.mysql_brain_agenda import MySQLBrainAgendaStore
+        MySQLBrainAgendaStore(self.store.runtime_settings)
+        original = MySQLConnectionProxy.execute
+        statements = []
+        def read_only(connection, sql, params=None):
+            statements.append(sql.split()[0])
+            self.assertIn(sql.split()[0], {'SELECT', 'SHOW'}, sql[:100])
+            return original(connection, sql, params)
+        with patch.object(MySQLConnectionProxy, 'execute', read_only):
+            status = ai_control_status(self.store.runtime_settings, account_id=SUBJECT['accountId'])
+        self.assertIn('executionHealth', status)
+        self.assertIn('taskScheduling', status)
+        self.assertTrue(statements)
+
     def test_graph_wait_preserves_task_age_and_does_not_exhaust_failure_retries(self):
         from digital_twin.modules.reasoning.contracts import EvidenceNotReady
         from datetime import datetime, timedelta, timezone

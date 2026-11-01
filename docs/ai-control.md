@@ -2548,3 +2548,5 @@ retain their own records. Coalesced reservations are `superseded`, not authored
 judgments or recovered historical observations. The web view shows provider
 wait counts, the oldest reservation and current worker activity separately
 from the existing saved-judgment timestamps and verified delivery receipts.
+Status reads reuse the existing schema; managed startup owns initialization
+and index migration. A dashboard request does not repeat schema setup.

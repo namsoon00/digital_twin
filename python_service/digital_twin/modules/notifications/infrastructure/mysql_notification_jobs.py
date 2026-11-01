@@ -880,6 +880,9 @@ class MySQLNotificationJobStore(PriceMetricsStore, DiagnosticThreadStore, Invest
                 "SELECT text, payload_json FROM notification_jobs WHERE job_id = %s",
                 (target,),
             ).fetchone()
+            if not row:
+                from digital_twin.infrastructure.mysql_history_archive import read_archived_row
+                row = read_archived_row(connection, "notification_jobs", {"job_id": target})
         return self.job_from_row(row) if row else None
 
     def record_lifecycle_with_connection(

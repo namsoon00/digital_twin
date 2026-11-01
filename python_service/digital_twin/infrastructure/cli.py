@@ -2008,6 +2008,20 @@ def run_mysql_temporal_snapshot_compaction(
 def maintenance_command(args) -> int:
     """Run storage maintenance outside the realtime inference path."""
     settings = dict(runtime_settings(fast_operational_read=True))
+    if args.maintenance_action == "history-archive":
+        from .mysql_history_archive import history_archive_status, verify_history_archive, restore_archived_row
+        configured = {**settings, "_skipOperationalSchemaBootstrap": True, "_skipOperationalHistoryRetention": True}
+        store = MySQLOperationalConnection(configured)
+        with store.connect() as connection:
+            connection.execute("SET SESSION MAX_EXECUTION_TIME=1500")
+            if args.restore:
+                result = restore_archived_row(connection, args.table, json.loads(args.key_json))
+            elif args.verify:
+                result = verify_history_archive(connection, args.limit)
+            else:
+                result = {"status": "ok", "tables": history_archive_status(connection)}
+        print(json.dumps(result, ensure_ascii=False))
+        return 0
     if args.maintenance_action == "financial-evidence":
         from digital_twin.infrastructure.financial_evidence_maintenance import run_financial_evidence_maintenance
         symbols = [item.strip() for item in str(args.symbols or "").split(",") if item.strip()]
@@ -2879,6 +2893,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     maintenance = subparsers.add_parser("maintenance", help="Run explicit local storage maintenance")
     maintenance_actions = maintenance.add_subparsers(dest="maintenance_action", required=True)
+    history_archive = maintenance_actions.add_parser("history-archive", help="Inspect or verify local lossless history")
+    history_archive.add_argument("--verify", action="store_true")
+    history_archive.add_argument("--limit", type=int, default=32)
+    history_archive.add_argument("--restore", action="store_true", help="Restore one exact row without replacing live data")
+    history_archive.add_argument("--table", default="")
+    history_archive.add_argument("--key-json", default="{}")
     financial_evidence = maintenance_actions.add_parser("financial-evidence")
     financial_evidence.add_argument("--apply", action="store_true")
     financial_evidence.add_argument("--limit", type=int, default=2000)

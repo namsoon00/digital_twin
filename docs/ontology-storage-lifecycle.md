@@ -14,12 +14,12 @@ TypeDB materialized ontology. It is a storage policy, not an investment rule.
 
 ## Retention Defaults
 
-- Terminal notification payloads: 30 days; compact delivery identities: 365 days.
+- Terminal notification payloads: archive after 30 days; actual delivery identities remain protected.
 - Completed shared-world projection jobs: 6 hours; completed inference detail: 7 days.
 - Failed shared-world payloads: compact after 2 days; delete the failed row
   after 30 days.
-- Temporal feature snapshots: 3 days; statistical signal snapshots: 365 days.
-- Investment reasoning cases and engine comparisons: 90 days.
+- Temporal feature snapshots: archive after 3 days; statistical signal snapshots after 365 days.
+- Investment reasoning cases remain protected; engine comparisons: 90 days.
 - Intraday market observations: 3-minute data for 7 days, 15-minute data for
   30 days, hourly data for 365 days, and daily data for 1,825 days.
 - Inactive TypeDB ABox manifests: keep one rollback generation per world.
@@ -215,13 +215,14 @@ rows so measuring payload lengths does not scan hundreds of megabytes per turn.
 Retention candidate indexes must match the global cleanup scope. Signal snapshot
 history uses `(created_at, snapshot_id)` in addition to its account/model read
 indexes. Both current signal and assessment heads remain protected at selection
-and deletion. Reasoning-case cleanup uses `(stage, completed_at, case_id)` and
-`(stage, updated_at, case_id)`: terminal stages and `VALIDATED` are selected in
-separate bounded ranges, then at most one shared batch of IDs is merged before
-payload lengths are read. The byte budget remains shared across stages. The
-candidate ordering follows the applicable retention clock, oldest first; the
-retention periods and deletion eligibility are unchanged. Every primary-key
-delete rechecks the current stage/clock so a reactivated case is preserved.
+and deletion. Decision cases, subject cases, candidate snapshots, publications,
+actual delivery receipts and model inputs are protected identity roots. Their
+age alone no longer makes them deletion candidates. Keep these records hot until
+all relational consumers support a separately verified cold representation;
+physical compression remains available as an explicit offline operation.
+AI queue requests, results and execution audits linked to a subject decision,
+an insight episode or an actual delivered receipt also remain hot. An active
+request protects its result and audit even before a decision link is committed.
 
 Existing installations receive these indexes through schema tuning. For a live
 rollout, add missing indexes with `ALGORITHM=INPLACE, LOCK=NONE` and a short
@@ -424,13 +425,110 @@ entry limits. Oversized inputs execute normally without being cached; they are
 never truncated. These are cache admission budgets, not an RSS or swap limit.
 Long-duration observation still needs to establish steady-state process memory.
 
-Subject decision history uses a `(completed_at, subject_case_id)` retention
-index. Candidate snapshots and publications select at most one batch of IDs
-in that order before reading payload sizes; sorting by the child ID would
-reintroduce a joined-history sort. Deletion rechecks the parent's completion
-cutoff, and a parent remains until both child collections have been removed.
-A timed-out child read propagates without deleting that child's data. Shared
-row, byte, and runtime budgets and the existing retention periods still apply.
+### Lossless cold history and safe eviction
+
+`platform/domain/storage_preservation.py` defines the preservation classes. It
+protects investment episodes/outcomes, decision/audit/publication identities,
+actual delivery receipts, model inputs/calls, release artifacts and transition
+history. Terminal source snapshots/facts, reasoning jobs and their source links,
+notification jobs, temporal features and signal snapshots require a full local
+archive before eviction. Current heads, pending jobs and mailbox references stay
+hot. Both minimal and legacy retention enforce the relevant deletion guards.
+Age, a terminal status, or an aggregate is not proof that evidence is disposable.
+
+Archives live under `data/history-archive/<database-hash>/`. Canonical row
+serialization preserves the exact stored JSON strings, identifiers, clocks and
+NULLs. Bounded 64 KiB blocks are SHA-256 addressed and individually compressed
+with the standard library zlib codec. Unchanged aligned blocks are shared across
+rows. Each manifest independently names every block, so there is no replay
+chain, mutable base, or dependency on retaining a previous snapshot. Inserting
+bytes can reduce block reuse; this is deliberately not a claim of optimal
+content-defined deduplication. A Python rolling-byte prototype exceeded the
+maintenance budget on large inputs and was not deployed.
+
+Files and directory entries are flushed and the complete row is read back before
+MySQL eviction. A compact `storage_archive_records` receipt is promoted in the
+same transaction as the guarded DELETE. A complete-row SQL hash is compared
+again, so a concurrent correction or claim prevents deletion. Failure leaves the
+live row intact; an unpromoted receipt is never a historical-read authority.
+Archival leaves at least the configured critical shared-disk reserve (never less
+than 6 GiB), admits a full 64 MiB staging budget, and checks the cooperative
+budget again before eviction. Low-space admission keeps the hot row. The operation is
+idempotent, and it never sends data outside this machine. There is no automatic
+archive expiry or garbage collection; archive growth remains part of shared disk
+usage. Unreferenced files from interrupted transactions consume space but cannot
+cause committed evidence to disappear.
+
+Exact source/fact, reasoning-job and notification-job reads fall back to verified
+archives. Experiment lookback merges exact archived source boundaries within a
+1,000-row / 64 MiB read limit. Corrupt/missing archive objects fail closed instead
+of substituting current market data. Operators can inspect receipts, verify a
+bounded sample, or explicitly restore an original row without overwriting a
+newer live row:
+
+```bash
+python3 python_service/service.py maintenance history-archive
+python3 python_service/service.py maintenance history-archive --verify --limit 32
+python3 python_service/service.py maintenance history-archive --restore \
+  --table verified_reasoning_source_snapshots --key-json '{"snapshot_id":"historical-id"}'
+```
+
+Back up MySQL receipts **and** the local archive directory together. A MySQL-only
+backup cannot restore evicted payloads. A successful bounded verification is not
+an audit of every archived row. DELETE releases pages for reuse inside MySQL;
+only measured file shrinkage after an explicit table rebuild counts as OS space
+recovery. Protected decision-root growth is still possible and must be measured,
+not described as permanently bounded by this change.
+
+Additional compression candidates include cases, publications, source facts,
+external revisions and news enrichment revisions. They require explicit
+`mysql-snapshot-compression --tables <comma-separated-tables> --apply`; they are
+not automatically compressed on new installations. Existing hot-table formats
+are unchanged. Partitioning is reserved for homogeneous time-series history
+with independent boundaries; dropping a partition is not allowed to break an
+original decision input or replace missing outcomes with aggregate values.
+
+A November 2026 pilot used two actual source rows totaling 31.57 MiB, without
+production DDL or AI calls. Every tested representation restored the full rows:
+
+| Representation | Stored size | Write / verified write | Read |
+| --- | ---: | ---: | ---: |
+| Full rows, zlib 6 | 2.47 MiB | 333 ms | 34 ms |
+| Full rows, Zstd 3 | 1.53 MiB | 38 ms | 27 ms |
+| Independent deduplicated zlib blocks | 3.55 MiB allocated | 1,980 ms including verification | 560 ms |
+| Parquet + Zstd 3 | 1.50 MiB | 122 ms | 99 ms warm / 144 ms cold |
+
+This small sample is not a whole-database saving or latency forecast. Parquet
+and Zstd were tested in an isolated operator environment; they are not new
+runtime dependencies. Parquet is better evaluated for grouped structured cold
+exports, while single-row evidence reads need the manifest index and exact
+identity checks. Native InnoDB compression reduced the isolated sample table
+from 32 MiB to 4 MiB, but median primary-key read time increased from 45 to 79 ms.
+Therefore applying it to frequently read mutable tables requires a workload
+trial rather than an automatic migration.
+
+### TypeDB candidate recovery before cutover
+
+A prepared candidate must be stopped, reopened and checked against its frozen
+release attestation and exact active-world pointer fingerprint. Recovery is
+validated before live services are stopped. This validation never repairs WALs,
+deletes checkpoints, reseeds or rebuilds worlds to hide lost committed data.
+
+Before directory replacement, inspect the exact storage path of every TypeDB
+process, not just its PID file and not a path-prefix match. An unavailable
+ownership inspection or any remaining owner blocks cutover. The stopped
+candidate is also rejected if a database has an empty final WAL segment: the
+3.12 loader can then initialize durability behind an existing checkpoint.
+See the upstream [WAL loader](https://github.com/typedb/typedb/blob/3.12.0/durability/wal.rs)
+and [checkpoint recovery](https://github.com/typedb/typedb/blob/3.12.0/storage/recovery/checkpoint.rs).
+These checks contain the observed failure mode; they do not establish why a
+historical empty segment was created or prove an engine bug fixed.
+
+Cutover needs the configured restart free-space reserve plus 64 MiB at the
+actual boundary. A manual request does not bypass unreadable measurements or
+that reserve. Keep the old store for the configured rollback window, and count
+reclamation only after safe retired-store cleanup. No manual WAL/checkpoint
+edits, bulk deletes of evidence, or silent reserve reductions are permitted.
 
 ## Operational Verification
 

@@ -69,6 +69,9 @@ class SqliteBoundConnection:
         self.db.row_factory = lambda cursor, row: {col[0]: row[i] for i, col in enumerate(cursor.description)}
         self.db.create_function("LEAST", 2, min)
         self.db.executescript('''
+            CREATE TABLE storage_archive_records (table_name TEXT, key_hash TEXT, row_hash TEXT,
+                manifest_hash TEXT, original_bytes INTEGER, evicted INTEGER,
+                account_id TEXT, source_at TEXT, archived_at TEXT);
             CREATE TABLE verified_reasoning_source_snapshots (snapshot_id TEXT PRIMARY KEY, account_id TEXT,
                 generated_at TEXT, created_at TEXT, contract_version TEXT, mode TEXT, fingerprint TEXT, symbols_json TEXT, payload_json TEXT);
             CREATE TABLE ontology_experiment_observation_plans (plan_fingerprint TEXT PRIMARY KEY, account_id TEXT, symbol TEXT,
@@ -437,6 +440,23 @@ class ExperimentObservationTests(unittest.TestCase):
         samples = dataset["coverage"][1]["samples"]
         self.assertEqual([99, 100], [row["value"] for row in samples])
         self.assertEqual("ready", dataset["coverage"][1]["state"])
+        # Evicted originals must still replay the same frozen values/clocks.
+        import tempfile
+        from digital_twin.infrastructure.history_archive import LocalHistoryArchive
+        from digital_twin.infrastructure.mysql_history_archive import record_key
+        with tempfile.TemporaryDirectory() as root:
+            archive = LocalHistoryArchive(root)
+            rows = self.connection.execute('SELECT * FROM verified_reasoning_source_snapshots').fetchall()
+            for row in rows:
+                receipt = archive.put(row)
+                self.connection.execute('INSERT INTO storage_archive_records VALUES (?,?,?,?,?,1,?,?,?)',
+                    ('verified_reasoning_source_snapshots', record_key('verified_reasoning_source_snapshots',
+                     {'snapshot_id': row['snapshot_id']}), 'rowhash', receipt['manifestSha256'],
+                     receipt['originalBytes'], row['account_id'], row['generated_at'], NOW))
+            self.connection.execute('DELETE FROM verified_reasoning_source_snapshots')
+            with patch('digital_twin.infrastructure.mysql_history_archive.archive_for_connection', return_value=archive):
+                cold = read_dataset(self.connection, plan, {'snapshotId': source_row()['snapshot_id']}, NOW)
+            self.assertEqual(dataset, cold)
         self.connection.execute("DELETE FROM verified_reasoning_source_snapshots")
         self.assertEqual([99, 100], [row["value"] for row in validate_dataset(dataset)["coverage"][1]["samples"]])
 

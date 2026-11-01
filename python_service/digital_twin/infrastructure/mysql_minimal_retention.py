@@ -14,6 +14,8 @@ import uuid
 from typing import Dict, List, Mapping, Sequence
 
 from digital_twin.platform.domain.mysql_minimal_retention import MySQLMinimalRetentionPolicy, policy_cutoffs
+from digital_twin.platform.domain.storage_preservation import ARCHIVE_BEFORE_DELETE, PROTECTED_HISTORY_TABLES
+from .mysql_history_archive import archive_delete_row
 from .mysql_schema_tuning import quote_identifier
 
 
@@ -255,36 +257,10 @@ class MySQLMinimalRetentionRepository:
                 "AND mailbox.state IN ('pending', 'direct-pending'))",
                 (cutoffs["reasoningEngineJobs"],),
             ),
-            "investmentReasoningCases": self._summary(
-                "SELECT COUNT(*) AS candidate_count, COALESCE(SUM(OCTET_LENGTH(payload_json)), 0) AS candidate_bytes "
-                "FROM `investment_reasoning_cases` WHERE "
-                "((stage IN ('COMPLETED', 'PUBLISHED', 'BLOCKED', 'FAILED', 'SUPPRESSED', 'SUPERSEDED', 'EXPIRED') "
-                "AND completed_at <> '' AND completed_at < " + _cutoff_sql() + ") "
-                "OR (stage = 'VALIDATED' AND updated_at < " + _cutoff_sql() + "))",
-                (cutoffs["investmentReasoningCases"], cutoffs["investmentReasoningCases"]),
-            ),
-            "subjectDecisionCases": self._summary(
-                "SELECT COUNT(*) AS candidate_count, COALESCE(SUM(OCTET_LENGTH(payload_json)), 0) AS candidate_bytes "
-                "FROM `investment_subject_decision_cases` WHERE completed_at <> '' "
-                "AND completed_at < " + _cutoff_sql(),
-                (cutoffs["investmentReasoningCases"],),
-            ),
-            "decisionCandidateSnapshots": self._summary(
-                "SELECT COUNT(*) AS candidate_count, COALESCE(SUM(OCTET_LENGTH(candidate.payload_json)), 0) AS candidate_bytes "
-                "FROM `decision_candidate_snapshots` candidate "
-                "JOIN `investment_subject_decision_cases` subject "
-                "ON subject.subject_case_id = candidate.subject_case_id "
-                "WHERE subject.completed_at <> '' AND subject.completed_at < " + _cutoff_sql(),
-                (cutoffs["investmentReasoningCases"],),
-            ),
-            "decisionPublications": self._summary(
-                "SELECT COUNT(*) AS candidate_count, COALESCE(SUM(OCTET_LENGTH(publication.payload_json)), 0) AS candidate_bytes "
-                "FROM `decision_publications` publication "
-                "JOIN `investment_subject_decision_cases` subject "
-                "ON subject.subject_case_id = publication.subject_case_id "
-                "WHERE subject.completed_at <> '' AND subject.completed_at < " + _cutoff_sql(),
-                (cutoffs["investmentReasoningCases"],),
-            ),
+            "investmentReasoningCases": {"candidateRows": 0, "candidateBytes": 0, "protected": True},
+            "subjectDecisionCases": {"candidateRows": 0, "candidateBytes": 0, "protected": True},
+            "decisionCandidateSnapshots": {"candidateRows": 0, "candidateBytes": 0, "protected": True},
+            "decisionPublications": {"candidateRows": 0, "candidateBytes": 0, "protected": True},
             "reasoningComparisons": self._summary(
                 "SELECT COUNT(*) AS candidate_count, COALESCE(SUM(OCTET_LENGTH(payload_json)), 0) AS candidate_bytes "
                 "FROM `reasoning_engine_comparisons` WHERE created_at < " + _cutoff_sql(),
@@ -787,11 +763,14 @@ class MySQLMinimalRetentionRepository:
         }
 
     def _delete_temporal_feature_snapshots(self, policy, budget, cutoff_iso) -> Dict[str, object]:
+        guard = ("created_at < " + _cutoff_sql()
+                 + " AND NOT EXISTS (SELECT 1 FROM statistical_model_signal_snapshots signal_snapshot "
+                 "WHERE signal_snapshot.source_feature_snapshot_id = temporal_feature_snapshots.snapshot_id)")
         candidates = self._byte_bounded_candidates(
             "SELECT snapshot_id, OCTET_LENGTH(windows_json) AS payload_bytes "
-            "FROM `temporal_feature_snapshots` WHERE created_at < " + _cutoff_sql()
+            "FROM `temporal_feature_snapshots` WHERE " + guard
             + " ORDER BY created_at, snapshot_id LIMIT %s",
-            (cutoff_iso, policy.batch_size),
+            (cutoff_iso, min(8, policy.batch_size)),
             "snapshot_id",
             policy,
             budget,
@@ -800,7 +779,7 @@ class MySQLMinimalRetentionRepository:
             "temporal_feature_snapshots",
             "snapshot_id",
             candidates,
-            "created_at < " + _cutoff_sql(),
+            guard,
             (cutoff_iso,),
             budget,
         )
@@ -915,11 +894,10 @@ class MySQLMinimalRetentionRepository:
                 break
             # Account and symbol may legitimately be empty in ingress lineage.
             values = tuple(_row_value(row, key, index=index, fallback="") for index, key in enumerate(keys))
-            cursor = _execute(self.connection,
-                "DELETE FROM `reasoning_engine_job_sources` WHERE "
-                + " AND ".join(key + " = %s" for key in keys) + " AND " + absent_parent,
-                values)
-            if _integer(getattr(cursor, "rowcount", 0)):
+            count = archive_delete_row(self.connection, "reasoning_engine_job_sources",
+                                       dict(zip(keys, values)), absent_parent,
+                                       may_evict=lambda: self._has_budget(budget))
+            if count:
                 deleted += 1
                 row_bytes = max(0, _integer(_row_value(row, "payload_bytes")))
                 bytes_deleted += row_bytes
@@ -986,44 +964,8 @@ class MySQLMinimalRetentionRepository:
         return self._result("reasoning_engine_comparisons", deleted, bytes_deleted)
 
     def _delete_investment_reasoning_cases(self, policy, budget, cutoff_iso) -> Dict[str, object]:
-        statuses = ("COMPLETED", "PUBLISHED", "BLOCKED", "FAILED", "SUPPRESSED", "SUPERSEDED", "EXPIRED")
-        # Each stage has an indexed clock range and its own LIMIT. A single
-        # OR across completed_at/updated_at sorts the entire eligible history
-        # before LIMIT. Merge only bounded IDs, then load selected payload sizes.
-        branches = []
-        parameters = []
-        for index, stage in enumerate(statuses + ("VALIDATED",)):
-            clock = "updated_at" if stage == "VALIDATED" else "completed_at"
-            branches.append(
-                "SELECT case_id, retention_at FROM (SELECT case_id, " + clock
-                + " AS retention_at FROM `investment_reasoning_cases` WHERE stage = %s"
-                + (" AND completed_at <> ''" if stage != "VALIDATED" else "")
-                + " AND " + clock + " < " + _cutoff_sql()
-                + " ORDER BY " + clock + ", case_id LIMIT %s) retention_stage_" + str(index)
-            )
-            parameters.extend((stage, cutoff_iso, policy.batch_size))
-        candidates = self._byte_bounded_candidates(
-            "SELECT retained.case_id, OCTET_LENGTH(retained.payload_json) AS payload_bytes "
-            "FROM (SELECT case_id, retention_at FROM (" + " UNION ALL ".join(branches)
-            + ") stage_candidates ORDER BY retention_at, case_id LIMIT %s) candidates "
-            "JOIN `investment_reasoning_cases` retained ON retained.case_id = candidates.case_id "
-            "ORDER BY candidates.retention_at, candidates.case_id",
-            tuple(parameters) + (policy.batch_size,),
-            "case_id",
-            policy,
-            budget,
-        )
-        deleted, bytes_deleted = self._delete_candidates(
-            "investment_reasoning_cases",
-            "case_id",
-            candidates,
-            "((stage IN (" + _status_placeholders(statuses)
-            + ") AND completed_at <> '' AND completed_at < " + _cutoff_sql()
-            + ") OR (stage = 'VALIDATED' AND updated_at < " + _cutoff_sql() + "))",
-            statuses + (cutoff_iso, cutoff_iso),
-            budget,
-        )
-        return self._result("investment_reasoning_cases", deleted, bytes_deleted)
+        """Preserve decision identity and replay roots independently of age."""
+        return self._result("investment_reasoning_cases", 0, 0)
 
     def _delete_decision_publications(self, policy, budget, cutoff_iso) -> Dict[str, object]:
         return self._delete_subject_artifacts(
@@ -1036,6 +978,8 @@ class MySQLMinimalRetentionRepository:
         )
 
     def _delete_subject_artifacts(self, table, identifier, policy, budget, cutoff_iso) -> Dict[str, object]:
+        if table in PROTECTED_HISTORY_TABLES:
+            return self._result(table, 0, 0)
         quoted_table, quoted_id = quote_identifier(table), quote_identifier(identifier)
         # Join only IDs while finding the oldest eligible subjects. The LIMIT
         # materializes that small set before any LONGTEXT payload is accessed.
@@ -1068,31 +1012,8 @@ class MySQLMinimalRetentionRepository:
         return self._result(table, deleted, bytes_deleted)
 
     def _delete_subject_decision_cases(self, policy, budget, cutoff_iso) -> Dict[str, object]:
-        children_absent = (
-            "NOT EXISTS (SELECT 1 FROM decision_candidate_snapshots child "
-            "WHERE child.subject_case_id = investment_subject_decision_cases.subject_case_id) "
-            "AND NOT EXISTS (SELECT 1 FROM decision_publications child "
-            "WHERE child.subject_case_id = investment_subject_decision_cases.subject_case_id)"
-        )
-        candidates = self._byte_bounded_candidates(
-            "SELECT subject_case_id, OCTET_LENGTH(payload_json) AS payload_bytes "
-            "FROM `investment_subject_decision_cases` WHERE completed_at <> '' "
-            "AND completed_at < " + _cutoff_sql()
-            + " AND " + children_absent + " ORDER BY completed_at, subject_case_id LIMIT %s",
-            (cutoff_iso, policy.batch_size),
-            "subject_case_id",
-            policy,
-            budget,
-        )
-        deleted, bytes_deleted = self._delete_candidates(
-            "investment_subject_decision_cases",
-            "subject_case_id",
-            candidates,
-            "completed_at <> '' AND completed_at < " + _cutoff_sql() + " AND " + children_absent,
-            (cutoff_iso,),
-            budget,
-        )
-        return self._result("investment_subject_decision_cases", deleted, bytes_deleted)
+        """Preserve decision identity and replay roots independently of age."""
+        return self._result("investment_subject_decision_cases", 0, 0)
 
     def _compact_failed_world_projection_payloads(self, policy, budget, cutoff_iso) -> Dict[str, object]:
         candidates = self._byte_bounded_candidates(
@@ -1161,6 +1082,8 @@ class MySQLMinimalRetentionRepository:
         return self._result("ontology_world_projection_outbox", deleted, bytes_deleted)
 
     def _delete_terminal_notifications(self, policy, budget, keep_count, cutoff_iso) -> Dict[str, object]:
+        from .mysql_retention import _notification_cooldown_history_cutoff
+        protected_since = _notification_cooldown_history_cutoff(self.connection)
         statuses = _status_placeholders(TERMINAL_NOTIFICATION_STATUSES)
         account_rows = _fetchall(_execute(
             self.connection,
@@ -1210,31 +1133,17 @@ class MySQLMinimalRetentionRepository:
             "notification_jobs",
             "job_id",
             candidates,
-            "status IN (" + _status_placeholders(TERMINAL_NOTIFICATION_STATUSES) + ") AND updated_at < " + _cutoff_sql(),
-            tuple(TERMINAL_NOTIFICATION_STATUSES) + (cutoff_iso,),
+            "status IN (" + _status_placeholders(TERMINAL_NOTIFICATION_STATUSES) + ") AND updated_at < " + _cutoff_sql()
+            + " AND NOT EXISTS (SELECT 1 FROM notification_delivery_attempts receipt "
+            "WHERE receipt.job_id=notification_jobs.job_id AND receipt.status='delivered' AND receipt.completed_at >= %s)",
+            tuple(TERMINAL_NOTIFICATION_STATUSES) + (cutoff_iso, protected_since),
             budget,
         )
         return self._result("notification_jobs", deleted, bytes_deleted)
 
     def _delete_decision_notification_receipts(self, policy, budget, cutoff_iso) -> Dict[str, object]:
-        candidates = self._byte_bounded_candidates(
-            "SELECT job_id, 256 AS payload_bytes FROM `decision_notification_receipts` "
-            "WHERE updated_at < " + _cutoff_sql()
-            + " ORDER BY updated_at, job_id LIMIT %s",
-            (cutoff_iso, policy.batch_size),
-            "job_id",
-            policy,
-            budget,
-        )
-        deleted, bytes_deleted = self._delete_candidates(
-            "decision_notification_receipts",
-            "job_id",
-            candidates,
-            "updated_at < " + _cutoff_sql(),
-            (cutoff_iso,),
-            budget,
-        )
-        return self._result("decision_notification_receipts", deleted, bytes_deleted)
+        """Preserve decision identity and replay roots independently of age."""
+        return self._result("decision_notification_receipts", 0, 0)
 
     def _delete_snapshot_history(self, policy, budget, keep_count) -> Dict[str, object]:
         account_rows = _fetchall(_execute(
@@ -1743,6 +1652,8 @@ class MySQLMinimalRetentionRepository:
         guard_params: Sequence[object],
         budget: Dict[str, object],
     ) -> tuple:
+        if table in PROTECTED_HISTORY_TABLES:
+            return 0, 0
         deleted = 0
         bytes_deleted = 0
         quoted_table = quote_identifier(table)
@@ -1753,12 +1664,17 @@ class MySQLMinimalRetentionRepository:
             key = str(_row_value(row, primary_key, fallback="") or "").strip()
             if not key:
                 continue
-            cursor = _execute(
-                self.connection,
-                "DELETE FROM " + quoted_table + " WHERE " + quoted_key + " = %s AND " + guard_sql,
-                (key,) + tuple(guard_params or ()),
-            )
-            if _integer(getattr(cursor, "rowcount", 0)):
+            if table in ARCHIVE_BEFORE_DELETE:
+                count = archive_delete_row(self.connection, table, {primary_key: key}, guard_sql, guard_params,
+                                           may_evict=lambda: self._has_budget(budget))
+            else:
+                cursor = _execute(
+                    self.connection,
+                    "DELETE FROM " + quoted_table + " WHERE " + quoted_key + " = %s AND " + guard_sql,
+                    (key,) + tuple(guard_params or ()),
+                )
+                count = _integer(getattr(cursor, "rowcount", 0))
+            if count:
                 deleted += 1
                 row_bytes = max(0, _integer(_row_value(row, "payload_bytes")))
                 bytes_deleted += row_bytes

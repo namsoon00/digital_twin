@@ -757,10 +757,7 @@ class MySQLMonitorStore(MySQLOperationalConnection):
                     "WHERE snapshot_id = %s LIMIT 1",
                     (snapshot_id,),
                 ).fetchone() or {}
-                if not row:
-                    self._source_packet_cache.discard(snapshot_id)
-                    return ""
-                if str(row.get("fingerprint") or "") == cached[0]:
+                if row and str(row.get("fingerprint") or "") == cached[0]:
                     return cached[1]
                 self._source_packet_cache.discard(snapshot_id)
             row = connection.execute(
@@ -772,6 +769,10 @@ class MySQLMonitorStore(MySQLOperationalConnection):
                 """,
                 (snapshot_id,),
             ).fetchone() or {}
+            if not row:
+                from ..mysql_history_archive import read_archived_row
+                row = read_archived_row(connection, "verified_reasoning_source_snapshots",
+                                        {"snapshot_id": snapshot_id}) or {}
         payload_json = row.get("payload_json") or ""
         self._source_packet_cache.put(snapshot_id, str(row.get("fingerprint") or ""), payload_json)
         return payload_json
@@ -788,6 +789,10 @@ class MySQLMonitorStore(MySQLOperationalConnection):
                 """,
                 (str(snapshot_id or ""),),
             ).fetchone() or {}
+            if not row:
+                from ..mysql_history_archive import read_archived_row
+                row = read_archived_row(connection, "verified_reasoning_source_snapshots",
+                                        {"snapshot_id": str(snapshot_id or "")}) or {}
         if not row:
             return {}
         return {

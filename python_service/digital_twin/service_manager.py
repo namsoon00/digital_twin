@@ -2393,6 +2393,7 @@ def typedb_candidate_validation_summary(payload: Dict[str, object]) -> Dict[str,
         "validatedInferenceModes": dict(source.get("validatedInferenceModes") or {}),
         "validatedReleaseContracts": dict(source.get("validatedReleaseContracts") or {}),
         "validatedSeedContracts": seed_contracts,
+        "durabilityValidation": dict(source.get("durabilityValidation") or {}),
     }
     for key in ("seedContract", "releaseContract", "inferenceReadiness", "seedFailure"):
         if isinstance(source.get(key), dict):
@@ -3126,9 +3127,11 @@ def launch_typedb_stage_process(spec: Dict[str, object], log_label: str) -> bool
     return wait_for_fresh_typedb_candidate(spec)
 
 
-def typedb_process_ids_for_data_path(data_path: object) -> List[int]:
+def typedb_process_ids_for_data_path(data_path: object, *, strict: bool = False) -> List[int]:
     """Find only TypeDB processes that explicitly own one managed data path."""
     if os.name == "nt":
+        if strict:
+            raise RuntimeError("TypeDB data-path ownership inspection is unavailable")
         return []
     path = str(Path(data_path or "").resolve()) if data_path else ""
     if not path:
@@ -3140,6 +3143,8 @@ def typedb_process_ids_for_data_path(data_path: object) -> List[int]:
             stderr=subprocess.DEVNULL,
         )
     except (OSError, subprocess.CalledProcessError):
+        if strict:
+            raise RuntimeError("TypeDB data-path ownership inspection failed")
         return []
     result = []
     for line in output.splitlines():
@@ -3153,7 +3158,19 @@ def typedb_process_ids_for_data_path(data_path: object) -> List[int]:
         # fence a new isolated candidate.
         if state.startswith("Z"):
             continue
-        if path not in command or "typedb_server_bin" not in command:
+        if "typedb_server_bin" not in command:
+            continue
+        try:
+            tokens = shlex.split(command)
+        except ValueError:
+            continue
+        owned_paths = []
+        for index, token in enumerate(tokens):
+            if token == "--storage.data-directory" and index + 1 < len(tokens):
+                owned_paths.append(tokens[index + 1])
+            elif token.startswith("--storage.data-directory="):
+                owned_paths.append(token.split("=", 1)[1])
+        if not any(str(Path(value).resolve()) == path for value in owned_paths):
             continue
         try:
             pid = int(parts[0])
@@ -5655,6 +5672,12 @@ def prepare_typedb_blue_green_candidate(spec: Dict[str, object]) -> Dict[str, ob
                 "protectedDatabases": protected_databases,
                 "missingProtectedDatabases": missing_protected_databases,
             }
+        durability = validate_typedb_candidate_durability(candidate, validated_seed_contracts)
+        if not durability.get("ready"):
+            candidate["_candidateReusable"] = False
+            clear_typedb_candidate_reuse_marker(candidate)
+            return {"status": "candidate-durability-failed", "candidate": candidate,
+                    "durabilityValidation": durability, "activeStorePreserved": True}
         return {
             "status": "prepared",
             "candidate": candidate,
@@ -5670,6 +5693,7 @@ def prepare_typedb_blue_green_candidate(spec: Dict[str, object]) -> Dict[str, ob
                 and all(seed_reuse_by_database.get(database, False) for database in validated_databases)
             ),
             "seedReuseByDatabase": seed_reuse_by_database,
+            "durabilityValidation": durability,
         }
     except Exception as error:  # noqa: BLE001 - active store stays untouched.
         return {
@@ -5677,6 +5701,58 @@ def prepare_typedb_blue_green_candidate(spec: Dict[str, object]) -> Dict[str, ob
             "reason": str(error)[:300],
             "candidate": candidate,
         }
+
+
+def typedb_candidate_world_fingerprint(spec):
+    """Read only bounded active world pointers, never scan physical ABox rows."""
+    from .infrastructure.ontology_graph_store import ontology_repository_from_settings
+    import hashlib
+    configured = dict(runtime_settings(fast_operational_read=True) or {})
+    configured.update(ontologyTypeDbEnabled="1", typedbAddress=str(spec["healthAddress"]), typedbDatabase=str(spec["typedbDatabase"]),
+                      typedbHttpAddress=str(spec.get("httpAddress") or ""))
+    for key in ("typedbUser", "typedbPassword", "typedbTlsEnabled"):
+        if key in spec:
+            configured[key] = spec[key]
+    repository = ontology_repository_from_settings(configured)
+    rows = repository.active_worldview_manifest_pointer_identity_rows("", limit=257)
+    if len(rows) > 256:
+        raise ValueError("Candidate world inventory exceeds bounded validation limit")
+    canonical = json.dumps(sorted(rows, key=lambda row: json.dumps(row, sort_keys=True)),
+                           sort_keys=True, separators=(",", ":"), default=str)
+    return {"worlds": len(rows), "sha256": hashlib.sha256(canonical.encode()).hexdigest()}
+
+
+def validate_typedb_candidate_durability(candidate, seed_contracts):
+    """Reopen the final candidate before live services or directories change.
+
+    In-memory readiness cannot detect checkpoint/WAL recovery failures. This
+    pass never deletes checkpoints, re-seeds, or rebuilds worlds after restart:
+    doing so would conceal a lost committed generation.
+    """
+    if candidate.get("role") != "typedb-stage":
+        return {"ready": False, "reason": "candidate-role-required"}
+    specs = typedb_blue_green_database_specs(candidate)
+    try:
+        before = {item["typedbDatabase"]: typedb_candidate_world_fingerprint(item) for item in specs}
+        if stop_worker(candidate) != 0 or not stop_typedb_stage_data_path_processes(candidate):
+            return {"ready": False, "reason": "candidate-owner-stop-failed"}
+        remove_pid(candidate["pid"])
+        if not launch_typedb_stage_process(candidate, "final candidate durability restart"):
+            return {"ready": False, "reason": "candidate-recovery-failed"}
+        for item in specs:
+            database = item["typedbDatabase"]
+            item["_typedbSeedContract"] = seed_contracts.get(database, {})
+            item["_typedbSeedAttestation"] = seed_contracts.get(database, {})
+            if not validate_typedb_candidate_release_contract(item).get("ready"):
+                return {"ready": False, "reason": "post-restart-release-mismatch"}
+            if not validate_typedb_candidate_inference_runtime(item).get("ready"):
+                return {"ready": False, "reason": "post-restart-inference-unavailable"}
+            if typedb_candidate_world_fingerprint(item) != before[database]:
+                return {"ready": False, "reason": "post-restart-world-mismatch"}
+        return {"ready": True, "status": "reopened-and-verified", "databases": len(specs),
+                "worlds": sum(item["worlds"] for item in before.values())}
+    except Exception as error:
+        return {"ready": False, "reason": "candidate-durability-read-failed", "errorType": type(error).__name__}
 
 
 def cleanup_typedb_candidate(candidate: Dict[str, object], remove_data: bool = True) -> None:
@@ -5803,6 +5879,11 @@ def swap_typedb_blue_green_data_paths(spec: Dict[str, object], candidate: Dict[s
     retired_path = active_path.with_name(active_path.name + "-retired-" + str(int(time.time())))
     if not candidate_path.exists():
         return {"status": "candidate-missing"}
+    # A stale PID file is not proof that every database owner exited. An old
+    # process can reopen an absolute WAL path after the directories move.
+    if (typedb_process_ids_for_data_path(active_path, strict=True)
+            or typedb_process_ids_for_data_path(candidate_path, strict=True)):
+        return {"status": "cutover-owner-still-running", "activeStorePreserved": True}
     if active_path.exists():
         os.replace(active_path, retired_path)
         # ``os.replace`` preserves the old directory mtime. Using that stale
@@ -5913,7 +5994,7 @@ def typedb_cutover_storage_preflight(spec, candidate, *, supervisor_owned):
                         for p in active_path.glob("*/wal") if p.is_dir())
         free_bytes = shutil.disk_usage(active_path).free
     except (OSError, ValueError) as error:
-        return {"ready": not supervisor_owned, "measured": False,
+        return {"ready": False, "measured": False,
                 "reason": "cutover-storage-measurement-unavailable",
                 "errorType": type(error).__name__}
     maximum_mb = int_value(spec.get("maxSizeMb"), 8192, 1)
@@ -5925,17 +6006,41 @@ def typedb_cutover_storage_preflight(spec, candidate, *, supervisor_owned):
     intrinsic_pressure = (usage_percent >= threshold
                           or (wal_trigger_mb > 0 and wal_mb >= wal_trigger_mb))
     benefit = shared_disk_rotation_admission(active_bytes / 1024**2, candidate_bytes / 1024**2, 0)
+    restart_reserve = int_value(spec.get("minimumFreeSpaceMb"), 12288, 1) * 1024**2
+    headroom_ready = free_bytes >= restart_reserve + 64 * 1024**2
+    durability_ready = typedb_stopped_candidate_wal_ready(candidate_path)
     return {
-        "ready": not supervisor_owned or intrinsic_pressure or benefit["needed"],
+        "ready": headroom_ready and durability_ready and (not supervisor_owned or intrinsic_pressure or benefit["needed"]),
         "measured": True, "activePath": str(active_path),
         "activeAllocatedBytes": active_bytes, "candidateAllocatedBytes": candidate_bytes,
         "projectedReductionBytes": active_bytes - candidate_bytes,
         "sharedFreeBytesBeforeCutover": free_bytes,
+        "restartReserveBytes": restart_reserve, "stoppedCandidateWalReady": durability_ready,
         "reclaimRequiresRetiredCleanup": True, "intrinsicPressure": intrinsic_pressure,
-        "reason": ("explicit-rotation" if not supervisor_owned else "typedb-intrinsic-pressure"
+        "reason": ("insufficient-restart-headroom" if not headroom_ready else
+                   "candidate-empty-wal-tail" if not durability_ready else
+                   "explicit-rotation" if not supervisor_owned else "typedb-intrinsic-pressure"
                    if intrinsic_pressure else "measured-reclaim-benefit" if benefit["needed"]
                    else "insufficient-measured-reclaim-benefit"),
     }
+
+
+def typedb_stopped_candidate_wal_ready(candidate_path):
+    """Reject a known recovery hazard; never repair database files by hand.
+
+    TypeDB 3.12 loads its next sequence from the last WAL segment. An empty
+    trailing segment can put durability behind a persisted checkpoint.
+    """
+    try:
+        for database in Path(candidate_path).iterdir():
+            if not database.is_dir() or not (database / "checkpoint").is_dir():
+                continue
+            segments = sorted((database / "wal").glob("wal-*"))
+            if segments and segments[-1].stat().st_size == 0:
+                return False
+        return True
+    except OSError:
+        return False
 
 
 def typedb_rotate(

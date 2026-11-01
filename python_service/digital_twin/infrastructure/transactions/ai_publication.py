@@ -1951,17 +1951,17 @@ class MySQLAIInferenceQueueStore(MySQLOperationalConnection):
         }
 
     def prune_terminal(self, retention_hours: int = 24, limit: int = 50) -> int:
+        from digital_twin.infrastructure.mysql_retention import _unreferenced_ai_request_sql
         cutoff = (
             datetime.now(timezone.utc) - timedelta(hours=max(1, min(24 * 30, int(retention_hours or 24))))
         ).isoformat().replace("+00:00", "Z")
         bounded = max(1, min(200, int(limit or 50)))
         with self.transaction() as connection:
             rows = connection.execute(
-                """
-                SELECT request_id, subject_key FROM ai_inference_requests
-                WHERE status IN (%s, %s, %s) AND completed_at != '' AND completed_at < %s
-                ORDER BY completed_at, request_id LIMIT %s FOR UPDATE SKIP LOCKED
-                """,
+                "SELECT request_id, subject_key FROM ai_inference_requests "
+                "WHERE status IN (%s, %s, %s) AND completed_at != '' AND completed_at < %s AND "
+                + _unreferenced_ai_request_sql("ai_inference_requests")
+                + " ORDER BY completed_at, request_id LIMIT %s FOR UPDATE SKIP LOCKED",
                 (*TERMINAL_STATES, cutoff, bounded),
             ).fetchall()
             request_ids = [_clean(row.get("request_id")) for row in rows or [] if _clean(row.get("request_id"))]
@@ -1973,11 +1973,13 @@ class MySQLAIInferenceQueueStore(MySQLOperationalConnection):
                 request_ids,
             )
             connection.execute(
-                "DELETE FROM ai_inference_results WHERE request_id IN (" + placeholders + ")",
+                "DELETE FROM ai_inference_results WHERE request_id IN (" + placeholders + ") AND "
+                + _unreferenced_ai_request_sql("ai_inference_results"),
                 request_ids,
             )
             cursor = connection.execute(
-                "DELETE FROM ai_inference_requests WHERE request_id IN (" + placeholders + ")",
+                "DELETE FROM ai_inference_requests WHERE request_id IN (" + placeholders + ") AND "
+                + _unreferenced_ai_request_sql("ai_inference_requests"),
                 request_ids,
             )
         return int(getattr(cursor, "rowcount", 0) or 0)

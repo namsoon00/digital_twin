@@ -9,9 +9,18 @@ import re
 from digital_twin.infrastructure.mysql_schema_tuning import quote_identifier
 
 
-COMPRESSED_SNAPSHOT_TABLES = frozenset({
+DEFAULT_COMPRESSED_SNAPSHOT_TABLES = frozenset({
     "monitor_snapshot_history", "verified_reasoning_source_snapshots",
     "statistical_model_signal_snapshots", "ontology_reasoning_run_stages",
+})
+
+# Additional tables are eligible only for an explicitly selected, measured
+# offline migration. Do not silently change hot-table CPU/buffer behavior.
+COMPRESSED_SNAPSHOT_TABLES = DEFAULT_COMPRESSED_SNAPSHOT_TABLES | frozenset({
+    "investment_reasoning_cases", "investment_subject_decision_cases",
+    "investment_decision_audit_entries", "decision_candidate_snapshots",
+    "decision_publications", "news_article_enrichment_revisions",
+    "reasoning_source_facts", "external_fact_revision",
 })
 
 
@@ -23,7 +32,7 @@ def compression_supported(connection):
 
 def snapshot_schema_statement(statement, supported=True):
     match = re.search(r"CREATE TABLE IF NOT EXISTS\s+`?(\w+)`?", statement, re.I)
-    if not supported or not match or match[1] not in COMPRESSED_SNAPSHOT_TABLES:
+    if not supported or not match or match[1] not in DEFAULT_COMPRESSED_SNAPSHOT_TABLES:
         return statement
     return statement.replace("ENGINE=InnoDB", "ENGINE=InnoDB ROW_FORMAT=COMPRESSED KEY_BLOCK_SIZE=8", 1)
 
@@ -82,7 +91,7 @@ def run_snapshot_compression(settings, *, apply=False, tables=()):
     from .mysql_operational_connection import MySQLOperationalConnection, MySQLConnectionProxy
     from digital_twin import service_manager
 
-    requested = sorted(set(tables or COMPRESSED_SNAPSHOT_TABLES))
+    requested = sorted(set(tables or DEFAULT_COMPRESSED_SNAPSHOT_TABLES))
     if set(requested) - COMPRESSED_SNAPSHOT_TABLES:
         raise ValueError("Table is outside snapshot compression policy")
     configured = {**settings, "_skipOperationalSchemaBootstrap": True,

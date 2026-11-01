@@ -2779,6 +2779,9 @@ class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
                 "SELECT * FROM reasoning_engine_jobs WHERE job_id = %s",
                 (str(job_id or ""),),
             ).fetchone()
+            if not row:
+                from digital_twin.infrastructure.mysql_history_archive import read_archived_row
+                row = read_archived_row(connection, "reasoning_engine_jobs", {"job_id": str(job_id or "")})
         return self.row_payload(row) if row else {}
 
     def live_queue_state(self, deployment_id: str) -> Dict[str, object]:

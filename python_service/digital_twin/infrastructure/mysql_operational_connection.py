@@ -1225,6 +1225,23 @@ MYSQL_SCHEMA = [
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     """,
     """
+    CREATE TABLE IF NOT EXISTS storage_archive_records (
+        table_name VARCHAR(96) NOT NULL,
+        key_hash CHAR(64) NOT NULL,
+        row_hash CHAR(64) NOT NULL,
+        manifest_hash CHAR(64) NOT NULL,
+        original_bytes BIGINT NOT NULL,
+        stored_bytes BIGINT NOT NULL,
+        evicted TINYINT NOT NULL DEFAULT 0,
+        account_id VARCHAR(191) NOT NULL DEFAULT '',
+        source_at VARCHAR(40) NOT NULL DEFAULT '',
+        archived_at VARCHAR(40) NOT NULL,
+        PRIMARY KEY (table_name, key_hash, row_hash),
+        KEY idx_archive_key_time (table_name, key_hash, archived_at),
+        KEY idx_archive_source_window (table_name, account_id, source_at)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
+    """
     CREATE TABLE IF NOT EXISTS verified_reasoning_source_snapshots (
         snapshot_id VARCHAR(191) PRIMARY KEY,
         account_id VARCHAR(191) NOT NULL,

@@ -732,6 +732,14 @@ class IndexedRetentionExecutionTests(unittest.TestCase):
                        "remainingBytes": 100, "deletedBytes": 0}
         self.before_delete = None
         self.repo = MySQLMinimalRetentionRepository(self)
+        from unittest.mock import patch
+        def archive_boundary(connection, table, keys, guard, params, **kwargs):
+            where = " AND ".join(key + "=%s" for key in keys)
+            return connection.execute("DELETE FROM `" + table + "` WHERE " + where + " AND " + guard,
+                                      tuple(keys.values()) + tuple(params)).rowcount
+        boundary = patch("digital_twin.infrastructure.mysql_minimal_retention.archive_delete_row", side_effect=archive_boundary)
+        boundary.start()
+        self.addCleanup(boundary.stop)
 
     def tearDown(self):
         self.db.close()
@@ -763,52 +771,21 @@ class IndexedRetentionExecutionTests(unittest.TestCase):
                 for table in ("decision_candidate_snapshots", "decision_publications"):
                     self.db.execute("INSERT INTO " + table + " VALUES (?,?,?)", (key, key, "{}"))
 
-    def test_subject_children_expire_in_bounded_batches_without_orphaning(self):
+    def test_decision_roots_survive_all_ttl_passes_without_querying_payloads(self):
         self.seed_subjects()
-        # The oldest subject has no children: it must not starve later artifacts.
-        for method in (self.repo._delete_decision_candidate_snapshots, self.repo._delete_decision_publications):
-            result = method(self.policy, self.budget, "2026-10-01")
-            self.assertEqual(3, result["deleted"])
-        self.repo._delete_subject_decision_cases(self.policy, self.budget, "2026-10-01")
-        self.assertIn("old-4", self.remaining("investment_subject_decision_cases", "subject_case_id"))
-        for _ in range(3):
-            self.repo._delete_decision_candidate_snapshots(self.policy, self.budget, "2026-10-01")
-            self.repo._delete_decision_publications(self.policy, self.budget, "2026-10-01")
-            self.repo._delete_subject_decision_cases(self.policy, self.budget, "2026-10-01")
+        before = {table: self.remaining(table, key) for table, key in (
+            ("investment_subject_decision_cases", "subject_case_id"),
+            ("decision_candidate_snapshots", "candidate_set_id"),
+            ("decision_publications", "publication_id"))}
+        from unittest.mock import patch
+        with patch.object(self, "execute", side_effect=AssertionError("protected roots need no TTL query")):
+            for method in (self.repo._delete_decision_candidate_snapshots,
+                           self.repo._delete_decision_publications, self.repo._delete_subject_decision_cases):
+                self.assertEqual(0, method(self.policy, self.budget, "2099-01-01")["deleted"])
         for table, key in (("investment_subject_decision_cases", "subject_case_id"),
                            ("decision_candidate_snapshots", "candidate_set_id"),
                            ("decision_publications", "publication_id")):
-            self.assertEqual({"active", "recent"}, self.remaining(table, key))
-
-    def test_subject_children_recheck_completion_and_obey_shared_byte_budget(self):
-        self.seed_subjects()
-        self.budget["remainingBytes"] = 2
-        self.before_delete = lambda: self.db.execute(
-            "UPDATE investment_subject_decision_cases SET completed_at='' WHERE subject_case_id='old-1'")
-        result = self.repo._delete_decision_candidate_snapshots(self.policy, self.budget, "2026-10-01")
-        self.assertEqual(0, result["deleted"])
-        self.before_delete = lambda: self.db.execute(
-            "UPDATE investment_subject_decision_cases SET completed_at='2026-10-12' WHERE subject_case_id='old-2'")
-        result = self.repo._delete_decision_publications(self.policy, self.budget, "2026-10-01")
-        self.assertEqual(0, result["deleted"])
-        result = self.repo._delete_decision_candidate_snapshots(self.policy, self.budget, "2026-10-01")
-        self.assertEqual(1, result["deleted"])
-        self.assertEqual(0, self.budget["remainingBytes"])
-        self.assertEqual(0, self.repo._delete_decision_publications(self.policy, self.budget, "2026-10-01")["deleted"])
-
-    def test_subject_parent_rechecks_child_presence_and_child_read_failures_preserve_rows(self):
-        self.seed_subjects()
-        def add_child():
-            self.db.execute("INSERT INTO decision_candidate_snapshots VALUES ('new-child','empty','{}')")
-        self.before_delete = add_child
-        self.assertEqual(0, self.repo._delete_subject_decision_cases(self.policy, self.budget, "2026-10-01")["deleted"])
-        from unittest.mock import patch
-        for method in (self.repo._delete_decision_candidate_snapshots, self.repo._delete_decision_publications):
-            with patch.object(self, "execute", side_effect=RuntimeError("read timeout")):
-                with self.assertRaisesRegex(RuntimeError, "read timeout"):
-                    method(self.policy, self.budget, "2026-10-01")
-        self.assertEqual(7, len(self.remaining("decision_candidate_snapshots", "candidate_set_id")))
-        self.assertEqual(6, len(self.remaining("decision_publications", "publication_id")))
+            self.assertEqual(before[table], self.remaining(table, key))
 
     def test_case_and_comparison_ranges_keep_current_rows_and_make_bounded_progress(self):
         expired = {"COMPLETED", "PUBLISHED", "BLOCKED", "FAILED", "SUPPRESSED", "SUPERSEDED", "EXPIRED", "VALIDATED"}
@@ -824,8 +801,8 @@ class IndexedRetentionExecutionTests(unittest.TestCase):
             result = self.repo._delete_investment_reasoning_cases(self.policy, self.budget, "2026-10-01")
             self.assertLessEqual(result["deleted"], 3)
             total += result["deleted"]
-        self.assertEqual(8, total)
-        self.assertEqual({"CREATED", "PROCESSING", "UNKNOWN", "no-clock", "recent", "boundary"},
+        self.assertEqual(0, total)
+        self.assertEqual(expired | {"CREATED", "PROCESSING", "UNKNOWN", "no-clock", "recent", "boundary"},
                          self.remaining("investment_reasoning_cases", "case_id"))
         from dataclasses import replace
         for number in range(20):
@@ -853,8 +830,8 @@ class IndexedRetentionExecutionTests(unittest.TestCase):
             self.db.execute("UPDATE investment_reasoning_cases SET updated_at='2026-10-12' WHERE case_id='renewed'")
         self.before_delete = change
         result = self.repo._delete_investment_reasoning_cases(self.policy, self.budget, "2026-10-01")
-        self.assertEqual(1, result["deleted"])
-        self.assertEqual({"reactivated", "renewed"}, self.remaining("investment_reasoning_cases", "case_id"))
+        self.assertEqual(0, result["deleted"])
+        self.assertEqual({"reactivated", "renewed", "expired"}, self.remaining("investment_reasoning_cases", "case_id"))
         for key in ("renewed", "expired"):
             self.db.execute("INSERT INTO reasoning_engine_comparisons VALUES (?, '2026-01-01', '{}')", (key,))
         self.before_delete = lambda: self.db.execute(
@@ -868,9 +845,9 @@ class IndexedRetentionExecutionTests(unittest.TestCase):
             self.add_case(stage, stage, payload="x" * 40)
         self.budget["remainingBytes"] = 60
         result = self.repo._delete_investment_reasoning_cases(self.policy, self.budget, "2026-10-01")
-        self.assertEqual(1, result["deleted"])
-        self.assertEqual(40, result["estimatedBytes"])
-        self.assertEqual(20, self.budget["remainingBytes"])
+        self.assertEqual(0, result["deleted"])
+        self.assertEqual(0, result["estimatedBytes"])
+        self.assertEqual(60, self.budget["remainingBytes"])
 
     def test_signal_index_keeps_both_heads_and_rechecks_new_head_before_delete(self):
         for key in ("signal-head", "assessment-head", "new-head", "expired", "recent"):
@@ -903,6 +880,17 @@ class MySQLReasoningLineageRetentionChecks(unittest.TestCase):
         self.raw.autocommit(True)
         self.connection = MySQLConnectionProxy(self.raw)
         self.addCleanup(self.connection.close)
+        from digital_twin.infrastructure.mysql_operational_connection import MYSQL_SCHEMA
+        self.connection.execute("DROP TABLE IF EXISTS storage_archive_records")
+        self.connection.execute(next(sql for sql in MYSQL_SCHEMA if "CREATE TABLE IF NOT EXISTS storage_archive_records (" in sql))
+        import tempfile
+        from digital_twin.infrastructure.history_archive import LocalHistoryArchive
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        archive_patch = patch("digital_twin.infrastructure.mysql_history_archive.archive_for_connection",
+                              return_value=LocalHistoryArchive(temporary.name))
+        archive_patch.start()
+        self.addCleanup(archive_patch.stop)
         for table in ("reasoning_engine_job_sources", "reasoning_engine_jobs"):
             self.connection.execute("DROP TABLE IF EXISTS " + table)
         self.connection.execute("CREATE TABLE reasoning_engine_jobs (job_id VARCHAR(40) PRIMARY KEY, job_status VARCHAR(40)) ENGINE=InnoDB")

@@ -578,7 +578,8 @@ class TypeDBServiceManagerTests(unittest.TestCase):
                     }), \
                     patch.object(service_manager, "ensure_typedb_shared_world_projection_rebuilt", return_value=True), \
                     patch.object(service_manager, "ensure_typedb_portfolio_world_projection_rebuilt", return_value=True), \
-                    patch.object(service_manager, "typedb_driver_ready", return_value=True):
+                    patch.object(service_manager, "typedb_driver_ready", return_value=True), \
+                    patch.object(service_manager, "validate_typedb_candidate_durability", return_value={"ready": True}):
                 result = service_manager.prepare_typedb_blue_green_candidate(spec)
                 self.assertEqual(3, release_check.call_count)
                 release_check.side_effect = [
@@ -664,7 +665,8 @@ class TypeDBServiceManagerTests(unittest.TestCase):
                     }), \
                     patch.object(service_manager, "ensure_typedb_shared_world_projection_rebuilt", return_value=True), \
                     patch.object(service_manager, "ensure_typedb_portfolio_world_projection_rebuilt", return_value=True), \
-                    patch.object(service_manager, "typedb_driver_ready", return_value=True):
+                    patch.object(service_manager, "typedb_driver_ready", return_value=True), \
+                    patch.object(service_manager, "validate_typedb_candidate_durability", return_value={"ready": True}):
                 result = service_manager.prepare_typedb_blue_green_candidate(spec)
 
         self.assertEqual("prepared", result["status"])
@@ -1297,7 +1299,8 @@ class TypeDBMeasuredCutoverTests(unittest.TestCase):
                 with self.subTest(active=active_mb, candidate=candidate_mb, wal=wal_mb, automatic=automatic):
                     sizes = {active: active_mb, staged: candidate_mb, active / "db" / "wal": wal_mb}
                     with patch.object(service_manager, "storage_directory_physical_size_bytes",
-                                      side_effect=lambda p, **k: sizes[p] * 1024**2):
+                                      side_effect=lambda p, **k: sizes[p] * 1024**2), \
+                         patch.object(service_manager.shutil, "disk_usage", return_value=SimpleNamespace(free=20*1024**3)):
                         result = service_manager.typedb_cutover_storage_preflight(
                             spec, candidate, supervisor_owned=automatic)
                     self.assertEqual(expected, result["ready"])

@@ -469,9 +469,16 @@ def _row_identifiers(rows, key: str) -> List[str]:
 
 
 def _delete_stale_rows(connection, target: MySQLRetentionTarget, cutoff_iso: str, batch_size: int) -> int:
+    from digital_twin.platform.domain.storage_preservation import PROTECTED_HISTORY_TABLES
+    if target.table in PROTECTED_HISTORY_TABLES:
+        return 0
     table = quote_identifier(target.table)
     time_column = quote_identifier(target.time_column)
     cutoff_sql = "CAST(%s AS CHAR CHARACTER SET utf8mb4) COLLATE utf8mb4_unicode_ci"
+    guard = ""
+    if target.table == "monitor_snapshot_history":
+        from .mysql_minimal_retention import _history_unreferenced_sql
+        guard = " AND " + _history_unreferenced_sql()
     sql = (
         "DELETE FROM "
         + table
@@ -479,6 +486,7 @@ def _delete_stale_rows(connection, target: MySQLRetentionTarget, cutoff_iso: str
         + time_column
         + " < "
         + cutoff_sql
+        + guard
         + " ORDER BY "
         + time_column
         + " LIMIT %s"
@@ -487,39 +495,56 @@ def _delete_stale_rows(connection, target: MySQLRetentionTarget, cutoff_iso: str
 
 
 def _delete_stale_reasoning_source_snapshots(connection, cutoff_iso: str, batch_size: int) -> int:
-    """Delete replay packets only after every referencing job is terminal."""
+    """Use the same archive and live-reference guard as minimal retention."""
+    guard = ("created_at < %s AND NOT EXISTS (SELECT 1 FROM reasoning_engine_jobs job "
+        "WHERE job.source_snapshot_id = verified_reasoning_source_snapshots.snapshot_id "
+        "AND job.job_status IN ('queued','retry','processing','awaiting_world_projection')) "
+        "AND NOT EXISTS (SELECT 1 FROM ontology_reasoning_mailbox_events mailbox "
+        "WHERE mailbox.source_snapshot_id = verified_reasoning_source_snapshots.snapshot_id "
+        "AND mailbox.state IN ('pending','direct-pending'))")
+    return _archive_history_batch(connection, "verified_reasoning_source_snapshots", "snapshot_id",
+                                  guard, (cutoff_iso,), "created_at, snapshot_id", batch_size)
 
-    sql = (
-        "DELETE FROM `verified_reasoning_source_snapshots` WHERE snapshot_id IN ("
-        "SELECT snapshot_id FROM (SELECT source.snapshot_id "
-        "FROM `verified_reasoning_source_snapshots` source "
-        "WHERE source.created_at < %s AND NOT EXISTS ("
-        "SELECT 1 FROM `reasoning_engine_jobs` job "
-        "WHERE job.source_snapshot_id = source.snapshot_id "
-        "AND job.job_status IN ('queued', 'retry', 'processing')"
-        ") AND NOT EXISTS ("
-        "SELECT 1 FROM `ontology_reasoning_mailbox_events` mailbox "
-        "WHERE mailbox.source_snapshot_id = source.snapshot_id "
-        "AND mailbox.state IN ('pending', 'direct-pending')"
-        ") ORDER BY source.created_at, source.snapshot_id LIMIT %s) stale_sources)"
-    )
-    return _delete_one_batch(connection, sql, (cutoff_iso, batch_size))
+
+def _archive_history_batch(connection, table, key, guard, params, order, batch_size):
+    from .mysql_history_archive import archive_delete_row
+    rows = _execute(connection, "SELECT " + quote_identifier(key) + " FROM " + quote_identifier(table)
+        + " WHERE " + guard + " ORDER BY " + order + " LIMIT %s",
+        tuple(params) + (min(8, max(1, batch_size)),)).fetchall()
+    return sum(archive_delete_row(connection, table, {key: value}, guard, params)
+               for value in _row_identifiers(rows, key))
 
 
 def _delete_stale_reasoning_source_facts(connection, cutoff_iso: str, batch_size: int) -> int:
     """Bound revision history while retaining the latest fact per aggregate."""
 
-    sql = (
-        "DELETE FROM `reasoning_source_facts` WHERE fact_id IN ("
-        "SELECT fact_id FROM (SELECT stale.fact_id FROM `reasoning_source_facts` stale "
-        "WHERE stale.ingested_at < %s AND EXISTS ("
+    guard = (
+        "ingested_at < %s AND EXISTS ("
         "SELECT 1 FROM `reasoning_source_facts` newer "
-        "WHERE newer.fact_type = stale.fact_type AND newer.aggregate_id = stale.aggregate_id "
-        "AND (newer.ingested_at > stale.ingested_at OR "
-        "(newer.ingested_at = stale.ingested_at AND newer.fact_id > stale.fact_id))"
-        ") ORDER BY stale.ingested_at, stale.fact_id LIMIT %s) stale_revisions)"
+        "WHERE newer.fact_type = reasoning_source_facts.fact_type "
+        "AND newer.aggregate_id = reasoning_source_facts.aggregate_id "
+        "AND (newer.ingested_at > reasoning_source_facts.ingested_at OR "
+        "(newer.ingested_at = reasoning_source_facts.ingested_at AND newer.fact_id > reasoning_source_facts.fact_id)))"
     )
-    return _delete_one_batch(connection, sql, (cutoff_iso, batch_size))
+    from .mysql_history_archive import archive_delete_row
+    rows = _execute(connection, "SELECT fact_id, fact_type, aggregate_id, ingested_at "
+        "FROM reasoning_source_facts WHERE " + guard + " ORDER BY ingested_at, fact_id LIMIT %s",
+        (cutoff_iso, min(8, batch_size))).fetchall()
+    deleted = 0
+    for row in rows:
+        successor = _execute(connection, "SELECT fact_id FROM reasoning_source_facts "
+            "WHERE fact_type=%s AND aggregate_id=%s AND (ingested_at > %s "
+            "OR (ingested_at=%s AND fact_id > %s)) ORDER BY ingested_at, fact_id LIMIT 1",
+            (row["fact_type"], row["aggregate_id"], row["ingested_at"], row["ingested_at"], row["fact_id"])).fetchone()
+        if not successor:
+            continue
+        # LIMIT materializes one indexed witness, preventing MySQL's target
+        # table/self-subquery error without a full derived-table scan.
+        deletion_guard = ("ingested_at < %s AND EXISTS (SELECT 1 FROM "
+            "(SELECT fact_id FROM reasoning_source_facts WHERE fact_id=%s LIMIT 1) retained_successor)")
+        deleted += archive_delete_row(connection, "reasoning_source_facts", {"fact_id": row["fact_id"]},
+                                      deletion_guard, (cutoff_iso, successor["fact_id"]))
+    return deleted
 
 
 def _delete_stale_shared_inference_rows(connection, cutoff_iso: str, batch_size: int) -> Dict[str, int]:
@@ -546,14 +571,13 @@ def _delete_stale_shared_inference_rows(connection, cutoff_iso: str, batch_size:
 
 def _delete_suppressed_notification_rows(connection, cutoff_iso: str, batch_size: int) -> int:
     cutoff_sql = "CAST(%s AS CHAR CHARACTER SET utf8mb4) COLLATE utf8mb4_unicode_ci"
-    sql = (
-        "DELETE FROM `notification_jobs`"
-        " WHERE `status` IN ('suppressed', 'superseded')"
+    guard = (
+        "`status` IN ('suppressed', 'superseded')"
         " AND `created_at` < "
         + cutoff_sql
-        + " ORDER BY `created_at`, `job_id` LIMIT %s"
     )
-    return _delete_one_batch(connection, sql, (cutoff_iso, batch_size))
+    return _archive_history_batch(connection, "notification_jobs", "job_id", guard,
+                                  (cutoff_iso,), "created_at, job_id", batch_size)
 
 
 def _notification_cooldown_history_cutoff(connection) -> str:
@@ -572,16 +596,15 @@ def _delete_terminal_notification_rows(connection, cutoff_iso: str, batch_size: 
     """Delete only delivered legacy/current notifications, never a retryable job."""
 
     cutoff_sql = "CAST(%s AS CHAR CHARACTER SET utf8mb4) COLLATE utf8mb4_unicode_ci"
-    sql = (
-        "DELETE FROM `notification_jobs`"
-        " WHERE `status` IN ('done', 'sent')"
+    guard = (
+        "`status` IN ('done', 'sent')"
         " AND `created_at` < "
         + cutoff_sql
         + " AND NOT EXISTS (SELECT 1 FROM notification_delivery_attempts a "
         "WHERE a.job_id = notification_jobs.job_id AND a.status = 'delivered' AND a.completed_at >= %s)"
-        + " ORDER BY `created_at`, `job_id` LIMIT %s"
     )
-    return _delete_one_batch(connection, sql, (cutoff_iso, _notification_cooldown_history_cutoff(connection), batch_size))
+    return _archive_history_batch(connection, "notification_jobs", "job_id", guard,
+        (cutoff_iso, _notification_cooldown_history_cutoff(connection)), "created_at, job_id", batch_size)
 
 
 def _delete_completed_model_review_rows(connection, cutoff_iso: str, batch_size: int) -> int:
@@ -611,12 +634,29 @@ def _delete_completed_news_analysis_work_rows(connection, cutoff_iso: str, batch
     return _delete_one_batch(connection, sql, (cutoff_iso, batch_size))
 
 
+def _unreferenced_ai_request_sql(table: str) -> str:
+    """Indexed decision/delivery references outlive the operational queue TTL."""
+    if table not in {"ai_inference_requests", "ai_inference_results", "ai_inference_execution_audits"}:
+        raise ValueError("Unsupported AI history table")
+    guard = (
+        "NOT EXISTS (SELECT 1 FROM investment_subject_decision_cases c WHERE c.ai_request_id=" + table + ".request_id)"
+        " AND NOT EXISTS (SELECT 1 FROM investment_ai_insight_episodes e WHERE e.request_id=" + table + ".request_id)"
+        " AND NOT EXISTS (SELECT 1 FROM notification_delivery_attempts d WHERE d.job_id=" + table
+        + ".notification_job_id AND d.status='delivered')"
+    )
+    if table != "ai_inference_requests":
+        guard += (" AND NOT EXISTS (SELECT 1 FROM ai_inference_requests r WHERE r.request_id=" + table
+                  + ".request_id AND r.status NOT IN ('completed','failed','superseded'))")
+    return guard
+
+
 def _delete_terminal_ai_inference_rows(connection, cutoff_iso: str, batch_size: int) -> Dict[str, int]:
     cutoff_sql = "CAST(%s AS CHAR CHARACTER SET utf8mb4) COLLATE utf8mb4_unicode_ci"
     results = _delete_one_batch(
         connection,
         "DELETE FROM `ai_inference_results` WHERE `created_at` < "
         + cutoff_sql
+        + " AND " + _unreferenced_ai_request_sql("ai_inference_results")
         + " ORDER BY `created_at`, `result_id` LIMIT %s",
         (cutoff_iso, batch_size),
     )
@@ -625,6 +665,7 @@ def _delete_terminal_ai_inference_rows(connection, cutoff_iso: str, batch_size: 
         "DELETE FROM `ai_inference_requests` WHERE `status` IN ('completed', 'failed', 'superseded')"
         " AND `completed_at` != '' AND `completed_at` < "
         + cutoff_sql
+        + " AND " + _unreferenced_ai_request_sql("ai_inference_requests")
         + " ORDER BY `completed_at`, `request_id` LIMIT %s",
         (cutoff_iso, batch_size),
     )
@@ -664,13 +705,11 @@ def _delete_delivered_notification_rows_over_keep_count(
     job_ids = list(dict.fromkeys(job_ids))[:batch_size]
     if not job_ids:
         return 0
-    return _delete_one_batch(
-        connection,
-        "DELETE FROM `notification_jobs` WHERE job_id IN ("
-        + ", ".join(["%s"] * len(job_ids))
-        + ") AND `status` = 'done'",
-        tuple(job_ids),
-    )
+    from .mysql_history_archive import archive_delete_row
+    guard = ("status='done' AND NOT EXISTS (SELECT 1 FROM notification_delivery_attempts a "
+             "WHERE a.job_id=notification_jobs.job_id AND a.status='delivered' AND a.completed_at >= %s)")
+    return sum(archive_delete_row(connection, "notification_jobs", {"job_id": job_id}, guard, (protected_since,))
+               for job_id in job_ids[:8])
 
 
 def _delete_expired_article_delivery_ledger_rows(connection, cutoff_iso: str, batch_size: int) -> int:
@@ -713,6 +752,7 @@ def _delete_market_time_series_rows(
 
 
 def _delete_snapshot_history_over_keep_count(connection, keep_count: int, batch_size: int) -> int:
+    from .mysql_minimal_retention import _history_unreferenced_sql
     account_rows = _execute(
         connection,
         "SELECT DISTINCT account_id FROM `monitor_snapshot_history` ORDER BY account_id",
@@ -735,7 +775,7 @@ def _delete_snapshot_history_over_keep_count(connection, keep_count: int, batch_
             connection,
             "DELETE FROM `monitor_snapshot_history` WHERE account_id = %s AND generated_at IN ("
             + ", ".join(["%s"] * len(generated_values))
-            + ")",
+            + ") AND " + _history_unreferenced_sql(),
             (account_id, *generated_values),
         )
     return deleted
@@ -1152,8 +1192,9 @@ def apply_mysql_operational_history_retention(
         ).replace(microsecond=0).isoformat().replace("+00:00", "Z")
         ai_audit_deleted = _delete_one_batch(
             connection,
-            "DELETE FROM `ai_inference_execution_audits` WHERE `created_at` < %s "
-            "ORDER BY `created_at`, `request_id` LIMIT %s",
+            "DELETE FROM `ai_inference_execution_audits` WHERE `created_at` < %s AND "
+            + _unreferenced_ai_request_sql("ai_inference_execution_audits")
+            + " ORDER BY `created_at`, `request_id` LIMIT %s",
             (ai_audit_cutoff, batch_size),
         )
         deleted_by_table["ai_inference_execution_audits"] = ai_audit_deleted

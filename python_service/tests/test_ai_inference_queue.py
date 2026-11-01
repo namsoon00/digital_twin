@@ -800,17 +800,25 @@ class AIInferenceQueueTests(unittest.TestCase):
             "UPDATE ai_inference_requests SET completed_at = %s WHERE request_id = %s",
             ("2000-01-01T00:00:00Z", request.request_id),
         )
-        self.assertEqual(1, self.queue.prune_terminal(retention_hours=1))
-        self.assertIsNone(self.queue.get(request.request_id))
+        # A completed insight protects its original model input and result.
+        self.assertEqual(0, self.queue.prune_terminal(retention_hours=1))
+        self.assertIsNotNone(self.queue.get(request.request_id))
         durable_job, durable = self.create_detached_request(request.origin_id)
         durable_outcome = self.queue.enqueue_subject_decision(durable_job, durable)
-        self.assertEqual("completed-insight", durable_outcome["status"])
+        self.assertEqual("completed", durable_outcome["status"])
         self.assertIsNone(self.notifications.get(durable_job.job_id))
         request_count = mysql_fetchone(
             self.seed,
             "SELECT COUNT(*) FROM ai_inference_requests",
         )
-        self.assertEqual(0, int(request_count[0]))
+        self.assertEqual(1, int(request_count[0]))
+        # Older installations may already have evicted the queue row. Retain
+        # the insight-only idempotency contract for that historical state.
+        mysql_execute(self.seed, 'DELETE FROM ai_inference_results WHERE request_id=%s', (request.request_id,))
+        mysql_execute(self.seed, 'DELETE FROM ai_inference_requests WHERE request_id=%s', (request.request_id,))
+        legacy_job, legacy = self.create_detached_request(request.origin_id)
+        self.assertEqual('completed-insight', self.queue.enqueue_subject_decision(legacy_job, legacy)['status'])
+        self.assertIsNone(self.notifications.get(legacy_job.job_id))
 
     def assert_subject_decision_ai_web_only_result_never_creates_notification(self):
         from test_ai_follow_up_tracking import condition

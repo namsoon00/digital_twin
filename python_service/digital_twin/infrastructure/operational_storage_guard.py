@@ -364,6 +364,7 @@ def operational_storage_inventory(
         "typedbCheckpointReferencedMb": round(typedb_checkpoint / 1024 / 1024, 1),
         "typedbLimitMb": _integer(configured.get("typedbDataMaxSizeMb"), 8192, 256),
         "mysqlSizeMb": mysql_size_mb,
+        "historyArchiveMb": round(physical_size(root / "history-archive") / 1024 / 1024, 1),
         **mysql_metadata,
         "mysqlLimitMb": mysql_limit_mb,
         "mysqlUsagePercent": mysql_usage_percent,

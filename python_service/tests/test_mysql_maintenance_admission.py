@@ -260,10 +260,13 @@ class MySQLMaintenanceAdmissionTests(unittest.TestCase):
              self.assertRaisesRegex(RuntimeError, 'contents changed'):
             storage.compress_snapshot_table(connection, 'monitor_snapshot_history', writers_paused=True)
         self.assertFalse(any('ANALYZE' in str(call) for call in connection.execute.call_args_list))
-        for table in storage.COMPRESSED_SNAPSHOT_TABLES:
+        for table in storage.DEFAULT_COMPRESSED_SNAPSHOT_TABLES:
             sql = 'CREATE TABLE IF NOT EXISTS ' + table + ' (id INT PRIMARY KEY) ENGINE=InnoDB'
             self.assertIn('ROW_FORMAT=COMPRESSED', storage.snapshot_schema_statement(sql))
             self.assertEqual(sql, storage.snapshot_schema_statement(sql, supported=False))
+        for table in storage.COMPRESSED_SNAPSHOT_TABLES - storage.DEFAULT_COMPRESSED_SNAPSHOT_TABLES:
+            sql = 'CREATE TABLE IF NOT EXISTS ' + table + ' (id INT PRIMARY KEY) ENGINE=InnoDB'
+            self.assertEqual(sql, storage.snapshot_schema_statement(sql))
 
     def test_capacity_refresh_runs_even_when_busy_queue_defers_retention(self):
         self._assert_capacity_turn_never_alerts_from_fallback_limits()

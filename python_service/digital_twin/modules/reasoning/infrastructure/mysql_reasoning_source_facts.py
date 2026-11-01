@@ -76,6 +76,9 @@ class MySQLReasoningSourceFactStore(MySQLOperationalConnection):
                 "SELECT * FROM reasoning_source_facts WHERE fact_id = %s",
                 (str(fact_id or ""),),
             ).fetchone()
+            if not row:
+                from digital_twin.infrastructure.mysql_history_archive import read_archived_row
+                row = read_archived_row(connection, "reasoning_source_facts", {"fact_id": str(fact_id or "")})
         return source_fact_from_row(row) if row else None
 
     def latest(self, fact_type: str, aggregate_id: str, limit: int = 20) -> List[ReasoningSourceFact]:

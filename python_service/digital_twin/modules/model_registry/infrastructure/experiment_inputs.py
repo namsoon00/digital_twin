@@ -86,6 +86,10 @@ def read_dataset(connection, plan, boundary, captured_at):
         (boundary.get("snapshotId"), plan["accountId"]),
     ).fetchone()
     if not row:
+        from digital_twin.infrastructure.mysql_history_archive import read_archived_row
+        row = read_archived_row(connection, "verified_reasoning_source_snapshots",
+                                {"snapshot_id": boundary.get("snapshotId")})
+    if not row or row.get("account_id") != plan["accountId"]:
         raise ValueError("historical-source-packet-unavailable")
     source = source_packet(row)
     if (boundary.get("fingerprint") and boundary["fingerprint"] != source["fingerprint"]
@@ -106,6 +110,17 @@ def read_dataset(connection, plan, boundary, captured_at):
             "AND created_at <= %s ORDER BY generated_at LIMIT 1001",
             (plan["accountId"], start, source["generatedAt"], source["recordedAt"]),
         ).fetchall()
+        from digital_twin.infrastructure.mysql_history_archive import read_archived_source_window
+        cold_rows = read_archived_source_window(connection, plan["accountId"], start, source["generatedAt"])
+        live_ids = {item["snapshot_id"] for item in rows}
+        for item in cold_rows:
+            if item["snapshot_id"] in live_ids or item["created_at"] > source["recordedAt"]:
+                continue
+            packet = source_packet(item)
+            rows.append({**item, "positions_json": json.dumps(packet["payload"].get("positions", {})),
+                         "watchlist_json": json.dumps(packet["payload"].get("watchlist", {}))})
+            live_ids.add(item["snapshot_id"])
+        rows.sort(key=lambda item: (item["generated_at"], item["snapshot_id"]))
         if len(rows) > 1000:
             raise ValueError("experiment-input-read-limit")
         # Keep exact requested scalar observations, not every historical news/account archive.

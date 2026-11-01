@@ -476,7 +476,10 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # One outer-context contract prevents reuse after same-source repairs.
         # Seventeen evidence-checkpoint, isolated-capacity and question-purpose
         # contracts cover persistence/fencing, freshness, exact wakeups and fairness.
-        self.assertLessEqual(total, 2890)
+        # Fourteen archive/recovery contracts cover lossless restoration,
+        # low-space deferral, concurrent correction, receipt atomicity, protected
+        # AI lineage, candidate cold restart and exact process ownership.
+        self.assertLessEqual(total, 2904)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

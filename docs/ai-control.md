@@ -1,5 +1,33 @@
 # Central AI control
 
+## Operational activity notifications (2026-11-01)
+
+`aiActivityNotificationsEnabled=true` records central task starts, evidence and
+memory reads, frozen inputs, retrieval outcomes, model calls, result storage,
+follow-up reservations, agenda transitions, waits and failures in the transactional
+`ai_activity_events` outbox. Every audited gateway call is included, even outside
+central observation. Enable `aiActivity` in `aiResearchTelegramMessageTypes` to
+deliver these events through the configured research bot to its operator chat.
+The standard notification worker drains up to 50 records per pass. Receipts retain
+the event/stage/task identifiers and `deliveryRoute=ai-research`. Missing research
+transport fails visibly instead of falling back to another destination.
+
+Messages are rendered deterministically and require no model tokens. They contain
+bounded operation metadata and measured usage, never raw prompts, model responses,
+private reasoning or credentials. Calls and task stages have stable event identities;
+transaction rollback and lease loss cannot produce successful activity records.
+Repeated identical waiting/idle heartbeats do not create repeated notices. This
+opt-in operational stream bypasses market hours, quiet hours and semantic similarity
+filters, while investment-result validation and publication limits remain intact.
+Delivery and task completion are operational evidence, not investment accuracy.
+
+The internal daily allowance accepts up to 100,000,000 tokens. Increasing it does
+not change provider subscription limits, model context limits, concurrency guards
+or repeat-research protection. `request_execution_recheck()` is an explicit operator
+recovery action when provider capacity may have returned: it advances one fenced
+probe without erasing failure history or taking over an active probe. Another
+provider failure restores the normal backoff. It is not an automatic quota reset.
+
 ## Independent evidence preparation (2026-11-01)
 
 Central observation now reads a reasoning-owned `verified-observation-checkpoint-v1`

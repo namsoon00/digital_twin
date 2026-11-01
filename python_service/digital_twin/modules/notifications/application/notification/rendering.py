@@ -63,6 +63,10 @@ class NotificationRenderingService:
         return rendered
 
     def _render(self, job: NotificationJob) -> str:
+        if job.message_type == "aiActivity":
+            from digital_twin.modules.notifications.application.ai_activity_message import render_ai_activity
+            job.text = render_ai_activity(job.context["aiActivity"])
+            return job.text
         if job.message_type == "researchProgress":
             from digital_twin.modules.notifications.application.research_progress_message import render_research_progress
             job.text = render_research_progress(job.context["researchProgress"])

@@ -37,9 +37,11 @@ class NotificationDispatchService:
         operations_delivery = is_operations_delivery_message_type(job.message_type)
         if not operations_delivery and job.account_id and job.account_id not in accounts:
             raise RuntimeError("알림 수신 계정을 찾을 수 없어 다른 계정으로 대체 발송하지 않았습니다.")
-        account = None if job.message_type == AI_OBSERVATION_DIAGNOSTIC else accounts.get(job.account_id)
+        account = None if job.message_type in {AI_OBSERVATION_DIAGNOSTIC, "aiActivity"} else accounts.get(job.account_id)
         notifier = self.ai_research_notifier_factory(job.message_type, account) if self.ai_research_notifier_factory else None
         dedicated_research = notifier is not None
+        if job.message_type == "aiActivity" and not dedicated_research:
+            raise RuntimeError("AI 실행 알림 전용 봇이 없어 다른 채널로 대체 발송하지 않았습니다.")
         if notifier is None and operations_delivery:
             if job.message_type in {ONTOLOGY_REASONING_QUEUE, AI_OBSERVATION_DIAGNOSTIC} and not self.operations_notifier_factory:
                 raise RuntimeError("운영 알림 전송기가 구성되지 않아 계정 채널로 대체 발송하지 않았습니다.")
@@ -116,6 +118,9 @@ class NotificationDispatchService:
                 key: diagnostic.get(key) for key in ("version", "taskId", "symbol", "reasons", "executionInputId")}
             if context.get("aiDiagnosticProgress"):
                 rendered_audit["aiDiagnosticProgress"] = context["aiDiagnosticProgress"]
+        if job.message_type == "aiActivity":
+            activity = context.get("aiActivity") or {}
+            rendered_audit["aiActivity"] = {key: activity.get(key) for key in ("version", "eventId", "stage", "at", "taskId")}
         if relation_change.get("version") and relation_change.get("current"):
             # The receipt outlives the large job payload. Preserve the exact
             # last-delivered facts for the next customer comparison.

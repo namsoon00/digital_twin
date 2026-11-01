@@ -4,6 +4,7 @@ import uuid
 
 from digital_twin.modules.ai_orchestration.domain.execution_resilience import instant, stamp
 from digital_twin.modules.ai_orchestration.domain.runtime_coverage import PULSE_GAP_SECONDS, runtime_coverage
+from ..domain.activity import enabled as activity_enabled
 
 RUNTIME = "central-observation-runtime"
 WORKER_ID = uuid.uuid4().hex
@@ -33,6 +34,17 @@ class AIRuntimePersistence:
                 connection.execute("UPDATE ai_control_runtime_intervals SET last_seen_at=%s WHERE interval_id=%s",
                                    (stamp(now), state["intervalId"]))
             state["lastSeenAt"] = stamp(now)
+            if activity_enabled(self.runtime_settings) and activity in {
+                    "resource-deferred", "recovery-wait", "budget-wait", "idle", "paused", "unavailable"}:
+                details = {"status": activity}
+                if activity == "recovery-wait":
+                    import json
+                    row = connection.execute("SELECT state_json FROM ai_control_execution_state WHERE scope_key='shared-local-model'").fetchone()
+                    provider = json.loads(row["state_json"]) if row else {}
+                    details.update(reasonCode=provider.get("lastFailureCategory", ""), nextCheckAt=provider.get("blockedUntil", ""))
+                if state.get("notifiedActivity") != details:
+                    state["notifiedActivity"] = details
+                    self.activity(connection, "worker-state", stamp(now), **details)
             if activity in {"checking", "running", "resource-deferred", "recovery-wait", "budget-wait",
                             "idle", "paused", "completed", "unchanged", "unchanged-wait", "awaiting-evidence",
                             "deferred", "failed", "retired", "lease-lost", "unavailable"}:

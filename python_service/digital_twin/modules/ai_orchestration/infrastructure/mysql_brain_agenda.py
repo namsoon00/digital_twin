@@ -45,6 +45,8 @@ class MySQLBrainAgendaStore(MySQLOperationalConnection):
         if not initialize:
             return
         with self.connect() as connection:
+            from .mysql_activity import SCHEMA as ACTIVITY_SCHEMA
+            connection.execute(ACTIVITY_SCHEMA)
             for sql in SCHEMA:
                 connection.execute(sql)
 
@@ -55,8 +57,13 @@ class MySQLBrainAgendaStore(MySQLOperationalConnection):
         return json.loads(row["payload_json"]) if row else None
 
     def save(self, connection, case, task_id, stage, details=None):
-        return self.save_with_connection(connection, case, task_id, stage, details,
-                                         getattr(self, "progress_writer", None))
+        result = self.save_with_connection(connection, case, task_id, stage, details,
+                                           getattr(self, "progress_writer", None))
+        from .mysql_activity import append_activity
+        append_activity(connection, self.runtime_settings, "case-updated", identity(case["caseId"], case["revision"]),
+                        {**case, "taskId": task_id}, caseStage=stage, caseKind=case.get("kind", "question"),
+                        status=case["status"], revision=case["revision"], nextCheckAt=case.get("nextCheckAt", ""))
+        return result
 
     @staticmethod
     def save_with_connection(connection, case, task_id, stage, details=None, progress_writer=None):

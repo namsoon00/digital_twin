@@ -71,11 +71,13 @@ class AIControlService:
                     # reading memories, preparing inputs or opening a retrieval.
                     self.store.execution_wait()
                     stage = "evidence-capture"
+                    self.store.record_activity(job, "evidence-started")
                     capture = self.evidence({**job, "marketWorldId": current_subject.get("marketWorldId", "")})
                     session = capture if isinstance(capture, ObservationEvidenceSession) else None
                     packet = session.packet() if session else capture
                     if not packet.get("facts") or not packet.get("sourceSnapshotId"):
                         raise ValueError("current verified graph facts unavailable")
+                    self.store.record_activity(job, "evidence-ready", factCount=len(packet["facts"]))
                     if lanes.enabled(self.settings):
                         packet = lanes.annotate(packet, job)
                     if self.settings.get("aiEvidenceReadPolicy") == evidence_readiness.VERSION:
@@ -89,6 +91,7 @@ class AIControlService:
                                else self.store.memory(job["accountId"], job["symbol"]))
                     stage = "memory-and-followup"
                     history = [row for row in history if not row.get("worldId") or row["worldId"] == job["worldId"]]
+                    self.store.record_activity(job, "memory-read", memoryCount=len(history))
                     packet = company_value.annotate(packet, history)
                     from ..domain import judgment_policy
                     if self.settings.get("aiJudgmentQualityPolicy") == judgment_policy.VERSION and evidence_purpose.enabled(packet):

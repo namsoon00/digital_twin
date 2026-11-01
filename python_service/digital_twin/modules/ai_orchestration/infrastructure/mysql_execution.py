@@ -117,11 +117,31 @@ class AIExecutionPersistence:
         # Frozen input identities include attempts; never decrement or reuse them.
         now = stamp(datetime.now(timezone.utc))
         with self.transaction() as connection:
-            return bool(connection.execute("UPDATE ai_control_tasks SET status='pending',last_error=%s,available_at=%s,"
+            changed = connection.execute("UPDATE ai_control_tasks SET status='pending',last_error=%s,available_at=%s,"
                 "payload_json=JSON_SET(payload_json,'$.executionDeferrals',%s,'$.executionWait',CAST(%s AS JSON)),updated_at=%s,lease_token='',lease_until='' "
                 "WHERE task_id=%s AND status='processing' AND lease_token=%s AND lease_until>=%s",
                 (wait.code, wait.retry_at, int(job.get("executionDeferrals", 0)) + 1, json.dumps(wait.result()), now,
-                 job["taskId"], job["leaseToken"], now)).rowcount)
+                 job["taskId"], job["leaseToken"], now)).rowcount
+            if changed:
+                from ..domain.planning import identity
+                self.activity(connection, "task-deferred", identity(job["taskId"], job["attempts"]), job,
+                              status="recovery-wait", reasonCode=wait.category, nextCheckAt=wait.retry_at)
+            return bool(changed)
+
+    def request_execution_recheck(self):
+        """Explicit operator request: advance one fenced probe, never erase failures."""
+        now = datetime.now(timezone.utc)
+        with self.transaction() as connection:
+            state = self._locked_execution_state(connection, SCOPE, now)
+            if instant(state.get("probeUntil")) and instant(state["probeUntil"]) > now:
+                return {"status": "probe-running"}
+            if not state.get("blockedUntil"):
+                return {"status": "ready"}
+            previous = state["blockedUntil"]
+            state.update(blockedUntil=stamp(now), operatorRecheckAt=stamp(now), previousBlockedUntil=previous)
+            self._save_execution_state(connection, SCOPE, state, now)
+            self.activity(connection, "resume-requested", stamp(now), status="pending", reasonCode=state.get("lastFailureCategory", ""))
+        return {"status": "probe-requested", "previousRetryAt": previous}
 
     def record_observation_progress(self, connection, job, result, now):
         if job["capability"] not in OBSERVATIONS or not (result.get("summary") or result.get("status") in {"unchanged", "awaiting-evidence", "unchanged-wait"}):

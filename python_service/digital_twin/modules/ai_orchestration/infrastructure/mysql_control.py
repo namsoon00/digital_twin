@@ -28,6 +28,7 @@ from .mysql_task_dispatch import AITaskDispatchPersistence
 from .mysql_diagnostic_progress import DiagnosticProgressPersistence, SCHEMA as DIAGNOSTIC_SCHEMA
 from .mysql_token_usage import AITokenUsagePersistence
 from ..domain.token_budget import usage_counts, RESERVATION, execution_pool
+from .mysql_activity import AIActivityPersistence, SCHEMA as ACTIVITY_SCHEMA
 
 
 STATUS_INDEXES = (
@@ -36,6 +37,7 @@ STATUS_INDEXES = (
 )
 
 SCHEMA = (
+    ACTIVITY_SCHEMA,
     *DIAGNOSTIC_SCHEMA,
     EXECUTION_SCHEMA,
     RUNTIME_SCHEMA,
@@ -81,7 +83,7 @@ SCHEMA = (
 )
 
 
-class MySQLAIControlStore(AITokenUsagePersistence, DiagnosticProgressPersistence, AITaskDispatchPersistence, AIRuntimePersistence, AIExecutionPersistence, MySQLOperationalConnection):
+class MySQLAIControlStore(AIActivityPersistence, AITokenUsagePersistence, DiagnosticProgressPersistence, AITaskDispatchPersistence, AIRuntimePersistence, AIExecutionPersistence, MySQLOperationalConnection):
     def __init__(self, settings=None, *, initialize=True):
         configured = dict(settings or {})
         if not initialize:
@@ -92,7 +94,8 @@ class MySQLAIControlStore(AITokenUsagePersistence, DiagnosticProgressPersistence
         with self.connect() as connection:
             for sql in SCHEMA:
                 connection.execute(sql)
-            ensure_mysql_indexes(connection, {"ai_control_tasks": STATUS_INDEXES})
+            ensure_mysql_indexes(connection, {"ai_control_tasks": STATUS_INDEXES,
+                "ai_activity_events": (MySQLIndexDefinition("ai_activity_events", "ai_activity_created", "`created_at`, `event_id`"),)})
 
     @staticmethod
     def insert(connection, job):
@@ -154,9 +157,12 @@ class MySQLAIControlStore(AITokenUsagePersistence, DiagnosticProgressPersistence
                 "WHERE task_id=%s", (token, until, now, json.dumps(receipt), row["task_id"]))
             connection.execute("UPDATE ai_control_budget SET used_count=used_count+1 WHERE day_key=%s", (day,))
             self._save_execution_state(connection, DISPATCH_SCOPE, cursor, clock)
-            return {**json.loads(row["payload_json"]), "leaseToken": token, "attempts": int(row["attempts"]) + 1,
+            job = {**json.loads(row["payload_json"]), "leaseToken": token, "attempts": int(row["attempts"]) + 1,
                     "previousError": row["last_error"], "scheduledAt": row["available_at"], "claimedAt": now,
                     "claimedPriority": int(row["priority"]), "taskDispatch": receipt}
+            self.activity(connection, "task-started", identity(job["taskId"], job["attempts"]), job,
+                          capability=job["capability"], attempt=job["attempts"])
+            return job
 
     def heartbeat(self, job):
         until = (datetime.now(timezone.utc) + timedelta(minutes=15)).isoformat().replace("+00:00", "Z")
@@ -216,6 +222,13 @@ class MySQLAIControlStore(AITokenUsagePersistence, DiagnosticProgressPersistence
                                (json.dumps(saved_result, ensure_ascii=False), job["taskId"]))
             for child in saved_children:
                 self.insert(connection, child)
+                self.activity(connection, "task-scheduled", child["taskId"], child,
+                              capability=child["capability"], nextCheckAt=child.get("availableAt", now))
+            self.activity(connection, "task-completed", identity(job["taskId"], job["attempts"]), job,
+                          capability=job["capability"], status=saved_result.get("status", "completed"),
+                          quality=(saved_result.get("quality") or {}).get("status", ""),
+                          publicationStatus=(saved_result.get("publication") or {}).get("status", ""),
+                          childCount=len(saved_children))
             self.record_observation_progress(connection, job, saved_result, now)
             return saved_result, saved_children
 
@@ -275,6 +288,9 @@ class MySQLAIControlStore(AITokenUsagePersistence, DiagnosticProgressPersistence
                 next_due = (now + timedelta(seconds=recovery_delay)).isoformat().replace("+00:00", "Z")
                 self.insert(connection, {**{k: job[k] for k in ("accountId", "symbol", "name", "worldId")},
                     "capability": job["capability"], "taskId": identity(job["taskId"], "recovery"), "availableAt": next_due})
+            if changed:
+                self.activity(connection, "task-failed", identity(job["taskId"], job["attempts"]), job,
+                              status=status, reasonCode=error_kind[:100], nextCheckAt=due if not terminal else "")
         return {"status": status if changed else "lease-lost"}
 
     def defer_evidence(self, job, wait):
@@ -310,6 +326,8 @@ class MySQLAIControlStore(AITokenUsagePersistence, DiagnosticProgressPersistence
                  job["taskId"], job["leaseToken"], stamp())).rowcount
             if changed:
                 self.record_observation_progress(connection, job, result, stamp())
+                self.activity(connection, "task-deferred", identity(job["taskId"], job["attempts"]), job,
+                              status="awaiting-evidence", reasonCode=wait.code, nextCheckAt=retry_at)
             return bool(changed)
 
     def defer_research(self, job, wait):
@@ -324,17 +342,24 @@ class MySQLAIControlStore(AITokenUsagePersistence, DiagnosticProgressPersistence
             agenda = getattr(self, "agenda_writer", None)
             if changed and agenda:
                 agenda(connection, job, wait.result(), [])
+            if changed:
+                self.activity(connection, "task-deferred", identity(job["taskId"], job["attempts"]), job,
+                              status="research-cooldown", reasonCode=wait.code, nextCheckAt=wait.retry_at)
             return bool(changed)
 
     def defer_budget(self, job, wait):
         # Keep attempt identities immutable for frozen input/call audit. Budget
         # waits are separately counted so they cannot exhaust failure retries.
         with self.transaction() as connection:
-            return bool(connection.execute("UPDATE ai_control_tasks SET status='pending',last_error=%s,available_at=%s,"
+            changed = connection.execute("UPDATE ai_control_tasks SET status='pending',last_error=%s,available_at=%s,"
                 "payload_json=JSON_SET(payload_json,'$.budgetDeferrals',%s),updated_at=%s,lease_token='',lease_until='' "
                 "WHERE task_id=%s AND status='processing' AND lease_token=%s AND lease_until>=%s",
                 (wait.code, wait.reset_at, int(job.get("budgetDeferrals", 0)) + 1, stamp(),
-                 job["taskId"], job["leaseToken"], stamp())).rowcount)
+                 job["taskId"], job["leaseToken"], stamp())).rowcount
+            if changed:
+                self.activity(connection, "task-deferred", identity(job["taskId"], job["attempts"]), job,
+                              status="budget-wait", reasonCode=wait.code, nextCheckAt=wait.reset_at)
+            return bool(changed)
 
     def last_processing_outcome(self, account_id, symbol, capability="observe"):
         with self.connect() as connection:
@@ -379,7 +404,8 @@ class MySQLAIControlStore(AITokenUsagePersistence, DiagnosticProgressPersistence
         if packet.get("executionLanePolicy") and packet.get("executionLane") != (MARKET if job["capability"] == MARKET else "question-research"):
             raise ValueError("execution input lane ownership mismatch")
         input_id = identity(job["taskId"], job["attempts"], digest)
-        artifact = gzip.compress(json.dumps(envelope, ensure_ascii=False, allow_nan=False).encode(), mtime=0)
+        raw = json.dumps(envelope, ensure_ascii=False, allow_nan=False).encode()
+        artifact = gzip.compress(raw, mtime=0)
         with self.transaction() as connection:
             owned = connection.execute("SELECT task_id FROM ai_control_tasks WHERE task_id=%s AND status='processing' "
                 "AND lease_token=%s AND lease_until>=%s FOR UPDATE", (job["taskId"], job["leaseToken"], stamp())).fetchone()
@@ -388,6 +414,8 @@ class MySQLAIControlStore(AITokenUsagePersistence, DiagnosticProgressPersistence
             connection.execute("INSERT IGNORE INTO ai_control_inputs "
                 "(input_id,task_id,attempt,protocol_version,input_hash,prompt_hash,artifact_gzip,created_at) VALUES (%s,%s,%s,%s,%s,%s,%s,%s)",
                 (input_id, job["taskId"], job["attempts"], envelope["protocolVersion"], digest, envelope["promptHash"], artifact, stamp()))
+            self.activity(connection, "input-prepared", input_id, job, inputId=input_id,
+                          promptVersion=envelope["promptVersion"], inputBytes=len(raw))
         return input_id
 
     def save_retrieval_round(self, job, step):
@@ -431,6 +459,11 @@ class MySQLAIControlStore(AITokenUsagePersistence, DiagnosticProgressPersistence
             saved = connection.execute("SELECT artifact_hash FROM ai_control_retrieval_rounds WHERE input_id=%s", (step["inputId"],)).fetchone()
             if saved["artifact_hash"] != digest:
                 raise ValueError("retrieval audit is immutable")
+            reads = [{"tool": item.get("request", {}).get("tool", item.get("request", {}).get("kind", "자료 조회")),
+                      "status": item.get("result", {}).get("status", ""),
+                      "factCount": len(item.get("result", {}).get("facts") or [])} for item in step.get("reads", [])]
+            self.activity(connection, "retrieval-completed", step["inputId"], job,
+                          status=step["status"], readCount=len(reads), reads=reads)
         return True
 
     def begin_call(self, workload, prompt_hash, task_id="", input_id=""):
@@ -463,6 +496,8 @@ class MySQLAIControlStore(AITokenUsagePersistence, DiagnosticProgressPersistence
                                                     "promptVersion": prompt_version})))
             if input_id:
                 connection.execute("INSERT INTO ai_control_input_calls (call_id,input_id) VALUES (%s,%s)", (call_id, input_id))
+            self.activity(connection, "model-started", call_id, self.activity_subject(connection, task_id),
+                          callId=call_id, workload=workload, promptVersion=prompt_version)
         return call_id
 
     def retrieval_round_budget(self):
@@ -476,7 +511,7 @@ class MySQLAIControlStore(AITokenUsagePersistence, DiagnosticProgressPersistence
 
     def finish_call(self, call_id, error_kind="", metrics=None):
         with self.transaction() as connection:
-            call = connection.execute("SELECT workload,started_at,status FROM ai_control_calls WHERE call_id=%s FOR UPDATE", (call_id,)).fetchone()
+            call = connection.execute("SELECT workload,started_at,status,task_id FROM ai_control_calls WHERE call_id=%s FOR UPDATE", (call_id,)).fetchone()
             if not call or call["status"] != "running":
                 return
             saved = connection.execute("SELECT metrics_json FROM ai_control_call_metrics WHERE call_id=%s", (call_id,)).fetchone()
@@ -501,6 +536,13 @@ class MySQLAIControlStore(AITokenUsagePersistence, DiagnosticProgressPersistence
                 connection.execute("INSERT INTO ai_control_call_metrics (call_id,metrics_json) VALUES (%s,%s) "
                     "ON DUPLICATE KEY UPDATE metrics_json=VALUES(metrics_json)", (call_id, json.dumps(safe)))
             connection.execute("UPDATE ai_control_calls SET status=%s,completed_at=%s,error_kind=%s WHERE call_id=%s", ("failed" if error_kind else "completed", stamp(), error_kind[:100], call_id))
+            measured = {"inputTokens": usage["input_tokens"], "outputTokens": usage["output_tokens"],
+                        "cachedTokens": usage.get("cached_input_tokens", 0)} if usage is not None else {}
+            self.activity(connection, "model-failed" if error_kind else "model-completed", call_id,
+                          self.activity_subject(connection, call.get("task_id", "")), callId=call_id,
+                          workload=call["workload"], reasonCode=error_kind[:100],
+                          promptVersion=admission.get("promptVersion", ""),
+                          elapsedMs=(metrics or {}).get("totalMs"), **measured)
 
     def review_proof(self, input_id):
         with self.connect() as connection:

@@ -207,6 +207,12 @@ def build_notification_queue_runner(dry_run: bool = False, lane: str = "all") ->
     from digital_twin.modules.ai_orchestration.infrastructure.mysql_control import MySQLAIControlStore
     publication = AIControlPublication(settings, MySQLAIControlStore(settings), stores.notification_job_store(settings),
                                        lambda: ai_control_subjects(settings))
+    from digital_twin.infrastructure.transactions.ai_activity_publication import AIActivityPublication
+    activity = AIActivityPublication(publication.control, publication.notifications, settings)
+    def reconcile_ai_progress():
+        result = activity.run_once()
+        result["diagnostics"] = publication.diagnostic_progress.run_once()
+        return result
     return NotificationQueueRunner(
         queue=stores.notification_job_store(settings),
         account_repository=stores.account_reader(settings),
@@ -235,5 +241,5 @@ def build_notification_queue_runner(dry_run: bool = False, lane: str = "all") ->
         link_base_resolver=ActiveShareNotificationLinkResolver(),
         delivery_comparison_refresher=delivery_comparison_refresher,
         delivery_guard=publication.delivery_guard,
-        diagnostic_followup_reconciler=publication.diagnostic_progress.run_once,
+        diagnostic_followup_reconciler=reconcile_ai_progress,
     )

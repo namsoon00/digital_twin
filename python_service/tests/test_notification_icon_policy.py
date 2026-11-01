@@ -21,6 +21,7 @@ EXPECTED_BASE_ICONS = {
     "default": "🔔",
     "aiObservation": "🧠",
     "aiObservationDiagnostic": "🧪",
+    "aiActivity": "🧠",
     "investmentInsight": "🧭",
     "marketObservation": "↔️",
     "portfolioHoldingsSnapshot": "📋",

@@ -17,7 +17,7 @@ DEFAULT_QUIET_HOURS_END = "05:00"
 DEFAULT_QUIET_HOURS_TIMEZONE = "Asia/Seoul"
 
 
-QUIET_HOURS_BYPASS_MESSAGE_TYPES = {"workHandoff", "operatorReasoningReport", "aiObservationDiagnostic"}
+QUIET_HOURS_BYPASS_MESSAGE_TYPES = {"workHandoff", "operatorReasoningReport", "aiObservationDiagnostic", "aiActivity"}
 
 
 DEFAULT_MESSAGE_DELIVERY_LEVEL = "absoluteBeginner"

@@ -802,7 +802,8 @@ class DecisionOutcomeTargetTests(unittest.TestCase):
         self.assertEqual([], result["missingRequiredMetricIds"])
 
     def test_financial_evidence_reader_batches_as_of_immutable_history(self):
-        source = MySQLOutcomeEvidenceSource({})
+        # This verifies query assembly with fake rows, not schema bootstrap.
+        source = object.__new__(MySQLOutcomeEvidenceSource)
         connection = QueryRowsConnection([{
             "request_id": "request:1", "generated_at": "2026-08-25T01:00:00Z",
             "company_json": json.dumps({"financials": {"quarterly": [{"period": "2026-06-30"}]}}),

@@ -689,19 +689,7 @@ model approval state / next action / verifiedAt
 첫 재무/연속성 티켓의 집중 검증은 저장소 루트에서 다음처럼 실행할 수 있다. 운영 DB나 credential을 사용하는 명령으로 바꾸지 않는다.
 
 ```bash
-env \
-  PYTHONPATH=python_service:python_service/tests \
-  ORBIT_RUNTIME_ENV=test \
-  ORBIT_RUNTIME_REVISION=investment-assistant-focused-tests \
-  ORBIT_INFRASTRUCTURE_OVERRIDE_ENABLED=1 \
-  MYSQL_DATABASE=orbit_alpha_test \
-  MYSQL_TEST_DATABASE=orbit_alpha_test \
-  TYPEDB_ADDRESS=127.0.0.1:1739 \
-  TYPEDB_HTTP_ADDRESS=127.0.0.1:8010 \
-  TYPEDB_DATA_PATH="$PWD/data/test-runtime/typedb-data" \
-  TYPEDB_DATABASE=orbit_alpha_ontology_test \
-  python3 python_service/tests/minimal_suite_runner.py \
-  --mode investment-assistant-focused \
+npm run test:focus -- \
   test_financial_reporting_integrity.py \
   test_financial_evidence_repair.py \
   test_decision_continuity.py \
@@ -714,7 +702,7 @@ env \
 npm test
 ```
 
-`npm test`는 기준 커밋에서 frontend 검사·테스트, smoke, **core로 선택된 Python suite**를 실행한다. 전체 Python 테스트 실행과 같지 않다. 변경 기능이 core에 없으면 집중 테스트를 따로 실행한다. native/저장소 의미를 바꾼 경우 필요한 integration만 추가하고, 변경 없는 전 범위를 이유 없이 반복하지 않는다.
+`npm test`는 frontend 검사·테스트, tooling 검사, smoke, **Python unit tier**를 실행하는 빠른 검사다. 변경 기능의 계약이나 native/저장소 의미는 필요한 집중·통합 테스트로 추가 검증한다. 기존 core 묶음은 `npm run test:core`, 전체 검사는 `npm run test:full`로 유지하며, 변경 없는 전 범위를 이유 없이 반복하지 않는다. 최신 실행 기준은 [테스트 지침](testing.md)을 따른다.
 
 ### 7.3 필수 end-to-end 수용 사례
 

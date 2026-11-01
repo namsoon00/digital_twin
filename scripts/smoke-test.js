@@ -3005,7 +3005,7 @@ async function withServer(extraEnv, callback) {
   }
 }
 
-async function checkNormalMode(port, context) {
+async function checkStartup(port) {
   const home = await request(port, "/");
   assertOk(home.statusCode === 200, "홈 화면 응답 코드가 200이 아닙니다: " + home.statusCode);
   assertOk(home.body.indexOf('id="app"') >= 0, "홈 화면에 앱 루트가 없습니다.");
@@ -3016,7 +3016,10 @@ async function checkNormalMode(port, context) {
   assertOk(payload.profile && payload.profile.assistantName, "부트스트랩 API에 프로필 정보가 없습니다.");
   assertOk(Array.isArray(payload.items), "부트스트랩 API items가 배열이 아닙니다.");
   assertOk(Array.isArray(payload.messages), "부트스트랩 API messages가 배열이 아닙니다.");
+}
 
+async function checkNormalMode(port, context) {
+  await checkStartup(port);
   const ontologyAudit = await request(port, "/api/ontology/audit?limit=5");
   assertOk(ontologyAudit.statusCode === 200, "온톨로지 감사 API 응답 코드가 200이 아닙니다: " + ontologyAudit.statusCode);
   const ontologyAuditPayload = JSON.parse(ontologyAudit.body);
@@ -3617,6 +3620,15 @@ async function checkLiveTossMode(port) {
 }
 
 async function main() {
+  const args = process.argv.slice(2);
+  if (args.length > 1 || (args.length === 1 && args[0] !== "--quick")) {
+    throw new Error("Usage: node scripts/smoke-test.js [--quick]");
+  }
+  if (args[0] === "--quick") {
+    await withServer({}, checkStartup);
+    console.log("Quick HTTP smoke passed: home and bootstrap (isolated database)");
+    return;
+  }
   await checkFrontendAdminRender();
   await withServer({}, checkNormalMode);
   await withFakeTossApi(async function (baseUrl) {

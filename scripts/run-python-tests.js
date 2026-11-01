@@ -37,8 +37,22 @@ function loadManifest() {
   return entries;
 }
 
-function testFilesForMode(mode) {
+function testFilesForMode(mode = "unit", selectors = []) {
   const entries = loadManifest();
+  if (mode === "focus") {
+    if (selectors.length === 0) throw new Error("Focus requires at least one test filename.");
+    const declared = new Set(entries.map((entry) => entry.file));
+    const selected = selectors.map((selector) => {
+      const relative = selector.replace(/^\.\//, "").replace(/^python_service\/tests\//, "");
+      const filename = relative.endsWith(".py") ? relative : relative + ".py";
+      if (!/^test_[a-z0-9_]+\.py$/i.test(filename) || !declared.has(filename)) {
+        throw new Error("Unknown test file: " + selector + ". Use an exact manifest filename; globs are not supported.");
+      }
+      return filename;
+    });
+    return Array.from(new Set(selected));
+  }
+  if (selectors.length) throw new Error("Test filenames require focus mode.");
   if (tiers.has(mode)) return entries.filter((entry) => entry.tier === mode).map((entry) => entry.file);
   if (mode === "core") return entries.filter((entry) => entry.core).map((entry) => entry.file);
   if (mode === "full") return entries.map((entry) => entry.file);
@@ -54,9 +68,20 @@ function pythonPath(environment) {
   return entries.join(path.delimiter);
 }
 
-function run(mode) {
-  const files = testFilesForMode(mode);
+function run(argv) {
+  const args = argv.slice();
+  const mode = args.length && !args[0].startsWith("--") ? args.shift() : "unit";
+  const listOnly = args.includes("--list");
+  const selectors = args.filter((arg) => arg !== "--list");
+  const unknownOption = selectors.find((arg) => arg.startsWith("--"));
+  if (unknownOption) throw new Error("Unknown option: " + unknownOption);
+  const files = testFilesForMode(mode, selectors);
   if (files.length === 0) throw new Error("No Python tests selected for mode: " + mode);
+  if (listOnly) {
+    console.log(JSON.stringify({ mode, fileCount: files.length, files }, null, 2));
+    return;
+  }
+  console.log("Python " + mode + ": " + files.length + " test modules");
   const environment = Object.assign({}, process.env, {
     PYTHONPATH: pythonPath(process.env),
     ORBIT_RUNTIME_ENV: "test",
@@ -87,7 +112,7 @@ function run(mode) {
 
 if (require.main === module) {
   try {
-    run(process.argv[2] || "core");
+    run(process.argv.slice(2));
   } catch (error) {
     console.error(error && error.message ? error.message : error);
     process.exit(1);

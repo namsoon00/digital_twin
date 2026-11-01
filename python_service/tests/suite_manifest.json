@@ -130,7 +130,7 @@
     {"file": "test_portfolio_valuation_contract.py", "tier": "unit", "core": true},
     {"file": "test_toss_base_currency_values.py", "tier": "unit", "core": true},
     {"file": "test_investment_domain_architecture.py", "tier": "unit", "core": true},
-    {"file": "test_investment_domain_boundaries.py", "tier": "unit", "core": true},
+    {"file": "test_investment_domain_boundaries.py", "tier": "contract", "core": true},
     {"file": "test_investment_product_readiness.py", "tier": "unit", "core": true},
     {"file": "test_investment_model_read_adapter.py", "tier": "unit", "core": true},
     {"file": "test_investment_alert_coverage.py", "tier": "unit", "core": true},
@@ -195,7 +195,7 @@
     {"file": "test_investor_flow_contract.py", "tier": "unit", "core": true},
     {"file": "test_toss_token_cache.py", "tier": "unit", "core": true},
     {"file": "test_statistical_signals.py", "tier": "unit", "core": true},
-    {"file": "test_suite_governance.py", "tier": "unit", "core": true},
+    {"file": "test_suite_governance.py", "tier": "contract", "core": true},
 
     {"file": "test_portfolio_lifecycle_service.py", "tier": "contract", "core": true},
     {"file": "test_investment_case_query_service.py", "tier": "contract", "core": true},

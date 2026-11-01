@@ -1,33 +1,77 @@
 # Testing
 
-The maintained Python suite is intentionally bounded. It protects domain and
-integration contracts without retaining every implementation-specific example
-that has existed in the project.
+The project is in pre-release development. Optimize the feedback cycle by
+running tests that match the change. Keep broad regression coverage available
+for architecture changes and release readiness.
 
 ```bash
 npm test
 ```
 
-The normal development gate runs syntax checks, the HTTP smoke test, and the
-tests marked `core` in `python_service/tests/suite_manifest.json`. Core includes
-all unit and contract tests plus queue-loss and database-deadlock integration
-contracts.
+The quick gate runs syntax/build checks, tooling and frontend tests, the
+isolated home/bootstrap HTTP smoke test, and Python modules with `tier: unit` in
+`python_service/tests/suite_manifest.json`. The target is roughly one to two
+minutes on the development machine. It does not certify DB/TypeDB integration
+or complete feature behavior.
+
+`npm run smoke:quick` checks server startup, the home page and bootstrap payload.
+`npm run smoke` retains the extended API, fake-provider mapping and sharing/auth
+scenarios; run it when those paths change. Core/full also include that extended
+smoke. Both modes clean up their own server and temporary test database.
+
+For simple wording, UI or documentation edits, use only the relevant syntax,
+frontend or manual screen checks. Documentation-only changes do not require a
+suite run. For behavior changes, use the quick gate plus any affected tests
+outside its unit tier:
 
 ```bash
+npm run test:focus -- test_observation_checkpoints.py test_ai_evidence_wake.py
+npm run test:focus -- test_observation_checkpoints.py --list
+```
+
+Focus accepts exact manifest filenames, filename stems, or paths such as
+`python_service/tests/test_ai_evidence_wake.py`. Duplicates run once; empty,
+unknown, wildcard or out-of-scope selections fail instead of silently running
+nothing or falling back to the entire suite. `--list` works for every Python
+mode and previews the selection without starting Python or touching storage.
+Focus runs only the selected Python tests; it does not repeat syntax, frontend
+or HTTP checks that already passed.
+
+DB, queue, evidence and notification changes must retain their relevant
+integration checks for data preservation, account isolation, source lineage,
+and duplicate-delivery prevention. Choose the files explicitly after tracing
+the changed behavior; there is no automatic dependency-coverage guarantee.
+
+## Broader checks
+
+```bash
+npm run test:core
 npm run test:full
 ```
 
-The full release gate also runs the slower TypeDB, MySQL retention, service
-manager, and web-process tests. CI uses this gate. Individual tiers are
-available as `test:unit`, `test:contract`, `test:integration`, and `test:system`.
+`test:core` preserves the former default selection (`core: true`), including
+broad contract, ownership and integration checks. `test:full` runs every
+manifest module, including slower TypeDB, MySQL retention, service-manager and
+web-process checks. Use the appropriate broader gate for cross-cutting changes
+or release readiness. Do not run both without a specific coverage reason.
+
+CI push and pull-request runs use the quick gate. A manual CI run can select
+`suite: full` for release verification. There is no recurring full-test job.
+Individual tiers remain available as `test:unit`, `test:contract`,
+`test:integration`, and `test:system`; `python:test:*` runs Python alone.
+
+Reuse existing regressions and add only meaningful missing coverage. Small
+reversible edits do not need new tests. Re-run passed checks only for later
+changes affecting them or unresolved failures. Report whether validation was
+quick, focused, core or full, including any skipped or unavailable integration.
 
 ## Suite Governance
 
 - Every `test_*.py` module must be declared in `suite_manifest.json` with one
   tier and an explicit `core` decision. Unclassified test files fail the run.
-- The maintained suite must remain between 600 and 1905 tests, with no module
-  containing more than 50 tests. Add a focused contract and remove a weaker
-  example when the upper bound would be exceeded.
+- Suite-size review remains in `test_suite_governance.py`, run by core/full or
+  explicitly when changing suite ownership. Avoid implementation-specific or
+  duplicate examples just to increase test counts.
 - The runner forces MySQL and TypeDB test database names. A production database
   name fails before any test module is imported.
 - Per-test timings are written to the ignored

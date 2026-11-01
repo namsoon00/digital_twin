@@ -6,15 +6,23 @@ on:
       - main
   pull_request:
   workflow_dispatch:
+    inputs:
+      suite:
+        description: Validation scope
+        type: choice
+        default: quick
+        options:
+          - quick
+          - full
 
 permissions:
   contents: read
 
 jobs:
   smoke:
-    name: Node smoke test
+    name: Development validation
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: ${{ inputs.suite == 'full' && 30 || 10 }}
     services:
       mysql:
         image: mysql:8.4
@@ -56,5 +64,10 @@ jobs:
       - name: Install Python dependencies
         run: python3 -m pip install --user pymysql typedb-driver==3.12.0 websockets==15.0.1
 
-      - name: Run checks
+      - name: Run quick checks
+        if: ${{ inputs.suite != 'full' }}
+        run: npm test
+
+      - name: Run full release checks
+        if: ${{ inputs.suite == 'full' }}
         run: npm run test:full

@@ -165,7 +165,11 @@ This project uses a local-first, DDD-oriented, event-driven architecture. Future
 - Keep old top-level Python modules only as compatibility re-export modules.
   New business code imports its own layer or another module's public contract.
 - Build investment-analysis features ontology-first. New investment facts, relationships, semantic rules, AI context, and notification triggers must enter the TBox/ABox/direct-TypeQL/InferenceBox flow before they influence user-facing investment judgement.
-- Run `npm test` before handoff, then commit and push to `origin/main` unless explicitly told not to.
+- Validate in proportion to the change using [Testing](testing.md): the default
+  `npm test` is the pre-release quick gate. Add affected contract/integration
+  tests for behavior changes; simple text/UI/docs edits need only relevant
+  checks. Reserve `test:core`/`test:full` for broad changes or release readiness.
+  Then commit and push to `origin/main` unless explicitly told not to.
 - After commit and push, restart project-managed local runtime processes with `npm run python:service:restart`, then confirm with `npm run python:service:status`. Also restart any web, preview, share, or watcher process that the current Codex session started. Do not kill unrelated or user-started processes that cannot be safely identified; report any process that could not be restarted.
 - After commit and push, send a work-complete notification with `npm run python:handoff:notify -- --summary "<short summary>" --commit "$(git rev-parse --short HEAD)" --validation "npm test 통과" --push "origin/main 성공"` so other local workers can see the task is finished.
 - Notification wording must keep categorical investment judgement separate from notification delivery priority. Follow `docs/notification-terminology.md` when changing alert messages, rule labels, or notification UI.
@@ -556,9 +560,19 @@ quiet-hours values or change account serialization during a DTO ownership move.
 
 ## Testing Expectations
 
-- Add unit tests around application services when a use case changes.
-- Add tests around event contracts when adding or changing event payloads.
-- Add tests around model-review text when alert explanations, validation checks, or improvement hints change.
+- During pre-release development, target a roughly one-to-two-minute default
+  gate; this is a target, not a reason to skip a failing check. Follow
+  [Testing](testing.md) for quick, focused and full commands.
+- Reuse affected tests first. Add a focused regression for a real bug or a
+  changed behavior that existing tests do not cover. Do not add tests merely
+  to mirror implementation or freeze trivial wording.
+- Event payload, DB, queue and publication changes still need their affected
+  contract/integration checks, especially data preservation, account isolation,
+  duplicate notification prevention and evidence/time provenance.
+- Run whole-repository structure and historical-refactor parity checks when
+  their protected structure changes, not after every feature edit.
+- After a successful run, repeat only coverage affected by later edits or an
+  unresolved failure. Do not run core and full consecutively without a reason.
 - Add infrastructure tests only for repository/adapter behavior that can run without real credentials.
 - Preserve local-first behavior: no test should require real Toss, Telegram, or private account data.
 
@@ -566,7 +580,7 @@ quiet-hours values or change account serialization during a DTO ownership move.
 
 Every development session that changes the project should finish with the same observable handoff:
 
-1. Run validation.
+1. Run change-scoped validation above and record exactly which checks ran.
 2. Commit and push to `origin/main`.
 3. Restart the managed Python runtime processes:
 

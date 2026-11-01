@@ -65,7 +65,10 @@ class KISRealtimeIntegrityTests(unittest.TestCase):
         self.assertEqual(before, legacy)
         self.assertNotIn("foreignNetAmount", safe)
         self.assertEqual(-6752, safe["foreignNetVolume"])
-        self.assertFalse(KISMarketSignalProvider(quote_cache=MemoryQuotes()).is_cache_fresh(safe))
+        with patch("digital_twin.infrastructure.kis_market_signals.runtime_settings",
+                   side_effect=AssertionError("Unit cache checks must not load stored settings")):
+            provider = KISMarketSignalProvider(settings={"kisMarketSignalsEnabled": "1"}, quote_cache=MemoryQuotes())
+            self.assertFalse(provider.is_cache_fresh(safe))
         current = {**values, "marketSignalCoverage": {"investor": {
             "amountUnit": "KRW", "amountNormalizationVersion": "kis-investor-amount-krw-v1"}}}
         self.assertEqual(current, investor_amount_cache_contract(current))

@@ -15,7 +15,26 @@ The app runs at `http://127.0.0.1:3000` by default. Use `HOST=0.0.0.0` only when
 npm test
 ```
 
-This runs syntax checks and a local smoke test against the home page and `/api/bootstrap`.
+During pre-release development this is the quick gate: syntax/build checks,
+tooling and frontend tests, an isolated home/bootstrap HTTP smoke test, and Python unit tests.
+It does not run the broad Python contract/integration suite.
+
+- For wording, UI or documentation changes, run only the relevant checks or
+  inspect the affected screen; do not add tests for trivial reversible edits.
+- For behavior changes, run `npm test` and any affected tests outside the unit
+  tier with `npm run test:focus -- test_example.py test_other.py`. Exact test
+  filenames, stems and repository-relative test paths are supported.
+- For DB, queue, notification or evidence changes, include the relevant
+  integration tests for data preservation, scope isolation, duplicate delivery
+  and evidence lineage. Do not infer that the quick gate covers them.
+- For affected API, provider-mapping or sharing/authentication behavior, run
+  the existing extended HTTP checks with `npm run smoke`.
+- Use `npm run test:core` for the former broad gate and `npm run test:full` for
+  cross-cutting architecture changes or release readiness. Neither is required
+  for every edit. Rerun successful tests only when subsequent changes or new
+  evidence affect their coverage.
+- `npm run test:focus -- test_example.py --list` previews selection without
+  starting Python or touching storage. See [Testing](docs/testing.md).
 
 ## Development Methodology
 
@@ -32,7 +51,8 @@ Key rules:
 
 After making project changes:
 
-1. Run the relevant validation, normally `npm test`.
+1. Run the relevant validation above, normally the quick `npm test`, and report
+   its actual scope. Do not describe a quick or focused pass as a full pass.
 2. Commit the completed work and push it to `origin/main` unless the user explicitly says not to.
 3. Restart project-managed local runtime processes so running workers pick up the committed code:
 

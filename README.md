@@ -104,7 +104,7 @@ npm run generate:static
 
 웹 소스를 수정한 뒤에는 `npm run frontend:build`로 번들과 HTML·서비스 워커의
 콘텐츠 기반 버전을 함께 갱신합니다. `npm test`는 생성물 일치 여부, 모듈 경계,
-요청·탐색 회귀 테스트와 기존 Python 검증을 실행합니다. 실제 브라우저 검증은
+요청·탐색 회귀 테스트, HTTP 스모크와 Python 단위 테스트를 실행하는 빠른 검사입니다. 실제 브라우저 검증은
 `npm run frontend:test:browser`, 전체 Python 회귀 검증은 `npm run test:full`입니다.
 모듈 경계와 선택적 비동기 기준은 [구조 문서](docs/module-architecture.md),
 격리된 다계정 부하 검증은 [실행 문서](docs/integrated-load-verification.md)를 따릅니다.
@@ -166,7 +166,12 @@ eps * targetPer * growthWeight * qualityWeight * riskWeight
 npm test
 ```
 
-프런트엔드 변경 후에는 로컬 서버를 띄워 브라우저에서도 확인합니다.
+개발 중 기본 검사는 단위 테스트 중심입니다. 변경 기능의 추가 검증은
+`npm run test:focus -- test_example.py`로 선택하고, 기존의 넓은 검사는
+`npm run test:core`, 전체 검사는 `npm run test:full`로 실행합니다.
+큰 구조 변경이나 공개 준비 때 전체 검사를 사용하며, 작은 변경마다 반복하지 않습니다.
+자세한 범위는 [테스트 지침](docs/testing.md)을 참고합니다.
+프런트엔드 변경 후에는 영향을 받은 화면을 브라우저에서도 확인합니다.
 
 ## GitHub Pages 배포
 

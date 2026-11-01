@@ -395,6 +395,9 @@ class MySQLAIControlStore(OpinionMemoryPersistence, AIActivityPersistence, AITok
         for row in rows:
             saved = json.loads(row["result_json"])
             previous = saved.pop("input", {})
+            if previous.get("executionLane") == "market-observe":
+                from ..domain.insight_progress import memory as progress_memory
+                saved["marketProgressMemory"] = progress_memory(previous)
             if previous.get("priceInvestigationRepeatPolicy"):
                 from ..domain.price_investigation_repeat import memory as price_repeat_memory
                 saved["priceInvestigationMemory"] = price_repeat_memory(previous)

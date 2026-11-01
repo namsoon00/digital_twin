@@ -17,6 +17,48 @@ class ReviewedOpinionStorageTests(unittest.TestCase):
         self.storage = BrainAgendaStorageTests(); self.storage.setUp(); self.addCleanup(self.storage.tearDown)
         self.control, self.agenda = self.storage.control, self.storage.brain
 
+    def test_source_gap_wait_and_plan_are_atomic_idempotent_and_do_not_publish_an_opinion(self):
+        from test_insight_source_progress import missing_sources
+        from digital_twin.modules.ai_orchestration.domain import insight_progress
+        from digital_twin.modules.ai_orchestration.domain.observation_wait import disposition
+        from digital_twin.modules.ai_orchestration.application.control import AIControlService
+        self.control.runtime_settings.update(aiControlBudgetEnabled="false", aiTokenBudgetEnabled="false")
+        subject = self.storage.subject
+        previous = missing_sources(); p = previous["input"]; p.update(subject)
+        state = insight_progress.assessment(p, previous)
+        source_job = insight_progress.research_job(subject, state, stamp())
+        wait = disposition(p, "unchanged-source", "data-wait", [n["requirement"] for n in state["needs"]])
+        wait.update(sourceProgress=state, reasonCode="insight-source-gaps", authorCalled=False)
+        # A later observation may report this same gap, but the durable source
+        # planning task remains singular even after completion, scoped by owner.
+        with self.control.transaction() as c:
+            for key in ("gap-observation-1", "gap-observation-2"):
+                self.control.insert(c, {**subject, "taskId": key, "capability": "market-observe", "priority": 10})
+        service = AIControlService(self.control, lambda: [subject], None, None, None, None)
+        first = self.control.claim()
+        original = self.control.insert
+        def failed_insert(connection, job):
+            original(connection, job)
+            if job["capability"] == "research-plan":
+                raise RuntimeError("rollback source scheduling")
+        self.control.insert = failed_insert
+        with self.assertRaisesRegex(RuntimeError, "rollback source scheduling"):
+            service.complete_wait(first, p, wait, [])
+        self.control.insert = original
+        with self.control.connect() as c:
+            self.assertIsNone(c.execute("SELECT task_id FROM ai_control_tasks WHERE task_id=%s", (source_job["taskId"],)).fetchone())
+            self.assertEqual("processing", c.execute("SELECT status FROM ai_control_tasks WHERE task_id=%s", (first["taskId"],)).fetchone()["status"])
+        self.assertEqual("awaiting-evidence", service.complete_wait(first, p, wait, [])["status"])
+        self.assertEqual("awaiting-evidence", service.complete_wait(self.control.claim(), p, wait, [])["status"])
+        with self.control.connect() as c:
+            row = c.execute("SELECT payload_json FROM ai_control_tasks WHERE task_id=%s", (source_job["taskId"],)).fetchone()
+            self.assertTrue(insight_progress.source_gap_request(json.loads(row["payload_json"])))
+            self.assertEqual(1, c.execute("SELECT COUNT(*) n FROM ai_control_tasks WHERE capability='research-plan'").fetchone()["n"])
+            self.assertEqual(0, c.execute("SELECT COUNT(*) n FROM ai_opinion_records").fetchone()["n"])
+            self.assertEqual(0, c.execute("SELECT COUNT(*) n FROM notification_jobs WHERE message_type='aiObservation'").fetchone()["n"])
+        other = insight_progress.research_job({**subject, "worldId": "another-world"}, state, stamp())
+        self.assertNotEqual(source_job["taskId"], other["taskId"])
+
     def test_opinion_read_receipts_v21_and_v22_survive_progress_storage_and_reject_tampering(self):
         from test_reliable_opinion_completion import packet
         from test_efficient_retrieval import decision

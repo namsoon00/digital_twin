@@ -2,7 +2,7 @@
 from ..domain import external_influence, market_explanation, price_investigation
 from digital_twin.modules.reasoning.contracts import OBSERVATION_QUOTE_KINDS
 
-from ..domain import reliable_retrieval, opinion_retrieval, opinion_memory
+from ..domain import reliable_retrieval, opinion_retrieval, opinion_memory, insight_progress
 from copy import deepcopy
 import json
 from digital_twin.modules.reasoning.contracts import EvidenceContractError, content_hash, validate_evidence_packet, EVIDENCE_PACKET_MAX_BYTES, source_packet_bytes
@@ -97,7 +97,7 @@ def retrieve_working_evidence(session, packet, history, research, decide, save_i
                              max_rounds=MAX_ROUNDS, record_round=None, memory_search=None):
     investigation_index = None
     if price_investigation.enabled(packet):
-        anchor, investigation_index, scope = session.price_investigation()
+        anchor, investigation_index, scope = session.price_investigation(**({"prefer_original": True} if insight_progress.enabled(packet) else {}))
         packet = {**packet, "priceMoveAnchor": anchor, "priceInvestigationScope": scope}
     indexed = packet.get("memoryReadPolicy") == memory_reference.VERSION
     question_work = question_assessment.enabled(packet)

@@ -117,9 +117,13 @@ class ObservationEvidenceSession:
         return {"sourceSnapshots": deepcopy(self._packet["sourceSnapshots"]),
                 "coverage": deepcopy(self._packet["coverage"]), "ordering": "source-time-descending-then-id"}
 
-    def price_investigation(self):
+    def progress_identity(self):
+        from .observation_source_progress import inventory_identity
+        return inventory_identity(self._packet, self._facts.values())
+
+    def price_investigation(self, *, prefer_original=False):
         from .price_investigation_sources import build
-        return build(self._facts.values(), self._packet)
+        return build(self._facts.values(), self._packet, prefer_original=prefer_original)
 
     def price_investigation_source_key(self):
         """All captured event/company sources, including budget-excluded ones.

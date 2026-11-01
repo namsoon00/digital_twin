@@ -1,6 +1,7 @@
 """Discovery and price clocks from one immutable ABox, never live quote repair."""
 from copy import deepcopy
 from datetime import timedelta
+import hashlib
 
 from .observation_event_index import build as legacy_index, instant, EVENTS
 from .observation_evidence import canonical_json, quote_use_assessment
@@ -40,7 +41,19 @@ def content_state(fact):
     return "metadata-or-derived-summary; original-text-not-present"
 
 
-def build(facts, packet):
+def original_text_present(fact):
+    if any(isinstance(fact.get(k), str) and fact[k].strip()
+           for k in ("officialDocumentText", "articleText", "body", "text")):
+        return True
+    for key in ("historicalDocumentReference", "questionSourceReference", "articleSourceReference"):
+        ref = fact.get(key)
+        if (isinstance(ref, dict) and isinstance(ref.get("text"), str) and ref["text"].strip()
+                and ref.get("passageTextHash") == hashlib.sha256(ref["text"].encode()).hexdigest()):
+            return True
+    return False
+
+
+def build(facts, packet, *, prefer_original=False):
     facts = list(facts)
     anchor = price_move_anchor(packet)
     times = [instant(row["sourceAsOf"]) for row in anchor["quotes"] if row["datedReferenceEligible"]]
@@ -75,6 +88,7 @@ def build(facts, packet):
             # Prefer the richer source record over its headline-only graph alias.
             def rank(row):
                 return (row.get("judgementEvidenceUsable") is not False,
+                        original_text_present(row) if prefer_original else False,
                         row.get("bodyRead") is True, row.get("kind") == "research-evidence",
                         len(canonical_json(row)), row["id"])
             if rank(fact) <= rank(prior):
@@ -100,6 +114,12 @@ def build(facts, packet):
     # A generic company document in the baseline cannot satisfy a survey when
     # an actual, source-dated news/filing candidate is waiting to be read.
     focused = [row for row in eligible if documented_event(row)] or eligible
+    if prefer_original:
+        # A bodyRead flag or a longer AI summary cannot displace actual text.
+        # Keep the bounded event/period scope; this is read routing, not approval.
+        originals = [row for row in focused if original_text_present(by_id[row["factId"]])]
+        if originals:
+            focused = originals
     groups = {"events": [row["factId"] for row in focused],
               "market": [row["factId"] for row in market if not row["explicitlyIneligible"]]}
     for row in all_index["events"] + all_index["context"]:

@@ -6,7 +6,7 @@ from digital_twin.modules.reasoning.contracts import EvidenceContractError, Evid
 from digital_twin.modules.ai_orchestration.application.retrieval import RetrievalLeaseLost, RetrievalContractFailure
 from .working_retrieval import retrieve_working_evidence
 from ..domain.observation_wait import retry_key, disposition, unchanged_wait
-from ..domain import opinion_memory
+from ..domain import opinion_memory, insight_progress
 from ..domain import research_repeat as repeat, execution_lanes as lanes, evidence_readiness, evidence_purpose, company_value
 from digital_twin.modules.ai_orchestration.domain.planning import enabled, identity, stamp, validate_plan, observation_fingerprint
 from digital_twin.modules.ai_orchestration.domain.execution_input import LANE_PROMPT_VERSION, freeze_execution_input, freeze_review_input, freeze_repair_input, PROMPT_VERSION
@@ -184,6 +184,8 @@ class AIControlService:
                             from ..domain.price_investigation_repeat import VERSION as repeat_policy
                             packet["priceInvestigationRepeatPolicy"] = repeat_policy
                             packet["priceInvestigationSourceKey"] = lanes.material_key(packet, research, evidence_identity=session.price_investigation_source_key())
+                            packet["insightProgressPolicy"] = insight_progress.VERSION
+                            packet["sourceProgressKey"] = session.progress_identity()
                     from .opinion_preparation import quote_blocker
                     blocker = quote_blocker(packet)
                     if blocker:
@@ -205,7 +207,10 @@ class AIControlService:
                     same_quote_wait = (previous_outcome.get("reasonCode") == "current-quote"
                         and bool(previous_outcome.get("quoteWaitKey"))
                         and previous_outcome["quoteWaitKey"] == evidence_purpose.quote_wait_key(packet, research))
-                    if (unchanged_wait(previous_outcome, retry_identity) or same_quote_wait) and not any(row.get("transitionVerified") for row in packet["followUpEvaluations"]):
+                    due_thesis_review = (previous_outcome.get("reasonCode") == "insight-source-gaps"
+                        and any(row.get("reviewDue") for row in research if row.get("kind") == "business-thesis"))
+                    if ((unchanged_wait(previous_outcome, retry_identity) or same_quote_wait) and not due_thesis_review
+                            and not any(row.get("transitionVerified") for row in packet["followUpEvaluations"])):
                         return self.complete_wait(job, packet, previous_outcome, [], "unchanged-wait")
                     if (lanes.identified(packet) and not lanes.market(packet) and packet.get("questionWorkPolicy")
                             and not packet.get("questionWorkPending")):
@@ -254,6 +259,13 @@ class AIControlService:
                                 missing or ["조회 범위 또는 호출 한도 안에서 필요한 근거를 선택하지 못했습니다."])
                             state.update(evidence_purpose.waiting_metadata(waiting_source_packet, retrieval_trace, waiting_source_research))
                             return self.complete_wait(job, packet, state, retrieval_trace)
+                    source_progress = insight_progress.assessment(packet, previous, research)
+                    if source_progress.get("skipAuthor"):
+                        state = disposition(packet, retry_identity, "data-wait",
+                            [row["requirement"] for row in source_progress["needs"]])
+                        state.update(reasonCode="insight-source-gaps", stage="pre-author-source-progress",
+                                     sourceProgress=source_progress, authorCalled=False)
+                        return self.complete_wait(job, packet, state, retrieval_trace)
                     stage = "pre-author-quote-check"
                     expired_quote = evidence_purpose.expired_current_quote(packet, stamp())
                     if expired_quote:
@@ -384,6 +396,11 @@ class AIControlService:
                     if observation_abstention.enabled(packet):
                         result["abstention"] = observation_abstention.assessment(result)
                     children = []
+                    if source_progress.get("needs"):
+                        result["sourceProgress"] = source_progress
+                        source_job = insight_progress.research_job(self.subject(job), source_progress, stamp())
+                        if source_job:
+                            children.append(source_job)
                     for question in result["researchQuestions"]:
                         request = next((item.get("researchRequest", {}) for item in result["workQuestions"]
                                         if item["question"] == question and item["capability"] == "research"), {})
@@ -393,7 +410,6 @@ class AIControlService:
                     due = (datetime.now(timezone.utc) + timedelta(minutes=result["nextCheckMinutes"])).isoformat().replace("+00:00", "Z")
                     children.append({**self.subject(job), "capability": job["capability"], "watchQuestions": result["questions"], "taskId": identity(job["taskId"], "next"), "availableAt": due})
                 elif job["capability"] == "research-plan":
-                    self.store.execution_wait()
                     # Operational source planning has no dependency on graph
                     # readiness, narrative novelty or notification acceptance.
                     stage = "research-planning"
@@ -415,7 +431,8 @@ class AIControlService:
                                  if callable(getattr(type(self.store), "last_processing_outcome", None)) else {})
                     if last_plan.get("emptyPlanKey") == plan_key:
                         result, children = {"status": "research-plan-unchanged", "processingOutcome": {**last_plan, "modelCalled": False}}, []
-                    elif not any(row.get("planDue") for row in cases) and (cases or not envelope["gaps"]):
+                    elif (not any(row.get("planDue") for row in cases) and (cases or not envelope["gaps"])
+                          and not insight_progress.source_gap_request(job)):
                         result, children = {"status": "research-plan-obsolete"}, []
                     else:
                         self.store.execution_wait()
@@ -512,7 +529,11 @@ class AIControlService:
         child = {**self.subject(job), "capability": job["capability"], "watchQuestions": job.get("watchQuestions", []),
                  "taskId": identity(job["taskId"], "wait"), "availableAt": outcome["retryAt"]}
         children = [child]
-        if (status != "unchanged-wait" and outcome.get("status") == "data-wait" and outcome.get("requirements")
+        if status != "unchanged-wait" and outcome.get("sourceProgress"):
+            source_job = insight_progress.research_job(self.subject(job), outcome["sourceProgress"], stamp())
+            if source_job:
+                children.append(source_job)
+        elif (status != "unchanged-wait" and outcome.get("status") == "data-wait" and outcome.get("requirements")
                 and outcome.get("reasonCode") != "current-quote"):
             from ..domain.research_work import PRIORITY
             children.append({**self.subject(job), "capability": "research-plan", "priority": PRIORITY,

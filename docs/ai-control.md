@@ -2669,3 +2669,41 @@ Live rollout also exposed a causal-guard false positive on the explicit phrase
 attribution predicate before the existing clause checks. An affirmative cause
 elsewhere in the sentence and double negation remain rejected. Guard v4 is
 retained for historical replay; no source, review or delivery gate is bypassed.
+
+## Source progress before repeated explanation (2026-11-01)
+
+`insight-source-progress-v1` adds a market-observation admission check. The
+reasoning owner supplies a separate operational identity over the full captured
+inventory, including unread and budget-excluded facts. For macro prints with a
+verified observation date matching `sourceAsOf`, a collector-only `asOf` change
+does not renew model work. Values, source periods, revisions, eligibility and
+coverage still participate. Frozen evidence, source clocks and historical
+fingerprints are unchanged.
+
+After retrieval, an unchanged, previously accepted observation-only explanation
+with `cause-unconfirmed` and no notification may wait before authoring again.
+This requires identical selected facts, quote/holding facts, reviewed question
+context and delivered-receipt context. New facts, risk changes, verified follow-up
+transitions and due business-thesis reviews remain eligible. Rejected drafts are
+not trusted as the previous judgment. The wait preserves retrieval input IDs and
+source requirements, without an authored summary, opinion or customer delivery.
+
+Missing actual event text and missing numeric market observations are distinct
+requirements. `bodyRead` and generated summaries do not substitute for original
+text; valid original passages take precedence over duplicate metadata during
+new-policy discovery. Numeric presence alone never proves matching return periods.
+This change does not add a benchmark feed or authorize fabricated comparisons.
+
+An event-text gap can create one stable, scoped `research-plan` task through the
+existing transactional completion path. Polling time, parent observation and
+benchmark changes cannot duplicate it. The captured title/publication date guides
+the request. A new gap may be planned even when unrelated cases are parked, but
+existing question deduplication, source availability, attempt limits and execution
+admission still apply; a plan is not proof of source acquisition. Benchmark-only
+gaps are not sent to the news/filing research route. A later observation performs
+a cheap source check and waits again until material evidence changes.
+
+Causal guard v6 also recognizes a completed explicit denial such as
+"이번 하락의 원인은 증명하지 않습니다". Separate affirmative causes and double
+negation remain subject to the existing guard. Guards v1–v5 remain available for
+historical replay. None of these operational changes grants publication authority.

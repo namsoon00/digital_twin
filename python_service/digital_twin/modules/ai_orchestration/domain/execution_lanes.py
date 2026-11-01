@@ -92,6 +92,10 @@ def material_key(packet, research, *, evidence_identity=None):
             common["deliveredContext"] = packet["deliveredNotificationContext"]["fingerprint"]
     if market(packet):
         common["evidence"] = evidence_identity if evidence_identity is not None else evidence_change_identity(packet, [], [])
+        if packet.get("insightProgressPolicy") == "insight-source-progress-v1" and packet.get("sourceProgressKey"):
+            common["sourceProgressPolicy"] = packet["insightProgressPolicy"]
+            if evidence_identity is None:
+                common["evidence"] = packet["sourceProgressKey"]
         common["observationCases"] = sorted([{key: row[key] for key in ("caseId", "capability", "question", "completionCriterion") if key in row}
             for row in research if row.get("kind") == "brain-case"], key=content_hash)
         common["reviewedQuestionReceipts"] = sorted([{"caseId": row["caseId"],

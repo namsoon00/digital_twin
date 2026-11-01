@@ -262,6 +262,8 @@ class AbstentionStorageTests(unittest.TestCase):
         from digital_twin.modules.ai_orchestration.domain.price_investigation_repeat import waiting
         from datetime import datetime
         self.assertNotIn("input", memory[0])
+        from digital_twin.modules.ai_orchestration.domain.insight_progress import memory as progress_memory
+        self.assertEqual(progress_memory(p), memory[0]["marketProgressMemory"])
         self.assertTrue(waiting(p, memory[0], [], datetime.fromisoformat(result["observedAt"].replace("Z", "+00:00"))))
         changed = deepcopy(p); changed["priceInvestigationSourceKey"] = "new-source"
         self.assertFalse(waiting(changed, memory[0], [], datetime.fromisoformat(result["observedAt"].replace("Z", "+00:00"))))

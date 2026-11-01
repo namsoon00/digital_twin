@@ -1,5 +1,14 @@
 const escape = (value) => String(value ?? "").replace(/[&<>"']/g, (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const effects = {supports:"이번 설명을 뒷받침",weakens:"이번 설명을 약화",unchanged:"이번 설명 유지",insufficient:"설명을 바꿀 근거 부족"};
+const relations = {supports:"근거가 설명을 뒷받침",contradicts:"근거가 설명과 충돌",mixed:"지지·반대 근거 공존",insufficient:"판단 근거 부족"};
+const changes = {new:"첫 검토 의견",unchanged:"이전 의견 유지",strengthened:"이전 의견 강화",weakened:"이전 의견 약화",withdrawn:"이전 의견 철회"};
+
+function impactView(impact = {}) {
+  if (!impact.evidenceRelation || !impact.opinionChange) {
+    return `<p><strong>기존 판단 기록 · ${escape(effects[impact.effect] || "영향 미확인")}</strong><br>${escape(impact.reason)}</p><p class="muted">이 기록은 근거의 관계와 이전 의견의 변화를 별도로 분류하기 전에 작성했습니다.</p>`;
+  }
+  return `<p><strong>답변 근거와 설명의 관계</strong> · ${escape(relations[impact.evidenceRelation])}<br><strong>승인된 이전 의견과 비교</strong> · ${escape(changes[impact.opinionChange])}<br>${escape(impact.reason)}</p>`;
+}
 
 function inquiryView(row) {
   const chain = row.inquiryLineage;
@@ -46,7 +55,9 @@ function workflowView(workflow) {
 export function questionAssessmentView(row) {
   const workflow = inquiryView(row) + workflowView(row.workflow);
   const closure = row.workflow?.closure;
-  const assessment = row.workflow && !row.workflow.judgmentTaskId ? null : row.questionAssessment;
+  const approved = row.approvedOpinion;
+  const assessment = approved ? (approved.status === "reviewed" ? {...approved, status:approved.answerStatus} : null)
+    : row.workflow && !row.workflow.judgmentTaskId ? null : row.questionAssessment;
   const progress = row.evidenceProgress;
   if (!assessment) {
     if (closure || !progress?.missingRequirements?.length) return workflow;
@@ -64,7 +75,7 @@ export function questionAssessmentView(row) {
     ${row.answerResolution?.status === "answered" && assessment.status !== "answered" ? '<p class="muted">앞선 자료조사는 답변 확보로 기록했지만, 최종 검토에서 원래 완료 기준의 부족분을 확인했습니다.</p>' : ""}
     ${sources ? `<ul>${sources}</ul>` : ""}
     ${!closure && assessment.missingRequirements?.length ? `<p><strong>아직 답하지 못한 항목</strong></p><ul>${assessment.missingRequirements.map((item) => `<li>${escape(item)}</li>`).join("")}</ul>` : ""}
-    <p><strong>AI 판단에 미친 영향 · ${escape(effects[assessment.judgmentImpact?.effect] || "영향 미확인")}</strong><br>${escape(assessment.judgmentImpact?.reason)}</p>
+    ${impactView(assessment.judgmentImpact)}
     <details><summary>이 답변과 함께 기록한 AI 설명</summary><p>${escape(assessment.judgment?.summary)}</p><p>가능한 설명: ${escape(assessment.judgment?.hypothesis)}</p><p>반대 근거와 한계: ${escape(assessment.judgment?.counterEvidence)}</p></details>
     <p class="muted">새 원문이나 질문 조건이 바뀌면 재검토합니다. 질문의 답변과 설명 가설은 투자 성과 검증이나 매매 승인과 구분합니다.</p></div>`;
 }
@@ -74,7 +85,7 @@ export function questionPerformanceView(value) {
   return `<div class="panel"><strong>현재 표시된 질문 ${escape(value.sampleCount)}건의 진행 성과</strong>
     <p>최종 답변 ${escape(value.finalAnswers)}건 · 검토된 판단 연결 ${escape(value.reviewedJudgmentLinks)}건 · 부분 답변 보존 ${escape(value.partialAnswersRetained)}건</p>
     ${value.confirmedPartialAnswers != null ? `<p>확인한 답과 부족 항목을 분리한 부분 답변 ${escape(value.confirmedPartialAnswers)}건</p>` : ""}
-    <p>기존 설명 뒷받침 ${escape(value.judgmentSupported)}건 · 약화 ${escape(value.judgmentChanged)}건 · 유지 ${escape(value.judgmentUnchanged)}건 · 근거 부족 ${escape(value.judgmentInsufficient)}건</p>
+    ${value.opinionChanges ? `<p>이전 의견 강화 ${escape(value.opinionChanges.strengthened || 0)}건 · 약화 ${escape(value.opinionChanges.weakened || 0)}건 · 유지 ${escape(value.opinionChanges.unchanged || 0)}건 · 철회 ${escape(value.opinionChanges.withdrawn || 0)}건 · 첫 검토 ${escape(value.opinionChanges.new || 0)}건</p><p>의견 변화 별도 분류 전 기록 ${escape(value.unclassifiedChangeCount || 0)}건</p>` : `<p>기존 기록: 설명 뒷받침 ${escape(value.judgmentSupported)}건 · 약화 ${escape(value.judgmentChanged)}건 · 유지 ${escape(value.judgmentUnchanged)}건 · 근거 부족 ${escape(value.judgmentInsufficient)}건</p>`}
     <p>제공처 실행 대기 ${escape(value.providerWaiting)}건 · 연결된 실제 AI 관찰 발송 ${escape(value.receiptVerifiedNotifications)}건</p>
     ${value.executionStates ? `<p>같은 자료 재조사 중지 ${escape(value.executionStates["unchanged-material"] || 0)}건 · 조사 한도 도달 ${escape(value.executionStates["limit-reached"] || 0)}건 · 조사 진행 불가 ${escape((value.executionStates.blocked || 0) + (value.executionStates["source-unavailable"] || 0))}건 · 최종 검토 대기 ${escape(value.executionStates["review-pending"] || 0)}건</p>` : ""}
     <p class="muted">화면에 표시된 질문 표본입니다. 같은 알림은 한 번만 셉니다. 판단 정확도·수익률은 미측정입니다.</p></div>`;

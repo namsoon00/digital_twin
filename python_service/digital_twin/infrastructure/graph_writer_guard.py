@@ -50,7 +50,7 @@ class LocalGraphWriterGuard:
     generation manifests still remain short-lived and independently audited.
     """
 
-    contract_version = "local-typedb-single-writer-v5"
+    contract_version = "local-typedb-single-writer-v6"
 
     def __init__(
         self,
@@ -249,13 +249,13 @@ class LocalGraphWriterGuard:
         return {"reserved": True, "status": "next-prepared-turn-reserved"}
 
     @_synchronized
-    def yield_for_input_preparation(self, grace_seconds=10) -> Dict[str, object]:
+    def yield_for_input_preparation(self, grace_seconds=30) -> Dict[str, object]:
         """Release the physical writer; bound a candidate's short input turn.
 
         A timer releases the reservation even if a source read is blocked.
         It never releases a physical writer or another preparation's turn.
         """
-        seconds = max(0.0, min(10.0, float(grace_seconds)))
+        seconds = max(0.0, min(30.0, float(grace_seconds)))
         retain = self.role == "candidate" and seconds > 0
         result = self.release(keep_priority=retain or self.role in {"delivery", "active"})
         if retain and result.get("released"):

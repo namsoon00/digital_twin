@@ -289,6 +289,7 @@ class RuleDeliveryLatencyTests(TestCase):
             assembler = Mock()
             def assemble(request):
                 self.assertFalse(guard.status()['acquired'])
+                self.assertGreater(guard.status()['inputPreparationGraceSeconds'], 12)
                 self.assertEqual('granted-turn-reserved', delivery.acquire()['status'])
                 return prepared
             assembler.assemble.side_effect = assemble

@@ -9,15 +9,22 @@ P95 was 214.693 seconds. The separately measured prepared-writer wait P95 was
 130.544 seconds. These are diagnostic measurements, not replacement gates:
 all original duration, queue and end-to-end promotion limits remain unchanged.
 
-Writer contract v5 releases the physical writer during source preparation while
-retaining the already-granted candidate turn for at most ten seconds. An
+Writer contract v6 releases the physical writer during source preparation while
+retaining the already-granted candidate turn for at most thirty seconds. An
 independent timer drops that reservation even if the source reader is blocked.
 Short reads can continue without waiting behind another complete delivery run;
 long reads yield and retain the existing bounded prepared-input wait. Grace is
-clamped to 0–10 seconds by `reasoningEngineV2InputPreparationGraceSeconds`.
+clamped to 0–30 seconds by `reasoningEngineV2InputPreparationGraceSeconds`.
 Delivery priority, native exclusivity, control/claim/readiness checks and source
 identity remain unchanged. A canceled timer cannot release a newer turn or an
 active native writer. Errors and process exit still release all ownership.
+
+The first v5 rollout showed that a 12.17-second source read crossed the original
+10-second grace and waited behind another complete delivery turn. The 30-second
+bound accommodates that measured read without an unbounded reservation. It is
+not a minimum wait: an eight-second read continues at eight seconds. A blocked
+reader still loses its turn on the independent timer. Promotion latency limits
+are unchanged, and the v5 execution history is retained separately.
 
 `test_graph_writer_guard` exercises the real timer and OS locks, bounded grace,
 stale callbacks and cleanup. `test_rule_delivery_latency` covers both quick

@@ -60,7 +60,7 @@ class LocalGraphWriterGuardTests(unittest.TestCase):
             for seconds in (0, 999):
                 self.assertTrue(candidate.acquire()['acquired'])
                 candidate.yield_for_input_preparation(grace_seconds=seconds)
-                self.assertLessEqual(candidate.status()['inputPreparationGraceSeconds'], 10)
+                self.assertLessEqual(candidate.status()['inputPreparationGraceSeconds'], 30)
                 if seconds == 0:
                     self.assertTrue(delivery.acquire()['acquired'])
                     delivery.release()
@@ -68,6 +68,22 @@ class LocalGraphWriterGuardTests(unittest.TestCase):
                 self.assertIsNone(candidate._preparation_timer)
                 self.assertTrue(delivery.acquire()['acquired'])
                 delivery.release()
+
+    def test_twelve_second_read_keeps_turn_but_expired_read_releases_it(self):
+        with tempfile.TemporaryDirectory() as directory:
+            candidate = LocalGraphWriterGuard('candidate', 'candidate', Path(directory))
+            delivery = LocalGraphWriterGuard('active', 'delivery', Path(directory))
+            for elapsed, retained in ((12, True), (31, False)):
+                with self.subTest(elapsed=elapsed):
+                    self.assertTrue(candidate.acquire()['acquired'])
+                    started = time.monotonic()
+                    candidate.yield_for_input_preparation()
+                    with patch('digital_twin.infrastructure.graph_writer_guard.time.monotonic', return_value=started + elapsed):
+                        candidate.finish_input_preparation()
+                    self.assertEqual(retained, candidate.status()['grantedTurnReserved'])
+                    self.assertEqual(not retained, delivery.acquire()['acquired'])
+                    candidate.release()
+                    delivery.release()
 
     def test_only_one_guard_owns_a_graph_database(self):
         with self.subTest(scenario="different_databases_share_server_and_delivery_gets_next_turn"):

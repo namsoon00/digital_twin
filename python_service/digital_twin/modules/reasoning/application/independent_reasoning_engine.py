@@ -3459,7 +3459,7 @@ class IndependentReasoningJobRunner:
         prepare = getattr(self.graph_writer_guard, "yield_for_input_preparation", None)
         finish = getattr(self.graph_writer_guard, "finish_input_preparation", None)
         released = prepare(grace_seconds=_int_setting(
-            self.settings, "reasoningEngineV2InputPreparationGraceSeconds", 10, 0, 10,
+            self.settings, "reasoningEngineV2InputPreparationGraceSeconds", 30, 0, 30,
         )) if callable(prepare) else self.release_graph_writer_ownership(
             keep_priority=role in {"delivery", "active"})
         if not released.get("released"):

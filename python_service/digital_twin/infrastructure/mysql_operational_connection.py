@@ -1213,6 +1213,8 @@ MYSQL_SCHEMA = [
         generated_at VARCHAR(40) NOT NULL DEFAULT '',
         payload_json LONGTEXT NOT NULL,
         projection_payload_json LONGTEXT NULL,
+        temporal_payload_json LONGTEXT NULL,
+        temporal_projection_version VARCHAR(64) NOT NULL DEFAULT '',
         created_at VARCHAR(40) NOT NULL,
         PRIMARY KEY (account_id, generated_at),
         KEY idx_monitor_snapshot_history_account_time (account_id, generated_at)

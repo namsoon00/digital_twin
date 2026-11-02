@@ -5,6 +5,7 @@ from digital_twin.infrastructure.transaction_port import BoundWriteConnection
 from typing import Any, Dict, Iterable
 from digital_twin.infrastructure.operational_common import json_dumps
 from digital_twin.infrastructure.settings import utc_now
+from digital_twin.modules.reasoning.contracts import compact_monitor_history_state, TEMPORAL_HISTORY_PROJECTION_VERSION
 
 
 def mark_reasoning_anchor_pending(
@@ -109,11 +110,14 @@ def upsert_monitor_snapshot_history(
     return connection.execute(
         """
             INSERT INTO monitor_snapshot_history (
-                account_id, generated_at, payload_json, projection_payload_json, created_at
+                account_id, generated_at, payload_json, projection_payload_json, created_at,
+                temporal_payload_json, temporal_projection_version
             )
-            VALUES (%s, %s, %s, %s, %s)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
             ON DUPLICATE KEY UPDATE payload_json = VALUES(payload_json),
-                projection_payload_json = VALUES(projection_payload_json), created_at = VALUES(created_at)
+                projection_payload_json = VALUES(projection_payload_json), created_at = VALUES(created_at),
+                temporal_payload_json = VALUES(temporal_payload_json),
+                temporal_projection_version = VALUES(temporal_projection_version)
             """,
         (
             account_id,
@@ -121,5 +125,7 @@ def upsert_monitor_snapshot_history(
             payload_json if payload_json is not None else json_dumps(state),
             json_dumps(temporal_projection),
             updated_at,
+            json_dumps(compact_monitor_history_state(temporal_projection)),
+            TEMPORAL_HISTORY_PROJECTION_VERSION,
         ),
     )

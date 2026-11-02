@@ -875,6 +875,13 @@ MYSQL_OPERATIONAL_COLUMNS: Dict[str, Sequence[MySQLColumnDefinition]] = {
             "projection_payload_json",
             "LONGTEXT NULL",
         ),
+        MySQLColumnDefinition(
+            "monitor_snapshot_history", "temporal_payload_json", "LONGTEXT NULL",
+        ),
+        MySQLColumnDefinition(
+            "monitor_snapshot_history", "temporal_projection_version",
+            "VARCHAR(64) NOT NULL DEFAULT ''",
+        ),
     ),
     "service_accounts": (
         MySQLColumnDefinition(

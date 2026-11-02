@@ -1075,3 +1075,63 @@ and all outcomes of selected episodes remain intact. Tied episode selection
 is deterministic by episode ID. Existing revision-checked prepared inputs
 remain in use. Query errors propagate instead of becoming empty history, and
 the transaction is rolled back before returning the connection to its pool.
+
+## Dedicated temporal-history input (2026-11-02)
+
+The broad `monitor_snapshot_history.projection_payload_json` had grown to about
+5.7 MB per row as company knowledge and financial context improved. Loading up
+to 96 rows, then rebuilding and discarding that company context for each temporal
+window, remained on the critical path. Recent live input assembly took 140–240
+seconds. Selecting only the required JSON branches at query time was also too
+slow: a 96-row probe exceeded its 15-second SQL deadline. An index alone cannot
+remove the repeated document decoding and shaping.
+
+History writes now atomically store a separate `temporal_payload_json`, tagged
+with `temporal-history-v1`. It retains every position/watchlist field, account
+and portfolio state, observation clock, and the five research/quote groups used
+by temporal concepts. It does not carry unrelated company-model documents.
+Per-symbol temporal research reads compact those five groups directly instead
+of building company knowledge and discarding it. The current snapshot, previous
+snapshot, full source archive, and point-in-time replay projection are unchanged.
+
+The independent reasoning assembler prefers `load_temporal_history`. Legacy or
+unknown-version rows use their exact broad projection; a completely legacy
+account retains the existing six-row raw fallback. DB/JSON failures propagate;
+they do not become a successful empty history. No new cache, polling interval,
+queue policy, investment threshold, or notification permission is introduced.
+Input progress now separately records account selection, preflight, snapshot
+read, previous-state copy, metadata copy, and temporal-history read timings.
+
+Restart all managed writers onto the new code before preparing older rows:
+
+```bash
+python3 scripts/prepare-temporal-history.py --account <account-id> --limit 96
+python3 scripts/prepare-temporal-history.py --account <account-id> --limit 96 --apply
+```
+
+Schema initialization only adds columns. Backfill is explicit, bounded to
+1–500 rows, resumable, and reads one broad row at a time. It checks the original
+projection hash before updating, so a concurrent correction/deletion wins.
+Raw/replay payloads and original timestamps are never rewritten. Rollback to
+old code can continue reading the original projection; before returning to the
+new reader after old writers have run, invalidate/rebuild the prepared rows.
+
+`test_temporal_history_projection` compares consumed temporal facts and every
+persisted ABox entity/relation against the previous path. It also tests account
+scope, order/limits, legacy fallback, invalid input, correction/rollback,
+idempotent backfill and concurrent source changes. Existing source preparation,
+snapshot replay and delivery regressions cover immutable lineage and duplicate
+delivery. Component speedup is not evidence that queue waiting, TypeDB execution
+or source-to-notification latency has disappeared; those require live timings
+from the restarted revision.
+
+Frozen-data check on 2026-11-02: the old live 96-row read exceeded its explicit
+120-second SQL deadline; 91 complete rows were captured before interruption.
+Across those exact rows, all 1,183 per-symbol temporal inputs matched, including
+source clocks/quality and research facts (aggregate fact hash
+`c050616edd8139a09cbf9ba82b257f42334c23394381799f86c8cda185989de9`).
+The payload fell from 516,856,558 to 19,601,654 bytes. Offline decode/compaction
+took 129,448 ms on the broad rows versus 327 ms decoding their prepared inputs.
+These measurements exclude SQL/network and do not measure total alert latency.
+Only counts, timing and a digest are recorded here; private source records are
+not checked in.

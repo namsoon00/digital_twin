@@ -28,6 +28,7 @@ from digital_twin.modules.market_data.domain.price_observation_episodes import p
 from digital_twin.modules.market_data.domain.smart_price_observations import movement_cadence
 from digital_twin.modules.market_data.domain.price_observation_diagnostics import record_candidates
 from digital_twin.modules.reasoning.domain.ontology_projection_input import compact_monitor_state_for_ontology, compact_monitor_state_for_reasoning_base, compact_monitor_state_for_reasoning_symbol, reasoning_snapshot_symbols
+from digital_twin.modules.reasoning.contracts import compact_monitor_history_state, TEMPORAL_HISTORY_PROJECTION_VERSION
 from digital_twin.modules.portfolio.domain.portfolio import AccountSnapshot, AlertEvent, account_snapshot_from_monitor_state, monitor_state_has_live_account_data
 from digital_twin.modules.reasoning.domain.reasoning_source_snapshot import build_reasoning_source_snapshot
 from digital_twin.modules.reasoning.infrastructure.source_packet_cache import SourcePacketCache
@@ -689,6 +690,104 @@ class MySQLMonitorStore(MySQLOperationalConnection):
                 ).fetchall()
         history = [_json_loads(row["payload_json"], {}) for row in reversed(rows)]
         return [item for item in history if item]
+
+    def load_temporal_history(self, account_id: str, limit: int = 6) -> List[Dict[str, object]]:
+        """Read the small window input; leave the immutable replay reader intact.
+
+        Older rows fall back to the exact broad projection, never to a newer
+        snapshot or an empty-history success. Backfill is explicit maintenance,
+        not a write or a full-history migration in this latency-sensitive read.
+        """
+        with self.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT generated_at, temporal_projection_version,
+                       temporal_payload_json AS payload_json, 1 AS prepared
+                FROM monitor_snapshot_history
+                WHERE account_id = %s
+                ORDER BY generated_at DESC LIMIT %s
+                """,
+                (str(account_id or ""), max(1, int(limit or 6))),
+            ).fetchall()
+            # Do not reference the broad LONGTEXT, even in a CASE/WHERE:
+            # InnoDB can still fetch that off-page document. An entirely
+            # prepared newest window is the same selection as load_history,
+            # because its writer atomically persists both projections.
+            if rows and not all(row["temporal_projection_version"] == TEMPORAL_HISTORY_PROJECTION_VERSION
+                                and row["payload_json"] for row in rows):
+                rows = connection.execute(
+                    """
+                    SELECT generated_at, projection_payload_json AS payload_json, 0 AS prepared
+                    FROM monitor_snapshot_history
+                    WHERE account_id = %s AND projection_payload_json <> ''
+                    ORDER BY generated_at DESC LIMIT %s
+                    """,
+                    (str(account_id or ""), max(1, int(limit or 6))),
+                ).fetchall()
+            if not rows:
+                rows = connection.execute(
+                    """
+                    SELECT generated_at, payload_json, 0 AS prepared FROM monitor_snapshot_history
+                    WHERE account_id = %s ORDER BY generated_at DESC LIMIT %s
+                    """,
+                    (str(account_id or ""), min(6, max(1, int(limit or 6)))),
+                ).fetchall()
+        history = []
+        for row in reversed(rows):
+            # A corrupt historical input must fail, not look like absent data.
+            value = json.loads(row["payload_json"])
+            if not isinstance(value, dict):
+                raise ValueError("Temporal history snapshot is not an object")
+            if row["prepared"] and (not value or value.get("generatedAt") != row["generated_at"]):
+                raise ValueError("Temporal history snapshot does not match its source clock")
+            if value:
+                history.append(value if row["prepared"] else compact_monitor_history_state(value))
+        return history
+
+    def backfill_temporal_history(self, account_id: str, limit: int = 96) -> Dict[str, int]:
+        """Prepare bounded retained history without changing its source or clocks."""
+        with self.connect() as connection:
+            candidates = connection.execute(
+                """
+                SELECT generated_at FROM monitor_snapshot_history
+                WHERE account_id = %s AND projection_payload_json <> ''
+                  AND (temporal_projection_version <> %s OR temporal_payload_json IS NULL
+                       OR temporal_payload_json = '')
+                ORDER BY generated_at DESC LIMIT %s
+                """,
+                (str(account_id or ""), TEMPORAL_HISTORY_PROJECTION_VERSION, max(1, min(500, int(limit)))),
+            ).fetchall()
+        counts = {"selected": len(candidates), "updated": 0, "racedOrDeleted": 0}
+        for candidate in candidates:
+            key = (str(account_id or ""), candidate["generated_at"])
+            with self.connect() as connection:
+                row = connection.execute(
+                    """SELECT projection_payload_json, SHA2(projection_payload_json, 256) AS fingerprint
+                       FROM monitor_snapshot_history WHERE account_id = %s AND generated_at = %s""",
+                    key,
+                ).fetchone()
+            if not row or not row["projection_payload_json"]:
+                counts["racedOrDeleted"] += 1
+                continue
+            value = json.loads(row["projection_payload_json"])
+            if not isinstance(value, dict):
+                raise ValueError("Temporal history snapshot is not an object")
+            prepared = json_dumps(compact_monitor_history_state(value))
+            with self.transaction() as connection:
+                updated = connection.execute(
+                    """
+                    UPDATE monitor_snapshot_history
+                    SET temporal_payload_json = %s, temporal_projection_version = %s
+                    WHERE account_id = %s AND generated_at = %s
+                      AND SHA2(projection_payload_json, 256) = %s
+                      AND (temporal_projection_version <> %s OR temporal_payload_json IS NULL
+                           OR temporal_payload_json = '')
+                    """,
+                    (prepared, TEMPORAL_HISTORY_PROJECTION_VERSION, *key,
+                     row["fingerprint"], TEMPORAL_HISTORY_PROJECTION_VERSION),
+                ).rowcount
+            counts["updated" if updated else "racedOrDeleted"] += 1
+        return counts
 
     def reasoning_snapshot_state_at(
         self,

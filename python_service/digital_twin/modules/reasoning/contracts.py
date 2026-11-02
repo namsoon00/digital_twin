@@ -70,6 +70,8 @@ _EXPORTS.update({
     'build_portfolio_ontology': ('digital_twin.modules.reasoning.domain.portfolio_ontology_builder', 'build_portfolio_ontology'),
     'native_account_weight_pct': ('digital_twin.modules.reasoning.domain.account_policy_facts', 'native_account_weight_pct'),
     'compact_monitor_state_for_ontology': ('digital_twin.modules.reasoning.domain.ontology_projection_input', 'compact_monitor_state_for_ontology'),
+    'compact_monitor_history_state': ('digital_twin.modules.reasoning.domain.ontology_projection_input', 'compact_monitor_history_state'),
+    'TEMPORAL_HISTORY_PROJECTION_VERSION': ('digital_twin.modules.reasoning.domain.ontology_projection_input', 'TEMPORAL_HISTORY_PROJECTION_VERSION'),
     'compact_snapshot_event_metadata': ('digital_twin.modules.reasoning.domain.event_payloads', 'compact_snapshot_event_metadata'),
     'conflict_state_from_roles': ('digital_twin.modules.reasoning.domain.ontology_decision_state', 'conflict_state_from_roles'),
     'data_state_is_usable': ('digital_twin.modules.reasoning.domain.ontology_decision_state', 'data_state_is_usable'),

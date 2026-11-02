@@ -17,7 +17,7 @@ from digital_twin.shared_kernel.events import DomainEvent
 from digital_twin.modules.reasoning.domain.independent_reasoning import IndependentReasoningRequest, IndependentReasoningResult, independent_reasoning_request, reasoning_event_scope, VERIFIED_PROJECTION_STATUSES
 from digital_twin.modules.decisions.contracts import FactDelta, rule_evaluation_records_from_projection_results
 from digital_twin.modules.market_data.contracts import market_observation_completion_scope
-from digital_twin.modules.reasoning.domain.ontology_projection_input import compact_monitor_state_for_ontology
+from digital_twin.modules.reasoning.domain.ontology_projection_input import compact_monitor_state_for_ontology, compact_monitor_history_state
 from digital_twin.modules.reasoning.domain.world_partitioned_reasoning import attach_shared_premise_evidence
 from digital_twin.modules.reasoning.domain.ontology_store_routing import ontology_store_route
 from digital_twin.modules.reasoning.domain.reasoning_source_facts import reasoning_source_facts_runtime_eligibility
@@ -720,18 +720,30 @@ class IndependentReasoningInputAssembler:
         return deepcopy(value) if isinstance(value, dict) else {}
 
     def history(self, account_id: str):
+        prepared_reader = getattr(self.monitor_store, "load_temporal_history", None)
+        if callable(prepared_reader):
+            return list(prepared_reader(account_id, limit=self.temporal_history_limit()) or [])
         reader = getattr(self.monitor_store, "load_history", None)
         if not callable(reader):
             return []
         values = list(reader(account_id, limit=self.temporal_history_limit()) or [])
         return [
-            compact_monitor_state_for_ontology(value, settings=self.settings)
+            compact_monitor_history_state(value, settings=self.settings)
             for value in values
             if isinstance(value, dict) and value
         ][-self.temporal_history_limit():]
 
     def assemble(self, request: IndependentReasoningRequest) -> Dict[str, object]:
-        accounts = self.selected_accounts(request)
+        timings = {}
+
+        def measured(name, callback):
+            started = time.perf_counter()
+            try:
+                return callback()
+            finally:
+                timings[name] = timings.get(name, 0) + round((time.perf_counter() - started) * 1000)
+
+        accounts = measured("inputAccountSelectionMs", lambda: self.selected_accounts(request))
         if not accounts:
             return {
                 "status": "rejected",
@@ -744,23 +756,23 @@ class IndependentReasoningInputAssembler:
                 },
                 "snapshots": [],
             }
-        preflight = self.preflight(request, accounts)
+        preflight = measured("inputPreflightMs", lambda: self.preflight(request, accounts))
         if not preflight.get("ready"):
             return {"status": "deferred", "accounts": accounts, "preflight": preflight, "snapshots": []}
         snapshots = []
         previous_by_account = {}
         for account in accounts:
             account_id = str(getattr(account, "account_id", "") or "")
-            snapshot = self.snapshot_source(account, reasoning_context=dict(request.context))
-            previous = self.previous_state(account_id, snapshot)
-            metadata = deepcopy(snapshot.metadata or {})
+            snapshot = measured("inputSnapshotReadMs", lambda: self.snapshot_source(account, reasoning_context=dict(request.context)))
+            previous = measured("inputPreviousStateMs", lambda: self.previous_state(account_id, snapshot))
+            metadata = measured("inputMetadataCopyMs", lambda: deepcopy(snapshot.metadata or {}))
             if previous and not isinstance(metadata.get("previousMonitorState"), dict):
                 metadata["previousMonitorState"] = compact_monitor_state_for_ontology(
                     previous,
                     settings=self.settings,
                 )
             if not isinstance(metadata.get("monitorStateHistory"), list):
-                metadata["monitorStateHistory"] = self.history(account_id)
+                metadata["monitorStateHistory"] = measured("inputTemporalHistoryMs", lambda: self.history(account_id))
             metadata["independentReasoningRequest"] = {
                 "requestId": request.request_id,
                 "scopeId": request.scope_id,
@@ -777,6 +789,7 @@ class IndependentReasoningInputAssembler:
             "preflight": preflight,
             "snapshots": snapshots,
             "previousByAccount": previous_by_account,
+            "inputTimingsMs": timings,
         }
 
 
@@ -1459,9 +1472,11 @@ class V2ReasoningEngine:
         stages["inputAssemblyMs"] = max(0, int(
             (time.perf_counter() - input_started) * 1000
         ) - stages["preparedInputWriterWaitMs"])
+        stages.update(assembled.get("inputTimingsMs") or {})
         progress(
             "input_assembly.completed",
-            {"durationMs": stages["inputAssemblyMs"], "status": assembled.get("status")},
+            {"durationMs": stages["inputAssemblyMs"], "status": assembled.get("status"),
+             "inputTimingsMs": assembled.get("inputTimingsMs") or {}},
         )
         preflight = dict(assembled.get("preflight") or {})
         if assembled.get("status") != "ready":

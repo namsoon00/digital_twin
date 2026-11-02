@@ -490,7 +490,9 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # Eleven requested-report contracts protect dated evidence, owner-only
         # access, immutable retries, atomic publication and verified receipts.
         # One historical-route correction regression retains the original receipt.
-        self.assertLessEqual(total, 2973)
+        # Seven temporal-history contracts preserve ABox facts, source replay,
+        # isolation, corrections, rollback, failure visibility and backfill races.
+        self.assertLessEqual(total, 2980)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

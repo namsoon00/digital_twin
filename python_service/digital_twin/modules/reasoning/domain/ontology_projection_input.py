@@ -49,6 +49,17 @@ TEXT_LIMIT = 1200
 TEMPORAL_RESEARCH_ITEM_LIMIT = 3
 TEMPORAL_RESEARCH_TEXT_LIMIT = 420
 
+# Only these groups are consumed by temporal_history_rows. The broad snapshot
+# projection remains the point-in-time replay/current-evidence contract.
+TEMPORAL_HISTORY_PROJECTION_VERSION = "temporal-history-v1"
+TEMPORAL_HISTORY_SIGNAL_GROUPS = (
+    "researchEvidence", "newsHeadlines", "dartDisclosures", "secFilings", "equityQuotes",
+)
+TEMPORAL_HISTORY_STATE_FIELDS = (
+    "accountId", "accountLabel", "provider", "mode", "status", "generatedAt",
+    "portfolio", "positions", "watchlist",
+)
+
 
 def _symbols(values: Iterable[object]) -> Set[str]:
     return {
@@ -1411,15 +1422,45 @@ def temporal_research_signals_for_symbol(
 ) -> Dict[str, object]:
     """Return only the historical research facts used by temporal windows."""
 
-    compact = compact_external_signals_for_ontology(
-        external_signals,
-        target_symbols=[symbol],
-    )
-    return {
-        key: value
-        for key, value in compact.items()
-        if key in {"researchEvidence", "newsHeadlines", "dartDisclosures", "secFilings", "equityQuotes"}
+    source = external_signals if isinstance(external_signals, Mapping) else {}
+    allowed_symbols = projection_signal_symbols([symbol])
+    result = {}
+    for group in TEMPORAL_HISTORY_SIGNAL_GROUPS:
+        compact = _compact_symbol_group(group, source.get(group), allowed_symbols)
+        if compact:
+            result[group] = compact
+    return result
+
+
+def compact_monitor_history_state(
+    state: Mapping[str, object] = None,
+    *,
+    settings: Mapping[str, object] = None,
+) -> Dict[str, object]:
+    """Project a historical state for temporal windows, without company models.
+
+    Keep every position field (including provenance, source clocks, quality and
+    flow coverage). Only external groups unused by temporal concepts are left
+    out. This is not the current snapshot or previous-state replay projection.
+    """
+    source = state if isinstance(state, Mapping) else {}
+    result = {
+        key: deepcopy(source[key]) for key in TEMPORAL_HISTORY_STATE_FIELDS
+        if source.get(key) not in (None, "")
     }
+    signals = source.get("externalSignals")
+    if isinstance(signals, Mapping):
+        allowed_symbols = projection_signal_symbols(None, settings)
+        result["externalSignals"] = {}
+        for group in TEMPORAL_HISTORY_SIGNAL_GROUPS:
+            compact = (
+                _compact_temporal_research_group(signals.get(group), allowed_symbols)
+                if group == "researchEvidence"
+                else _compact_symbol_group(group, signals.get(group), allowed_symbols)
+            )
+            if compact:
+                result["externalSignals"][group] = compact
+    return result
 
 
 def projection_input_summary(

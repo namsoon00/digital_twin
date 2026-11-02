@@ -1,5 +1,30 @@
 # Reasoning Input Latency
 
+## Bound short input preparation before operational cutover (2026-11-03)
+
+Overnight candidate telemetry showed 127 successful executions and no shadow
+delivery. Five frozen-input migration comparisons passed, but complete execution
+P95 was 214.693 seconds. The separately measured prepared-writer wait P95 was
+135.938 seconds; subtracting each run's own wait yielded an execution P95 of
+130.544 seconds. These are diagnostic measurements, not replacement gates:
+all original duration, queue and end-to-end promotion limits remain unchanged.
+
+Writer contract v5 releases the physical writer during source preparation while
+retaining the already-granted candidate turn for at most ten seconds. An
+independent timer drops that reservation even if the source reader is blocked.
+Short reads can continue without waiting behind another complete delivery run;
+long reads yield and retain the existing bounded prepared-input wait. Grace is
+clamped to 0–10 seconds by `reasoningEngineV2InputPreparationGraceSeconds`.
+Delivery priority, native exclusivity, control/claim/readiness checks and source
+identity remain unchanged. A canceled timer cannot release a newer turn or an
+active native writer. Errors and process exit still release all ownership.
+
+`test_graph_writer_guard` exercises the real timer and OS locks, bounded grace,
+stale callbacks and cleanup. `test_rule_delivery_latency` covers both quick
+preparation and the existing lease/control failure paths after grace expires.
+Operational promotion requires a new release's actual executions and paired
+comparisons under this scheduler; the earlier latency samples remain recorded.
+
 Prepared candidate fairness (2026-11-02): a candidate releases both the physical
 writer and its turn reservation during immutable source reads. If its completed
 input has waited ten seconds, it reserves the next turn while the current writer

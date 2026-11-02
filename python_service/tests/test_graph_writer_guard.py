@@ -1,6 +1,7 @@
 import tempfile
 import subprocess
 import sys
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -10,6 +11,64 @@ from digital_twin.infrastructure.graph_writer_guard import LocalGraphWriterGuard
 
 
 class LocalGraphWriterGuardTests(unittest.TestCase):
+    def test_short_input_preparation_keeps_turn_without_holding_physical_writer(self):
+        with tempfile.TemporaryDirectory() as directory:
+            candidate = LocalGraphWriterGuard('candidate', 'candidate', Path(directory))
+            delivery = LocalGraphWriterGuard('active', 'delivery', Path(directory))
+            self.assertTrue(candidate.acquire()['acquired'])
+            self.assertTrue(candidate.yield_for_input_preparation()['released'])
+            token = candidate._preparation_token
+            self.assertFalse(candidate.status()['acquired'])
+            self.assertGreater(candidate.status()['inputPreparationGraceSeconds'], 0)
+            self.assertEqual('granted-turn-reserved', delivery.acquire()['status'])
+            candidate.finish_input_preparation()
+            self.assertTrue(candidate.acquire()['acquired'])
+            # A callback already queued before cancellation cannot release
+            # either this native writer or the next preparation reservation.
+            candidate._expire_preparation_grace(token)
+            self.assertTrue(candidate.status()['acquired'])
+            self.assertFalse(delivery.acquire()['acquired'])
+            candidate.yield_for_input_preparation()
+            candidate._expire_preparation_grace(token)
+            self.assertTrue(candidate.status()['grantedTurnReserved'])
+            candidate.release()
+            self.assertTrue(delivery.acquire()['acquired'])
+            delivery.release()
+
+    def test_blocked_source_read_loses_reservation_on_real_timer_without_callback_from_reader(self):
+        with tempfile.TemporaryDirectory() as directory:
+            candidate = LocalGraphWriterGuard('candidate', 'candidate', Path(directory))
+            delivery = LocalGraphWriterGuard('active', 'delivery', Path(directory))
+            self.assertTrue(candidate.acquire()['acquired'])
+            candidate.yield_for_input_preparation(grace_seconds=0.05)
+            deadline = time.monotonic() + 3
+            while not delivery.acquire()['acquired'] and time.monotonic() < deadline:
+                time.sleep(0.01)
+            self.assertTrue(delivery.status()['acquired'])
+            self.assertFalse(candidate.status()['grantedTurnReserved'])
+            candidate.finish_input_preparation()
+            self.assertFalse(candidate.acquire()['acquired'])
+            delivery.release()
+            self.assertTrue(candidate.reserve_next_turn()['reserved'])
+            self.assertTrue(candidate.acquire()['acquired'])
+            candidate.release()
+
+    def test_preparation_grace_is_bounded_and_failure_releases_it(self):
+        with tempfile.TemporaryDirectory() as directory:
+            candidate = LocalGraphWriterGuard('candidate', 'candidate', Path(directory))
+            delivery = LocalGraphWriterGuard('active', 'delivery', Path(directory))
+            for seconds in (0, 999):
+                self.assertTrue(candidate.acquire()['acquired'])
+                candidate.yield_for_input_preparation(grace_seconds=seconds)
+                self.assertLessEqual(candidate.status()['inputPreparationGraceSeconds'], 10)
+                if seconds == 0:
+                    self.assertTrue(delivery.acquire()['acquired'])
+                    delivery.release()
+                candidate.release()
+                self.assertIsNone(candidate._preparation_timer)
+                self.assertTrue(delivery.acquire()['acquired'])
+                delivery.release()
+
     def test_only_one_guard_owns_a_graph_database(self):
         with self.subTest(scenario="different_databases_share_server_and_delivery_gets_next_turn"):
             self._assert_different_databases_share_server_and_delivery_gets_next_turn()

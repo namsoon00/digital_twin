@@ -10,6 +10,8 @@ import os
 import random
 import socket
 import time
+import threading
+from functools import wraps
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict
@@ -31,6 +33,14 @@ def _normalized_graph_address(value: str) -> str:
     return address or "127.0.0.1:1729"
 
 
+def _synchronized(method):
+    @wraps(method)
+    def call(self, *args, **kwargs):
+        with self._state_lock:
+            return method(self, *args, **kwargs)
+    return call
+
+
 class LocalGraphWriterGuard:
     """Hold one OS-released writer lock per TypeDB instance, across its databases.
 
@@ -40,7 +50,7 @@ class LocalGraphWriterGuard:
     generation manifests still remain short-lived and independently audited.
     """
 
-    contract_version = "local-typedb-single-writer-v4"
+    contract_version = "local-typedb-single-writer-v5"
 
     def __init__(
         self,
@@ -65,6 +75,10 @@ class LocalGraphWriterGuard:
         self._handle = None
         self._depth = 0
         self._acquired_at = ""
+        self._state_lock = threading.RLock()
+        self._preparation_timer = None
+        self._preparation_token = None
+        self._preparation_deadline = 0.0
 
     @staticmethod
     def _owner_payload(handle) -> Dict[str, object]:
@@ -75,6 +89,7 @@ class LocalGraphWriterGuard:
             return {}
         return dict(value or {}) if isinstance(value, dict) else {}
 
+    @_synchronized
     def acquire(self) -> Dict[str, object]:
         if self._handle is not None:
             self._depth += 1
@@ -158,6 +173,7 @@ class LocalGraphWriterGuard:
         else:
             self._turn_handle = turn
         self._handle = handle
+        self._cancel_preparation_grace()
         self._depth = 1
         self._acquired_at = _utc_now_iso()
         payload = {
@@ -177,6 +193,7 @@ class LocalGraphWriterGuard:
         os.fsync(handle.fileno())
         return {**payload, "acquired": True, "status": "acquired"}
 
+    @_synchronized
     def release(self, keep_priority: bool = False) -> Dict[str, object]:
         if self._handle is None:
             if not keep_priority:
@@ -209,6 +226,7 @@ class LocalGraphWriterGuard:
         self._acquired_at = ""
         return {**payload, "status": "released", "released": True}
 
+    @_synchronized
     def reserve_next_turn(self) -> Dict[str, object]:
         """Reserve a candidate turn for ready work or completed source input.
 
@@ -230,6 +248,49 @@ class LocalGraphWriterGuard:
         self._turn_handle = handle
         return {"reserved": True, "status": "next-prepared-turn-reserved"}
 
+    @_synchronized
+    def yield_for_input_preparation(self, grace_seconds=10) -> Dict[str, object]:
+        """Release the physical writer; bound a candidate's short input turn.
+
+        A timer releases the reservation even if a source read is blocked.
+        It never releases a physical writer or another preparation's turn.
+        """
+        seconds = max(0.0, min(10.0, float(grace_seconds)))
+        retain = self.role == "candidate" and seconds > 0
+        result = self.release(keep_priority=retain or self.role in {"delivery", "active"})
+        if retain and result.get("released"):
+            self._cancel_preparation_grace()
+            token = object()
+            self._preparation_token = token
+            self._preparation_deadline = time.monotonic() + seconds
+            timer = threading.Timer(seconds, self._expire_preparation_grace, args=(token,))
+            timer.daemon = True
+            self._preparation_timer = timer
+            timer.start()
+        return result
+
+    @_synchronized
+    def finish_input_preparation(self):
+        # An already expired turn stays released. A short read can reacquire
+        # immediately; outer completion/failure always releases the turn.
+        if self._preparation_token is not None and time.monotonic() >= self._preparation_deadline:
+            self._expire_preparation_grace(self._preparation_token)
+        self._cancel_preparation_grace()
+
+    @_synchronized
+    def _expire_preparation_grace(self, token):
+        if token is not None and token is self._preparation_token and self._handle is None:
+            self._release_priority()
+
+    def _cancel_preparation_grace(self):
+        timer = self._preparation_timer
+        self._preparation_timer = None
+        self._preparation_token = None
+        self._preparation_deadline = 0.0
+        if timer is not None:
+            timer.cancel()
+
+    @_synchronized
     def status(self) -> Dict[str, object]:
         return {
             "contractVersion": self.contract_version,
@@ -245,10 +306,12 @@ class LocalGraphWriterGuard:
             "lockScope": "server",
             "deliveryIntent": self._priority_handle is not None,
             "grantedTurnReserved": self._turn_handle is not None,
+            "inputPreparationGraceSeconds": max(0.0, self._preparation_deadline - time.monotonic()) if self._preparation_token is not None else 0.0,
             "serverBackoff": self._read_cooldown(),
         }
 
     def _release_priority(self):
+        self._cancel_preparation_grace()
         if self._priority_handle is not None:
             self._priority_handle.close()
             self._priority_handle = None
@@ -267,6 +330,7 @@ class LocalGraphWriterGuard:
             pass
         return {}
 
+    @_synchronized
     def record_result(self, turn):
         """Share overload backoff across databases, while still owning the lock.
 

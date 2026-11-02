@@ -3453,16 +3453,23 @@ class IndependentReasoningJobRunner:
             return
         self._input_preparation_released_writer = True
         role = str(getattr(self.graph_writer_guard, "role", self.deployment_role))
-        # A candidate must not reserve the writer while it reads MySQL. Its
-        # prepared input survives in the suspended engine call instead. Keep
-        # delivery's priority so new background work cannot jump ahead of it.
-        released = self.release_graph_writer_ownership(
-            keep_priority=role in {"delivery", "active"},
-        )
+        # Avoid losing a granted turn for a short source read. Infrastructure
+        # bounds the reservation independently of the read, without holding a
+        # physical writer. Longer reads retain the original yielding behavior.
+        prepare = getattr(self.graph_writer_guard, "yield_for_input_preparation", None)
+        finish = getattr(self.graph_writer_guard, "finish_input_preparation", None)
+        released = prepare(grace_seconds=_int_setting(
+            self.settings, "reasoningEngineV2InputPreparationGraceSeconds", 10, 0, 10,
+        )) if callable(prepare) else self.release_graph_writer_ownership(
+            keep_priority=role in {"delivery", "active"})
         if not released.get("released"):
             raise InputPreparationDeferred("Could not release the graph writer for source preparation.")
         self.publish_released_writer_state()
-        yield timing
+        try:
+            yield timing
+        finally:
+            if callable(finish):
+                finish()
         if timing.get("nativeInputReady") is False:
             return
         wait_started = time.monotonic()

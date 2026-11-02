@@ -252,7 +252,9 @@ class RuleDeliveryLatencyTests(TestCase):
                 def assemble(request):
                     self.assertFalse(guard.status()['acquired'])
                     if failure == 'source-error': raise RuntimeError('source unavailable')
-                    if failure == 'busy': self.assertTrue(contender.acquire()['acquired'])
+                    if failure == 'busy':
+                        guard._expire_preparation_grace(guard._preparation_token)
+                        self.assertTrue(contender.acquire()['acquired'])
                     return FakeAssembler().assemble(request)
                 assembler.assemble = assemble
                 engine = V2ReasoningEngine(descriptor(), assembler, executor, FakeCandidateBuilder())
@@ -279,6 +281,46 @@ class RuleDeliveryLatencyTests(TestCase):
                 finally:
                     contender.release()
 
+    def test_short_candidate_input_keeps_granted_turn_and_rechecks_authority(self):
+        with tempfile.TemporaryDirectory() as directory:
+            guard = LocalGraphWriterGuard('candidate', 'candidate', Path(directory))
+            delivery = LocalGraphWriterGuard('active', 'delivery', Path(directory))
+            prepared = FakeAssembler().assemble(None)
+            assembler = Mock()
+            def assemble(request):
+                self.assertFalse(guard.status()['acquired'])
+                self.assertEqual('granted-turn-reserved', delivery.acquire()['status'])
+                return prepared
+            assembler.assemble.side_effect = assemble
+            executor = FakeExecutor()
+            execute = executor.execute
+            def run_native(request, snapshots):
+                self.assertTrue(guard.status()['acquired'])
+                self.assertIs(prepared['snapshots'][0], snapshots[0])
+                self.assertFalse(delivery.acquire()['acquired'])
+                return execute(request, snapshots)
+            executor.execute = Mock(side_effect=run_native)
+            engine = V2ReasoningEngine(descriptor(), assembler, executor, FakeCandidateBuilder())
+            heartbeat = Mock(return_value=True)
+            runner = IndependentReasoningJobRunner(SimpleNamespace(heartbeat=heartbeat), engine,
+                SimpleNamespace(), graph_writer_guard=guard)
+            runner.prepare_queue_turn = lambda: {'status': 'ready'}
+            runner.control_binding_status = Mock(return_value={'selected': True})
+            runner.execution_readiness = Mock(return_value={'ready': True})
+            runner._run_once = lambda _: engine.consume([source_event()], input_assembly_scope=
+                lambda: runner.unlocked_input_assembly(['job:1'], threading.Event()))
+            result = runner.run_once()
+            self.assertNotEqual('deferred', result['status'])
+            assembler.assemble.assert_called_once()
+            executor.execute.assert_called_once()
+            heartbeat.assert_called_once()
+            runner.control_binding_status.assert_called_once()
+            runner.execution_readiness.assert_called_once()
+            self.assertLess(result['stage_durations_ms']['preparedInputWriterWaitMs'], 1000)
+            self.assertIsNone(guard._preparation_timer)
+            self.assertTrue(delivery.acquire()['acquired'])
+            delivery.release()
+
     def test_candidate_prepares_once_despite_delivery_arriving_during_source_read(self):
         with tempfile.TemporaryDirectory() as directory:
             guard = LocalGraphWriterGuard('candidate', 'candidate', Path(directory))
@@ -291,6 +333,8 @@ class RuleDeliveryLatencyTests(TestCase):
             assembler = FakeAssembler()
             def assemble(request):
                 self.assertFalse(guard.status()['acquired'])
+                # Model a source read that outlasted its bounded grace.
+                guard._expire_preparation_grace(guard._preparation_token)
                 self.assertFalse(guard.status()['grantedTurnReserved'])
                 self.assertTrue(delivery.acquire()['acquired'])
                 self.assertTrue(delivery.status()['deliveryIntent'])
@@ -363,6 +407,7 @@ class RuleDeliveryLatencyTests(TestCase):
                 lease_lost = threading.Event()
                 assembler = Mock()
                 def assemble(request):
+                    guard._expire_preparation_grace(guard._preparation_token)
                     self.assertTrue(delivery.acquire()['acquired'])
                     return FakeAssembler().assemble(request)
                 assembler.assemble.side_effect = assemble
@@ -490,6 +535,7 @@ class RuleDeliveryLatencyTests(TestCase):
                             from digital_twin.modules.reasoning.application.independent_reasoning_engine import InputPreparationDeferred
                             with self.assertRaises(InputPreparationDeferred):
                                 with runner.unlocked_input_assembly(['job:1'], lease_lost):
+                                    guard._expire_preparation_grace(guard._preparation_token)
                                     self.assertTrue(delivery.acquire()['acquired'])
                         else:
                             with runner.unlocked_input_assembly(['job:1'], lease_lost):
@@ -506,6 +552,7 @@ class RuleDeliveryLatencyTests(TestCase):
                 delivery = LocalGraphWriterGuard('live', 'delivery', Path(directory))
                 assembler, executor = Mock(), Mock()
                 def assemble(request):
+                    guard._expire_preparation_grace(guard._preparation_token)
                     self.assertTrue(delivery.acquire()['acquired'])
                     return {'status': 'deferred', 'snapshots': [], 'preflight': {
                         'ready': False, 'status': 'source-snapshot-missing',

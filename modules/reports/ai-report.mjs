@@ -52,6 +52,7 @@ function opinionView(opinion) {
 }
 
 export function renderAIReport(report) {
+  if (report.version === "ai-portfolio-report-v2") return renderAnalysis(report);
   const c = report.coverage;
   return `<section class="report-intro"><h2>${e(report.title)}</h2>
     <p>생성 ${e(reportDate(report.createdAt))}<br>계좌 자료 기준 ${e(reportDate(report.snapshotAt))}</p>
@@ -77,4 +78,50 @@ export function deliveryLabel(delivery) {
   if (delivery?.status === "delivered" && delivery.receiptVerified === true && delivery.deliveryRoute === "account") return "고객 채널 전송 확인 · " + reportDate(delivery.deliveredAt) + " · Telegram 서버 접수 기준";
   return ({"not-requested": "아직 발송을 요청하지 않았습니다.", "other-channel": "연구 봇으로만 전송된 보고서입니다. 고객 채널로 발송할 수 있습니다.", pending: "발송 대기 중", processing: "전송 중", failed: "발송 실패 · 알림 이력에서 확인",
     suppressed: "발송 설정에 따라 보류됨", "receipt-unconfirmed": "실제 전송 영수증을 확인하지 못했습니다.", "retry-wait": "전송 재시도 대기 중"})[delivery?.status] || "발송 상태 확인 중";
+}
+
+
+const dimensions = {business: "사업과 실적", value: "기업 가치와 가격", price: "가격 흐름", external: "시장·산업·외부 요인", portfolio: "보유·관심 상황", research: "기존 질문·의견의 변화", risks: "반대 근거와 다음 확인"};
+const globalDimensions = {overview: "전체 판단", market: "시장·산업의 공통 영향", portfolio: "보유 구조와 공통 위험", priorities: "우선 확인할 변화"};
+function referenceValue(source, path) {
+  return path.split(".").reduce((value, key) => value?.[key], source?.data);
+}
+function claimsView(claims, titles, sources = {}) {
+  return Object.entries(titles).map(([key, title]) => {
+    const claim = claims[key];
+    const status = {supported: "근거 확인", partial: "일부 근거", unknown: "판단 보류"}[claim.status];
+    return `<article><h3>${e(title)} <small>${e(status)}</small></h3><p>${e(claim.text)}</p>
+      ${claim.missing.length ? `<div class="boundary">추가 확인${lines(claim.missing)}</div>` : ""}
+      ${(claim.refs || []).filter(r => sources[r.sourceId]).map(ref => {
+        const source = sources[ref.sourceId];
+        return `<details><summary>인용 근거 · ${e(source.data.title || source.data.label || source.kind)}</summary>
+          <p>${e(ref.field)}: ${e(String(referenceValue(source, ref.field)))}</p>
+          <p class="meta">자료 시각 ${e(reportDate(source.asOf))}</p>${sourceLink({...source.data, factId: source.originalId})}</details>`;
+      }).join("")}</article>`;
+  }).join("");
+}
+function renderAnalysis(report) {
+  const c = report.coverage;
+  return `<section class="report-intro"><h2>${e(report.title)}</h2><p class="boundary">${e(report.boundary)}</p>
+    <p>분석 ${e(reportDate(report.analysisStartedAt))} ~ ${e(reportDate(report.createdAt))}<br>계좌 기준 ${e(reportDate(report.snapshotAt))}</p>
+    <div class="metrics"><div><strong>${e(c.subjects)}</strong>전체 종목</div><div><strong>${e(c.withReviewedAnalysis)}</strong>검토된 설명이 있는 종목</div>
+      <div><strong>${e(c.withGaps)}</strong>부족 항목이 있는 종목</div><div><strong>${e(c.sourcesRead)} / ${e(c.sourcesAvailable)}</strong>본문 확인 / 확보 자료</div></div>
+    <nav class="contents">${report.subjects.map((s, i) => `<a href="#subject-${i}">${e(s.name)} (${e(s.symbol)})</a>`).join("")}</nav></section>
+    <section class="subject"><h2>전체 종합</h2>${claimsView(report.overall, globalDimensions, report.overallSources)}</section>
+    ${report.subjects.map((s, i) => `<section class="subject" id="subject-${i}"><header><span class="tag">${s.scope === "holding" ? "보유" : "관심"}</span><h2>${e(s.name)} <small>${e(s.symbol)}</small></h2></header>
+      <p class="meta">분석 ${e(reportDate(s.analyzedAt))} · 확보 자료 ${e(s.sourceCoverage.available)}건 중 ${e(s.sourceCoverage.read)}건 확인</p>
+      ${claimsView(s.claims, dimensions, s.sources)}
+      ${s.sourceCoverage.graphLimitation ? '<p class="boundary">검증된 그래프 자료를 확보하지 못한 항목이 있어 과거 조사와 계좌 자료 범위로 제한했습니다.</p>' : ""}
+      ${s.sourceCoverage.memoryCoverage?.caseReadLimitReached ? '<p class="boundary">과거 질문 조회 상한에 도달해 모든 이력을 포함하지 못했습니다.</p>' : ""}
+      <h3>아직 열린 질문</h3>${lines((s.openQuestions || []).map(q => q.question))}</section>`).join("")}
+    <footer class="meta">보고서 ${e(report.reportId)}<br>검증된 내용 해시 ${e(report.contentHash)}</footer>`;
+}
+
+export function analysisLabel(run) {
+  if (!run) return "";
+  const phases = {read: "자료 조회", write: "종목 분석", review: "근거 검토", synthesis: "전체 종합", "synthesis-review": "전체 종합 검토", deliver: "고객 채널 발송 예약", done: "완료"};
+  const progress = `${run.completedSubjects} / ${run.totalSubjects}종목 검토 완료 · ${phases[run.phase] || "대기"}`;
+  if (run.status === "failed" || run.taskStatus === "failed") return progress + " · 실행 중단. 저장된 진행 기록을 확인해야 합니다.";
+  if (run.waitReason) return progress + " · 실행 대기 (" + run.waitReason + ") · 다음 확인 " + reportDate(run.nextCheckAt);
+  return progress + (run.taskStatus === "pending" ? " · 중앙 AI 실행 순서 대기" : "");
 }

@@ -4,16 +4,19 @@
 <body><main>
 <nav><a href="/">Orbit Alpha</a><a href="/ai-control.html">중앙 AI</a></nav>
 <header><p class="eyebrow">AI RESEARCH REPORT</p><h1>보유·관심 종목 AI 보고서</h1>
-<p>기업 자료, 검토된 AI 의견과 질문 답변을 한곳에서 읽습니다.</p></header>
+<p>모든 보유·관심 종목을 분석하고 시장·산업·포트폴리오 관점으로 종합합니다.</p></header>
 <section class="toolbar" aria-label="보고서 생성과 조회">
 <label>계정 <select id="account" aria-label="보고서 계정"></select></label>
-<button id="create" disabled>현재 자료로 보고서 만들기</button>
+<button id="create" disabled>전체 AI 분석 시작</button>
 <button id="refresh" disabled>저장된 보고서 새로고침</button>
-<p>새 보고서는 저장된 결과를 모아 만듭니다. 새 AI 호출이나 자동 반복 발송을 시작하지 않습니다.</p>
+<p>분석은 중앙 AI의 실행 순서와 예산에 따라 진행됩니다. 완료된 단계는 저장하며 자동 반복 보고서는 만들지 않습니다.</p>
+<label><input type="checkbox" id="auto-send" checked> 완료 시 고객 채널로 요약과 전문 받기</label>
 </section>
+<p id="analysis-progress" role="status" aria-live="polite"></p>
 <p id="message" role="status" aria-live="polite"></p>
 <section class="toolbar"><label>보고서 이력 <select id="history"><option value="">보고서 없음</option></select></label>
-<button id="send" disabled>고객 채널로 요약 받기</button><span id="delivery" role="status"></span>
+<button id="send" disabled>고객 채널로 보고서 받기</button><span id="delivery" role="status"></span>
+<button id="download" disabled>전문 HTML 저장</button>
 <button id="print" disabled>인쇄 / PDF 저장</button></section>
 <div id="report"><p class="empty">보고서 이력을 불러오고 있습니다.</p></div>
-</main><script type="module" src="/ai-reports.mjs?v=0bac430734ade355"></script></body></html>
+</main><script type="module" src="/ai-reports.mjs?v=f7a71a7f0f3db687"></script></body></html>

@@ -1,10 +1,11 @@
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 import re
+import math
 from typing import Dict, Iterable, List, Optional
 
 from digital_twin.modules.news_intelligence.contracts import research_evidence_from_external_signals
-from digital_twin.modules.market_data.contracts import number
+from digital_twin.modules.market_data.contracts import number, TEMPORAL_FEATURE_SET_VERSION, temporal_observation_quality, uses_valid_price_path, temporal_price_observation_usable
 from digital_twin.modules.market_data.contracts import market_session_date, market_timezone
 from digital_twin.modules.reasoning.domain.ontology_contracts import PortfolioOntology
 from digital_twin.modules.reasoning.domain.ontology_observation_quality import profile_for_domain
@@ -323,23 +324,6 @@ def window_rows(rows: List[Dict[str, object]], definition: TemporalWindowDefinit
     return ordered[-max(definition.min_samples, 2):]
 
 
-STALE_DATA_QUALITY_STATES = {"stale", "poor", "invalid", "missing", "unavailable", "error"}
-REFERENCE_DATA_QUALITY_STATES = {
-    "reference",
-    "last-close",
-    "last close",
-    "previous-close",
-    "previous close",
-    "no-tick",
-    "no tick",
-    "market-closed",
-    "market closed",
-    "closed",
-    "off-hours",
-    "off hours",
-}
-
-
 def row_timestamp(row: Dict[str, object]) -> str:
     return str(
         row.get("bucketAt")
@@ -351,21 +335,7 @@ def row_timestamp(row: Dict[str, object]) -> str:
 
 
 def normalized_data_quality(row: Dict[str, object]) -> str:
-    quality = " ".join([
-        str(camel_or_snake(row, "dataQuality", "data_quality") or ""),
-        str(camel_or_snake(row, "freshnessStatus", "freshness_status") or ""),
-        str(camel_or_snake(row, "quoteStatus", "quote_status") or ""),
-        str(camel_or_snake(row, "marketSession", "market_session") or ""),
-    ]).strip().lower()
-    if any(state in quality for state in REFERENCE_DATA_QUALITY_STATES):
-        return "reference"
-    if any(state in quality for state in STALE_DATA_QUALITY_STATES):
-        return "stale"
-    if any(state in quality for state in {"actual", "live", "fresh", "verified"}):
-        return "fresh"
-    if any(state in quality for state in {"cached", "manual", "synthetic", "partial"}):
-        return "partial"
-    return "unknown"
+    return temporal_observation_quality(row)
 
 
 def observation_is_valid(
@@ -552,21 +522,30 @@ def distinct_price_observations(rows):
     return [observations[key] for key in sorted(observations)]
 
 
-def temporal_window_values(rows: List[Dict[str, object]], definition: TemporalWindowDefinition) -> Dict[str, object]:
+def temporal_window_values(
+    rows: List[Dict[str, object]], definition: TemporalWindowDefinition,
+    *, feature_set_version: str = TEMPORAL_FEATURE_SET_VERSION,
+) -> Dict[str, object]:
+    filtered = uses_valid_price_path(feature_set_version)
     priced_rows = distinct_price_observations(rows)
-    valid_rows = [row for row in priced_rows if observation_is_valid(row, definition)]
-    # Keep the raw price path visible for diagnostics, while validity counts
-    # decide whether a rule may use that path as judgement evidence.
-    first = priced_rows[0] if priced_rows else {}
-    last = priced_rows[-1] if priced_rows else {}
-    flow_last = next((row for row in reversed(rows) if row_number(row, "currentPrice", "current_price") > 0), {})
+    valid_rows = [row for row in priced_rows
+                  if (temporal_price_observation_usable(row, intraday=definition.is_intraday) if filtered else observation_is_valid(row, definition))
+                  and (not filtered or math.isfinite(row_number(row, "currentPrice", "current_price")))]
+    path_rows = valid_rows if filtered else priced_rows
+    first = path_rows[0] if path_rows else {}
+    last = path_rows[-1] if path_rows else {}
+    flow_last = next((row for row in reversed(rows)
+                      if row_number(row, "currentPrice", "current_price") > 0
+                      and (not filtered or (
+                          math.isfinite(row_number(row, "currentPrice", "current_price"))
+                          and temporal_price_observation_usable(row, intraday=definition.is_intraday)))), {})
     latest_raw = priced_rows[-1] if priced_rows else {}
     first_time = parse_timestamp(row_timestamp(first))
     last_time = parse_timestamp(row_timestamp(last))
-    prices = [row_number(row, "currentPrice", "current_price") for row in priced_rows]
+    prices = [row_number(row, "currentPrice", "current_price") for row in path_rows]
     ma20_distances = [
         row_number(row, "ma20Distance", "ma20_distance")
-        for row in priced_rows
+        for row in path_rows
         if abs(row_number(row, "ma20Distance", "ma20_distance")) > 0
         or row_number(row, "ma20", "ma20") > 0
     ]
@@ -748,6 +727,40 @@ def temporal_window_values(rows: List[Dict[str, object]], definition: TemporalWi
             else "partial" if smart_money_rows else "unavailable"
         ),
     }
+    if filtered:
+        valid_row_ids = {id(row) for row in valid_rows}
+        excluded_rows = [row for row in priced_rows if id(row) not in valid_row_ids]
+        latest_input = rows[-1] if rows else {}
+        input_clock = parse_timestamp(camel_or_snake(latest_input, "sourceAsOf")) if (
+            "sourceAsOf" in latest_input or "source_as_of" in latest_input
+        ) else parse_timestamp(row_timestamp(latest_input))
+        last_price_clock = parse_timestamp(row_timestamp(latest_raw))
+        latest_input_price = row_number(latest_input, "currentPrice", "current_price")
+        latest_usable = bool(
+            latest_raw and id(latest_raw) in valid_row_ids and input_clock and last_price_clock
+            and input_clock <= last_price_clock and math.isfinite(latest_input_price) and latest_input_price > 0
+        )
+        def exclusion_reason(row):
+            return temporal_observation_quality(row, prioritize_invalid=True) if math.isfinite(row_number(row, "currentPrice", "current_price")) else "invalid-price"
+
+        valid_times = [parse_timestamp(row_timestamp(row)) for row in valid_rows]
+        values.update({
+            "pricePathFeatureVersion": feature_set_version,
+            "rawPriceObservationCount": len(priced_rows),
+            "sampleCount": len(path_rows),
+            "pricePathSampleCount": len(path_rows),
+            "excludedPriceObservationCount": len(excluded_rows),
+            "excludedPriceObservationReasons": {
+                reason: sum(exclusion_reason(row) == reason for row in excluded_rows)
+                for reason in sorted({exclusion_reason(row) for row in excluded_rows})
+            },
+            "latestObservationUsable": latest_usable,
+            "latestRawObservedAt": row_timestamp(latest_raw),
+            "maximumPriceGapMinutes": round(max(
+                ((right - left).total_seconds() / 60.0 for left, right in zip(valid_times, valid_times[1:])),
+                default=0.0,
+            ), 3),
+        })
     if smart_money_values:
         positive_count = len([value for value in smart_money_values if value > 0])
         negative_count = len([value for value in smart_money_values if value < 0])
@@ -965,7 +978,10 @@ def add_position_temporal_concepts(
             )
             if isinstance(external_signals, dict) and selected:
                 selected[-1] = {**selected[-1], "externalSignals": temporal_signals}
-        values = temporal_window_values(selected, definition)
+        values = temporal_window_values(
+            selected, definition,
+            feature_set_version=str(settings.get("_reasoningFeatureSetVersion") or TEMPORAL_FEATURE_SET_VERSION),
+        )
         values.update(event_counts(symbol, selected, event_cache=event_cache))
         values["symbol"] = symbol
         values["source"] = str(values.get("observationSource") or "monitor-snapshot-history")
@@ -1038,7 +1054,10 @@ def add_position_temporal_concepts(
                 "aiInfluenceLabel": definition.key + " " + phase["phaseLabel"],
             })
         if project_observation_anchors:
-            add_temporal_observation_anchors(graph, window_id, symbol, definition, selected)
+            anchor_rows = [row for row in distinct_price_observations(selected)
+                           if temporal_price_observation_usable(row, intraday=definition.is_intraday)
+                           and math.isfinite(row_number(row, "currentPrice", "current_price"))] if values.get("pricePathFeatureVersion") else selected
+            add_temporal_observation_anchors(graph, window_id, symbol, definition, anchor_rows)
 
         if not values.get("hasSufficientHistory"):
             add_temporal_coverage_gap(

@@ -178,6 +178,7 @@ class StatisticalSignalTests(unittest.TestCase):
         window = OntologyEntity("window:TEST", "Path", "temporal-window", {
             "windowKey": "3D", "hasSufficientHistory": False, "coverageRatio": .3,
             "validObservationRatio": 1, "staleObservationCount": 0,
+            "pricePathFeatureVersion": "temporal-features-v3-valid-price-path", "latestObservationUsable": True,
             "peakReturnPct": 0, "drawdownFromPeakPct": 0, "recentPriceChangePct": 0})
         graph = PortfolioOntology("test", entities=[stock, window], relations=[
             OntologyRelation(stock.entity_id, window.entity_id, "HAS_TEMPORAL_WINDOW")])
@@ -188,8 +189,18 @@ class StatisticalSignalTests(unittest.TestCase):
         self.assertEqual("unmatched", evaluate_market_hypothesis_contract(graph, stock, rule)["status"])
         window.properties.update(peakReturnPct=5, drawdownFromPeakPct=-3, recentPriceChangePct=-1)
         self.assertEqual("matched", evaluate_market_hypothesis_contract(graph, stock, rule)["status"])
-        window.properties.update(staleObservationCount=1)
-        self.assertEqual("incomplete", evaluate_market_hypothesis_contract(graph, stock, rule)["status"])
+        window.properties.update(staleObservationCount=1, validObservationRatio=.975)
+        self.assertEqual("matched", evaluate_market_hypothesis_contract(graph, stock, rule)["status"])
+        for change in ({"latestObservationUsable": False}, {"validObservationRatio": .79},
+                       {"pricePathFeatureVersion": "temporal-features-v2"}, {"hasSufficientHistory": False}):
+            saved = dict(window.properties)
+            window.properties.update(change)
+            self.assertEqual("incomplete", evaluate_market_hypothesis_contract(graph, stock, rule)["status"])
+            window.properties.clear()
+            window.properties.update(saved)
+        legacy = next(r for r in governed_graph_inference_rules(filtered_temporal_paths=False)
+                      if r.rule_id == rule.rule_id)
+        self.assertEqual("incomplete", evaluate_market_hypothesis_contract(graph, stock, legacy)["status"])
 
     def test_nonmatching_model_input_receipt_is_scoped_and_requires_aligned_native_generation(self):
         from types import SimpleNamespace
@@ -580,6 +591,7 @@ class StatisticalSignalTests(unittest.TestCase):
                     "coverageRatio": 1,
                     "validObservationRatio": 1,
                     "staleObservationCount": 0,
+                    "pricePathFeatureVersion": "temporal-features-v3-valid-price-path", "latestObservationUsable": True,
                     "priceChangePct": -4,
                     "recentPriceChangePct": -3,
                     "priceVelocityChangePct": -2,
@@ -778,6 +790,7 @@ class StatisticalSignalTests(unittest.TestCase):
                     "coverageRatio": 1,
                     "validObservationRatio": 1,
                     "staleObservationCount": 0,
+                    "pricePathFeatureVersion": "temporal-features-v3-valid-price-path", "latestObservationUsable": True,
                     "priceChangePct": -4,
                     "recentPriceChangePct": -3,
                     "priceVelocityChangePct": -2,

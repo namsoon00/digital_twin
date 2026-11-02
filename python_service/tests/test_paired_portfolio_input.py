@@ -48,6 +48,10 @@ class PairedPortfolioInputTests(unittest.TestCase):
         row = {"portfolioId": "portfolio:" + snapshot.account_id, "asOf": STAMP, "portfolioRiskSnapshot": {"id": "risk:frozen"}}
         packet = freeze_validation_portfolio_input(snapshot.account_id, source_id, STAMP, row)
         instance = recorder(api, snapshot=snapshot)
+        instance.settings["_reasoningFeatureSetVersion"] = "temporal-features-v2"
+        instance.runtime_context_overrides[snapshot.account_id]["settings"] = {
+            "_reasoningFeatureSetVersion": "temporal-features-v3-valid-price-path",
+        }
         instance.runtime_context_overrides[snapshot.account_id]["portfolioLifecycle"] = {"id": "risk:later"}
         instance.runtime_context_overrides[snapshot.account_id]["temporalObservationWindows"] = {"AAA": {"backend": "independent"}}
         inputs = SimpleNamespace(settings=instance.settings, active_tbox_context=lambda: TBOX,
@@ -62,6 +66,8 @@ class PairedPortfolioInputTests(unittest.TestCase):
         self.assertEqual({"AAA": {"backend": "independent"}}, result.runtime_context["temporalObservationWindows"])
         saved = unpack_projection_runtime_contexts(result.runtime_context_packet)[snapshot.account_id]
         self.assertEqual(row, saved["portfolioLifecycle"])
+        self.assertEqual("temporal-features-v2", result.runtime_context["settings"]["_reasoningFeatureSetVersion"])
+        self.assertEqual("temporal-features-v2", saved["settings"]["_reasoningFeatureSetVersion"])
         with self.assertRaises(ValueError):
             capture_graph_input(inputs, snapshot, ["AAA"], False, {**context, "validationPortfolioContexts": {}}, {}, Mock())
         # Live projection always supplies the source cutoff to its portfolio reader.

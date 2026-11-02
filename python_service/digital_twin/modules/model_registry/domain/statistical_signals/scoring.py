@@ -8,7 +8,7 @@ from typing import Dict, Iterable, List, Mapping, Sequence, Tuple
 
 from digital_twin.modules.market_data.contracts import parse_timestamp
 from digital_twin.modules.market_data.contracts import market_session_date
-from digital_twin.modules.market_data.contracts import TemporalFeatureSnapshot
+from digital_twin.modules.market_data.contracts import TemporalFeatureSnapshot, TEMPORAL_FEATURE_SET_VERSION, temporal_price_observation_usable, uses_valid_price_path
 from digital_twin.modules.model_registry.domain.statistical_signals.contracts import ModelSignal, ModelSignalSnapshot, SignalEligibility
 from digital_twin.modules.model_registry.domain.hypothesis_catalog import hypothesis_family_definition
 from digital_twin.modules.model_registry.domain.statistical_signals.registry import DEFAULT_PRICE_SIGNAL_RELEASE_ID, model_release, signal_hypothesis_family
@@ -121,8 +121,10 @@ def _linear_slope_ratio(prices: Sequence[float]) -> float:
     return slope / center_y
 
 
-def _window_metrics(rows: Iterable[Mapping[str, object]], minimum_samples: int) -> Dict[str, object]:
-    ordered = _ordered_rows(rows)
+def _window_metrics(rows: Iterable[Mapping[str, object]], minimum_samples: int, *, filtered=False) -> Dict[str, object]:
+    raw_ordered = _ordered_rows(rows)
+    ordered = [row for row in raw_ordered if temporal_price_observation_usable(row)
+               and _number(_first(row, "currentPrice", "current_price", "close", "closePrice")) > 0] if filtered else raw_ordered
     prices = _prices(ordered)
     returns = _returns(prices)
     volatility = pstdev(returns) if len(returns) >= 2 else 0.0
@@ -135,11 +137,15 @@ def _window_metrics(rows: Iterable[Mapping[str, object]], minimum_samples: int) 
         str(_first(latest, "freshnessStatus", "freshness_status") or ""),
     ]).lower()
     stale = any(value in qualities for value in ("stale", "invalid", "missing", "error", "unavailable"))
+    if filtered:
+        stale = not raw_ordered or raw_ordered[-1] not in ordered
     peak = max(prices) if prices else 0.0
     trough = min(prices) if prices else 0.0
     return {
         "sampleCount": len(prices),
-        "coverageRatio": _bounded(len(prices) / max(1.0, float(minimum_samples))),
+        "coverageRatio": min(_bounded(len(prices) / max(1.0, float(minimum_samples))),
+                             len(ordered) / max(1, len(raw_ordered))) if filtered
+                         else _bounded(len(prices) / max(1.0, float(minimum_samples))),
         "priceReturn": _change(prices[0], prices[-1]) if prices else 0.0,
         "currentPrice": prices[-1] if prices else 0.0,
         "priorReturn": prior_return,
@@ -157,6 +163,9 @@ def _window_metrics(rows: Iterable[Mapping[str, object]], minimum_samples: int) 
             _first(latest, "marketSession", "market_session", "session") or ""
         ).lower(),
         "stale": stale,
+        **({"rawSampleCount": len(raw_ordered), "excludedPriceObservationCount": len(raw_ordered) - len(ordered),
+            "latestRawObservedAt": str(_source_clock(raw_ordered[-1]) or "") if raw_ordered else ""}
+           if filtered else {}),
     }
 
 
@@ -264,7 +273,8 @@ def _score_components(metrics: Mapping[str, object]) -> Dict[str, float]:
     }
 
 
-def _combined_metrics(windows: Mapping[str, object], cutoff_at: object = "") -> Dict[str, object]:
+def _combined_metrics(windows: Mapping[str, object], cutoff_at: object = "",
+                      feature_set_version: str = TEMPORAL_FEATURE_SET_VERSION) -> Dict[str, object]:
     session_rows = windows.get("SESSION") if isinstance(windows.get("SESSION"), list) else []
     metrics = {}
     for key, minimum_samples in WINDOW_MINIMUM_SAMPLES.items():
@@ -276,7 +286,7 @@ def _combined_metrics(windows: Mapping[str, object], cutoff_at: object = "") -> 
             cutoff_at,
             WINDOW_ROLLING_SAMPLES[key],
         )
-        metrics[key] = _window_metrics(rows, minimum_samples)
+        metrics[key] = _window_metrics(rows, minimum_samples, filtered=uses_valid_price_path(feature_set_version))
     primary = metrics.get("20D") or metrics.get("5D") or metrics.get("3D") or metrics.get("1D") or {}
     short = metrics.get("5D") or metrics.get("3D") or primary
     if not primary:
@@ -332,7 +342,7 @@ def score_temporal_feature_snapshot(
     signals = []
     latest_observed_at = ""
     for symbol, windows in sorted(dict(snapshot.windows or {}).items()):
-        metrics = _combined_metrics(dict(windows or {}), snapshot.as_of)
+        metrics = _combined_metrics(dict(windows or {}), snapshot.as_of, snapshot.feature_set_version)
         if not metrics:
             continue
         latest_observed_at = max(latest_observed_at, str(metrics.get("latestObservedAt") or ""))

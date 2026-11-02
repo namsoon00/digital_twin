@@ -2,7 +2,7 @@ import json
 import sys
 import unittest
 from dataclasses import replace
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -106,6 +106,68 @@ class OntologyRuleBoxTests(unittest.TestCase):
         self.assertTrue(any("peak" in role for role, _index, _row in anchors))
         self.assertTrue(any("trough" in role for role, _index, _row in anchors))
         self.assertEqual("opening", phase["phaseKey"])
+
+    def test_temporal_path_excludes_bad_samples_but_retains_quality_and_source_clock(self):
+        from copy import deepcopy
+        from digital_twin.modules.model_registry.domain.statistical_signals.scoring import _window_metrics
+        from digital_twin.modules.reasoning.application.projection_input.model_evidence import governed_statistical_rules_for_catalog
+        base = datetime(2026, 10, 1, 6, tzinfo=timezone.utc)
+        rows = []
+        for day in range(20):
+            for minute in range(2):
+                stamp = (base + timedelta(days=day, minutes=minute)).isoformat()
+                rows.append({"sourceAsOf": stamp, "generatedAt": stamp, "currentPrice": 100 + day,
+                             "dataQuality": "fresh", "market": "US", "currency": "USD"})
+        rows[13].update(currentPrice=10000, dataQuality="stale", ma20Distance=999, tradeStrength=999)
+        frozen = deepcopy(rows)
+        definition = TemporalWindowDefinition("20D", 20, 5)
+        values = temporal_window_values(rows, definition)
+        self.assertEqual(frozen, rows)
+        self.assertEqual((40, 39, 1), (values["rawPriceObservationCount"], values["sampleCount"], values["excludedPriceObservationCount"]))
+        self.assertEqual({"stale": 1}, values["excludedPriceObservationReasons"])
+        self.assertEqual(1, values["staleObservationCount"])
+        self.assertEqual(.975, values["validObservationRatio"])
+        self.assertTrue(values["hasSufficientHistory"])
+        self.assertTrue(values["latestObservationUsable"])
+        self.assertEqual((119, 0, 0), (values["peakPrice"], values["drawdownFromPeakPct"], values["ma20DistancePeak"]))
+        self.assertEqual(rows[-1]["sourceAsOf"].replace("+00:00", "Z"), values["lastObservedAt"])
+        legacy = temporal_window_values(rows, definition, feature_set_version="temporal-features-v2")
+        self.assertEqual(10000, legacy["peakPrice"])
+        self.assertNotIn("pricePathFeatureVersion", legacy)
+        self.assertEqual(40, legacy["sampleCount"])
+        metrics = _window_metrics(rows, 5, filtered=True)
+        self.assertEqual(39, metrics["sampleCount"])
+        self.assertEqual(0, metrics["drawdown"])
+        self.assertEqual(1, metrics["excludedPriceObservationCount"])
+        missing_session = deepcopy(rows)
+        missing_session[12]["dataQuality"] = "stale"
+        sparse = temporal_window_values(missing_session, definition)
+        self.assertEqual(19, sparse["coveredSessionCount"])
+        self.assertEqual(.95, sparse["validObservationRatio"])
+        self.assertFalse(sparse["hasSufficientHistory"])
+        self.assertTrue(sparse["latestObservationUsable"])
+        for bad in ({"dataQuality": "stale"}, {"currentPrice": 0}, {"sourceAsOf": ""},
+                    {"sourceAsOf": "2027-01-01T00:00:00Z"}):
+            with self.subTest(bad=bad):
+                changed = deepcopy(rows)
+                changed[-1].update(bad)
+                self.assertFalse(temporal_window_values(changed, definition)["latestObservationUsable"])
+        empty = temporal_window_values([{**row, "dataQuality": "stale"} for row in rows], definition)
+        self.assertEqual(0, empty["sampleCount"])
+        self.assertFalse(empty["hasSufficientHistory"])
+        self.assertFalse(empty["latestObservationUsable"])
+        self.assertEqual(0, empty["peakPrice"])
+        fresh_closes = [{**row, "dataQuality": "last-close"} for row in rows]
+        self.assertTrue(temporal_window_values(fresh_closes, definition)["latestObservationUsable"])
+        self.assertFalse(temporal_window_values(fresh_closes, TemporalWindowDefinition("15M", 0, 4, "minute", 15))["latestObservationUsable"])
+        fresh_closes[-1]["freshnessStatus"] = "stale"
+        self.assertFalse(temporal_window_values(fresh_closes, definition)["latestObservationUsable"])
+        # An old immutable deployment must keep its old market input conditions.
+        rule_id = "graph.temporal.failed_recovery.risk.v1"
+        old_rules = governed_statistical_rules_for_catalog({"rules": [{"ruleId": rule_id}]}, "temporal-features-v2")
+        self.assertTrue(any("staleObservationCount" in c.target_property_filters for c in old_rules[0].conditions))
+        new_rules = governed_statistical_rules_for_catalog({"rules": [{"ruleId": rule_id}]})
+        self.assertTrue(any("latestObservationUsable" in c.target_property_filters for c in new_rules[0].conditions))
 
     def test_rulebox_v3_has_explicit_governance_and_removes_false_generic_paths(self):
         rules = governed_graph_inference_rules()

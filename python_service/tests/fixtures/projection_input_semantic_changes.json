@@ -16,5 +16,11 @@
     "bodyHash": "0d5b5a257d94a2b3eaf413cfe5239db399b04c29eca1ef36ab355ddaa8f4c683",
     "reason": "Use the atomically maintained decision-memory projection with exact source revision and legacy fallback; preserve the same outcomes, source cutoff and ABox fields. Outcome observation remains synchronous and unchanged.",
     "regressionTest": "test_realtime_decision_inputs.DecisionProjectionStorageTests.test_compact_read_preserves_native_input_outcomes_cutoff_and_subject"
+  },
+  "governed_statistical_rules_for_catalog": {
+    "baselineHash": "f66c9c90b0acb2affbbf4361b68bb8d3c631510a24dbbcc5ed9733a6d9417f65",
+    "bodyHash": "33ea6afe9fa480ff94d4fd068b4f11fe2d55b5365340d710313e1f2e3dda2c84",
+    "reason": "Bind raw model evidence conditions to the immutable deployment feature version. V2 retains zero-stale path conditions; V3 requires a filtered valid price path and usable latest observation. Active world rule IDs still bound the model inventory.",
+    "regressionTest": "test_ontology_rulebox.OntologyRuleBoxTests.test_temporal_path_excludes_bad_samples_but_retains_quality_and_source_clock"
   }
 }

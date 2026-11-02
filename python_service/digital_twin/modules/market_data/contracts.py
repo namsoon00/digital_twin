@@ -2,6 +2,8 @@
 
 from digital_twin.modules._exports import resolve_export
 
+_TEMPORAL_QUALITY_MODULE = 'digital_twin.modules.market_data.domain.temporal_price_quality'
+
 
 _EXPORTS = {'CapitalFlowObservation': ('digital_twin.modules.market_data.domain.capital_flow',
                             'CapitalFlowObservation'),
@@ -15,6 +17,8 @@ _EXPORTS = {'CapitalFlowObservation': ('digital_twin.modules.market_data.domain.
                                    'observed_fields_from_coverage')}
 
 _EXPORTS['verified_flow_measurements'] = ('digital_twin.modules.market_data.domain.verified_flow', 'verified_flow_measurements')
+for _name in ('VALID_PRICE_PATH_FEATURE_VERSION', 'temporal_observation_quality', 'uses_valid_price_path', 'temporal_price_observation_usable'):
+    _EXPORTS[_name] = (_TEMPORAL_QUALITY_MODULE, _name)
 
 _EXPORTS['MarketQuoteRepository'] = ('digital_twin.modules.market_data.domain.repositories', 'MarketQuoteRepository')
 _EXPORTS['ExternalCallDeferred'] = ('digital_twin.modules.market_data.domain.external_call', 'ExternalCallDeferred')

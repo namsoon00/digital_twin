@@ -41,6 +41,7 @@ def rule_catalog_requires_statistical_signal_scoring(
 
 def governed_statistical_rules_for_catalog(
     rule_catalog: Mapping[str, object] = None,
+    feature_set_version: str = "",
 ):
     """Keep model-contract scoring inside the active world RuleBox boundary."""
 
@@ -50,7 +51,9 @@ def governed_statistical_rules_for_catalog(
         for item in catalog.get("rules") or []
         if isinstance(item, dict) and item.get("enabled") is not False
     }
-    rules = governed_graph_inference_rules()
+    from digital_twin.modules.market_data.contracts import TEMPORAL_FEATURE_SET_VERSION, uses_valid_price_path
+    rules = governed_graph_inference_rules(filtered_temporal_paths=uses_valid_price_path(
+        feature_set_version or TEMPORAL_FEATURE_SET_VERSION))
     if not active_rule_ids:
         return rules
     return tuple(rule for rule in rules if rule.rule_id in active_rule_ids)
@@ -86,7 +89,8 @@ def attach_model_evidence(
         statistical_signal_context = {}
         statistical_result = {}
         try:
-            statistical_rules = governed_statistical_rules_for_catalog(rule_catalog)
+            statistical_rules = governed_statistical_rules_for_catalog(
+                rule_catalog, str(_inputs.settings.get("_reasoningFeatureSetVersion") or ""))
             statistical_result = _inputs.statistical_signal_service.run(
                 account_id=snapshot.account_id,
                 backend_id=str(

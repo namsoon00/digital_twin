@@ -1024,3 +1024,35 @@ uncertain issues are excluded independently. Closed-session waiting remains
 quiet. A suppressed interruption does not create a receipt and therefore cannot
 authorize a recovery reply. Native rule thresholds, engine releases and market
 judgments are unchanged by this notification policy correction.
+
+## 유효한 기간 가격 경로 (2026-11-02)
+
+`temporal-features-v3-valid-price-path`는 기간 가격·고점·저점·등락률·평균선 교차를
+유효한 가격 관측으로 다시 계산한다. 원본 시계열은 변경하지 않는다. ABox에는
+원본 표본 수, 사용 표본 수, 제외 수·사유, 원본 최신 시각과 사용한 마지막 시각,
+유효 비율과 최대 관측 간격을 함께 보존한다. 재조회는 새 원천 관측이 아니다.
+
+후속 RuleBox는 계산 버전과 `latestObservationUsable`을 확인한다. 과거의 불량
+표본 하나만으로 기간 전체를 거부하지 않지만, 기존 유효 비율 80%, 최소 표본,
+필요 세션 수와 기간 범위 조건은 유지한다. 최신 자료가 유효하지 않거나 원천
+시각·가격이 없으면 이전의 유효 가격을 현재 가격처럼 사용하지 않는다. 장 마감
+참고값은 일별 이력에만 허용하며 장중 신호를 만들지 않는다. 원시
+`staleObservationCount`는 감사용으로 남는다. 자료 부족은 가설 반증이 아니다.
+
+v2 배포는 기존 산술과 기존 시장 조건을 그대로 사용한다. 새 계산은 별도의
+불변 배포·RuleBox·feature-set 묶음으로 검증 후 전환한다. 예측의 실증 자격,
+계좌별 정책, TypeDB 최종 추론과 성공 영수증·발송 시점 재검증은 유지한다.
+
+검증: 분리된 TypeDB에서 정상 자료·중간 1건 무효·최신 무효·유효 비율 부족의
+4개 상황을 구/신 규칙으로 각각 실행한다. 재현 명령은
+`PYTHONPATH=python_service:python_service/tests python3 python_service/tests/native_temporal_quality_smoke.py`다.
+임시 DB만 생성·삭제하며 고객 알림은 보내지 않는다. 저장된 실제 feature snapshot
+5건도 원본 payload hash가 일치하는 자료로 재계산했고 49개 기간 구간의 입력을 확인했다.
+
+운영 전환은 이 코드 반영과 별개다. r15의 보존된 RuleBox는 소스 기본 목록과
+다르므로 기본 목록으로 덮어쓰면 안 된다. 기존 150개 규칙을 보존한 후속 artifact와
+v2→v3 계산 변경 검증이 필요하다. 현행 `reasoning-comparison-input-v6`는
+feature-set 버전과 파생 ABox까지 동일해야 비교를 인정하므로 의도한 계산 변경도
+승격 근거로 인정하지 않는다. 이 조건을 임의로 해제하거나 결과를 동일한 것으로
+기록하지 않는다. 원본 입력 일치와 선언된 계산 변경을 각각 검증하는 승격 절차를
+추가하기 전에는 기존 delivery 배포를 전환하지 않는다.

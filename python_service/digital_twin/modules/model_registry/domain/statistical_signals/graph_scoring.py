@@ -25,6 +25,8 @@ from digital_twin.modules.model_registry.domain.statistical_signals.measurements
 MODEL_HYPOTHESIS_EVIDENCE_FIELDS = (
     "windowKey", "symbol", "observedAt", "startAt", "endAt", "sampleCount",
     "hasSufficientHistory", "validObservationRatio", "staleObservationCount",
+    "pricePathFeatureVersion", "rawPriceObservationCount", "pricePathSampleCount", "excludedPriceObservationCount",
+    "excludedPriceObservationReasons", "latestObservationUsable", "latestRawObservedAt", "maximumPriceGapMinutes",
     "startPrice", "currentPrice", "priceChangePct", "recentPriceChangePct",
     "drawdownFromPeakPct", "reboundFromTroughPct", "priceVelocityChangePct",
     "volumeRatioEnd", "tradeStrengthEnd", "bidAskImbalanceEnd", "riskEventCount",
@@ -171,7 +173,8 @@ def _relation_matches(
             if "windowKey" in filters and not _value_matches((target.properties or {}).get("windowKey"), "==", filters["windowKey"]):
                 continue
             quality = {key: value for key, value in filters.items() if key in {
-                "hasSufficientHistory", "coverageRatio", "validObservationRatio", "staleObservationCount"}}
+                "hasSufficientHistory", "coverageRatio", "validObservationRatio", "staleObservationCount",
+                "pricePathFeatureVersion", "latestObservationUsable"}}
             if quality and _filters_match(target.properties or {}, quality) is not True:
                 unknown = True
                 continue

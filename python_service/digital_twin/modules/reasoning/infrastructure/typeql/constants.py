@@ -309,6 +309,8 @@ TYPEDB_PROMOTED_TEXT_ATTRIBUTES = {
     "fundamentalDataSourcePriority": "ontology-fundamental-data-source-priority",
     "windowKey": "ontology-window-key",
     "hasSufficientHistory": "ontology-has-sufficient-history",
+    "pricePathFeatureVersion": "ontology-price-path-feature-version",
+    "latestObservationUsable": "ontology-latest-observation-usable",
     "latestObservationQuality": "ontology-latest-observation-quality",
     "sequenceRole": "ontology-sequence-role",
     "observationQuality": "ontology-observation-quality",

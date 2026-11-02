@@ -172,35 +172,42 @@ class ProjectionInputOwnershipTests(unittest.TestCase):
                     "runtimeContextPacketMs", "externalSignalCompactionMs"):
             self.assertIn(key, measured["telemetry"]["runtimeStages"])
             self.assertNotIn(key, measured["contexts"]["fixture-account"])
-        expected = json.loads((ROOT / "tests/fixtures/projection_input_execution_v15.json").read_text())["scenarios"]
+        expected = json.loads((ROOT / "tests/fixtures/projection_input_execution_v16.json").read_text())["scenarios"]
         self.assertEqual(expected, contract_scenarios(api))
-        with patch.object(source_contract, "ONTOLOGY_PROJECTION_INPUT_VERSION", "ontology-projection-input-v7"):
-            previous = json.loads((ROOT / "tests/fixtures/projection_input_execution_v14.json").read_text())["scenarios"]
-            self.assertEqual(previous, contract_scenarios(api))
-        with patch.object(projection_facts, "INSTRUMENT_IDENTITY_RELATION_TYPES", set()), \
-                patch.object(source_contract, "ONTOLOGY_PROJECTION_INPUT_VERSION", "ontology-projection-input-v7"), \
+        from digital_twin.modules.reasoning.domain import portfolio_ontology_temporal_concepts as temporal
+        # Preserve the pre-upgrade oracle; do not overwrite old expected hashes.
+        with patch.object(temporal, "uses_valid_price_path", return_value=False), \
                 patch.object(projection_cache_identity, "PORTFOLIO_GRAPH_ASSEMBLY_CACHE_CONTRACT_VERSION",
-                             "portfolio-graph-assembly-cache-v24-question-document-links"):
-            expected = json.loads(
-                (ROOT / "tests/fixtures/projection_input_execution_v13.json").read_text()
-            )["scenarios"]
+                             "portfolio-graph-assembly-cache-v26-current-flow-source"):
+            expected = json.loads((ROOT / "tests/fixtures/projection_input_execution_v15.json").read_text())["scenarios"]
             self.assertEqual(expected, contract_scenarios(api))
-            from digital_twin.modules.reasoning.domain import ontology_projection_input as source_contract
-            from research_knowledge_fixture import pre_research_knowledge_catalog
-            from relationship_recovery_checks import legacy_observation_quality
-            with patch.object(source_contract, "ONTOLOGY_PROJECTION_INPUT_VERSION", "ontology-projection-input-v6"), \
-                    patch.object(source_contract, "ONTOLOGY_REASONING_SNAPSHOT_INPUT_VERSION", "ontology-reasoning-snapshot-input-v6"), \
-                    legacy_observation_quality():
-                previous = json.loads((ROOT / "tests/fixtures/projection_input_execution_v12.json").read_text())["scenarios"]
+            with patch.object(source_contract, "ONTOLOGY_PROJECTION_INPUT_VERSION", "ontology-projection-input-v7"):
+                previous = json.loads((ROOT / "tests/fixtures/projection_input_execution_v14.json").read_text())["scenarios"]
                 self.assertEqual(previous, contract_scenarios(api))
-            with patch.object(source_contract, "ONTOLOGY_PROJECTION_INPUT_VERSION", "ontology-projection-input-v5"), \
-                    patch.object(source_contract, "ONTOLOGY_REASONING_SNAPSHOT_INPUT_VERSION", "ontology-reasoning-snapshot-input-v5"), \
-                    legacy_observation_quality():
-                previous = json.loads((ROOT / "tests/fixtures/projection_input_execution_v11.json").read_text())["scenarios"]
-                self.assertEqual(previous, contract_scenarios(api))
-                previous = json.loads((ROOT / "tests/fixtures/projection_input_execution_v10.json").read_text())["scenarios"]
-                with pre_research_knowledge_catalog():
+            with patch.object(projection_facts, "INSTRUMENT_IDENTITY_RELATION_TYPES", set()), \
+                    patch.object(source_contract, "ONTOLOGY_PROJECTION_INPUT_VERSION", "ontology-projection-input-v7"), \
+                    patch.object(projection_cache_identity, "PORTFOLIO_GRAPH_ASSEMBLY_CACHE_CONTRACT_VERSION",
+                                 "portfolio-graph-assembly-cache-v24-question-document-links"):
+                expected = json.loads(
+                    (ROOT / "tests/fixtures/projection_input_execution_v13.json").read_text()
+                )["scenarios"]
+                self.assertEqual(expected, contract_scenarios(api))
+                from digital_twin.modules.reasoning.domain import ontology_projection_input as source_contract
+                from research_knowledge_fixture import pre_research_knowledge_catalog
+                from relationship_recovery_checks import legacy_observation_quality
+                with patch.object(source_contract, "ONTOLOGY_PROJECTION_INPUT_VERSION", "ontology-projection-input-v6"), \
+                        patch.object(source_contract, "ONTOLOGY_REASONING_SNAPSHOT_INPUT_VERSION", "ontology-reasoning-snapshot-input-v6"), \
+                        legacy_observation_quality():
+                    previous = json.loads((ROOT / "tests/fixtures/projection_input_execution_v12.json").read_text())["scenarios"]
                     self.assertEqual(previous, contract_scenarios(api))
+                with patch.object(source_contract, "ONTOLOGY_PROJECTION_INPUT_VERSION", "ontology-projection-input-v5"), \
+                        patch.object(source_contract, "ONTOLOGY_REASONING_SNAPSHOT_INPUT_VERSION", "ontology-reasoning-snapshot-input-v5"), \
+                        legacy_observation_quality():
+                    previous = json.loads((ROOT / "tests/fixtures/projection_input_execution_v11.json").read_text())["scenarios"]
+                    self.assertEqual(previous, contract_scenarios(api))
+                    previous = json.loads((ROOT / "tests/fixtures/projection_input_execution_v10.json").read_text())["scenarios"]
+                    with pre_research_knowledge_catalog():
+                        self.assertEqual(previous, contract_scenarios(api))
 
     def test_projection_input_packages_import_without_runtime_or_drivers(self):
         script = """

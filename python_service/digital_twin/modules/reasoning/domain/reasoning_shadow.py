@@ -34,6 +34,7 @@ ONTOLOGY_RUNTIME_POLICY_SETTING_KEYS = frozenset(
         if str(item.get(key) or "")
     }
     | {
+        "_reasoningFeatureSetVersion",
         "fxRates",
         "fxExposureReviewPct",
         "hypothesisOutcomeReviewMinimumSamples",

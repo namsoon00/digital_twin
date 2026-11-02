@@ -15,7 +15,7 @@ from dataclasses import dataclass
 
 
 PORTFOLIO_GRAPH_ASSEMBLY_CACHE_CONTRACT_VERSION = (
-    "portfolio-graph-assembly-cache-v26-current-flow-source"
+    "portfolio-graph-assembly-cache-v27-valid-price-path"
 )
 
 PROJECTION_RUNTIME_CONTEXT_CACHE_CONTRACT_VERSION = (

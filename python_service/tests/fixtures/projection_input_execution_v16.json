@@ -1,0 +1,16 @@
+{
+  "sourceRevision": "26ee09055 + versioned valid temporal price paths",
+  "contractVersion": "projection-input-execution-v16",
+  "reason": "Temporal feature V3 excludes invalid price observations before arithmetic and records the used/excluded counts and latest validity. Older execution fixtures remain unchanged and replay under legacy feature semantics. Cache V27 isolates the new graph shape.",
+  "scenarios": {
+    "full": "83f9ad88425b48308c15283df0cd9a8e307de9911fbb0033e9b09a9f8d50074d",
+    "target": "1a6eec83c557d3c105ffcb2e80920ff88f4695555a5a4a775a3c868002df50ac",
+    "source-facts": "80fc90bf66e9c592423c733feed16aa73f5a59531816256e5a470e34fdc9cd39",
+    "live-context": "72fe85b5b380d13d5a3d3cd69908da677566057dae1535a73cd65c24e2f1cac4",
+    "memory-hit": "b8f0cf39de37984df537f8c3b1bec8beff57aa60e296a3e663a47917de1d9e97",
+    "persistent-hit": "408a486af6d6e3e15f1a2b19384f41a8848a649b769328c9391fdc0821c647bb",
+    "cache-errors": "0efa76a589152f81cd9932f45e31443de431c3403d757c1206a2c9d03f608690",
+    "scoring-failure": "c25f489c8db4f5f16fc30383fba279cb77ea9ed669a42dab0f61f980bfb42db6",
+    "world-identity": "bcf0b341ec4c6e66a9b78da0636c009f92238eb6c62e674574279bc761d7a0a7"
+  }
+}

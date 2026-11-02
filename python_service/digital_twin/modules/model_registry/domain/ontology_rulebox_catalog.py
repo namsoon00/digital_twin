@@ -833,8 +833,39 @@ def crypto_market_inference_rules() -> List[GraphInferenceRule]:
         ))
     return rules
 
-@lru_cache(maxsize=1)
-def governed_graph_inference_rules() -> List[GraphInferenceRule]:
+def with_valid_temporal_price_paths(rules):
+    """Authored successor policy: quality of the filtered path, not zero exclusions."""
+    from digital_twin.modules.market_data.contracts import VALID_PRICE_PATH_FEATURE_VERSION
+
+    result = []
+    for rule in rules:
+        conditions = []
+        changed = False
+        for condition in rule.conditions:
+            filters = dict(condition.target_property_filters or {})
+            stale = filters.get("staleObservationCount")
+            if condition.target_kind == "temporal-window" and stale in (
+                {"operator": "<=", "value": 0}, {"operator": ">=", "value": 1},
+            ):
+                changed = True
+                filters.pop("staleObservationCount")
+                filters["pricePathFeatureVersion"] = VALID_PRICE_PATH_FEATURE_VERSION
+                filters["latestObservationUsable"] = stale.get("operator") == "<="
+                conditions.append(replace(condition, target_property_filters=filters))
+            else:
+                conditions.append(condition)
+        if rule.rule_id == "graph.temporal.stale_observation.block.v1":
+            rule = replace(rule, label="기간 가격 자료 부족 -> 해당 기간 판단 제한",
+                prompt_hint="제외한 표본 수는 감사 근거로 남기고, 최신 관측과 유효 표본의 충분성을 확인합니다.")
+            conditions = [replace(c, description="최근 가격 관측을 기간 판단에 사용할 수 없습니다.")
+                          if c.condition_id == "stale-temporal-observation" else c for c in conditions]
+        result.append(replace(rule, conditions=conditions,
+                              version=rule.version + "-valid-price-path") if changed else rule)
+    return result
+
+
+@lru_cache(maxsize=2)
+def governed_graph_inference_rules(*, filtered_temporal_paths=True) -> List[GraphInferenceRule]:
     rules = [
         GraphInferenceRule(
             rule_id="graph.loss_guard.breakdown.v1",
@@ -7849,11 +7880,17 @@ def governed_graph_inference_rules() -> List[GraphInferenceRule]:
             ],
         ),
     ]
+    if filtered_temporal_paths:
+        rules = with_valid_temporal_price_paths(rules)
     governed = with_rulebox_decision_effect_contract(
         with_rulebox_v3_governance(
             with_rulebox_execution_guidance(with_market_evidence_guards(rules))
         )
     )
+    if filtered_temporal_paths:
+        governed = [replace(rule, version="v3")
+                    if rule.rule_id == "graph.temporal.stale_observation.block.v1" else rule
+                    for rule in governed]
     from .current_flow_rules import current_flow_rules
     return [*governed, *current_flow_rules(governed)]
 

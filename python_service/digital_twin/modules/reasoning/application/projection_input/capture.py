@@ -109,6 +109,15 @@ def capture_graph_input(
         target_symbols=computation_symbols or None,
         progress_callback=context_progress,
     )
+    # The release owns feature semantics, including when replaying another
+    # release's immutable observations. Never inherit its calculator version.
+    feature_version = str(_inputs.settings.get("_reasoningFeatureSetVersion") or "")
+    if feature_version:
+        runtime_context["settings"] = {
+            **dict(runtime_context.get("settings") or {}),
+            "_reasoningFeatureSetVersion": feature_version,
+        }
+        _inputs.last_runtime_contexts[snapshot.account_id] = frozen_projection_runtime_context(runtime_context)
     if ((reasoning_context or {}).get("validationOnly") is True
             and (reasoning_context or {}).get("validationInputMode") == PAIRED_VALIDATION_INPUT_VERSION):
         packet = dict((reasoning_context or {}).get("validationPortfolioContexts") or {}).get(snapshot.account_id)

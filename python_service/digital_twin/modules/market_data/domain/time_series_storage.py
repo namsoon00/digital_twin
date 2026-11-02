@@ -6,9 +6,10 @@ from datetime import datetime, timezone
 from dataclasses import asdict, dataclass, field
 from typing import Dict, Iterable, List, Mapping, Protocol, Tuple
 
+from digital_twin.modules.market_data.domain.temporal_price_quality import VALID_PRICE_PATH_FEATURE_VERSION
 
 TIME_SERIES_CONTRACT_VERSION = "time-series-storage-contract-v1"
-TEMPORAL_FEATURE_SET_VERSION = "temporal-features-v2"
+TEMPORAL_FEATURE_SET_VERSION = VALID_PRICE_PATH_FEATURE_VERSION
 TEMPORAL_WINDOW_REFERENCE_VERSION = "temporal-window-reference-v1"
 
 BACKEND_STATUSES = {

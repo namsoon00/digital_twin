@@ -90,6 +90,29 @@ class LocalGraphWriterGuardTests(unittest.TestCase):
             self.assertTrue(delivery.acquire()["acquired"])
             delivery.release()
 
+    def test_prepared_candidate_gets_next_turn_without_interrupting_current_delivery(self):
+        with tempfile.TemporaryDirectory() as directory:
+            candidate = LocalGraphWriterGuard("candidate", "candidate", Path(directory))
+            delivery = LocalGraphWriterGuard("active", "delivery", Path(directory))
+            other = LocalGraphWriterGuard("other", "candidate", Path(directory))
+            self.assertTrue(delivery.acquire()["acquired"])
+            self.assertFalse(delivery.reserve_prepared_turn()["reserved"])
+            self.assertTrue(candidate.reserve_prepared_turn()["reserved"])
+            self.assertFalse(candidate.acquire()["acquired"])
+            self.assertTrue(delivery.status()["acquired"])
+            self.assertFalse(other.reserve_prepared_turn()["reserved"])
+            delivery.release()
+            self.assertEqual("granted-turn-reserved", delivery.acquire()["status"])
+            self.assertTrue(candidate.acquire()["acquired"])
+            candidate.release()
+            self.assertTrue(delivery.acquire()["acquired"])
+            delivery.release()
+            # Abandoning an acquired reservation, without a writer, also frees it.
+            self.assertTrue(candidate.reserve_prepared_turn()["reserved"])
+            candidate.release()
+            self.assertTrue(delivery.acquire()["acquired"])
+            delivery.release()
+
     def test_process_exit_releases_granted_preparation_turn(self):
         with tempfile.TemporaryDirectory() as directory:
             code = """

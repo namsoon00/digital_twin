@@ -420,7 +420,8 @@ def compact_projection_result(projection: object) -> Dict[str, object]:
         "temporalFeatureInput": dict(
             graph_input.get("temporalFeatureInput") or {}
         ),
-        "temporalFeatureMigrationInput": dict(graph_input.get("temporalFeatureMigrationInput") or {}),
+        **({"temporalFeatureMigrationInput": dict(graph_input["temporalFeatureMigrationInput"])}
+           if graph_input.get("temporalFeatureMigrationInput") else {}),
         # Source-event equality is not proof of equal assembled facts. Retain
         # both the incoming and persisted semantic manifests for comparison.
         **{
@@ -3472,6 +3473,11 @@ class IndependentReasoningJobRunner:
             now = time.monotonic()
             if now >= deadline:
                 raise InputPreparationDeferred("Prepared input writer wait exceeded the bounded lease interval.")
+            reserve = getattr(self.graph_writer_guard, "reserve_prepared_turn", None)
+            if now - started >= 10 and callable(reserve):
+                # Source reads have finished. Yield to the current delivery
+                # turn, but do not let its next burst starve this leased batch.
+                reserve()
             self.record_progress("input_assembly.writer_wait", {
                 "preparedInputRetained": True,
                 "writerWaitMs": int((now - started) * 1000),
@@ -3481,8 +3487,8 @@ class IndependentReasoningJobRunner:
                 self.confirm_input_assembly_claims(job_ids, lease_lost)
                 self.confirm_prepared_input_control()
                 next_authority_check = now + self.heartbeat_seconds()
-            # Wait without any writer/turn reservation. The existing heartbeat
-            # thread keeps the exact claim alive, and lease loss wakes us early.
+            # No physical writer is held while waiting. A bounded next-turn
+            # reservation is released by the outer finally on loss/shutdown.
             lease_lost.wait(min(1.0, max(0, deadline - now)))
 
     def confirm_prepared_input_control(self):

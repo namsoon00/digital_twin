@@ -87,7 +87,7 @@ def job_comparison_identity(job: Mapping[str, object]):
         "symbols": _texts(payload.get("affectedSymbols") or payload.get("symbols") or payload.get("symbol") or [symbol for item in boundaries for symbol in item.get("symbols") or []]),
         "temporalFeatureInputs": temporal_inputs,
         "temporalFeatureSemantics": temporal_semantics,
-        "featureMigrationInputs": feature_migration_inputs,
+        **({"featureMigrationInputs": feature_migration_inputs} if feature_migration_inputs else {}),
         "aboxInputs": abox_inputs if len(abox_inputs) == len(_mapping(result.get("projection_results") or result.get("projectionResults"))) else [],
     }
     if (sorted(row["accountId"] for row in abox_inputs) != inputs["accountIds"]

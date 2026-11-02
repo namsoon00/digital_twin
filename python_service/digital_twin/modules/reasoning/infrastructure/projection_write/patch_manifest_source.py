@@ -126,7 +126,8 @@ def repair_manifest_source(
             "repairInputMode": "complete-source-assembly-target-persist",
             "repairInputStatus": str(applied_target_patch.get("status") or ""),
             "temporalFeatureInput": dict(graph_assembly.get("temporalFeatureInput") or {}),
-            "temporalFeatureMigrationInput": dict(graph_assembly.get("temporalFeatureMigrationInput") or {}),
+            **({"temporalFeatureMigrationInput": dict(graph_assembly["temporalFeatureMigrationInput"])}
+               if graph_assembly.get("temporalFeatureMigrationInput") else {}),
         }
     )
     emit_progress(

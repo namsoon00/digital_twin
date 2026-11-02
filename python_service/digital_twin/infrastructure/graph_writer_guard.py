@@ -209,6 +209,27 @@ class LocalGraphWriterGuard:
         self._acquired_at = ""
         return {**payload, "status": "released", "released": True}
 
+    def reserve_prepared_turn(self) -> Dict[str, object]:
+        """Reserve the next turn only after immutable source preparation.
+
+        The current writer is never interrupted. Delivery's next acquire sees
+        the turn reservation; the prepared candidate may then finish once the
+        current writer releases. OS ownership also releases this on a crash.
+        """
+        if self.role != "candidate" or self._handle is not None:
+            return {"reserved": False, "status": "not-a-prepared-candidate"}
+        if self._turn_handle is not None:
+            return {"reserved": True, "status": "already-reserved"}
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        handle = self._turn_path.open("a+")
+        try:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            handle.close()
+            return {"reserved": False, "status": "another-turn-reserved"}
+        self._turn_handle = handle
+        return {"reserved": True, "status": "next-prepared-turn-reserved"}
+
     def status(self) -> Dict[str, object]:
         return {
             "contractVersion": self.contract_version,

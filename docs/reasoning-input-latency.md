@@ -1,5 +1,13 @@
 # Reasoning Input Latency
 
+Prepared candidate fairness (2026-11-02): a candidate releases both the physical
+writer and its turn reservation during immutable source reads. If its completed
+input has waited ten seconds, it reserves the next turn while the current writer
+finishes. This prevents consecutive delivery turns from starving an already
+leased validation batch. Claim, control, shutdown and cooldown checks still
+apply; failure or process exit releases the reservation. Real-lock regressions
+are in `test_graph_writer_guard` and `test_rule_delivery_latency`.
+
 ## Preserve executed temporal input identity (2026-10-26)
 
 A paired equity validation produced identical assembled and persisted facts,

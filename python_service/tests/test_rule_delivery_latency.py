@@ -394,6 +394,40 @@ class RuleDeliveryLatencyTests(TestCase):
                 self.assertTrue(delivery.acquire()['acquired'])
                 delivery.release()
 
+    def test_prepared_candidate_reserves_only_after_bounded_wait(self):
+        with tempfile.TemporaryDirectory() as directory:
+            guard = LocalGraphWriterGuard('candidate', 'candidate', Path(directory))
+            delivery = LocalGraphWriterGuard('active', 'delivery', Path(directory))
+            runner = IndependentReasoningJobRunner(
+                SimpleNamespace(heartbeat=lambda *args: True), SimpleNamespace(descriptor=descriptor),
+                SimpleNamespace(), graph_writer_guard=guard,
+            )
+            runner.control_binding_status = lambda _: {'selected': True}
+            runner.record_progress = lambda *args: None
+            lease_lost = threading.Event()
+            elapsed = [0]
+            self.assertTrue(delivery.acquire()['acquired'])
+            def wait(_seconds):
+                self.assertFalse(guard.status()['acquired'])
+                self.assertTrue(delivery.status()['acquired'])
+                if elapsed[0] < 10:
+                    self.assertFalse(guard.status()['grantedTurnReserved'])
+                    elapsed[0] = 10
+                else:
+                    self.assertTrue(guard.status()['grantedTurnReserved'])
+                    delivery.release()
+                    self.assertFalse(delivery.acquire()['acquired'])
+            try:
+                with patch('digital_twin.modules.reasoning.application.independent_reasoning_engine.time.monotonic',
+                           side_effect=lambda: elapsed[0]), patch.object(lease_lost, 'wait', side_effect=wait):
+                    runner.resume_prepared_input(['job:1'], lease_lost)
+                self.assertTrue(guard.status()['acquired'])
+            finally:
+                guard.release()
+                delivery.release()
+            self.assertTrue(delivery.acquire()['acquired'])
+            delivery.release()
+
     def test_retained_input_wait_honors_server_backoff_and_claim_loss_without_a_writer(self):
         for failure in ['backoff', 'lease-lost']:
             with self.subTest(failure=failure), tempfile.TemporaryDirectory() as directory:

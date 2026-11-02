@@ -135,7 +135,7 @@ def build_graph_assembly(
             ),
             "externalSignalProjection": input_projection,
             "temporalFeatureInput": temporal_feature_input,
-            "temporalFeatureMigrationInput": migration_input,
+            **({"temporalFeatureMigrationInput": migration_input} if migration_input else {}),
             "runtimeStages": stage_timings,
         },
     )

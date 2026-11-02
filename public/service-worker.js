@@ -1,15 +1,15 @@
-const SHELL_CACHE = "orbit-alpha-shell-modules-4559cec4231723fe";
+const SHELL_CACHE = "orbit-alpha-shell-modules-1c34e9374eef126e";
 const APP_SHELL = [
   "./",
   "./index.html",
   "./manifest.webmanifest",
   "./favicon.svg",
-  "./styles.css?v=modules-4559cec4231723fe",
-  "./console-workspaces.css?v=modules-4559cec4231723fe",
-  "./app-default-settings.js?v=modules-4559cec4231723fe",
-  "./console-workspaces.js?v=modules-4559cec4231723fe",
-  "./web-runtime.js?v=modules-4559cec4231723fe",
-  "./app.js?v=modules-4559cec4231723fe",
+  "./styles.css?v=modules-1c34e9374eef126e",
+  "./console-workspaces.css?v=modules-1c34e9374eef126e",
+  "./app-default-settings.js?v=modules-1c34e9374eef126e",
+  "./console-workspaces.js?v=modules-1c34e9374eef126e",
+  "./web-runtime.js?v=modules-1c34e9374eef126e",
+  "./app.js?v=modules-1c34e9374eef126e",
   "./icons/house.svg",
   "./icons/chart-no-axes-combined.svg",
   "./icons/brain-circuit.svg",
@@ -75,7 +75,7 @@ self.addEventListener("fetch", function (event) {
     return;
   }
 
-  const isMutableAppAsset = url.pathname.indexOf("/modules/") >= 0 || ["/app.js", "/app-default-settings.js", "/styles.css", "/console-workspaces.js", "/console-workspaces.css", "/web-runtime.js"].some(function (pathname) {
+  const isMutableAppAsset = url.pathname.indexOf("/modules/") >= 0 || ["/app.js", "/app-default-settings.js", "/styles.css", "/console-workspaces.js", "/console-workspaces.css", "/web-runtime.js", "/ai-reports.mjs", "/ai-reports.css"].some(function (pathname) {
     return url.pathname.endsWith(pathname);
   });
   if (isMutableAppAsset) {

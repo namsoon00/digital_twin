@@ -188,8 +188,9 @@ class DeliveryReliabilityTests(unittest.TestCase):
             self.assertIsNone(transport.notifier_for_ai_research("workHandoff", account))
             with self.assertRaisesRegex(RuntimeError, "수신 대상"):
                 transport.notifier_for_ai_research("researchProgress", SimpleNamespace(telegram_chat_id=""))
-            settings["aiResearchTelegramMessageTypes"] = "researchProgress"
+            settings["aiResearchTelegramMessageTypes"] = "researchProgress,aiObservation,aiReport"
             self.assertIsNone(transport.notifier_for_ai_research("aiObservation", account))
+            self.assertIsNone(transport.notifier_for_ai_research("aiReport", account))
             settings["aiResearchTelegramBotToken"] = ""
             self.assertIsNone(transport.notifier_for_ai_research("researchProgress", account))
         default = SimpleNamespace(send=Mock(return_value=receipt()))
@@ -200,26 +201,26 @@ class DeliveryReliabilityTests(unittest.TestCase):
         fallback = Mock(return_value=default)
         dispatcher = NotificationDispatchService(SimpleNamespace(), fallback,
             operations_notifier_factory=lambda _: operations, ai_research_notifier_factory=selected)
-        for kind in ("researchProgress", "aiObservation", "aiObservationDiagnostic"):
+        for kind in ("researchProgress", "aiObservationDiagnostic"):
             job = NotificationJob.create("routing fixture", account_id="account", message_type=kind)
             dispatcher.deliver(job, {"account": account}, job.text)
             self.assertEqual("ai-research", job.context["deliveryRoute"])
             self.assertIs(selected.call_args.args[1], None if kind == "aiObservationDiagnostic" else account)
             self.assertEqual("operations" if kind == "aiObservationDiagnostic" else "account", job.context["deliveryAudience"])
-        self.assertEqual(3, research.send.call_count)
+        self.assertEqual(2, research.send.call_count)
         fallback.assert_not_called()
         with self.assertRaisesRegex(RuntimeError, "수신 계정"):
             dispatcher.deliver(NotificationJob.create("wrong scope", account_id="missing", message_type="researchProgress"), {"account": account}, "wrong scope")
-        for kind in ("marketObservation", "workHandoff"):
+        for kind in ("marketObservation", "workHandoff", "aiObservation"):
             job = NotificationJob.create("unchanged channel", account_id="account", message_type=kind)
             dispatcher.deliver(job, {"account": account}, job.text)
-        default.send.assert_called_once()
+        self.assertEqual(2, default.send.call_count)
         operations.send.assert_called_once()
         failed = SimpleNamespace(send=Mock(return_value=NotificationResult(False, "research", "403")))
         dispatcher.ai_research_notifier_factory = lambda *_: failed
         with self.assertRaisesRegex(RuntimeError, "403"):
             dispatcher.deliver(NotificationJob.create("no fallback", account_id="account", message_type="researchProgress"), {"account": account}, "no fallback")
-        default.send.assert_called_once()
+        self.assertEqual(2, default.send.call_count)
 
     def test_only_format_errors_fallback_and_retry_after_is_honored(self):
         notifier = TelegramNotifier("123:fake", "456")

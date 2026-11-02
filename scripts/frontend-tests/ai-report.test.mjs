@@ -17,7 +17,9 @@ test("report retains dated partial answers, missing requirements and safe links"
 });
 
 test("delivery completion is shown only with verified receipt", () => {
-  assert.doesNotMatch(deliveryLabel({status: "done"}), /전달 확인/);
-  assert.doesNotMatch(deliveryLabel({status: "delivered", receiptVerified: false}), /전달 확인/);
-  assert.match(deliveryLabel({status: "delivered", receiptVerified: true, deliveredAt: "2026-11-02T05:00:00Z"}), /전달 확인/);
+  assert.doesNotMatch(deliveryLabel({status: "done"}), /전송 확인/);
+  assert.doesNotMatch(deliveryLabel({status: "delivered", receiptVerified: false, deliveryRoute: "account"}), /전송 확인/);
+  assert.doesNotMatch(deliveryLabel({status: "delivered", receiptVerified: true, deliveryRoute: "ai-research"}), /전송 확인/);
+  assert.match(deliveryLabel({status: "other-channel"}), /연구 봇으로만/);
+  assert.match(deliveryLabel({status: "delivered", receiptVerified: true, deliveryRoute: "account", deliveredAt: "2026-11-02T05:00:00Z"}), /고객 채널 전송 확인.*서버 접수/);
 });

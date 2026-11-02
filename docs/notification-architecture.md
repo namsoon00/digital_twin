@@ -65,8 +65,14 @@ AI-authored narrative-only publications are `AI 해석`, not `투자 판단`.
 
 ### Delivery Cadence
 
+Customer-facing `aiObservation` and requested `aiReport` messages always use
+the selected account's notification sender and recipient (`soontae_bot` in the
+owner's current deployment). They cannot be selected into the research route,
+even by a legacy `AI_RESEARCH_TELEGRAM_MESSAGE_TYPES` setting. Other customers
+retain their own account destination; no bot username or chat ID is hardcoded.
+
 An optional `AI_RESEARCH_TELEGRAM_BOT_TOKEN` routes `researchProgress`,
-`aiObservation` and `aiObservationDiagnostic` through a dedicated bot.
+`aiActivity` and `aiObservationDiagnostic` through a dedicated research bot.
 `AI_RESEARCH_TELEGRAM_MESSAGE_TYPES` can select a subset of those three types;
 other notification types retain their existing account/operations sender.
 Account messages retain that account's Telegram chat ID. Operator-only drafts
@@ -82,6 +88,9 @@ may establish a new anchor in the new destination; diagnostic follow-ups require
 a successfully delivered original in that same destination and otherwise remain
 in web history. Partially delivered messages are never replayed to a changed bot.
 Changing this route does not regenerate research or resend completed notices.
+An explicit report send can correct a completed historical research-bot delivery
+once to the customer channel, preserving the original job and receipt; see
+[Requested AI portfolio reports](ai-portfolio-reports.md).
 
 Factual price observations additionally use the source-clock windows and
 durable movement transitions described in [Smart price notifications](smart-price-notifications.md).

@@ -287,9 +287,8 @@ def notifier_for_ai_research(message_type: str, account: AccountConfig = None):
     settings = runtime_settings()
     token = str(settings.get("aiResearchTelegramBotToken") or "").strip()
     selected = {item.strip() for item in str(settings.get("aiResearchTelegramMessageTypes")
-        or "researchProgress,aiObservation,aiObservationDiagnostic").split(",")}
-    # Reports are explicit owner requests, independently of automatic notice subscriptions.
-    if not token or (message_type not in selected and message_type != "aiReport"):
+        or "researchProgress,aiObservationDiagnostic").split(",")}
+    if not token or message_type not in selected:
         return None
     # A dedicated bot changes the sender, never another account's recipient.
     # Operations drafts have no account argument and keep the operator scope.

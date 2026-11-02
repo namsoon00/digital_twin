@@ -96,20 +96,33 @@ class PortfolioReportTests(unittest.TestCase):
         portfolio_report_response(request, "/api/ai-reports", {}, factory)
         factory.assert_not_called(); request.read_json_body.assert_not_called()
 
-    def test_manual_report_uses_dedicated_bot_and_retains_account_recipient(self):
+    def test_customer_ai_messages_use_account_bot_even_with_legacy_research_selection(self):
         from digital_twin.modules.notifications.infrastructure.notification import transport
         from digital_twin.modules.notifications.domain.notification_rule_models import default_notification_rule
         from digital_twin.modules.notifications.application.notification.dispatch import NotificationDispatchService
         from digital_twin.modules.notifications.contracts import NotificationJob
-        settings = {"aiResearchTelegramBotToken": "fixture-token", "aiResearchTelegramMessageTypes": "aiObservation"}
+        settings = {"aiResearchTelegramBotToken": "fixture-token", "aiResearchTelegramMessageTypes": "aiObservation,aiReport"}
+        account = SimpleNamespace(notify_provider="telegram", telegram_bot_token="123:customer-fixture", telegram_chat_id="fixture-recipient")
         with patch.object(transport, "runtime_settings", return_value=settings):
-            notifier = transport.notifier_for_ai_research("aiReport", SimpleNamespace(telegram_chat_id="fixture-recipient"))
+            for kind in ("aiObservation", "aiReport"):
+                self.assertIsNone(transport.notifier_for_ai_research(kind, account))
+            notifier = transport.notifier_for_account(account)
             self.assertEqual("fixture-recipient", notifier.chat_id)
         rule = default_notification_rule("aiReport")
         self.assertFalse(rule.similarity_enabled); self.assertFalse(rule.market_hours_enabled)
-        fallback = Mock(side_effect=AssertionError("must not fall back"))
-        dispatcher = NotificationDispatchService(SimpleNamespace(), fallback)
-        with self.assertRaisesRegex(RuntimeError, "전용 봇"):
-            dispatcher.deliver(NotificationJob.create("report", account_id="report-test", message_type="aiReport"),
-                               {"report-test": object()}, "report")
-        fallback.assert_not_called()
+        customer = SimpleNamespace(send=Mock(return_value=transport.NotificationResult(True, "customer-fixture")))
+        factory = Mock(return_value=customer)
+        research = Mock(side_effect=AssertionError("customer content must not select research bot"))
+        dispatcher = NotificationDispatchService(SimpleNamespace(), factory, ai_research_notifier_factory=research)
+        for kind in ("aiObservation", "aiReport"):
+            job = NotificationJob.create("report", account_id="report-test", message_type=kind,
+                context={"aiPortfolioReport": report_summary(fixture_report())})
+            dispatcher.deliver(job, {"report-test": account}, "report")
+            self.assertEqual("account", job.context["deliveryRoute"])
+            factory.assert_called_with(account)
+            for missing in ("", "other-account"):
+                job.account_id = missing
+                with self.assertRaisesRegex(RuntimeError, "수신 계정"):
+                    dispatcher.deliver(job, {"report-test": account}, "report")
+        self.assertEqual(2, customer.send.call_count)
+        research.assert_not_called()

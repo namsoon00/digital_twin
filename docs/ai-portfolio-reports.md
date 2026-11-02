@@ -30,22 +30,31 @@ create reports or send messages. Reports are accessible only to local owners or
 authenticated owners; shared viewers cannot read them. Report payloads contain
 the projected evidence, not raw account snapshots or credentials.
 
-The separate **AI 봇으로 요약 받기** button requests delivery once per report.
-The report row lock and notification outbox insertion commit together. The new
-`aiReport` type uses the existing AI research bot and the selected account's
-recipient. An unavailable research bot fails closed without falling back to a
-different channel. This explicit owner request is independent of automatic-notice
+The separate **고객 채널로 요약 받기** button requests customer delivery once per report.
+The report row lock and notification outbox insertion commit together. The
+`aiReport` type uses the selected account's notification bot and recipient, as
+does the customer-facing `aiObservation` type. The research bot is reserved for
+research progress, diagnostics and activity; legacy research subscriptions cannot
+divert customer content there. This explicit owner request is independent of automatic-notice
 subscriptions, novelty checks and quiet hours; it still respects notification
 admission settings and does not modify the existing AI observation gate. Whole
 qualified passages fit the short summary; omitted subjects remain in the web
 report. The summary does not cut caveats to fit a character count.
 
 The report screen distinguishes a request, pending work, failure and delivery.
-Only a receipt with verified destination, matching account/report/content hash
-and matching rendered message hash is displayed as delivered. Receipt status
+Only an account-route receipt with verified destination, matching account/report/content hash
+and matching rendered message hash is displayed as delivered. This confirms
+Telegram server acceptance, not that the customer has read the message. Receipt status
 survives outbox-job retention. The local report link is not advertised as a
 phone-accessible public URL. The page offers browser printing/PDF saving, with
 the source disclosures expanded for printing.
+
+A completed legacy report delivered only through the research bot is shown as
+`other-channel`. An explicit send creates one deterministic customer job under
+the report lock and records `previousDeliveryJobId`. The frozen report, original
+job and original receipt are preserved. GET never schedules this correction;
+pending or partially delivered jobs are never reset to another destination.
+Repeated or concurrent sends reuse the customer job.
 
 API: owner-only `GET /api/ai-reports/accounts`, `GET /api/ai-reports?accountId=…`,
 `POST /api/ai-reports` with `accountId` and a stable `requestId`,
@@ -54,6 +63,7 @@ API: owner-only `GET /api/ai-reports/accounts`, `GET /api/ai-reports?accountId=�
 `POST /api/ai-reports/{id}/send` with `accountId`.
 
 Validation covers partial/future/wrong-scope evidence, frozen request retries,
-viewer denial, dedicated-bot routing, concurrent sends, transactional rollback,
+viewer denial, customer/research routing, concurrent sends, transactional rollback,
+explicit historical-route correction with the original receipt retained,
 receipt verification and escaped HTML. Production verification uses an actual
 requested report and its transport receipt, not a forced investment observation.

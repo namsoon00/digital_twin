@@ -1,4 +1,4 @@
-import { renderAIReport, reportDate, deliveryLabel } from "./modules/reports/ai-report.mjs?v=7a07a6938fdcc961";
+import { renderAIReport, reportDate, deliveryLabel } from "./modules/reports/ai-report.mjs?v=483c8b0cacfd2c21";
 
 const $ = id => document.getElementById(id);
 let current = null;
@@ -33,7 +33,7 @@ function controls() {
   $("refresh").disabled = busy || !$("account").value;
   $("account").disabled = busy;
   $("history").disabled = busy;
-  $("send").disabled = busy || !current || delivery?.status !== "not-requested";
+  $("send").disabled = busy || !current || !["not-requested", "other-channel"].includes(delivery?.status);
   $("print").disabled = busy || !current;
 }
 async function action(fn) {

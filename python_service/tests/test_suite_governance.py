@@ -489,7 +489,8 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # causality and bounded-retention regressions since that count.
         # Eleven requested-report contracts protect dated evidence, owner-only
         # access, immutable retries, atomic publication and verified receipts.
-        self.assertLessEqual(total, 2972)
+        # One historical-route correction regression retains the original receipt.
+        self.assertLessEqual(total, 2973)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

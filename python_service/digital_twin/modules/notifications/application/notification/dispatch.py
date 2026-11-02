@@ -5,7 +5,7 @@ from copy import deepcopy
 import hashlib
 from contextlib import nullcontext
 
-from digital_twin.modules.notifications.domain.message_types import AI_OBSERVATION_DIAGNOSTIC, ONTOLOGY_REASONING_QUEUE, is_operations_delivery_message_type
+from digital_twin.modules.notifications.domain.message_types import AI_CUSTOMER_DELIVERY_MESSAGE_TYPES, AI_RESEARCH_DELIVERY_MESSAGE_TYPES, AI_OBSERVATION_DIAGNOSTIC, ONTOLOGY_REASONING_QUEUE, is_operations_delivery_message_type
 from digital_twin.modules.notifications.domain.notifications import NotificationJob
 from digital_twin.modules.notifications.domain.relation_follow_up import delivery_snapshot
 from digital_twin.modules.notifications.domain.delivery_suppression import NotificationDeliverySuppressed
@@ -35,12 +35,15 @@ class NotificationDispatchService:
 
     def _deliver(self, job: NotificationJob, accounts: Dict[str, object], message: str) -> None:
         operations_delivery = is_operations_delivery_message_type(job.message_type)
-        if not operations_delivery and job.account_id and job.account_id not in accounts:
+        if not operations_delivery and (job.account_id or job.message_type in AI_CUSTOMER_DELIVERY_MESSAGE_TYPES) and job.account_id not in accounts:
             raise RuntimeError("알림 수신 계정을 찾을 수 없어 다른 계정으로 대체 발송하지 않았습니다.")
         account = None if job.message_type in {AI_OBSERVATION_DIAGNOSTIC, "aiActivity"} else accounts.get(job.account_id)
-        notifier = self.ai_research_notifier_factory(job.message_type, account) if self.ai_research_notifier_factory else None
+        # Customer conclusions use the account's sender even when legacy research
+        # subscriptions or an injected factory still include their message types.
+        notifier = (self.ai_research_notifier_factory(job.message_type, account)
+                    if self.ai_research_notifier_factory and job.message_type in AI_RESEARCH_DELIVERY_MESSAGE_TYPES else None)
         dedicated_research = notifier is not None
-        if job.message_type in {"aiActivity", "aiReport"} and not dedicated_research:
+        if job.message_type == "aiActivity" and not dedicated_research:
             raise RuntimeError("AI 알림 전용 봇이 없어 다른 채널로 대체 발송하지 않았습니다.")
         if notifier is None and operations_delivery:
             if job.message_type in {ONTOLOGY_REASONING_QUEUE, AI_OBSERVATION_DIAGNOSTIC} and not self.operations_notifier_factory:

@@ -74,7 +74,7 @@ export function renderAIReport(report) {
 }
 
 export function deliveryLabel(delivery) {
-  if (delivery?.status === "delivered" && delivery.receiptVerified === true) return "텔레그램 전달 확인 · " + reportDate(delivery.deliveredAt);
-  return ({"not-requested": "아직 발송을 요청하지 않았습니다.", pending: "발송 대기 중", processing: "전송 중", failed: "발송 실패 · 알림 이력에서 확인",
+  if (delivery?.status === "delivered" && delivery.receiptVerified === true && delivery.deliveryRoute === "account") return "고객 채널 전송 확인 · " + reportDate(delivery.deliveredAt) + " · Telegram 서버 접수 기준";
+  return ({"not-requested": "아직 발송을 요청하지 않았습니다.", "other-channel": "연구 봇으로만 전송된 보고서입니다. 고객 채널로 발송할 수 있습니다.", pending: "발송 대기 중", processing: "전송 중", failed: "발송 실패 · 알림 이력에서 확인",
     suppressed: "발송 설정에 따라 보류됨", "receipt-unconfirmed": "실제 전송 영수증을 확인하지 못했습니다.", "retry-wait": "전송 재시도 대기 중"})[delivery?.status] || "발송 상태 확인 중";
 }

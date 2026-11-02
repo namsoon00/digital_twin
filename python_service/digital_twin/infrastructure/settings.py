@@ -1741,7 +1741,7 @@ def runtime_settings(fast_operational_read: bool = False, *, require_store_read:
         "operationsTelegramChatId": value("operationsTelegramChatId", "OPERATIONS_TELEGRAM_CHAT_ID"),
         "aiResearchTelegramBotToken": value("aiResearchTelegramBotToken", "AI_RESEARCH_TELEGRAM_BOT_TOKEN"),
         "aiResearchTelegramChatId": value("aiResearchTelegramChatId", "AI_RESEARCH_TELEGRAM_CHAT_ID"),
-        "aiResearchTelegramMessageTypes": value("aiResearchTelegramMessageTypes", "AI_RESEARCH_TELEGRAM_MESSAGE_TYPES", "researchProgress,aiObservation,aiObservationDiagnostic"),
+        "aiResearchTelegramMessageTypes": value("aiResearchTelegramMessageTypes", "AI_RESEARCH_TELEGRAM_MESSAGE_TYPES", "researchProgress,aiObservationDiagnostic"),
         "notifyLinkUrl": value("notifyLinkUrl", "NOTIFY_LINK_URL", "http://127.0.0.1:3000?tab=notifications"),
         "valuationAssumptions": value("valuationAssumptions", "VALUATION_ASSUMPTIONS", ""),
         "aiValuationAutoProposalEnabled": value("aiValuationAutoProposalEnabled", "AI_VALUATION_AUTO_PROPOSAL_ENABLED", "1"),

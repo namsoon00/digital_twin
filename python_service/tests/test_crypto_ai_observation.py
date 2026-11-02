@@ -236,7 +236,7 @@ class CryptoAIObservationTests(unittest.TestCase):
         regular = Mock()
         regular.send.return_value = transport.NotificationResult(True, "test")
         account = SimpleNamespace(telegram_chat_id="fixture")
-        settings = {"aiResearchTelegramBotToken": "test", "aiResearchTelegramMessageTypes": "researchProgress,aiObservationDiagnostic"}
+        settings = {"aiResearchTelegramBotToken": "test", "aiResearchTelegramMessageTypes": "researchProgress,aiObservation,aiObservationDiagnostic"}
         with patch.object(transport, "runtime_settings", return_value=settings):
             dispatcher = NotificationDispatchService(SimpleNamespace(), lambda _: regular,
                 ai_research_notifier_factory=transport.notifier_for_ai_research)

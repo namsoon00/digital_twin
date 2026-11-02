@@ -33,7 +33,7 @@ class PortfolioReportStorageTests(unittest.TestCase):
     def clean(self):
         with self.store.transaction() as connection:
             connection.execute("DELETE FROM notification_delivery_attempts WHERE job_id IN "
-                "(SELECT notification_job_id FROM ai_portfolio_reports WHERE account_id='report-test')")
+                "(SELECT job_id FROM notification_jobs WHERE account_id='report-test' AND message_type='aiReport')")
             connection.execute("DELETE FROM notification_jobs WHERE account_id='report-test' AND message_type='aiReport'")
             connection.execute("DELETE FROM ai_portfolio_reports WHERE account_id='report-test'")
 
@@ -75,7 +75,7 @@ class PortfolioReportStorageTests(unittest.TestCase):
         body = NotificationRenderingService().render(job)
         artifact = job.context["aiPortfolioReport"]
         audit = {"receiptVerified": True, "destinationVerified": True, "accountId": "other-account",
-            "messageType": "aiReport", "deliveryRoute": "ai-research",
+            "messageType": "aiReport", "deliveryRoute": "account",
             "renderedMessage": body, "messageSha256": hashlib.sha256(body.encode()).hexdigest(),
             "aiPortfolioReport": {k: artifact[k] for k in ("version", "reportId", "reportHash", "summaryHash")}}
         attempt = self.queue.start_delivery_attempt(job, "accountNotification", "account")
@@ -85,9 +85,53 @@ class PortfolioReportStorageTests(unittest.TestCase):
         self.queue.complete_delivery_attempt(job, attempt, True, metadata=audit)
         self.assertNotEqual("delivered", self.publish.status(report)["status"])
         audit["destinationVerified"] = True
-        audit["deliveryRoute"] = "account"
-        self.queue.complete_delivery_attempt(job, attempt, True, metadata=audit)
-        self.assertNotEqual("delivered", self.publish.status(report)["status"])
         audit["deliveryRoute"] = "ai-research"
         self.queue.complete_delivery_attempt(job, attempt, True, metadata=audit)
+        self.assertNotEqual("delivered", self.publish.status(report)["status"])
+        audit["deliveryRoute"] = "account"
+        self.queue.complete_delivery_attempt(job, attempt, True, metadata=audit)
         self.assertEqual("delivered", self.publish.status(report)["status"])
+
+    def test_explicit_customer_correction_is_atomic_once_and_preserves_research_receipt(self):
+        report = self.store.save_once(fixture_report())
+        # A legacy report already delivered by the research bot.
+        job = self.queue.get(self.publish(report)["jobId"])
+        original_id = job.job_id
+        legacy_id = "ai-report-" + report["reportId"][:38]
+        with self.store.transaction() as c:
+            c.execute("UPDATE notification_jobs SET job_id=%s WHERE job_id=%s", (legacy_id, original_id))
+            c.execute("UPDATE ai_portfolio_reports SET notification_job_id=%s WHERE report_id=%s", (legacy_id, report["reportId"]))
+        job.job_id = legacy_id
+        job.dedupe_key = legacy_id
+        self.queue.update(job)
+        artifact = job.context["aiPortfolioReport"]
+        body = "frozen historical report"
+        audit = {"receiptVerified": True, "destinationVerified": True, "accountId": "report-test",
+            "messageType": "aiReport", "deliveryRoute": "ai-research", "renderedMessage": body,
+            "messageSha256": hashlib.sha256(body.encode()).hexdigest(),
+            "aiPortfolioReport": {k: artifact[k] for k in ("version", "reportId", "reportHash", "summaryHash")}}
+        attempt = self.queue.start_delivery_attempt(job, "accountNotification", "account")
+        self.queue.complete_delivery_attempt(job, attempt, True, metadata=audit)
+        # An in-flight/partially delivered legacy job cannot be reset by send.
+        self.assertEqual(legacy_id, self.publish(report)["jobId"])
+        self.queue.mark_done(job)
+        self.assertEqual("other-channel", self.publish.status(report)["status"])
+        enqueue = self.queue.enqueue_with_connection
+        def fail(connection, new_job):
+            enqueue(connection, new_job)
+            raise RuntimeError("injected customer correction rollback")
+        with patch.object(self.queue, "enqueue_with_connection", side_effect=fail):
+            with self.assertRaises(RuntimeError): self.publish(report)
+        self.assertEqual(legacy_id, self.publish.status(report)["jobId"])
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            results = list(pool.map(lambda _: self.publish(report), range(2)))
+        self.assertEqual(results[0]["jobId"], results[1]["jobId"])
+        self.assertNotEqual(legacy_id, results[0]["jobId"])
+        corrected = self.queue.get(results[0]["jobId"])
+        self.assertEqual(legacy_id, corrected.context["previousDeliveryJobId"])
+        self.assertEqual(artifact, corrected.context["aiPortfolioReport"])
+        with self.store.connect() as c:
+            self.assertEqual(2, c.execute("SELECT COUNT(*) n FROM notification_jobs WHERE account_id='report-test' AND message_type='aiReport'").fetchone()["n"])
+            saved = c.execute("SELECT metadata_json FROM notification_delivery_attempts WHERE attempt_id=%s", (attempt,)).fetchone()
+        self.assertEqual("ai-research", json.loads(saved["metadata_json"])["deliveryRoute"])
+        self.assertEqual(report, self.store.get("report-test", report["reportId"]))

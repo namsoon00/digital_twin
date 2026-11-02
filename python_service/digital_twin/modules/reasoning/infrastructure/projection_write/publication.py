@@ -335,6 +335,9 @@ def attach_abox_persistence_runtime_stages(
         runtime_stages[target_key] = int(round(value))
 
     for source_key, target_key in {
+        "preparationMs": "aboxPreparationMs",
+        "nativeManifestEvidenceIndexMs": "aboxNativeManifestEvidenceIndexMs",
+        "activeScopeSemanticReuseMs": "aboxActiveScopeSemanticReuseMs",
         "candidateCleanupMs": "aboxCandidateCleanupMs",
         "currentStateInventoryReadMs": "aboxCurrentStateInventoryReadMs",
         "changedScopeWriteMs": "aboxChangedScopeWriteMs",

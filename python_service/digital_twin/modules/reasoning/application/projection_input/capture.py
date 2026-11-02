@@ -58,6 +58,7 @@ def capture_graph_input(
     # research/notification read models and is never copied into this live
     # ABox assembly path.
     emit("external_signal_compaction.start")
+    compaction_started = time.perf_counter()
     projection_external_signals = compact_external_signals_for_ontology(
         snapshot.external_signals,
         target_symbols=input_symbols if input_mode == "target-scoped" else None,
@@ -68,6 +69,7 @@ def capture_graph_input(
         projection_external_signals,
         target_symbols=input_symbols if input_mode == "target-scoped" else [],
     )
+    stage_timings["externalSignalCompactionMs"] = round((time.perf_counter() - compaction_started) * 1000)
     emit(
         "external_signal_compaction.done",
         retainedBytes=int(input_projection.get("projectedExternalSignalBytes") or 0),
@@ -89,13 +91,23 @@ def capture_graph_input(
     )
     emit("runtime_context.start")
     runtime_context_started = time.perf_counter()
+
+    def context_progress(stage, **details):
+        metric = {
+            "freeze.done": "runtimeContextFreezeMs",
+            "cache_write.done": "runtimeContextCacheWriteMs",
+            "copy.done": "runtimeContextCopyMs",
+        }.get(stage)
+        if metric:
+            stage_timings[metric] = int(details.get("runtimeMs") or 0)
+            return
+        emit("runtime_context." + str(stage or "unknown"), **details)
+
     runtime_context = _inputs.runtime_context(
         snapshot,
         active_tbox=active_tbox,
         target_symbols=computation_symbols or None,
-        progress_callback=lambda stage, **details: emit(
-            "runtime_context." + str(stage or "unknown"), **details
-        ),
+        progress_callback=context_progress,
     )
     if ((reasoning_context or {}).get("validationOnly") is True
             and (reasoning_context or {}).get("validationInputMode") == PAIRED_VALIDATION_INPUT_VERSION):
@@ -111,6 +123,7 @@ def capture_graph_input(
         if isinstance(item, dict)
     ]
     if source_facts:
+        lineage_started = time.perf_counter()
         runtime_context = {
             **dict(runtime_context or {}),
             "reasoningSourceFacts": source_facts,
@@ -121,6 +134,8 @@ def capture_graph_input(
         _inputs.last_runtime_contexts[snapshot.account_id] = (
             frozen_projection_runtime_context(runtime_context)
         )
+        stage_timings["runtimeContextLineageFreezeMs"] = round((time.perf_counter() - lineage_started) * 1000)
+    packet_started = time.perf_counter()
     try:
         runtime_context_packet = pack_projection_runtime_contexts(
             {
@@ -135,6 +150,7 @@ def capture_graph_input(
         # shadow replay packet may skip V2 sampling, but must never block
         # the active V1 projection.
         runtime_context_packet = {}
+    stage_timings["runtimeContextPacketMs"] = round((time.perf_counter() - packet_started) * 1000)
     stage_timings["runtimeContextMs"] = int(
         (time.perf_counter() - runtime_context_started) * 1000
     )

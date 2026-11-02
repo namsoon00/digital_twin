@@ -1,6 +1,7 @@
 import inspect
 import hashlib
 import uuid
+import time
 from copy import deepcopy
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
@@ -10,7 +11,7 @@ from digital_twin.modules.accounts.contracts import AccountConfig
 from digital_twin.modules.market_data.domain.events import alerts_detected_event, monitoring_cycle_completed_event, snapshot_collected_event
 from digital_twin.modules.outcomes.contracts import investment_follow_up_transitioned_event
 from digital_twin.modules.reasoning.contracts import ontology_reasoning_requested_event
-from digital_twin.modules.reasoning.contracts import compact_monitor_state_for_ontology, frozen_monitor_state_for_reasoning
+from digital_twin.modules.reasoning.contracts import compact_monitor_state_for_ontology, compact_monitor_history_state, frozen_monitor_state_for_reasoning
 from digital_twin.modules.reasoning.contracts import VERIFIED_MONITOR_SNAPSHOT_QUEUED
 from digital_twin.modules.reasoning.contracts import projection_reuses_unchanged_inference
 from digital_twin.modules.notifications.contracts import PORTFOLIO_ONTOLOGY_SIGNAL
@@ -96,6 +97,9 @@ class MonitorRunner:
         self.last_detected_alert_events: List[AlertEvent] = []
         self.last_reasoning_source_states: Dict[str, Dict[str, object]] = {}
         self.last_projection_runtime_contexts: Dict[str, Dict[str, object]] = {}
+        # Operational timings must not enter the frozen investment evidence.
+        self.last_collection_timings: Dict[str, Dict[str, object]] = {}
+        self.last_cycle_commit_ms = 0
 
     def run_once(
         self,
@@ -141,6 +145,8 @@ class MonitorRunner:
         self.last_detected_alert_events = []
         self.last_reasoning_source_states = {}
         self.last_projection_runtime_contexts = {}
+        self.last_collection_timings = {}
+        self.last_cycle_commit_ms = 0
         self.progress("monitor.start", accountCount=len(self.accounts), dryRun=bool(dry_run), force=bool(force))
         all_events: List[AlertEvent] = []
         snapshots = []
@@ -181,16 +187,21 @@ class MonitorRunner:
                 snapshotCount=len(snapshots),
                 eventCount=len(all_events),
             )
-            cycle_result = recorder(
-                [account.account_id for account in self.accounts],
-                snapshots,
-                all_events,
-                **kwargs,
-            )
+            commit_started = time.perf_counter()
+            try:
+                cycle_result = recorder(
+                    [account.account_id for account in self.accounts],
+                    snapshots,
+                    all_events,
+                    **kwargs,
+                )
+            finally:
+                self.last_cycle_commit_ms = round((time.perf_counter() - commit_started) * 1000)
             self.progress(
                 "cycle_record.done",
                 snapshotCount=len(snapshots),
                 eventCount=len(all_events),
+                runtimeMs=self.last_cycle_commit_ms,
             )
             self.last_cycle_record_result = cycle_result
             details = getattr(cycle_result, "details", {}) if cycle_result is not None else {}
@@ -238,6 +249,9 @@ class MonitorRunner:
         return all_events
 
     def run_due_account_jobs(self) -> List[AlertEvent]:
+        self.last_collection_timings = {}
+        self.last_cycle_commit_ms = 0
+        self.last_reasoning_source_states = {}
         self.account_job_store.sync_accounts(self.accounts, self.account_job_interval_seconds)
         jobs = self.account_job_store.claim_due(
             limit=self.account_job_batch_size,
@@ -280,7 +294,11 @@ class MonitorRunner:
         if self.cycle_recorder:
             snapshot.metadata.pop("previousMonitorState", None)
             snapshot.metadata.pop("monitorStateHistory", None)
-            self.cycle_recorder.record_cycle([account.account_id], [snapshot], events, dry_run=False)
+            commit_started = time.perf_counter()
+            try:
+                self.cycle_recorder.record_cycle([account.account_id], [snapshot], events, dry_run=False)
+            finally:
+                self.last_cycle_commit_ms += round((time.perf_counter() - commit_started) * 1000)
             self.observe_investment_outcomes([snapshot])
             self.observe_portfolio_lifecycle([snapshot])
         else:
@@ -311,8 +329,21 @@ class MonitorRunner:
         reasoning_context: Dict[str, object] = None,
         holdings_snapshot_requested: bool = False,
     ):
+        collection_started = time.perf_counter()
+        timings = {"historyReadMs": 0, "historyCompactMs": 0, "sourceFreezeMs": 0}
+        self.last_collection_timings[account.account_id] = timings
+
+        def measured(name, callback):
+            started = time.perf_counter()
+            try:
+                return callback()
+            finally:
+                timings[name] = round((time.perf_counter() - started) * 1000)
+
         self.progress("snapshot.start", accountId=account.account_id)
-        snapshot = self.build_snapshot(account, reasoning_context=reasoning_context)
+        snapshot = measured("snapshotBuildMs", lambda: self.build_snapshot(account, reasoning_context=reasoning_context))
+        snapshot_built_at = time.perf_counter()
+        timings["sourceGeneratedAt"] = str(snapshot.generated_at or "")
         self.progress(
             "snapshot.done",
             accountId=account.account_id,
@@ -395,27 +426,42 @@ class MonitorRunner:
             and isinstance(replay, dict)
             and replay.get("immutableInput")
         )
-        if not immutable_shadow_input:
-            snapshot.metadata["previousMonitorState"] = self.compact_previous_state(previous)
-            snapshot.metadata["monitorStateHistory"] = self.compact_monitor_history(
-                self.load_snapshot_history(snapshot.account_id)
+        projection_enabled = self.ontology_projection_enabled or dry_run
+        prepare_reasoning_input = projection_enabled or self.source_snapshot_replay
+        timings["reasoningInputPrepared"] = prepare_reasoning_input
+        if prepare_reasoning_input and not immutable_shadow_input:
+            snapshot.metadata["previousMonitorState"] = measured(
+                "previousStateCompactMs", lambda: self.compact_previous_state(previous)
             )
+            snapshot.metadata["monitorStateHistory"] = measured(
+                "historyReadMs", lambda: self.load_snapshot_history(snapshot.account_id)
+            )
+        elif not prepare_reasoning_input:
+            # The durable source transaction freezes its exact locked previous
+            # state. V2 assembles temporal history separately. Building V1's
+            # unused shadow packet here delayed ingress by reading/rebuilding
+            # up to 96 broad historical archives on every ordinary collection.
+            snapshot.metadata.pop("previousMonitorState", None)
+            snapshot.metadata.pop("monitorStateHistory", None)
         snapshot.metadata.setdefault("ontology", {})["previousStateAvailable"] = bool(previous)
-        if immutable_shadow_input:
+        if not prepare_reasoning_input:
+            self.last_reasoning_source_states.pop(snapshot.account_id, None)
+        elif immutable_shadow_input:
             # ``FrozenReasoningSnapshotSource`` already contains the exact
             # packet consumed by V1. Compacting it a second time can trim a
             # bounded history or target-scoped collection again, making V2's
             # facts differ even though the durable input is unchanged.
-            frozen_source_state = snapshot.to_monitor_state()
+            self.last_reasoning_source_states[snapshot.account_id] = snapshot.to_monitor_state()
         else:
-            frozen_source_state = frozen_monitor_state_for_reasoning(
-                snapshot.to_monitor_state(),
-                target_symbols=allowed_symbols,
-                settings=getattr(self.monitor, "settings", None),
+            self.last_reasoning_source_states[snapshot.account_id] = measured(
+                "sourceFreezeMs", lambda: frozen_monitor_state_for_reasoning(
+                    snapshot.to_monitor_state(),
+                    target_symbols=allowed_symbols,
+                    settings=getattr(self.monitor, "settings", None),
+                ),
             )
-        self.last_reasoning_source_states[snapshot.account_id] = frozen_source_state
         if self.source_snapshot_replay and not immutable_shadow_input:
-            normalized_snapshot = account_snapshot_from_monitor_state(frozen_source_state)
+            normalized_snapshot = account_snapshot_from_monitor_state(self.last_reasoning_source_states[snapshot.account_id])
             if normalized_snapshot is None:
                 raise RuntimeError("The immutable reasoning source packet cannot be rehydrated")
             snapshot = normalized_snapshot
@@ -425,7 +471,6 @@ class MonitorRunner:
         # single durable reasoning worker.  Running both paths concurrently
         # duplicates an ABox write and makes the single TypeDB writer queue
         # compete with itself.
-        projection_enabled = self.ontology_projection_enabled or dry_run
         if projection_enabled:
             self.progress("ontology_projection.start", accountId=account.account_id)
             projection_symbols = self.projection_symbol_filters_by_account.get(
@@ -512,6 +557,9 @@ class MonitorRunner:
             dict(projection) if isinstance(projection, dict) and projection else {"status": "missing"}
         )
         self.progress("events.ready", accountId=account.account_id, eventCount=len(events), force=bool(force))
+        timings["postSnapshotMs"] = round((time.perf_counter() - snapshot_built_at) * 1000)
+        timings["collectionMs"] = round((time.perf_counter() - collection_started) * 1000)
+        self.progress("collection.done", accountId=account.account_id, **timings)
         return snapshot, events
 
     def build_snapshot(self, account: AccountConfig, reasoning_context: Dict[str, object] = None) -> AccountSnapshot:
@@ -1046,14 +1094,25 @@ class MonitorRunner:
         )
 
     def load_snapshot_history(self, account_id: str) -> List[dict]:
-        if hasattr(self.store, "load_history"):
-            return list(self.store.load_history(account_id, limit=self.temporal_history_limit()) or [])
+        prepared_reader = getattr(self.store, "load_temporal_history", None)
+        if callable(prepared_reader):
+            return list(prepared_reader(account_id, limit=self.temporal_history_limit()) or [])
+        reader = getattr(self.store, "load_history", None)
+        if callable(reader):
+            started = time.perf_counter()
+            history = list(reader(account_id, limit=self.temporal_history_limit()) or [])
+            compact_started = time.perf_counter()
+            result = self.compact_monitor_history(history)
+            timings = getattr(self, "last_collection_timings", {}).get(account_id, {})
+            timings["historyCompactMs"] = round((time.perf_counter() - compact_started) * 1000)
+            timings["historySourceReadMs"] = round((compact_started - started) * 1000)
+            return result
         return []
 
     def compact_monitor_history(self, history: List[dict]) -> List[dict]:
         compacted = []
         for item in history or []:
-            compacted_item = self.compact_previous_state(item)
+            compacted_item = compact_monitor_history_state(item, settings=getattr(self.monitor, "settings", None))
             if compacted_item:
                 compacted.append(compacted_item)
         return compacted[-self.temporal_history_limit():]

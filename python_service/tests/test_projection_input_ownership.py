@@ -167,6 +167,11 @@ class ProjectionInputOwnershipTests(unittest.TestCase):
     def test_projection_input_execution_and_progress_match_policy_fact_contract(self):
         from digital_twin.modules.reasoning.domain import projection_facts, projection_cache_identity
         from digital_twin.modules.reasoning.domain import ontology_projection_input as source_contract
+        measured = assembly_scenario(api, "live-context")
+        for key in ("runtimeContextFreezeMs", "runtimeContextCacheWriteMs", "runtimeContextCopyMs",
+                    "runtimeContextPacketMs", "externalSignalCompactionMs"):
+            self.assertIn(key, measured["telemetry"]["runtimeStages"])
+            self.assertNotIn(key, measured["contexts"]["fixture-account"])
         expected = json.loads((ROOT / "tests/fixtures/projection_input_execution_v15.json").read_text())["scenarios"]
         self.assertEqual(expected, contract_scenarios(api))
         with patch.object(source_contract, "ONTOLOGY_PROJECTION_INPUT_VERSION", "ontology-projection-input-v7"):

@@ -361,12 +361,19 @@ def runtime_context(
     # context. Returning the unfiltered runtime settings here while only
     # storing the filtered replay packet made shadow parity impossible and
     # could let infrastructure wiring affect factual graph construction.
+    freeze_started = time.perf_counter()
     frozen = frozen_projection_runtime_context(result)
+    emit("freeze.done", runtimeMs=round((time.perf_counter() - freeze_started) * 1000))
     _inputs.last_runtime_contexts[account_id] = frozen
+    cache_write_started = time.perf_counter()
     if cache_enabled:
         _inputs.runtime_cache.put(
             cache_key,
             frozen,
             _inputs.runtime_context_cache_max_entries(),
         )
-    return deepcopy(frozen)
+    emit("cache_write.done", runtimeMs=round((time.perf_counter() - cache_write_started) * 1000))
+    copy_started = time.perf_counter()
+    isolated_context = deepcopy(frozen)
+    emit("copy.done", runtimeMs=round((time.perf_counter() - copy_started) * 1000))
+    return isolated_context

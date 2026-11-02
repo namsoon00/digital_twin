@@ -30,6 +30,7 @@ def save_scoped_abox_graph(
     _bindings: ManifestSaveRuntime
 ) -> Dict[str, object]:
     """Stage changed scopes before native inference activates a Manifest."""
+    preparation_started = time.monotonic()
     logical_scope_plan = _store.scoped_abox_plan(graph)
     scope_plan = list(logical_scope_plan)
     worldview = dict(getattr(graph, "worldview", {}) or {})
@@ -528,6 +529,7 @@ def save_scoped_abox_graph(
         },
     }
     save_started_at = time.monotonic()
+    timing["preparationMs"] = round((save_started_at - preparation_started) * 1000, 1)
     imported = _store.driver_imports()
     if imported[0] is None:
         release_write_lease()

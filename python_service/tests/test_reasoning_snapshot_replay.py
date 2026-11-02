@@ -3,7 +3,7 @@ from contextlib import nullcontext
 from copy import deepcopy
 from datetime import datetime, timezone
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from digital_twin.modules.market_data.application.monitoring_service import MonitorRunner
 from digital_twin.modules.accounts.domain.accounts import AccountConfig
@@ -365,6 +365,9 @@ class ReasoningSnapshotReplayTests(unittest.TestCase):
 
     def test_normal_monitor_queues_verified_snapshot_without_inline_typedb(self):
         snapshot = account_snapshot_from_monitor_state(monitor_state())
+        source_positions = deepcopy(snapshot.positions)
+        snapshot.metadata["monitorStateHistory"] = [{"stale": True}]
+        snapshot.metadata["previousMonitorState"] = {"stale": True}
         recorder = CapturingCycleRecorder()
         projected = []
 
@@ -383,9 +386,20 @@ class ReasoningSnapshotReplayTests(unittest.TestCase):
             ontology_projection_enabled=False,
         )
 
-        runner.run_once()
+        runner.store.load_history = Mock(side_effect=AssertionError("ordinary collection must not load archives"))
+        runner.store.load_temporal_history = Mock(side_effect=AssertionError("V2 owns temporal inputs"))
+        with patch("digital_twin.modules.market_data.application.monitoring_service.frozen_monitor_state_for_reasoning",
+                   side_effect=AssertionError("ordinary collection must not freeze V1 shadow input")):
+            runner.run_once()
 
         self.assertEqual([], projected)
+        self.assertEqual({}, runner.last_reasoning_source_states)
+        self.assertEqual(source_positions, recorder.snapshots[0].positions)
+        self.assertNotIn("monitorStateHistory", recorder.snapshots[0].metadata)
+        self.assertNotIn("previousMonitorState", recorder.snapshots[0].metadata)
+        self.assertFalse(runner.last_collection_timings["acct"]["reasoningInputPrepared"])
+        self.assertEqual(0, runner.last_collection_timings["acct"]["historyReadMs"])
+        self.assertNotIn("last_collection_timings", recorder.snapshots[0].metadata)
         self.assertEqual("queued-verified-monitor-snapshot", recorder.snapshots[0].metadata["ontology"]["projection"]["status"])
 
         pending_snapshot = recorder.snapshots[0]
@@ -401,6 +415,25 @@ class ReasoningSnapshotReplayTests(unittest.TestCase):
         self.assertEqual("", reason_code)
         self.assertEqual("", reason)
         self.assertTrue(detail["pending"])
+        self._assert_replay_monitor_uses_prepared_temporal_history_and_preserves_read_failure()
+
+    def _assert_replay_monitor_uses_prepared_temporal_history_and_preserves_read_failure(self):
+        from digital_twin.modules.reasoning.domain.ontology_projection_input import compact_monitor_history_state
+        history = [monitor_state("2026-07-29T00:00:00Z")]
+        prepared = [compact_monitor_history_state(row) for row in history]
+        store = SnapshotStore(monitor_state())
+        store.load_temporal_history = Mock(return_value=prepared)
+        store.load_history = Mock(side_effect=AssertionError("must not reload broad history"))
+        runner = MonitorRunner([account()], store, EmptyMonitor(), lambda _: None, lambda *_: None,
+                               source_snapshot_replay=True)
+        self.assertEqual(prepared, runner.load_snapshot_history("acct"))
+        store.load_temporal_history.assert_called_once_with("acct", limit=96)
+        store.load_temporal_history.side_effect = RuntimeError("history unavailable")
+        with self.assertRaisesRegex(RuntimeError, "history unavailable"):
+            runner.load_snapshot_history("acct")
+        del store.load_temporal_history
+        store.load_history = Mock(return_value=history)
+        self.assertEqual(prepared, runner.load_snapshot_history("acct"))
 
     def test_normal_monitor_observes_decision_outcomes_after_source_commit(self):
         snapshot = account_snapshot_from_monitor_state(monitor_state())

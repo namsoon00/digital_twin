@@ -1,8 +1,8 @@
 {
   "runtime_context": {
     "baselineHash": "c16fcdcb24e9d257e321cd4a1da7e5f4f2b7d06801c67ecf32548404cbf81ae1",
-    "bodyHash": "2b3d6992ceddd139a245d6f8d332d50be9fc6f901bb90a8ae8807449f2b09c73",
-    "reason": "Read portfolio lifecycle at the exact market source cutoff. Mutable heads updated later are omitted, not relabelled as past facts. Paired validation separately binds the retained portfolio receipt while temporal reads and model execution remain independent. Invalidate the outer source-context cache when the outcomes revision changes, and expose prepared-input timing only in operational progress.",
+    "bodyHash": "920ef4d0132466ab2925ccb6da78a7a45e565f65010c8dee3630d0990273d356",
+    "reason": "Read portfolio lifecycle at the exact market source cutoff. Mutable heads updated later are omitted, not relabelled as past facts. Paired validation separately binds the retained portfolio receipt while temporal reads and model execution remain independent. Invalidate the outer source-context cache when the outcomes revision changes. Measure freeze, cache-copy and returned-copy cost through operational callbacks, without adding timings to causal input or changing the frozen execution/progress contract.",
     "regressionTest": "test_projection_input_ownership.ProjectionInputOwnershipTests.test_same_source_outcome_revision_invalidates_outer_context_cache"
   },
   "graph_for_graph_store_persistence": {

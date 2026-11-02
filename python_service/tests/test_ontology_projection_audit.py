@@ -244,6 +244,9 @@ class OntologyProjectionAuditTests(unittest.TestCase):
                 "timing": {
                     "currentStateWriteStrategy": "copy-on-write-fresh-generation-v4",
                     "currentStateInventoryReadMs": 0,
+                    "preparationMs": 17500,
+                    "nativeManifestEvidenceIndexMs": 1200,
+                    "activeScopeSemanticReuseMs": 3200,
                     "changedScopeWritePlan": {
                         "relationWriteMode": "given-batch",
                         "queryCount": 4,
@@ -258,6 +261,9 @@ class OntologyProjectionAuditTests(unittest.TestCase):
         )
 
         self.assertEqual(0, stages["aboxCurrentStateInventoryReadMs"])
+        self.assertEqual(17500, stages["aboxPreparationMs"])
+        self.assertEqual(1200, stages["aboxNativeManifestEvidenceIndexMs"])
+        self.assertEqual(3200, stages["aboxActiveScopeSemanticReuseMs"])
         self.assertEqual(4, stages["aboxChangedScopeQueryCount"])
         self.assertNotIn("aboxCurrentStateWriteStrategy", stages)
         self.assertNotIn("aboxRelationWriteMode", stages)

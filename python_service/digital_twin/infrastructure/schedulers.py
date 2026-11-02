@@ -8,6 +8,7 @@ import socket
 import subprocess
 import threading
 import time
+from datetime import datetime, timezone
 
 from .operational_error_reporting import operational_error_reporter, report_runtime_error
 from .background_capacity import managed_background_call, managed_background_should_retire
@@ -623,6 +624,14 @@ class RealtimeScheduler:
                         self.runner.run_once()
                 else:
                     self.runner.run_once()
+                collection_timings = getattr(self.runner, "last_collection_timings", {})
+                if collection_timings:
+                    print("monitor-cycle-timing " + json.dumps({
+                        "completedAt": datetime.now(timezone.utc).isoformat(),
+                        "cycleMs": round((time.monotonic() - started) * 1000),
+                        "commitMs": getattr(self.runner, "last_cycle_commit_ms", 0),
+                        "collections": collection_timings,
+                    }, ensure_ascii=False))
             except Exception as error:  # noqa: BLE001 - long-running scheduler must continue after a cycle failure.
                 stage = self.error_stage(error)
                 print("Python realtime monitor error: " + str(error) + " stage=" + stage)

@@ -1,0 +1,100 @@
+{
+  "domain": {
+    "modules/reasoning/domain/event_payloads.py::compact_ontology_reasoning_request_payload_for_storage": {
+      "previousHash": "a1205eef86f726f4e1689a1d39aff5cfc049529d929afa393c02c6c7ed147fba",
+      "hash": "829059a2847a27297b046afe321321050aa948abd75bd20b006f67080a7154ca",
+      "reason": "Reviewed temporal-features-v3-valid-price-path migration: filter unusable prices before arithmetic, preserve legacy release semantics and all unrelated authored rules; require exact source/native evidence and retain raw failed comparisons. Paired validation freezes the complete secret-filtered source context with account, symbol and clock verification, without delivery. Regressions: test_temporal_feature_migration, test_ontology_rulebox, test_paired_portfolio_input, test_reasoning_logical_inputs; docs/reasoning-input-latency.md and docs/relationship-change-notifications.md."
+    },
+    "modules/reasoning/domain/independent_reasoning.py::independent_reasoning_request": {
+      "previousHash": "929400beb52ab994320ead2ab7cc42c206e0379cd366e182d55334ddb7d6de5f",
+      "hash": "d786286563f0f88bcafe57350fc655a6c5d275f9cad56182255550287cf3c566",
+      "reason": "Reviewed temporal-features-v3-valid-price-path migration: filter unusable prices before arithmetic, preserve legacy release semantics and all unrelated authored rules; require exact source/native evidence and retain raw failed comparisons. Paired validation freezes the complete secret-filtered source context with account, symbol and clock verification, without delivery. Regressions: test_temporal_feature_migration, test_ontology_rulebox, test_paired_portfolio_input, test_reasoning_logical_inputs; docs/reasoning-input-latency.md and docs/relationship-change-notifications.md."
+    },
+    "modules/reasoning/domain/ontology_projection_audit.py::compact_reasoning_request_context": {
+      "previousHash": "3fee6ccf6b732d1acca285f9e3379b456dad286b652c201b5763d5e1f4c19822",
+      "hash": "926e54882b50f49c90161d513fb92aaed86921a27605017baf4356b8f5184d59",
+      "reason": "Reviewed temporal-features-v3-valid-price-path migration: filter unusable prices before arithmetic, preserve legacy release semantics and all unrelated authored rules; require exact source/native evidence and retain raw failed comparisons. Paired validation freezes the complete secret-filtered source context with account, symbol and clock verification, without delivery. Regressions: test_temporal_feature_migration, test_ontology_rulebox, test_paired_portfolio_input, test_reasoning_logical_inputs; docs/reasoning-input-latency.md and docs/relationship-change-notifications.md."
+    },
+    "modules/model_registry/domain/ontology_rulebox_catalog.py::governed_graph_inference_rules": {
+      "previousHash": "e85b59f37f2b72baf72f78f20073fe8468ba61d67c2791ef040966b469772160",
+      "hash": "a1c28d62d76df27fd20e943d5afa64796f4ca074af8d3f6aae939d4754100fb4",
+      "reason": "Reviewed temporal-features-v3-valid-price-path migration: filter unusable prices before arithmetic, preserve legacy release semantics and all unrelated authored rules; require exact source/native evidence and retain raw failed comparisons. Paired validation freezes the complete secret-filtered source context with account, symbol and clock verification, without delivery. Regressions: test_temporal_feature_migration, test_ontology_rulebox, test_paired_portfolio_input, test_reasoning_logical_inputs; docs/reasoning-input-latency.md and docs/relationship-change-notifications.md."
+    },
+    "modules/model_registry/domain/ontology_rulebox_release_manifest.py::RULEBOX_DECISION_EFFECT_CONTRACT_RULE_VERSIONS": {
+      "previousHash": "7236d2026b2515b142d1a4316485c5a3915aa9fdb89824d04c0580c5037e9f7e",
+      "hash": "0e0a511f5958b06c9eb1e2dbe80dacedb759b59b910ee1b3c1edaf4220ebacf3",
+      "reason": "Reviewed temporal-features-v3-valid-price-path migration: filter unusable prices before arithmetic, preserve legacy release semantics and all unrelated authored rules; require exact source/native evidence and retain raw failed comparisons. Paired validation freezes the complete secret-filtered source context with account, symbol and clock verification, without delivery. Regressions: test_temporal_feature_migration, test_ontology_rulebox, test_paired_portfolio_input, test_reasoning_logical_inputs; docs/reasoning-input-latency.md and docs/relationship-change-notifications.md."
+    },
+    "modules/reasoning/domain/portfolio_ontology_temporal_concepts.py::normalized_data_quality": {
+      "previousHash": "f25d1ace95e0ddda325d6a99975e35092a3425558eb4700fc051861df6f5b452",
+      "hash": "a08de429c30fc810e30cfae02fd8f3c8f86d0e937fb772c3645de7583efc2dad",
+      "reason": "Reviewed temporal-features-v3-valid-price-path migration: filter unusable prices before arithmetic, preserve legacy release semantics and all unrelated authored rules; require exact source/native evidence and retain raw failed comparisons. Paired validation freezes the complete secret-filtered source context with account, symbol and clock verification, without delivery. Regressions: test_temporal_feature_migration, test_ontology_rulebox, test_paired_portfolio_input, test_reasoning_logical_inputs; docs/reasoning-input-latency.md and docs/relationship-change-notifications.md."
+    },
+    "modules/reasoning/domain/portfolio_ontology_temporal_concepts.py::temporal_window_values": {
+      "previousHash": "caa688b1bb9e7d72a216a3e8e28c71d35af1efc8cd6b0d006d94453b03662df3",
+      "hash": "4812d0cae5531ea8915bd77fc558c60530e67e7e08740f307a8169b7319f8995",
+      "reason": "Reviewed temporal-features-v3-valid-price-path migration: filter unusable prices before arithmetic, preserve legacy release semantics and all unrelated authored rules; require exact source/native evidence and retain raw failed comparisons. Paired validation freezes the complete secret-filtered source context with account, symbol and clock verification, without delivery. Regressions: test_temporal_feature_migration, test_ontology_rulebox, test_paired_portfolio_input, test_reasoning_logical_inputs; docs/reasoning-input-latency.md and docs/relationship-change-notifications.md."
+    },
+    "modules/reasoning/domain/portfolio_ontology_temporal_concepts.py::add_position_temporal_concepts": {
+      "previousHash": "33d13357f9331e4d408bcc3ef11d739de478a5fbc52b76127884620cf1ffaa14",
+      "hash": "343f500cd9836478627b3146a2211f92249d983edb2dea3a1f806d44d11b6d67",
+      "reason": "Reviewed temporal-features-v3-valid-price-path migration: filter unusable prices before arithmetic, preserve legacy release semantics and all unrelated authored rules; require exact source/native evidence and retain raw failed comparisons. Paired validation freezes the complete secret-filtered source context with account, symbol and clock verification, without delivery. Regressions: test_temporal_feature_migration, test_ontology_rulebox, test_paired_portfolio_input, test_reasoning_logical_inputs; docs/reasoning-input-latency.md and docs/relationship-change-notifications.md."
+    },
+    "modules/reasoning/domain/reasoning_comparison_identity.py::job_comparison_identity": {
+      "previousHash": "d3710e16e9e99369ad97f4d45a781b8553df2364bd741a949ad78f91d1e5eb43",
+      "hash": "6c3e3559cfe85e6e4edb353a7164e915778cd790763d9da2ea998ca1a38041e8",
+      "reason": "Reviewed temporal-features-v3-valid-price-path migration: filter unusable prices before arithmetic, preserve legacy release semantics and all unrelated authored rules; require exact source/native evidence and retain raw failed comparisons. Paired validation freezes the complete secret-filtered source context with account, symbol and clock verification, without delivery. Regressions: test_temporal_feature_migration, test_ontology_rulebox, test_paired_portfolio_input, test_reasoning_logical_inputs; docs/reasoning-input-latency.md and docs/relationship-change-notifications.md."
+    },
+    "modules/reasoning/domain/reasoning_shadow.py::ONTOLOGY_RUNTIME_POLICY_SETTING_KEYS": {
+      "previousHash": "489b6bce9d4504b72f41260099e990c7ff6fdb5db190200cb3ce6c77218bed40",
+      "hash": "b24180fec01b59c1c484b7f967d15cb2e431e606c270e7057e9f22b31e57a2e5",
+      "reason": "Reviewed temporal-features-v3-valid-price-path migration: filter unusable prices before arithmetic, preserve legacy release semantics and all unrelated authored rules; require exact source/native evidence and retain raw failed comparisons. Paired validation freezes the complete secret-filtered source context with account, symbol and clock verification, without delivery. Regressions: test_temporal_feature_migration, test_ontology_rulebox, test_paired_portfolio_input, test_reasoning_logical_inputs; docs/reasoning-input-latency.md and docs/relationship-change-notifications.md."
+    },
+    "modules/reasoning/domain/reasoning_shadow.py::reasoning_comparison_summary": {
+      "previousHash": "b072b3004358b5df00ce9e51af3bbe764f754f15158ce5ebbeec310fbacdbf51",
+      "hash": "3ff0aa11c3c3c6cd61717fb48c82b801268555598801915db978e8fe817c20f9",
+      "reason": "Reviewed temporal-features-v3-valid-price-path migration: filter unusable prices before arithmetic, preserve legacy release semantics and all unrelated authored rules; require exact source/native evidence and retain raw failed comparisons. Paired validation freezes the complete secret-filtered source context with account, symbol and clock verification, without delivery. Regressions: test_temporal_feature_migration, test_ontology_rulebox, test_paired_portfolio_input, test_reasoning_logical_inputs; docs/reasoning-input-latency.md and docs/relationship-change-notifications.md."
+    },
+    "modules/model_registry/domain/statistical_signals/graph_scoring.py::_relation_matches": {
+      "previousHash": "008aad69f2541aefc54fd0dfc6631e288ff8eba3d158ae370b284690fd8dc22d",
+      "hash": "2f71edc5e9f4e83e9e377eefcd50cb9d8bac1275d035abc4c0d000dccbc5379d",
+      "reason": "Reviewed temporal-features-v3-valid-price-path migration: filter unusable prices before arithmetic, preserve legacy release semantics and all unrelated authored rules; require exact source/native evidence and retain raw failed comparisons. Paired validation freezes the complete secret-filtered source context with account, symbol and clock verification, without delivery. Regressions: test_temporal_feature_migration, test_ontology_rulebox, test_paired_portfolio_input, test_reasoning_logical_inputs; docs/reasoning-input-latency.md and docs/relationship-change-notifications.md."
+    },
+    "modules/model_registry/domain/statistical_signals/scoring.py::_window_metrics": {
+      "previousHash": "3994b2108bef07b8f0379e57eb6ab7e7792a18e05bd7506f7550dbe3bea7cd94",
+      "hash": "ab66e6b409e2b92f1a9d5b6c7a5ed5579123f92bc03c86300c957b79ef1a8448",
+      "reason": "Reviewed temporal-features-v3-valid-price-path migration: filter unusable prices before arithmetic, preserve legacy release semantics and all unrelated authored rules; require exact source/native evidence and retain raw failed comparisons. Paired validation freezes the complete secret-filtered source context with account, symbol and clock verification, without delivery. Regressions: test_temporal_feature_migration, test_ontology_rulebox, test_paired_portfolio_input, test_reasoning_logical_inputs; docs/reasoning-input-latency.md and docs/relationship-change-notifications.md."
+    },
+    "modules/model_registry/domain/statistical_signals/scoring.py::_combined_metrics": {
+      "previousHash": "c6d824824d6bb78c00be0eb2a50efb58d4456ddbcb32803d57bdfcf344679ad9",
+      "hash": "0c0e4a4f752d1c00cdaabbf06c4ed7ed3d80a95f1e37c46d834858ceae34f2ea",
+      "reason": "Reviewed temporal-features-v3-valid-price-path migration: filter unusable prices before arithmetic, preserve legacy release semantics and all unrelated authored rules; require exact source/native evidence and retain raw failed comparisons. Paired validation freezes the complete secret-filtered source context with account, symbol and clock verification, without delivery. Regressions: test_temporal_feature_migration, test_ontology_rulebox, test_paired_portfolio_input, test_reasoning_logical_inputs; docs/reasoning-input-latency.md and docs/relationship-change-notifications.md."
+    },
+    "modules/model_registry/domain/statistical_signals/scoring.py::score_temporal_feature_snapshot": {
+      "previousHash": "28b571a958c169c936eb383880d0451200f0607f17e888160b00d3b427721918",
+      "hash": "9a4e1ca4791a022926edd9509d2f59cd9e6edb7857ac36e3d8aaa4e96b9c7231",
+      "reason": "Reviewed temporal-features-v3-valid-price-path migration: filter unusable prices before arithmetic, preserve legacy release semantics and all unrelated authored rules; require exact source/native evidence and retain raw failed comparisons. Paired validation freezes the complete secret-filtered source context with account, symbol and clock verification, without delivery. Regressions: test_temporal_feature_migration, test_ontology_rulebox, test_paired_portfolio_input, test_reasoning_logical_inputs; docs/reasoning-input-latency.md and docs/relationship-change-notifications.md."
+    },
+    "modules/market_data/domain/time_series_storage.py::TEMPORAL_FEATURE_SET_VERSION": {
+      "previousHash": "c0a1dcc8df4fe217805a4786c5c8cc872dfc65ddf166f62e8b1f2614e61ed5d7",
+      "hash": "aed3a37b9c223b80db18fe8fd4a3addfe4c0837fdd338f8a0321c79b19e20088",
+      "reason": "Reviewed temporal-features-v3-valid-price-path migration: filter unusable prices before arithmetic, preserve legacy release semantics and all unrelated authored rules; require exact source/native evidence and retain raw failed comparisons. Paired validation freezes the complete secret-filtered source context with account, symbol and clock verification, without delivery. Regressions: test_temporal_feature_migration, test_ontology_rulebox, test_paired_portfolio_input, test_reasoning_logical_inputs; docs/reasoning-input-latency.md and docs/relationship-change-notifications.md."
+    }
+  },
+  "removed": {
+    "modules/reasoning/domain/portfolio_ontology_temporal_concepts.py::STALE_DATA_QUALITY_STATES": {
+      "baselineHash": "8ae7dc554b08da2855abab283ea7938158ada8bb022b3b03613b33d32f0794d8",
+      "successorTarget": "modules/market_data/domain/temporal_price_quality.py",
+      "successorName": "temporal_observation_quality",
+      "successorHash": "17bea013cd65e995ddaa410e0ecd81b6203c5160400939a8404e68631e0f0cb1",
+      "reason": "Quality classification moved into the market-data owner shared by graph and model arithmetic. Legacy reference precedence and v3 invalid-observation precedence are separately covered by test_ontology_rulebox and test_statistical_signal_pipeline."
+    },
+    "modules/reasoning/domain/portfolio_ontology_temporal_concepts.py::REFERENCE_DATA_QUALITY_STATES": {
+      "baselineHash": "c4f71922c8581b34972f0fceea5819e36659f8651e58fce2e07f7df7a6769aba",
+      "successorTarget": "modules/market_data/domain/temporal_price_quality.py",
+      "successorName": "temporal_observation_quality",
+      "successorHash": "17bea013cd65e995ddaa410e0ecd81b6203c5160400939a8404e68631e0f0cb1",
+      "reason": "Quality classification moved into the market-data owner shared by graph and model arithmetic. Legacy reference precedence and v3 invalid-observation precedence are separately covered by test_ontology_rulebox and test_statistical_signal_pipeline."
+    }
+  }
+}

@@ -73,7 +73,39 @@ def pre_current_flow_catalog():
         storage_schema.typedb_rule_schema_capability_contract.cache_clear()
     clear()
     try:
-        with patch.object(current_flow_rules, "current_flow_rules", return_value=[]):
+        with pre_valid_temporal_catalog(), patch.object(current_flow_rules, "current_flow_rules", return_value=[]):
+            yield
+    finally:
+        clear()
+
+
+@contextmanager
+def pre_valid_temporal_catalog():
+    """Replay the frozen v2 price predicates/schema, without changing goldens."""
+    from contextlib import ExitStack
+    from functools import lru_cache
+    from digital_twin.modules.model_registry.domain import ontology_rulebox_catalog as rules
+    from digital_twin.modules.model_registry.domain import ontology_rulebox_release_manifest as releases
+    from digital_twin.modules.reasoning.infrastructure.typeql import constants, storage_schema
+    original = rules.governed_graph_inference_rules
+    @lru_cache(maxsize=2)
+    def legacy(*args, **kwargs):
+        return original(filtered_temporal_paths=False)
+    previous = {k: v for k, v in constants.TYPEDB_PROMOTED_TEXT_ATTRIBUTES.items()
+                if k not in {"pricePathFeatureVersion", "latestObservationUsable"}}
+    def clear():
+        original.cache_clear()
+        rules._production_graph_inference_rules.cache_clear()
+        storage_schema.typedb_rule_schema_capability_contract.cache_clear()
+    clear()
+    try:
+        with ExitStack() as stack:
+            for module in list(sys.modules.values()):
+                if module and getattr(module, "governed_graph_inference_rules", None) is original:
+                    stack.enter_context(patch.object(module, "governed_graph_inference_rules", legacy))
+            stack.enter_context(patch.dict(constants.TYPEDB_PROMOTED_TEXT_ATTRIBUTES, previous, clear=True))
+            stack.enter_context(patch.dict(releases.RULEBOX_DECISION_EFFECT_CONTRACT_RULE_VERSIONS,
+                                          {"graph.temporal.stale_observation.block.v1": "v2"}))
             yield
     finally:
         clear()

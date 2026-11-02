@@ -76,11 +76,30 @@ class DomainOwnershipCompletionTests(unittest.TestCase):
     def test_moved_business_definitions_keep_baseline_executable_semantics(self):
         fixture = json.loads((ROOT / "python_service/tests/fixtures/domain_semantics_v1.json").read_text())
         changes = json.loads((ROOT / "python_service/tests/fixtures/closed_loop_semantic_changes.json").read_text())["domain"]
+        temporal = json.loads((ROOT / "python_service/tests/fixtures/temporal_feature_semantic_changes.json").read_text())
+        prior_changes = dict(changes)
+        changes.update(temporal["domain"])
         checked_changes = set()
+        checked_removals = set()
         self.assertEqual("637b49023", fixture["baseline"])
         self.assertGreater(len(fixture["definitions"]), 3000)
         parsed = {}
         for item in fixture["definitions"]:
+            key = item["target"] + "::" + item["name"]
+            if key in temporal["removed"]:
+                moved = temporal["removed"][key]
+                self.assertEqual(item["hash"], moved["baselineHash"])
+                self.assertTrue(moved["reason"])
+                current = ast.parse((PACKAGE / item["target"]).read_text())
+                self.assertFalse(any(isinstance(n, ast.Assign) and any(
+                    isinstance(t, ast.Name) and t.id == item["name"] for t in n.targets) for n in current.body))
+                successor = ast.parse((PACKAGE / moved["successorTarget"]).read_text())
+                node = next(n for n in successor.body if isinstance(n, ast.FunctionDef) and n.name == moved["successorName"])
+                self.assertEqual(moved["successorHash"], definition_fingerprint(node))
+                checked_removals.add(key)
+                continue
+            if key in temporal["domain"]:
+                self.assertEqual(prior_changes.get(key, {}).get("hash", item["hash"]), temporal["domain"][key]["previousHash"])
             path = PACKAGE / item["target"]
             if path not in parsed:
                 tree = ast.parse(path.read_text())
@@ -104,3 +123,4 @@ class DomainOwnershipCompletionTests(unittest.TestCase):
                     self.assertNotEqual(item["hash"], reviewed["hash"])
                 self.assertEqual(reviewed["hash"] if reviewed else item["hash"], definition_fingerprint(parsed[path][item["name"]][item.get("occurrence", 0)]))
         self.assertEqual(set(changes), checked_changes)
+        self.assertEqual(set(temporal["removed"]), checked_removals)

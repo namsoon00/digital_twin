@@ -15,7 +15,7 @@ from typeql_contract_fixture import WORLD, contract_fingerprints, enabled_rules,
 ROOT = Path(__file__).resolve().parents[1] / "digital_twin"
 PACKAGE = "digital_twin.modules.reasoning.infrastructure.typeql"
 COMPILER = ROOT / "modules/reasoning/infrastructure/typeql"
-GOLDEN = Path(__file__).parent / "fixtures/typeql_compiler_witness_v20.json"
+GOLDEN = Path(__file__).parent / "fixtures/typeql_compiler_valid_price_path_v1.json"
 
 
 class TypeQLCompilerTests(unittest.TestCase):
@@ -44,7 +44,7 @@ class TypeQLCompilerTests(unittest.TestCase):
             typedb_value_match("$s", "ontology-profit-loss-rate", {"field": "typo", "default": -8}, "<=", "$v")
 
     def test_compiler_matches_versioned_account_policy_contract(self):
-        # V20 changes proof grounding, not a TypeQL investment predicate.
+        # V3 changes explicit price-path predicates; v2 remains replayable.
         expected = json.loads(GOLDEN.read_text())
         actual = contract_fingerprints(typeql)
         self.assertEqual(expected["engineVersion"], typeql.TYPEDB_NATIVE_RULE_ENGINE_VERSION)
@@ -53,8 +53,13 @@ class TypeQLCompilerTests(unittest.TestCase):
             with self.subTest(group=group, original=expected["sourceRevision"]):
                 self.assertEqual(fingerprint, actual[group])
         previous_current = json.loads((GOLDEN.parent / 'typeql_compiler_current_flow_v1.json').read_text())
+        from research_knowledge_fixture import pre_valid_temporal_catalog
+        with pre_valid_temporal_catalog():
+            legacy = contract_fingerprints(typeql)
+            predecessor = json.loads((GOLDEN.parent / 'typeql_compiler_witness_v20.json').read_text())
+            self.assertEqual(predecessor['groups'], legacy)
         self.assertEqual({k: v for k, v in previous_current['groups'].items() if k != 'profiles'},
-                         {k: v for k, v in actual.items() if k != 'profiles'})
+                         {k: v for k, v in legacy.items() if k != 'profiles'})
         from research_knowledge_fixture import pre_current_flow_catalog
         from unittest.mock import patch
         from digital_twin.modules.reasoning.infrastructure.typeql import profiles

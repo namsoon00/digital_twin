@@ -1,6 +1,8 @@
 from digital_twin.modules._exports import resolve_export
 
 _EXPORTS = {
+    "verify_portfolio_report": ("digital_twin.modules.ai_orchestration.domain.portfolio_report", "verify_report"),
+    "portfolio_report_digest": ("digital_twin.modules.ai_orchestration.domain.portfolio_report", "digest"),
     "opinion_question_contributions": ("digital_twin.modules.ai_orchestration.domain.opinion_memory", "contribution"),
     "AI_ACTIVITY_VERSION": ("digital_twin.modules.ai_orchestration.domain.activity", "VERSION"),
     "ai_activity_notifications_enabled": ("digital_twin.modules.ai_orchestration.domain.activity", "enabled"),

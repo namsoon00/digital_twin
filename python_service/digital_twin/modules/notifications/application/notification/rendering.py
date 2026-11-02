@@ -63,6 +63,12 @@ class NotificationRenderingService:
         return rendered
 
     def _render(self, job: NotificationJob) -> str:
+        if job.message_type == "aiReport":
+            from digital_twin.modules.notifications.application.ai_report_message import render_ai_report
+            artifact = job.context["aiPortfolioReport"]
+            if artifact.get("accountId") != job.account_id or job.source_event_id != artifact.get("reportId"):
+                raise ValueError("요청 보고서의 계정·발송 근거가 일치하지 않습니다.")
+            return render_ai_report(artifact)
         if job.message_type == "aiActivity":
             from digital_twin.modules.notifications.application.ai_activity_message import render_ai_activity
             job.text = render_ai_activity(job.context["aiActivity"])

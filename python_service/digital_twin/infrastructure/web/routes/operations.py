@@ -47,6 +47,9 @@ class OperationsRoutes:
         return NOT_HANDLED
 
     def route_operations_health(self, request, path: str, query: Query):
+        if path == "/api/ai-reports" or path.startswith("/api/ai-reports/"):
+            from digital_twin.infrastructure.web.routes.portfolio_reports import portfolio_report_response
+            return portfolio_report_response(request, path, query)
         if path == "/api/ai-control/feedback" and request.command == "PUT":
             if not request.ensure_writable("서비스 개선 검토는 소유자만 기록할 수 있습니다."):
                 return

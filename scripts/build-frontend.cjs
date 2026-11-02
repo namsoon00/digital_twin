@@ -36,12 +36,14 @@ async function buildFrontend({ check = false } = {}) {
   const outputs = new Map([["public/app.js", result.outputFiles[0].text]]);
   // Standalone pages import modules outside the bundle. Their immutable URLs
   // must change with the module contents so existing browsers receive fixes.
-  const aiControl = fs.readFileSync(path.join(root, "public/ai-control.mjs"), "utf8")
-    .replace(/(["'])(\.\/modules\/[^"']+\.mjs)(?:\?v=[^"']*)?\1/g, (_match, quote, specifier) => {
-      const digest = crypto.createHash("sha256").update(fs.readFileSync(path.resolve(root, "public", specifier))).digest("hex").slice(0, 16);
-      return quote + specifier + "?v=" + digest + quote;
-    });
-  outputs.set("public/ai-control.mjs", aiControl);
+  for (const standalone of ["ai-control.mjs", "ai-reports.mjs"]) {
+    const source = fs.readFileSync(path.join(root, "public", standalone), "utf8")
+      .replace(/(["'])(\.\/modules\/[^"']+\.mjs)(?:\?v=[^"']*)?\1/g, (_match, quote, specifier) => {
+        const digest = crypto.createHash("sha256").update(fs.readFileSync(path.resolve(root, "public", specifier))).digest("hex").slice(0, 16);
+        return quote + specifier + "?v=" + digest + quote;
+      });
+    outputs.set("public/" + standalone, source);
+  }
   const assets = ["app.js", "app-default-settings.js", "web-runtime.js", "console-workspaces.js", "styles.css", "console-workspaces.css"];
   for (const name of ["public/index.html", "public/service-worker.js"]) {
     let content = fs.readFileSync(path.join(root, name), "utf8");

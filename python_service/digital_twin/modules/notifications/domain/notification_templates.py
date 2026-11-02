@@ -90,6 +90,7 @@ CUSTOMER_FACING_MESSAGE_TYPES = {
 DEFAULT_NOTIFICATION_TEMPLATES = {
     "researchProgress": {"template": BODY_TEMPLATE, "description": "연구 질문·사업 가설의 등록, 검토, 수정과 종료 기록"},
     "aiObservation": {"template": BODY_TEMPLATE, "description": "중앙 AI의 독립 관찰과 새로운 해석"},
+    "aiReport": {"template": BODY_TEMPLATE, "description": "소유자가 요청한 보유·관심 종목 보고서 요약"},
     "aiObservationDiagnostic": {"template": BODY_TEMPLATE, "description": "검증 미통과 AI 초안과 보류 이유를 운영 채널에 전달"},
     "informationUpdate": {"template": BODY_TEMPLATE, "description": "공식 발표 결과와 공개 이후 가격의 사실 확인 알림"},
     "default": {

@@ -485,7 +485,11 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # evidence retrieval and notification contributions (2026-11-01).
         # Eight bootstrap-boundary contracts cover side-effect-free construction,
         # bounded sockets, failure recovery, and stored data/lineage preservation.
-        self.assertLessEqual(total, 2938)
+        # Twenty-three already registered source-progress, retrieval-completion,
+        # causality and bounded-retention regressions since that count.
+        # Eleven requested-report contracts protect dated evidence, owner-only
+        # access, immutable retries, atomic publication and verified receipts.
+        self.assertLessEqual(total, 2972)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

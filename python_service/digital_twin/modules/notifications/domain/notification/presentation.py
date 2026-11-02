@@ -29,11 +29,13 @@ NOTIFICATION_KINDS = {
         NotificationKind("report", "개발·검토 보고", "📦"),
         NotificationKind("research-progress", "연구 진행", "🔬"),
         NotificationKind("company-change-report", "기업 보고서", "📑"),
+        NotificationKind("ai-report", "AI 보고서", "📑"),
         NotificationKind("notice", "알림", "🔔"),
     )
 }
 
 LEGACY_KINDS = {
+    "aiReport": "ai-report",
     "researchProgress": "research-progress",
     "aiObservation": "ai-interpretation",
     "aiObservationDiagnostic": "report",
@@ -58,6 +60,7 @@ LEGACY_KINDS = {
 }
 
 DEFAULT_POLICY_TYPES = {
+    "ai-report": "aiReport",
     "research-progress": "researchProgress",
     "price-change": "marketObservation", "relation-change": "investmentInsight", "data-status": "investmentInsight",
     "ai-interpretation": "investmentInsight", "investment-decision": "investmentInsight",

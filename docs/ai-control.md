@@ -1,5 +1,10 @@
 # Central AI control
 
+Owner-requested portfolio reports are available at `/ai-reports.html`.
+See [AI portfolio reports](ai-portfolio-reports.md) for the frozen evidence,
+review, account-access and one-time delivery boundaries. Report creation does
+not run a model or change independent observation scheduling.
+
 ## Approved opinions and targeted memory (2026-11-01)
 
 `reviewed-opinion-memory-v1` uses author v35, repair v31, observation review v24,

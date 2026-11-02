@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>AI 보고서 · Orbit Alpha</title><link rel="stylesheet" href="/ai-reports.css"></head>
+<body><main>
+<nav><a href="/">Orbit Alpha</a><a href="/ai-control.html">중앙 AI</a></nav>
+<header><p class="eyebrow">AI RESEARCH REPORT</p><h1>보유·관심 종목 AI 보고서</h1>
+<p>기업 자료, 검토된 AI 의견과 질문 답변을 한곳에서 읽습니다.</p></header>
+<section class="toolbar" aria-label="보고서 생성과 조회">
+<label>계정 <select id="account" aria-label="보고서 계정"></select></label>
+<button id="create" disabled>현재 자료로 보고서 만들기</button>
+<button id="refresh" disabled>저장된 보고서 새로고침</button>
+<p>새 보고서는 저장된 결과를 모아 만듭니다. 새 AI 호출이나 자동 반복 발송을 시작하지 않습니다.</p>
+</section>
+<p id="message" role="status" aria-live="polite"></p>
+<section class="toolbar"><label>보고서 이력 <select id="history"><option value="">보고서 없음</option></select></label>
+<button id="send" disabled>AI 봇으로 요약 받기</button><span id="delivery" role="status"></span>
+<button id="print" disabled>인쇄 / PDF 저장</button></section>
+<div id="report"><p class="empty">보고서 이력을 불러오고 있습니다.</p></div>
+</main><script type="module" src="/ai-reports.mjs"></script></body></html>

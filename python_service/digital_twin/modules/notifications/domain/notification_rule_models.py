@@ -76,7 +76,7 @@ def default_similarity_enabled(message_type: str) -> bool:
     # change bypasses. A second text-similarity gate duplicates that policy
     # and can hide a genuinely changed graph decision.
     # Research milestones are deduplicated by the owning case transaction.
-    return key not in SYSTEM_MESSAGE_TYPES and key not in {MARKET_OBSERVATION, INVESTMENT_INSIGHT, "informationUpdate", "aiObservation", "researchProgress"}
+    return key not in SYSTEM_MESSAGE_TYPES and key not in {MARKET_OBSERVATION, INVESTMENT_INSIGHT, "informationUpdate", "aiObservation", "researchProgress", "aiReport"}
 
 
 def default_similarity_window_minutes(message_type: str) -> int:

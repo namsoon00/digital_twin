@@ -40,8 +40,8 @@ class NotificationDispatchService:
         account = None if job.message_type in {AI_OBSERVATION_DIAGNOSTIC, "aiActivity"} else accounts.get(job.account_id)
         notifier = self.ai_research_notifier_factory(job.message_type, account) if self.ai_research_notifier_factory else None
         dedicated_research = notifier is not None
-        if job.message_type == "aiActivity" and not dedicated_research:
-            raise RuntimeError("AI 실행 알림 전용 봇이 없어 다른 채널로 대체 발송하지 않았습니다.")
+        if job.message_type in {"aiActivity", "aiReport"} and not dedicated_research:
+            raise RuntimeError("AI 알림 전용 봇이 없어 다른 채널로 대체 발송하지 않았습니다.")
         if notifier is None and operations_delivery:
             if job.message_type in {ONTOLOGY_REASONING_QUEUE, AI_OBSERVATION_DIAGNOSTIC} and not self.operations_notifier_factory:
                 raise RuntimeError("운영 알림 전송기가 구성되지 않아 계정 채널로 대체 발송하지 않았습니다.")
@@ -121,6 +121,9 @@ class NotificationDispatchService:
         if job.message_type == "aiActivity":
             activity = context.get("aiActivity") or {}
             rendered_audit["aiActivity"] = {key: activity.get(key) for key in ("version", "eventId", "stage", "at", "taskId")}
+        if job.message_type == "aiReport":
+            rendered_audit["aiPortfolioReport"] = {key: context["aiPortfolioReport"][key]
+                for key in ("version", "reportId", "reportHash", "summaryHash")}
         if relation_change.get("version") and relation_change.get("current"):
             # The receipt outlives the large job payload. Preserve the exact
             # last-delivered facts for the next customer comparison.

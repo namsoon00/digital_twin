@@ -1904,7 +1904,7 @@ class MySQLNotificationJobStore(PriceMetricsStore, DiagnosticThreadStore, Invest
         # an already delivered article also removes limitation/counter-evidence
         # references and invalidates the reviewed body. Central observation
         # novelty is checked against successful receipts by its delivery guard.
-        if str(job.message_type or "") in {OPERATOR_REASONING_REPORT, AI_OBSERVATION, AI_OBSERVATION_DIAGNOSTIC}:
+        if str(job.message_type or "") in {OPERATOR_REASONING_REPORT, AI_OBSERVATION, AI_OBSERVATION_DIAGNOSTIC, "aiReport"}:
             return False
         if not self.sent_article_filter_enabled():
             return False

@@ -15,7 +15,8 @@ AI_OBSERVATION = "aiObservation"
 RESEARCH_PROGRESS = "researchProgress"
 AI_OBSERVATION_DIAGNOSTIC = "aiObservationDiagnostic"
 AI_ACTIVITY = "aiActivity"
-AI_RESEARCH_DELIVERY_MESSAGE_TYPES = frozenset({RESEARCH_PROGRESS, AI_OBSERVATION, AI_OBSERVATION_DIAGNOSTIC, AI_ACTIVITY})
+AI_REPORT = "aiReport"
+AI_RESEARCH_DELIVERY_MESSAGE_TYPES = frozenset({RESEARCH_PROGRESS, AI_OBSERVATION, AI_OBSERVATION_DIAGNOSTIC, AI_ACTIVITY, AI_REPORT})
 INVESTMENT_INSIGHT = "investmentInsight"
 MARKET_OBSERVATION = "marketObservation"
 ONTOLOGY_OBSERVATION_FOLLOWUP = "ontologyObservationFollowup"
@@ -85,6 +86,7 @@ SYSTEM_MESSAGE_TYPES = {
 }
 
 USER_MANAGED_NOTIFICATION_TYPES = [
+    AI_REPORT,
     RESEARCH_PROGRESS,
     INFORMATION_UPDATE,
     AI_OBSERVATION,
@@ -140,6 +142,7 @@ VISIBLE_NOTIFICATION_TEMPLATE_TYPES = [
 MIN_CADENCE_MINUTES = 10
 
 DEFAULT_ALERT_RULES = {
+    AI_REPORT: 1,
     RESEARCH_PROGRESS: 1,
     INFORMATION_UPDATE: 1,
     AI_OBSERVATION: 1,
@@ -227,6 +230,7 @@ DEFAULT_RELATION_RULE_THRESHOLDS = {
 }
 
 DEFAULT_CADENCE = {
+    AI_REPORT: 0,  # Owner-requested; one durable outbox identity per report.
     AI_ACTIVITY: 0,
     RESEARCH_PROGRESS: 0,  # Event-driven; exposes the existing alertRules switch.
     AI_OBSERVATION: 180,
@@ -251,6 +255,7 @@ DEFAULT_CADENCE = {
 }
 
 MESSAGE_TYPE_LABELS = {
+    AI_REPORT: "AI 보고서",
     RESEARCH_PROGRESS: "연구 진행",
     INFORMATION_UPDATE: "뉴스·공시·발표 후속 확인",
     DEFAULT_MESSAGE: "기본 알림",
@@ -299,6 +304,7 @@ MESSAGE_TYPE_LABELS = {
 }
 
 MESSAGE_TYPE_EMOJIS = {
+    AI_REPORT: "📑",
     RESEARCH_PROGRESS: "🔬",
     DEFAULT_MESSAGE: "🔔",
     AI_OBSERVATION: "🧠",
@@ -346,6 +352,7 @@ MESSAGE_TYPE_EMOJIS = {
 }
 
 TRIGGER_SUMMARIES = {
+    AI_REPORT: "소유자가 요청한 보유·관심 종목 보고서의 요약을 한 번 발송합니다. 저장된 분석 시각과 확인 한계를 유지합니다.",
     AI_ACTIVITY: "AI의 실제 작업·조회·모델 호출·결과 저장·후속 예약과 대기·실패 상태 변화를 연구 봇으로 알립니다.",
     RESEARCH_PROGRESS: "연구 질문과 사업 가설의 등록, 답변 검토, 수정·종료 및 지표 확인 상태의 변화를 알립니다.",
     INFORMATION_UPDATE: "등록된 정보의 발표 결과나 이후 가격 관측이 새로 확보됐을 때 보냅니다. 투자 판단을 만들지 않습니다.",
@@ -389,6 +396,7 @@ TRIGGER_SUMMARIES = {
 def notification_message_types(extra_types: List[str] = None) -> List[str]:
     keys = [
         DEFAULT_MESSAGE,
+        AI_REPORT,
         AI_ACTIVITY,
         RESEARCH_PROGRESS,
         *MONITORING_MESSAGE_TYPES,

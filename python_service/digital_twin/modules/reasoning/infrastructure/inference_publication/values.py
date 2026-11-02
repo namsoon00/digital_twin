@@ -1,7 +1,9 @@
-"""Pure TypeDB payload decoding retained verbatim at the storage boundary."""
+"""Pure TypeDB payload decoding, including retained historical encodings."""
 
 import json
 from typing import Dict
+
+from ..manifest.legacy_control_payload import restore_legacy_manifest_indices
 
 
 def typedb_bool(value: object) -> bool:
@@ -14,11 +16,11 @@ def typedb_bool(value: object) -> bool:
 
 def json_object(value: object) -> Dict[str, object]:
     if isinstance(value, dict):
-        return dict(value)
+        return restore_legacy_manifest_indices(value)
     if not value:
         return {}
     try:
         decoded = json.loads(str(value))
     except (TypeError, ValueError, json.JSONDecodeError):
         return {}
-    return dict(decoded) if isinstance(decoded, dict) else {}
+    return restore_legacy_manifest_indices(decoded) if isinstance(decoded, dict) else {}

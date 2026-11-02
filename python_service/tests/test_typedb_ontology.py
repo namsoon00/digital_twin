@@ -1,9 +1,11 @@
+import base64
 import hashlib
 import json
 import re
 import tempfile
 import time
 import unittest
+import zlib
 from copy import deepcopy
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
@@ -2272,6 +2274,9 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
         self.assertEqual("old", metadata["aboxSnapshotId"])
 
     def test_market_scope_observation_refresh_preserves_manifest_generations(self):
+        from digital_twin.modules.reasoning.infrastructure.inference_publication.values import json_object
+        from digital_twin.modules.reasoning.infrastructure.manifest import legacy_control_payload
+
         repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
         scope_id = "symbol:005930:market:world:test"
         scope_plan = [{
@@ -2307,6 +2312,8 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
                 "aboxScopeId": "manifest:abox-manifest:active",
                 "aboxScopeType": "manifest",
                 "scopeGenerationId": "abox-manifest:active",
+                "scopePlan": scope_plan,
+                "nativeRulePlannerTopology": {"status": "ok", "fingerprint": "topology"},
                 "nativeRuleEvidenceReadIndex": {"status": "ok", "fingerprint": "native-index"},
             }),
         }
@@ -2315,24 +2322,50 @@ class TypeDBOntologyRepositoryTests(unittest.TestCase):
             "marketScopeObservedAt": {scope_id: "2026-07-23T00:10:00Z"},
         }
 
-        with patch.object(repository, "acquire_scoped_abox_write_lease", return_value={"acquired": True, "leaseOwner": "refresh"}), \
-                patch.object(repository, "release_scoped_abox_write_lease", return_value={"status": "released"}), \
-                patch.object(repository, "active_abox_metadata", side_effect=[active, refreshed_active]), \
-                patch.object(repository, "worldview_manifest_marker_rows", return_value=[marker]), \
-                patch.object(repository, "replace_scoped_manifest_marker_graph", return_value={"saved": True, "status": "ok"}) as replace:
-            result = repository.refresh_market_world_observation_metadata(
-                "abox-manifest:active",
-                scope_plan,
-                {scope_id: "2026-07-23T00:10:00Z"},
-                world_id="market:shared:kr",
-            )
+        expanded = json.loads(marker["propertiesJson"])
+        archived = deepcopy(expanded)
+        indices = {key: archived.pop(key) for key in (
+            "scopePlan", "nativeRulePlannerTopology", "nativeRuleEvidenceReadIndex"
+        )}
+        raw = json.dumps(indices, ensure_ascii=False, sort_keys=True).encode()
+        archived["_manifestIndexArchive"] = {
+            "version": "manifest-index-zlib-v1", "decodedBytes": len(raw),
+            "sha256": hashlib.sha256(raw).hexdigest(),
+            "data": base64.b64encode(zlib.compress(raw)).decode(),
+        }
+        original_archive = deepcopy(archived)
+        self.assertEqual(expanded, json_object(archived))
+        self.assertEqual(expanded, json_object(json.dumps(archived)))
+        self.assertEqual(original_archive, archived)
+        for corrupt in (
+            {**archived, "_manifestIndexArchive": {**archived["_manifestIndexArchive"], "sha256": "invalid"}},
+            {**archived, "_manifestIndexArchive": {**archived["_manifestIndexArchive"], "decodedBytes": len(raw) - 1}},
+            {**archived, "_manifestIndexArchive": {**archived["_manifestIndexArchive"], "version": "unknown"}},
+            {**archived, "scopePlan": []},
+        ):
+            with self.assertRaises(ValueError):
+                json_object(corrupt)
+        with patch.object(legacy_control_payload, "_MAX_DECODED_BYTES", len(raw) - 1):
+            with self.assertRaises(ValueError):
+                json_object(archived)
 
-        self.assertEqual("ok", result["status"])
-        replacement_graph = replace.call_args.args[0]
-        properties = replacement_graph.entities[0].properties
-        self.assertEqual({scope_id: "abox-scope:005930"}, properties["scopeGenerationIds"])
-        self.assertEqual({scope_id: "2026-07-23T00:10:00Z"}, properties["marketScopeObservedAt"])
-        self.assertEqual("native-index", properties["nativeRuleEvidenceReadIndex"]["fingerprint"])
+        for payload in (expanded, archived):
+            with self.subTest(archived="_manifestIndexArchive" in payload), \
+                    patch.object(repository, "acquire_scoped_abox_write_lease", return_value={"acquired": True, "leaseOwner": "refresh"}), \
+                    patch.object(repository, "release_scoped_abox_write_lease", return_value={"status": "released"}), \
+                    patch.object(repository, "active_abox_metadata", side_effect=[active, refreshed_active]), \
+                    patch.object(repository, "worldview_manifest_marker_rows", return_value=[{**marker, "propertiesJson": json.dumps(payload)}]), \
+                    patch.object(repository, "replace_scoped_manifest_marker_graph", return_value={"saved": True, "status": "ok"}) as replace:
+                result = repository.refresh_market_world_observation_metadata(
+                    "abox-manifest:active", scope_plan,
+                    {scope_id: "2026-07-23T00:10:00Z"}, world_id="market:shared:kr",
+                )
+                self.assertEqual("ok", result["status"])
+                properties = replace.call_args.args[0].entities[0].properties
+                self.assertEqual({scope_id: "abox-scope:005930"}, properties["scopeGenerationIds"])
+                self.assertEqual({scope_id: "2026-07-23T00:10:00Z"}, properties["marketScopeObservedAt"])
+                self.assertEqual("native-index", properties["nativeRuleEvidenceReadIndex"]["fingerprint"])
+                self.assertNotIn("_manifestIndexArchive", properties)
 
     def test_staged_abox_rule_run_finalizes_only_an_aligned_native_generation(self):
         repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")

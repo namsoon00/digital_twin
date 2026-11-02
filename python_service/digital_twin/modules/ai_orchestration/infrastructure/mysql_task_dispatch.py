@@ -39,7 +39,7 @@ class AITaskDispatchPersistence:
             # Only exclude observations when another capability is admissible.
             # Otherwise inspect the candidate and raise the original budget wait.
             from ..domain.work_attention import WINDOW, select
-            limit = WINDOW if subjects and lane not in {"recovery", "other"} else 1
+            limit = WINDOW if subjects and lane not in {"recovery", "other", "portfolio-report"} else 1
             rows = connection.execute("SELECT task_id,account_id,symbol,capability,status,priority,available_at,"
                 "lease_until,attempts,last_error,payload_json FROM ai_control_tasks WHERE " + where
                 + (" AND capability='research'" if source_only else "")

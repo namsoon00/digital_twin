@@ -5,9 +5,24 @@ from ..domain.portfolio_report import build_report, request_identity
 
 
 class PortfolioReportService:
-    def __init__(self, repository, source_reader, publisher, now=None):
+    def __init__(self, repository, source_reader, publisher, now=None, analyses=None):
         self.repository, self.sources, self.publisher = repository, source_reader, publisher
         self.now = now or (lambda: datetime.now(timezone.utc).isoformat())
+        self.analyses = analyses
+
+    def analyze(self, account_id, request_id, send_when_ready=False):
+        self._account(account_id)
+        request_identity(request_id)
+        old = self.analyses.existing(account_id, request_id)
+        if old:
+            return self.analyses.status(old)
+        source = self.sources.capture(account_id, self.now(), full=True)
+        return self.analyses.status(self.analyses.create(account_id, request_id, source, send_when_ready))
+
+    def analysis(self, account_id, analysis_id=""):
+        self._account(account_id)
+        run = self.analyses.get(account_id, analysis_id) if analysis_id else self.analyses.existing(account_id)
+        return self.analyses.status(run)
 
     def accounts(self):
         return self.sources.accounts()

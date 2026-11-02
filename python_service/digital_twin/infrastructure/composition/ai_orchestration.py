@@ -207,7 +207,15 @@ def build_ai_control_service(settings=None, *, store=None):
     from digital_twin.infrastructure.transactions.ai_observation_source_refresh import AIObservationSourceRefresh
     from digital_twin.modules.notifications.infrastructure.delivery_context_reader import DeliveredInsightContextReader
     from digital_twin.infrastructure.composition.runtime_support import setting_truthy
+    from digital_twin.modules.ai_orchestration.application.portfolio_analysis import PortfolioAnalysisWorker
+    from digital_twin.modules.ai_orchestration.infrastructure.mysql_portfolio_analysis import MySQLPortfolioAnalysisStore
+    from digital_twin.infrastructure.composition.portfolio_reports import build_portfolio_report_service
+    reports = build_portfolio_report_service(settings=configured)
+    report_runs = MySQLPortfolioAnalysisStore(configured, initialize=True)
+    store.portfolio_report_writer, store.portfolio_report_failure = report_runs.complete, report_runs.failed
+    report_worker = PortfolioAnalysisWorker(report_runs, store, evidence, subjects, planner, reports.publisher, reports.accounts)
     return AIControlService(store, subjects, evidence, planner, researcher, research_memory, configured,
+                            portfolio_reports=report_worker,
                             delivery_memory=publication.memory,
                             delivery_context=DeliveredInsightContextReader(publication.notifications).read,
                             reviewer=planner, development_memory=development.memory,

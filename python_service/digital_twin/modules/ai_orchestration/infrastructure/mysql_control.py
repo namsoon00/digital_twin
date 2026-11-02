@@ -212,8 +212,11 @@ class MySQLAIControlStore(OpinionMemoryPersistence, AIActivityPersistence, AITok
             development = getattr(self, "development_writer", None)
             if development is not None and job["capability"] in OBSERVATIONS and saved_result.get("summary"):
                 saved_result["development"] = development(connection, job, saved_result)
+            portfolio = getattr(self, "portfolio_report_writer", None)
+            if portfolio is not None:
+                portfolio(connection, job, saved_result, saved_children)
             agenda = getattr(self, "agenda_writer", None)
-            if agenda is not None:
+            if agenda is not None and job["capability"] != "portfolio-report":
                 saved_result["brain"] = agenda(connection, job, saved_result, saved_children)
             knowledge = getattr(self, "knowledge_writer", None)
             if knowledge is not None and job["capability"] in OBSERVATIONS and (saved_result.get("summary") or saved_result.get("retrievalInputIds")):
@@ -286,7 +289,10 @@ class MySQLAIControlStore(OpinionMemoryPersistence, AIActivityPersistence, AITok
                 (status, error_kind[:100], due, stamp(), json.dumps(result, ensure_ascii=False, allow_nan=False) if result is not None else None,
                  capacity_deferrals + int(capacity_wait), job["taskId"], job["leaseToken"], stamp())).rowcount
             failure = getattr(self, "agenda_failure", None)
-            if changed and terminal and failure is not None:
+            portfolio_failure = getattr(self, "portfolio_report_failure", None)
+            if changed and terminal and portfolio_failure is not None:
+                portfolio_failure(connection, job)
+            if changed and terminal and failure is not None and job["capability"] != "portfolio-report":
                 failure(connection, job, error_kind[:100])
             if changed and terminal and job["capability"] in OBSERVATIONS:
                 next_due = (now + timedelta(seconds=recovery_delay)).isoformat().replace("+00:00", "Z")

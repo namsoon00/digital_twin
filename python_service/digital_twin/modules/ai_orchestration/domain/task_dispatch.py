@@ -1,9 +1,9 @@
 """Bounded execution opportunities; this policy never judges market evidence."""
 
-VERSION = "central-task-fairness-v3-work-attention"
+VERSION = "central-task-fairness-v4-portfolio-report"
 SCOPE = "central-task-scheduler"
-CYCLE = ("recovery", "market-observe", "observe", "research", "market-observe", "observe", "research-plan")
-CAPABILITIES = ("market-observe", "observe", "research", "research-plan")
+CYCLE = ("recovery", "market-observe", "observe", "research", "market-observe", "observe", "research-plan", "portfolio-report")
+CAPABILITIES = ("market-observe", "observe", "research", "research-plan", "portfolio-report")
 AGING_MINUTES = 20
 
 

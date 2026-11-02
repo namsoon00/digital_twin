@@ -72,7 +72,7 @@ class AIExecutionPersistence:
             wait = recovery_wait(state, now)
             if wait:
                 where = ("status='pending' AND available_at<=%s "
-                         "AND capability IN ('observe','market-observe','research-plan')")
+                         "AND capability IN ('observe','market-observe','research-plan','portfolio-report')")
                 params = (clock,)
             else:
                 where = "status='pending' AND last_error='ai-execution:recovery-wait'"

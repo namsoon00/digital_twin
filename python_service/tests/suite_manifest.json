@@ -1,5 +1,7 @@
 {
   "tests": [
+    {"file": "test_ai_portfolio_analysis.py", "tier": "unit", "core": false},
+    {"file": "test_ai_portfolio_analysis_storage.py", "tier": "integration", "core": false},
     {"file": "test_ai_portfolio_report.py", "tier": "unit", "core": false},
     {"file": "test_ai_portfolio_report_storage.py", "tier": "integration", "core": false},
     {"file": "test_reliable_opinion_completion.py", "tier": "contract", "core": true},

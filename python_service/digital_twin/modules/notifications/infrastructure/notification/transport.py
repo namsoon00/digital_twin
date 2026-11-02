@@ -85,7 +85,10 @@ class ConsoleNotifier:
         return NotificationResult(False, self.label, "콘솔 전용 모드")
 
 
-class TelegramNotifier:
+from .documents import TelegramDocuments
+
+
+class TelegramNotifier(TelegramDocuments):
     label = "Telegram"
     supports_delivery_checkpoints = True
     supports_research_replies = True

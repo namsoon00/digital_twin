@@ -91,6 +91,23 @@ class PortfolioReportStorageTests(unittest.TestCase):
         audit["deliveryRoute"] = "account"
         self.queue.complete_delivery_attempt(job, attempt, True, metadata=audit)
         self.assertEqual("delivered", self.publish.status(report)["status"])
+        # A fresh whole-portfolio report needs BOTH the summary and file receipt.
+        from test_ai_portfolio_analysis import completed_fixture
+        from digital_twin.modules.notifications.application.ai_report_message import report_summary
+        full = completed_fixture(); full["accountId"] = "report-test"
+        full["contentHash"] = digest({k: v for k, v in full.items() if k != "contentHash"})
+        full = self.store.save_once(full)
+        full_job = self.queue.get(self.publish(full)["jobId"])
+        full_body = NotificationRenderingService().render(full_job)
+        full_artifact = full_job.context["aiPortfolioReport"]
+        proof = {**audit, "renderedMessage": full_body, "messageSha256": hashlib.sha256(full_body.encode()).hexdigest(),
+            "aiPortfolioReport": {k: full_artifact[k] for k in ("version", "reportId", "reportHash", "summaryHash")}}
+        receipt = self.queue.start_delivery_attempt(full_job, "accountNotification", "account")
+        self.queue.complete_delivery_attempt(full_job, receipt, True, metadata=proof)
+        self.assertNotEqual("delivered", self.publish.status(full)["status"])
+        proof.update(documentReceiptVerified=True, documentSha256=full_artifact["document"]["sha256"])
+        self.queue.complete_delivery_attempt(full_job, receipt, True, metadata=proof)
+        self.assertEqual("delivered", self.publish.status(full)["status"])
 
     def test_explicit_customer_correction_is_atomic_once_and_preserves_research_receipt(self):
         report = self.store.save_once(fixture_report())

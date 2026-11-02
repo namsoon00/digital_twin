@@ -20,7 +20,7 @@ class PortfolioReportSourceReader(MySQLOperationalConnection):
         return [{"accountId": a.account_id, "label": a.label or "계정"}
                 for a in self.account_reader() if a.enabled]
 
-    def capture(self, account_id, cutoff):
+    def capture(self, account_id, cutoff, *, full=False):
         account = next((a for a in self.account_reader() if a.enabled and a.account_id == account_id), None)
         if account is None:
             raise ValueError("사용 가능한 계정을 선택해 주세요.")
@@ -38,6 +38,10 @@ class PortfolioReportSourceReader(MySQLOperationalConnection):
                 if scope == "watchlist" and p.symbol not in account.watchlist_symbols:
                     continue
                 universe[p.symbol] = {"symbol": p.symbol, "name": p.name or p.symbol, "scope": scope}
+                if full:
+                    universe[p.symbol]["position"] = {key: getattr(p, key) for key in
+                        ("currency", "market", "quantity", "current_price", "average_price", "account_value_krw",
+                         "account_value_basis", "valuation_fx_state", "source_as_of", "freshness_status")}
         # Configured interests missing from a partial source must stay visible.
         for symbol in account.watchlist_symbols:
             universe.setdefault(symbol, {"symbol": symbol, "name": symbol, "scope": "watchlist"})
@@ -59,10 +63,11 @@ class PortfolioReportSourceReader(MySQLOperationalConnection):
             if company and (company.get("accountId") != account_id or company.get("symbol") != symbol
                             or not known(company.get("sourceCutoffAt"), cutoff)):
                 raise ValueError("기업 자료의 종목·계정·기준 시각이 일치하지 않습니다.")
-            result.append({**subject, "opinion": opinion, "answers": answers[:5],
-                "openQuestions": pending[:5], "companyReport": company,
+            limit = 100 if full else 5
+            result.append({**subject, "worldId": world, "opinion": opinion, "answers": answers[:limit],
+                "openQuestions": pending[:limit], "companyReport": company,
                 "coverage": {"caseReadLimitReached": limited, "reviewedAnswersFound": len(answers),
-                    "omittedAnswers": max(0, len(answers) - 5), "omittedOpenQuestions": max(0, len(pending) - 5),
+                    "omittedAnswers": max(0, len(answers) - limit), "omittedOpenQuestions": max(0, len(pending) - limit),
                     "opinionReadLimit": 20},
                 "opinionStatus": "dated-reviewed" if opinion else "no-reviewed-opinion-in-read-window"})
         return {"snapshotAt": snapshot.generated_at, "subjects": result}

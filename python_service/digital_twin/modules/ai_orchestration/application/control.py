@@ -22,12 +22,13 @@ from digital_twin.modules.ai_orchestration.domain.validation_diagnostic import t
 
 
 class AIControlService:
-    def __init__(self, store, subjects, evidence, planner, researcher, research_memory, settings=None, delivery_memory=None, reviewer=None, development_memory=None, brain_memory=None, brain_waker=None, read_planner=None, evidence_waker=None, read_round_budget=None, company_memory=None, research_plan_memory=None, research_gate=None, knowledge_context=None, knowledge_refresh=None, rulebox_feedback=None, market_brain_memory=None, source_refresher=None, delivery_context=None):
+    def __init__(self, store, subjects, evidence, planner, researcher, research_memory, settings=None, delivery_memory=None, reviewer=None, development_memory=None, brain_memory=None, brain_waker=None, read_planner=None, evidence_waker=None, read_round_budget=None, company_memory=None, research_plan_memory=None, research_gate=None, knowledge_context=None, knowledge_refresh=None, rulebox_feedback=None, market_brain_memory=None, source_refresher=None, delivery_context=None, portfolio_reports=None):
         self.store, self.subjects, self.evidence = store, subjects, evidence
         self.planner, self.researcher, self.research_memory = planner, researcher, research_memory
         self.settings = dict(settings or {})
         self.delivery_memory = delivery_memory or (lambda account, symbol: {})
         self.delivery_context = delivery_context
+        self.portfolio_reports = portfolio_reports
         self.reviewer = reviewer
         self.development_memory = development_memory or (lambda account, symbol: [])
         self.brain_memory = brain_memory or (lambda account, symbol, world: [])
@@ -61,6 +62,12 @@ class AIControlService:
             return {"status": "idle"}
         stage = "subject-check"
         try:
+            if job["capability"] == "portfolio-report" and self.portfolio_reports:
+                stage = "portfolio-report"
+                with self.store.keep_alive(job):
+                    result, children = self.portfolio_reports(job)
+                    saved = self.store.complete(job, result, children)
+                return {"status": "completed" if saved else "lease-lost", "taskId": job["taskId"], "capability": job["capability"]}
             current_subject = next((subject for subject in subjects
                 if all(subject[key] == job[key] for key in ("accountId", "symbol", "worldId"))), None)
             if current_subject is None:

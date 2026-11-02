@@ -11,19 +11,27 @@ def portfolio_report_response(request, path, query, service_factory=build_portfo
         return NOT_HANDLED
     if request.share_access().role not in {"owner", "local-owner"}:
         return request.send_payload(403, {"error": "AI 보고서는 소유자만 확인할 수 있습니다."})
-    match = re.fullmatch(r"/api/ai-reports/([0-9a-f]{64})(/send|/delivery)?", path)
+    match = re.fullmatch(r"/api/ai-reports/([0-9a-f]{64})(/send|/delivery|/document)?", path)
+    analysis_match = re.fullmatch(r"/api/ai-reports/analyses(?:/([0-9a-f]{64}))?", path)
+    analyze = path == "/api/ai-reports/analyses" and request.command == "POST"
     create = path == "/api/ai-reports" and request.command == "POST"
     send = bool(match and match[2] == "/send" and request.command == "POST")
-    if request.command != "GET" and not (create or send):
+    if request.command != "GET" and not (create or send or analyze):
         return request.send_payload(405, {"error": "지원하지 않는 보고서 요청입니다."})
-    if (create or send) and not request.ensure_writable("보고서 생성·발송은 소유자만 요청할 수 있습니다."):
+    if (create or send or analyze) and not request.ensure_writable("보고서 생성·발송은 소유자만 요청할 수 있습니다."):
         return None
     try:
-        body = request.read_json_body() if create or send else {}
+        body = request.read_json_body() if create or send or analyze else {}
         if not isinstance(body, dict):
             raise ValueError("보고서 요청 형식을 확인해 주세요.")
-        account = body.get("accountId") if create or send else first_query(query, "accountId")
-        service = service_factory(writable=create)
+        account = body.get("accountId") if create or send or analyze else first_query(query, "accountId")
+        service = service_factory(writable=create or analyze)
+        if analyze:
+            if not isinstance(body.get("sendWhenReady", False), bool):
+                raise ValueError("발송 설정을 확인해 주세요.")
+            return request.send_payload(202, {"analysis": service.analyze(account, body.get("requestId"), body.get("sendWhenReady", False))})
+        if analysis_match:
+            return request.send_payload(200, {"analysis": service.analysis(account, analysis_match[1] or "")})
         if path == "/api/ai-reports/accounts" and request.command == "GET":
             return request.send_payload(200, {"accounts": service.accounts()})
         if create:
@@ -33,9 +41,12 @@ def portfolio_report_response(request, path, query, service_factory=build_portfo
             return request.send_payload(200, {"delivery": service.send(account, match[1])})
         if path == "/api/ai-reports":
             return request.send_payload(200, {"reports": service.list(account)})
-        if match and match[2] in {None, "/delivery"}:
+        if match and match[2] in {None, "/delivery", "/document"}:
             report = service.get(account, match[1])
             if report:
+                if match[2] == "/document":
+                    from digital_twin.modules.ai_orchestration.contracts import render_portfolio_report_document
+                    return request.send_payload(200, {"document": render_portfolio_report_document(report)})
                 if match[2] == "/delivery":
                     return request.send_payload(200, {"delivery": service.publisher.status(report)})
                 return request.send_payload(200, {"report": report, "delivery": service.publisher.status(report)})

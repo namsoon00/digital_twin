@@ -1,5 +1,6 @@
 """Frozen summary of an explicitly requested report; never regenerate an opinion."""
 import html
+import hashlib
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
@@ -18,6 +19,8 @@ def date_label(value):
 def report_summary(report):
     if not verify_portfolio_report(report):
         raise ValueError("보고서 내용 검증에 실패했습니다.")
+    if report.get("version") == "ai-portfolio-report-v2":
+        return analysis_summary(report)
     coverage = report["coverage"]
     lines = ["📑 보유·관심 종목 AI 보고서", "",
         "보고서 생성 " + date_label(report["createdAt"]),
@@ -61,3 +64,26 @@ def render_ai_report(value):
             or portfolio_report_digest({k: v for k, v in value.items() if k != "summaryHash"}) != value.get("summaryHash")):
         raise ValueError("요청 보고서의 저장된 요약이 일치하지 않습니다.")
     return html.escape(value["body"], quote=False)
+
+
+def analysis_summary(report):
+    from digital_twin.modules.ai_orchestration.contracts import render_portfolio_report_document
+    c = report["coverage"]
+    lines = ["📑 보유·관심 전체 AI 분석", "", "분석 완료 " + date_label(report["createdAt"]),
+        f"전체 {c['subjects']}종목 · 보유 {c['holdings']} · 관심 {c['watchlist']}",
+        f"검토된 설명 {c['withReviewedAnalysis']}종목 · 부족 항목이 남은 종목 {c['withGaps']}개", ""]
+    for key, title in (("overview", "전체 판단"), ("market", "시장·산업"), ("portfolio", "보유 구조와 위험"), ("priorities", "다음 확인")):
+        claim = report["overall"][key]
+        lines += [title, claim["text"]]
+        if claim["missing"]:
+            lines.append("미확인: " + " / ".join(claim["missing"]))
+        lines.append("")
+    lines += ["모든 종목의 분석·반대 근거·원문은 함께 보내는 전문 HTML 파일에서 확인할 수 있습니다.",
+              "확보한 자료 범위의 설명이며 매매 지시가 아닙니다.", "보고서 번호 " + report["reportId"][:12]]
+    document = render_portfolio_report_document(report)
+    value = {"version": VERSION, "reportId": report["reportId"], "accountId": report["accountId"],
+        "reportHash": report["contentHash"], "createdAt": report["createdAt"], "body": "\n".join(lines), "requestedByOwner": True,
+        "document": {"filename": "orbit-alpha-" + report["reportId"][:12] + ".html", "html": document,
+                     "sha256": hashlib.sha256(document.encode()).hexdigest()}}
+    value["summaryHash"] = portfolio_report_digest(value)
+    return value

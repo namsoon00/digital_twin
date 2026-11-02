@@ -156,11 +156,18 @@ class NotificationDispatchService:
                 persist_progress(job)
 
         try:
-            delivery = (
-                notifier.send_resumable(message, checkpoint=progress.get("checkpoint"), on_checkpoint=save_checkpoint,
-                    **({"reply_to_message_id": reply_id} if threaded else {}))
-                if resumable else notifier.send(message)
-            )
+            document = (context.get("aiPortfolioReport") or {}).get("document") if job.message_type == "aiReport" else None
+            if document:
+                send_report = getattr(notifier, "send_report_resumable", None)
+                if not callable(send_report):
+                    raise RuntimeError("고객 알림 채널이 보고서 전문 첨부를 지원하지 않습니다.")
+                delivery = send_report(message, document, checkpoint=progress.get("checkpoint"), on_checkpoint=save_checkpoint)
+            else:
+                delivery = (
+                    notifier.send_resumable(message, checkpoint=progress.get("checkpoint"), on_checkpoint=save_checkpoint,
+                        **({"reply_to_message_id": reply_id} if threaded else {}))
+                    if resumable else notifier.send(message)
+                )
         except Exception as error:
             if attempt_id and hasattr(self.queue, "complete_delivery_attempt"):
                 self.queue.complete_delivery_attempt(job, attempt_id, False, reason=str(error), metadata=rendered_audit)

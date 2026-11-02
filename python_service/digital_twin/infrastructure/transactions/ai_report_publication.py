@@ -67,6 +67,12 @@ class AIReportPublication:
                     and data.get("renderedMessage") and hashlib.sha256(data["renderedMessage"].encode()).hexdigest() == data.get("messageSha256")):
                 route = data.get("deliveryRoute")
                 if route == "account":
+                    if report.get("version") == "ai-portfolio-report-v2":
+                        expected = report_summary(report)
+                        if (data.get("documentReceiptVerified") is not True or data.get("documentSha256") != expected["document"]["sha256"]
+                                or identity.get("summaryHash") != expected["summaryHash"]
+                                or data["renderedMessage"] != render_ai_report(expected)):
+                            continue
                     return {"status": "delivered", "jobId": job_id, "deliveredAt": attempt["completed_at"],
                             "receiptVerified": True, "deliveryRoute": route}
                 if route == "ai-research" and (job is None or job["status"] == "done"):

@@ -23,3 +23,17 @@ test("delivery completion is shown only with verified receipt", () => {
   assert.match(deliveryLabel({status: "other-channel"}), /연구 봇으로만/);
   assert.match(deliveryLabel({status: "delivered", receiptVerified: true, deliveryRoute: "account", deliveredAt: "2026-11-02T05:00:00Z"}), /고객 채널 전송 확인.*서버 접수/);
 });
+
+test("whole portfolio report renders every subject, scoped gaps and escaped citations", () => {
+  const dims = ["business", "value", "price", "external", "portfolio", "research", "risks"];
+  const claim = {text: "아직 확인할 자료가 부족합니다.", status: "unknown", missing: ["실적 원문"], refs: []};
+  const report = {version: "ai-portfolio-report-v2", title: "전체 보고서", createdAt: "2026-11-02T05:00:00Z", snapshotAt: "2026-11-02T01:00:00Z", analysisStartedAt: "2026-11-02T04:00:00Z",
+    boundary: "확보 자료의 범위", reportId: "frozen", contentHash: "hash", coverage: {subjects: 13, withReviewedAnalysis: 0, withGaps: 13, sourcesRead: 20, sourcesAvailable: 50},
+    overall: Object.fromEntries(["overview", "market", "portfolio", "priorities"].map(k => [k, claim])), overallSources: {},
+    subjects: Array.from({length: 13}, (_, i) => ({name: "기업<script>" + i, symbol: "S" + i, scope: "watchlist", analyzedAt: "2026-11-02T04:00:00Z",
+      claims: Object.fromEntries(dims.map(k => [k, claim])), sources: {}, sourceCoverage: {available: 5, read: 2, graphLimitation: "missing"}, openQuestions: []}))};
+  const html = renderAIReport(report);
+  for (let i = 0; i < 13; i++) assert.match(html, new RegExp(`id="subject-${i}"`));
+  assert.match(html, /전체 종합/); assert.match(html, /실적 원문/); assert.match(html, /20 \/ 50/);
+  assert.doesNotMatch(html, /<script>/);
+});

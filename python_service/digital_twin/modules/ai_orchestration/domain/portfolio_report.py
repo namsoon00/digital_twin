@@ -101,9 +101,9 @@ def build_report(account, captured_at, snapshot_at, subjects, *, request_id):
 
 
 def verify_report(report):
-    return (report.get("version") == VERSION and bool(report.get("contentHash"))
+    return (report.get("version") in {VERSION, "ai-portfolio-report-v2"} and bool(report.get("contentHash"))
             and digest({k: v for k, v in report.items() if k != "contentHash"}) == report["contentHash"])
 
 
 def summary(report):
-    return {k: deepcopy(report[k]) for k in ("reportId", "accountId", "createdAt", "snapshotAt", "title", "coverage", "contentHash")}
+    return {k: deepcopy(report[k]) for k in ("reportId", "accountId", "createdAt", "snapshotAt", "title", "coverage", "contentHash", "version", "creationMode")}

@@ -11,6 +11,8 @@ POLICY = "paced-completion-v1"
 
 
 def execution_pool(workload, prompt_version=""):
+    if prompt_version.startswith("ai-portfolio-analysis-v1-"):
+        return "retrieval" if prompt_version.endswith("-read") else "completion"
     if workload == "independent-observation":
         if prompt_version.startswith("independent-observation-retrieval-"):
             return "retrieval"

@@ -492,7 +492,11 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # One historical-route correction regression retains the original receipt.
         # Seven temporal-history contracts preserve ABox facts, source replay,
         # isolation, corrections, rollback, failure visibility and backfill races.
-        self.assertLessEqual(total, 2980)
+        # Whole-portfolio scope, frozen paid-step recovery, attachment delivery,
+        # and transactional run ownership add nine distinct regressions.
+        # Seven concurrently landed valid-observation path contracts also
+        # belong to the current manifest (bea6bc9b1).
+        self.assertLessEqual(total, 2996)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

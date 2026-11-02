@@ -46,18 +46,22 @@ class MySQLPortfolioReportStore(MySQLOperationalConnection):
         return self._read("request_id", request_id, account)
 
     def save_once(self, report):
+        with self.transaction() as connection:
+            return self.save_with_connection(connection, report)
+
+    @classmethod
+    def save_with_connection(cls, connection, report):
         if not verify_report(report):
             raise ValueError("보고서 내용과 해시가 일치하지 않습니다.")
         payload = json.dumps(report, ensure_ascii=False, allow_nan=False)
         if len(payload.encode()) > 8_000_000:
             raise ValueError("보고서 크기가 저장 한도를 넘었습니다.")
-        with self.transaction() as connection:
-            connection.execute("INSERT IGNORE INTO ai_portfolio_reports "
+        connection.execute("INSERT IGNORE INTO ai_portfolio_reports "
                 "(report_id,account_id,request_id,created_at,content_hash,payload_json,summary_json) VALUES (%s,%s,%s,%s,%s,%s,%s)",
                 (report["reportId"], report["accountId"], report["requestId"], report["createdAt"], report["contentHash"], payload,
                  json.dumps(summary(report), ensure_ascii=False)))
-            # Concurrent retries return the first frozen snapshot, never replace it.
-            return self.decode(connection.execute("SELECT payload_json,content_hash FROM ai_portfolio_reports "
+        # Concurrent retries return the first frozen snapshot, never replace it.
+        return cls.decode(connection.execute("SELECT payload_json,content_hash FROM ai_portfolio_reports "
                 "WHERE account_id=%s AND request_id=%s", (report["accountId"], report["requestId"])).fetchone())
 
     def recent(self, account):

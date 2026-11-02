@@ -8,6 +8,7 @@ def build_portfolio_report_service(*, writable=False, settings=None):
     from digital_twin.modules.ai_orchestration.application.portfolio_reports import PortfolioReportService
     from digital_twin.modules.ai_orchestration.infrastructure.portfolio_report_sources import PortfolioReportSourceReader
     from digital_twin.modules.ai_orchestration.infrastructure.mysql_portfolio_reports import MySQLPortfolioReportStore
+    from digital_twin.modules.ai_orchestration.infrastructure.mysql_portfolio_analysis import MySQLPortfolioAnalysisStore
     from digital_twin.modules.read_models.public import InstrumentValuationQueryService
     from digital_twin.modules.portfolio.contracts import InstrumentValuationQuery
     from digital_twin.modules.news_intelligence.contracts import build_company_change_report
@@ -27,4 +28,4 @@ def build_portfolio_report_service(*, writable=False, settings=None):
     reports = MySQLPortfolioReportStore(read_settings, initialize=writable)
     source = PortfolioReportSourceReader(read_settings, lambda: MySQLWatchlistAccountReader(read_settings).load_all(), company)
     publication = AIReportPublication(reports, lambda: MySQLNotificationJobStore(read_settings))
-    return PortfolioReportService(reports, source, publication)
+    return PortfolioReportService(reports, source, publication, analyses=MySQLPortfolioAnalysisStore(read_settings, initialize=writable))

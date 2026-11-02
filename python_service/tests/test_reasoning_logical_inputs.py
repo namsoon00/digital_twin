@@ -134,7 +134,11 @@ class ReasoningLogicalInputTests(unittest.TestCase):
                                                   lambda event: events.append(event) or {"saved": True},
                                                   lambda: "2026-10-18T00:01:00Z",
                                                   lambda account, stamp: {"portfolioId": "portfolio:" + account,
-                                                                          "asOf": stamp, "status": "unavailable"})
+                                                                          "asOf": stamp, "status": "unavailable"},
+                                                  runtime_context_reader=lambda snap, symbols, baseline: {
+                                                      "asOf": snap.generated_at, "account": {"accountId": snap.account_id},
+                                                      "temporalObservationWindows": {symbols[0]: [1, 2, 3]},
+                                                      "settings": {"telegramToken": "fixture-private"}})
         first = service.request(["NVDA"], limit=1)
         second = service.request(["NVDA"], limit=1)
         self.assertEqual("requested", first["status"])
@@ -156,13 +160,18 @@ class ReasoningLogicalInputTests(unittest.TestCase):
         from digital_twin.modules.reasoning.domain.reasoning_comparison_identity import PAIRED_VALIDATION_INPUT_VERSION
         self.assertEqual(PAIRED_VALIDATION_INPUT_VERSION, repaired_request.context["validationInputMode"])
         self.assertEqual(events[0].payload["validationPortfolioContext"], durable.payload["validationPortfolioContext"])
+        self.assertEqual(events[0].payload["validationRuntimeContext"], durable.payload["validationRuntimeContext"])
         self.assertEqual({"acct": events[0].payload["validationPortfolioContext"]}, repaired_request.context["validationPortfolioContexts"])
-        for broken in ("missing", "wrong-fingerprint"):
+        for broken in ("missing", "wrong-fingerprint", "missing-runtime", "wrong-runtime-fingerprint"):
             invalid = deepcopy(durable)
             if broken == "missing":
                 invalid.payload.pop("validationPortfolioContext")
-            else:
+            elif broken == "wrong-fingerprint":
                 invalid.payload["validationPair"]["portfolioContextHash"] = "invalid"
+            elif broken == "missing-runtime":
+                invalid.payload.pop("validationRuntimeContext")
+            else:
+                invalid.payload["validationPair"]["runtimeContextHash"] = "invalid"
             with self.subTest(broken=broken), self.assertRaises(ValueError):
                 independent_reasoning_request("baseline", [invalid])
         self.assertEqual([], repaired_request.context["requestedScopeFamilies"])
@@ -172,6 +181,10 @@ class ReasoningLogicalInputTests(unittest.TestCase):
         self.assertTrue(compact["validationOnly"])
         self.assertEqual(repaired_request.context["validationInputMode"], compact["validationInputMode"])
         self.assertEqual(repaired_request.context["validationPortfolioContexts"], compact["validationPortfolioContexts"])
+        self.assertEqual(repaired_request.context["validationRuntimeContexts"], compact["validationRuntimeContexts"])
+        other = deepcopy(durable.to_dict())
+        other["payload"]["validationPair"]["runtimeContextHash"] = "different-history"
+        self.assertNotEqual(reasoning_batch_key(durable.to_dict(), "GOVERNANCE"), reasoning_batch_key(other, "GOVERNANCE"))
         ordinary = deepcopy(durable)
         ordinary.payload.pop("candidateValidationReplay")
         self.assertNotIn("validationInputMode", independent_reasoning_request("baseline", [ordinary]).context)

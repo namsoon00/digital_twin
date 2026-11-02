@@ -8,6 +8,7 @@ from unittest.mock import Mock
 
 from digital_twin.modules.reasoning.domain.validation_portfolio_input import (
     freeze_validation_portfolio_input, read_validation_portfolio_input,
+    freeze_validation_runtime_input, read_validation_runtime_input,
 )
 from digital_twin.modules.reasoning.domain.reasoning_comparison_identity import PAIRED_VALIDATION_INPUT_VERSION
 from digital_twin.modules.reasoning.domain.reasoning_source_snapshot import reasoning_source_snapshot_id
@@ -70,6 +71,26 @@ class PairedPortfolioInputTests(unittest.TestCase):
         self.assertEqual("temporal-features-v2", saved["settings"]["_reasoningFeatureSetVersion"])
         with self.assertRaises(ValueError):
             capture_graph_input(inputs, snapshot, ["AAA"], False, {**context, "validationPortfolioContexts": {}}, {}, Mock())
+        # Complete paired input never re-reads mutable outcomes, settings, or windows.
+        frozen = {**result.runtime_context, "asOf": STAMP, "account": {"accountId": snapshot.account_id}}
+        frozen["settings"] = {"telegramToken": "fixture-secret", "_reasoningFeatureSetVersion": "other-release"}
+        runtime_packet = freeze_validation_runtime_input(snapshot.account_id, source_id, STAMP, ["AAA"], frozen)
+        frozen["temporalObservationWindows"] = {"changed": True}
+        inputs.runtime_context = Mock(side_effect=AssertionError("frozen facts must not be read again"))
+        frozen_context = {**context, "validationRuntimeContexts": {snapshot.account_id: runtime_packet}}
+        captured = capture_graph_input(inputs, snapshot, ["AAA"], False, frozen_context, {}, Mock())
+        self.assertEqual({"AAA": {"backend": "independent"}}, captured.runtime_context["temporalObservationWindows"])
+        self.assertNotIn("telegramToken", captured.runtime_context["settings"])
+        self.assertEqual("temporal-features-v2", captured.runtime_context["settings"]["_reasoningFeatureSetVersion"])
+        for account, source, stamp, symbols, receipt in (
+            ("other", source_id, STAMP, ["AAA"], runtime_packet),
+            (snapshot.account_id, "other", STAMP, ["AAA"], runtime_packet),
+            (snapshot.account_id, source_id, "later", ["AAA"], runtime_packet),
+            (snapshot.account_id, source_id, STAMP, ["BBB"], runtime_packet),
+            (snapshot.account_id, source_id, STAMP, ["AAA"], {**runtime_packet, "sha256": "tampered"}),
+        ):
+            with self.subTest(account=account, source=source, stamp=stamp, symbols=symbols), self.assertRaises(ValueError):
+                read_validation_runtime_input(receipt, account, source, stamp, symbols)
         # Live projection always supplies the source cutoff to its portfolio reader.
         instance = recorder(api, snapshot=snapshot, overrides=False)
         reader = Mock(return_value=row)

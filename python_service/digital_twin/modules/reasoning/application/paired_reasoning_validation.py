@@ -8,16 +8,17 @@ from digital_twin.shared_kernel.events import DomainEvent
 from digital_twin.modules.reasoning.domain.independent_reasoning import shard_reasoning_event, reasoning_event_scope
 from digital_twin.modules.reasoning.domain.verified_snapshot_reasoning import verified_monitor_snapshot_reasoning_event
 from digital_twin.modules.reasoning.domain.reasoning_comparison_identity import PAIRED_VALIDATION_INPUT_VERSION
-from digital_twin.modules.reasoning.domain.validation_portfolio_input import freeze_validation_portfolio_input
+from digital_twin.modules.reasoning.domain.validation_portfolio_input import freeze_validation_portfolio_input, freeze_validation_runtime_input
 
 
 class PairedReasoningValidationService:
-    def __init__(self, registry, snapshot_reader, event_recorder, now_provider, portfolio_context_reader=None):
+    def __init__(self, registry, snapshot_reader, event_recorder, now_provider, portfolio_context_reader=None, runtime_context_reader=None):
         self.registry = registry
         self.snapshot_reader = snapshot_reader
         self.event_recorder = event_recorder
         self.now_provider = now_provider
         self.portfolio_context_reader = portfolio_context_reader
+        self.runtime_context_reader = runtime_context_reader
 
     def request(self, symbols, account_id="", limit=1):
         control = self.registry.control()
@@ -58,6 +59,13 @@ class PairedReasoningValidationService:
                         "sourceSnapshotId": str(boundary.get("snapshotId") or ""), "symbols": subject,
                         "inputMode": PAIRED_VALIDATION_INPUT_VERSION,
                         "portfolioContextHash": portfolio_packet["sha256"]}
+                if callable(self.runtime_context_reader):
+                    runtime_packet = freeze_validation_runtime_input(
+                        snapshot.account_id, pair["sourceSnapshotId"], snapshot.generated_at, subject,
+                        self.runtime_context_reader(snapshot, subject, baseline),
+                    )
+                    pair["runtimeContextHash"] = runtime_packet["sha256"]
+                    payload["validationRuntimeContext"] = runtime_packet
                 identity = hashlib.sha256(json.dumps(pair, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
                 payload.update(candidateValidationReplay=True, validationPair=pair,
                                validationPortfolioContext=portfolio_packet,

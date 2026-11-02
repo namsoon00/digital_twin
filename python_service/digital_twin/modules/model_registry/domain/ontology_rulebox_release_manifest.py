@@ -122,7 +122,7 @@ RULEBOX_MARKET_EVIDENCE_GUARD_RULE_IDS: FrozenSet[str] = frozenset(
 # Versioning these rows makes the persisted TypeDB catalog receive the change
 # once without treating presentation metadata as runtime policy.
 RULEBOX_DECISION_EFFECT_CONTRACT_RULE_VERSIONS: Dict[str, str] = {
-    "graph.temporal.stale_observation.block.v1": "v2",
+    "graph.temporal.stale_observation.block.v1": "v3",
     "graph.temporal.coverage_gap.v1": "v2",
     "graph.security_line.coverage_gap.v1": "v2",
     "graph.news.quality.validation_state.v1": "v2",

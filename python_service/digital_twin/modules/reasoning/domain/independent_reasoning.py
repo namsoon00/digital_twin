@@ -906,8 +906,9 @@ def independent_reasoning_request(
         for event in events
     )
     if complete_dependency_validation:
-        from .validation_portfolio_input import read_validation_portfolio_input
+        from .validation_portfolio_input import read_validation_portfolio_input, read_validation_runtime_input
         packets = {}
+        runtime_packets = {}
         for event in events:
             payload = event.payload or {}
             boundary = payload["verifiedSourceSnapshot"]
@@ -921,7 +922,21 @@ def independent_reasoning_request(
             if account_id in packets and packets[account_id] != packet:
                 raise ValueError("Validation batch mixes different portfolio inputs")
             packets[account_id] = packet
+            runtime_packet = payload.get("validationRuntimeContext")
+            runtime_hash = payload["validationPair"].get("runtimeContextHash")
+            if runtime_packet or runtime_hash:
+                read_validation_runtime_input(runtime_packet or {}, account_id, boundary["snapshotId"],
+                                              boundary["generatedAt"], payload["validationPair"].get("symbols") or [])
+                if runtime_packet.get("sha256") != runtime_hash:
+                    raise ValueError("Validation runtime input fingerprint mismatch")
+                if account_id in runtime_packets and runtime_packets[account_id] != runtime_packet:
+                    raise ValueError("Validation batch mixes different runtime inputs")
+                runtime_packets[account_id] = runtime_packet
         context["validationPortfolioContexts"] = packets
+        if runtime_packets:
+            if set(runtime_packets) != set(packets):
+                raise ValueError("Validation batch mixes frozen and independent runtime inputs")
+            context["validationRuntimeContexts"] = runtime_packets
         # A bounded comparison prepares current dependency facts, rather than
         # claiming ownership of one market event's narrow field slots. Keep
         # original source facts/revisions as audit and native subjects bounded.

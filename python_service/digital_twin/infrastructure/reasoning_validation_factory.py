@@ -37,9 +37,30 @@ def build_paired_reasoning_validation_service(settings=None):
             insert_domain_event_with_connection(connection, event)
             return jobs.ingress_event_with_connection(connection, event)
 
+    def read_runtime_context(snapshot, symbols, baseline_id):
+        from digital_twin.infrastructure.ontology_projection import PortfolioOntologyProjectionRecorder
+        from digital_twin.infrastructure.statistical_signal_factory import build_statistical_signal_pipeline_service
+        from digital_twin.infrastructure.time_series_factory import build_time_series_adapters
+        descriptor = registry.get(baseline_id)
+        artifact = registry.release_artifact(baseline_id)
+        if not artifact.get("valid"):
+            raise ValueError("Paired validation requires a verified baseline release artifact")
+        capture_settings = {**configured, "_reasoningFeatureSetVersion": descriptor["releaseBundle"]["feature_set_version"]}
+        recorder = PortfolioOntologyProjectionRecorder(
+            None, settings=capture_settings,
+            decision_episode_store=stores.investment_decision_episode_store(configured),
+            hypothesis_proposal_store=stores.investment_research_store(configured),
+            hypothesis_lifecycle_store=stores.hypothesis_lifecycle_store(configured),
+            investment_domain_store=portfolio,
+            market_time_series_store=build_time_series_adapters(configured)[descriptor["timeSeriesBackendId"]],
+            statistical_signal_service=build_statistical_signal_pipeline_service(capture_settings),
+        )
+        return recorder.runtime_context(snapshot, active_tbox=artifact["artifact"]["tboxMetadata"], target_symbols=symbols)
+
     return PairedReasoningValidationService(
         registry, read_snapshots, record, utc_now,
         portfolio_context_reader=lambda account_id, as_of: portfolio.ontology_portfolio_lifecycle_context(
             "portfolio:" + account_id, as_of=as_of,
         ),
+        runtime_context_reader=read_runtime_context,
     )

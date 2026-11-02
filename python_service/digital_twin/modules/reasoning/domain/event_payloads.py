@@ -182,10 +182,13 @@ def compact_ontology_reasoning_request_payload_for_storage(payload: Mapping[str,
                     "portfolioContextHash",
                 )},
                 **({"inputMode": _event_text(pair.get("inputMode"), 80)} if _event_text(pair.get("inputMode"), 80) else {}),
+                **({"runtimeContextHash": _event_text(pair["runtimeContextHash"], 64)} if pair.get("runtimeContextHash") else {}),
                 "symbols": _event_text_list(pair.get("symbols"), limit=200, item_limit=64),
             }
         if isinstance(source.get("validationPortfolioContext"), Mapping):
             compact["validationPortfolioContext"] = dict(source["validationPortfolioContext"])
+        if isinstance(source.get("validationRuntimeContext"), Mapping):
+            compact["validationRuntimeContext"] = dict(source["validationRuntimeContext"])
     return compact
 
 

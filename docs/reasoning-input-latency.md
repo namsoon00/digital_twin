@@ -8,6 +8,16 @@ leased validation batch. Claim, control, shutdown and cooldown checks still
 apply; failure or process exit releases the reservation. Real-lock regressions
 are in `test_graph_writer_guard` and `test_rule_delivery_latency`.
 
+Paired validation also captures the complete, secret-filtered factual runtime
+context once. Its compressed receipt binds account, exact source snapshot,
+source clock and subject set; both independent engines verify that receipt
+instead of re-reading mutable outcome and research records several minutes
+apart. Each engine still owns its feature calculator, native rules, graph store
+and zero-delivery execution. Missing/tampered receipts fail before graph work.
+Ordinary market jobs continue to read through their normal source ports.
+Legacy portfolio-only receipts remain auditable and retain strict fact-parity
+requirements; they are not relabelled as complete shared-input proofs.
+
 ## Preserve executed temporal input identity (2026-10-26)
 
 A paired equity validation produced identical assembled and persisted facts,

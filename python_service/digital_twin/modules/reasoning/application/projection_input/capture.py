@@ -10,7 +10,7 @@ from digital_twin.modules.reasoning.domain.reasoning_shadow import frozen_projec
 from digital_twin.modules.reasoning.domain.reasoning_shadow import pack_projection_runtime_contexts
 from digital_twin.modules.reasoning.domain.reasoning_comparison_identity import PAIRED_VALIDATION_INPUT_VERSION
 from digital_twin.modules.reasoning.domain.reasoning_source_snapshot import reasoning_source_snapshot_id
-from digital_twin.modules.reasoning.domain.validation_portfolio_input import read_validation_portfolio_input
+from digital_twin.modules.reasoning.domain.validation_portfolio_input import read_validation_portfolio_input, read_validation_runtime_input
 import time
 from .ports import CaptureInputs, PreparedGraphInput
 
@@ -103,12 +103,25 @@ def capture_graph_input(
             return
         emit("runtime_context." + str(stage or "unknown"), **details)
 
-    runtime_context = _inputs.runtime_context(
-        snapshot,
-        active_tbox=active_tbox,
-        target_symbols=computation_symbols or None,
-        progress_callback=context_progress,
-    )
+    validation_packets = (reasoning_context or {}).get("validationRuntimeContexts")
+    if ((reasoning_context or {}).get("validationOnly") is True
+            and (reasoning_context or {}).get("validationInputMode") == PAIRED_VALIDATION_INPUT_VERSION
+            and validation_packets):
+        runtime_context = read_validation_runtime_input(
+            validation_packets.get(snapshot.account_id) or {}, snapshot.account_id,
+            reasoning_source_snapshot_id(snapshot.account_id, snapshot.generated_at), snapshot.generated_at,
+            computation_symbols,
+        )
+        # Source facts are shared, while each release still owns its TBox and calculator.
+        runtime_context["activeTBox"] = active_tbox
+        _inputs.last_runtime_contexts[snapshot.account_id] = frozen_projection_runtime_context(runtime_context)
+    else:
+        runtime_context = _inputs.runtime_context(
+            snapshot,
+            active_tbox=active_tbox,
+            target_symbols=computation_symbols or None,
+            progress_callback=context_progress,
+        )
     # The release owns feature semantics, including when replaying another
     # release's immutable observations. Never inherit its calculator version.
     feature_version = str(_inputs.settings.get("_reasoningFeatureSetVersion") or "")

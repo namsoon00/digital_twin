@@ -122,6 +122,8 @@ export function analysisLabel(run) {
   const phases = {read: "자료 조회", write: "종목 분석", review: "근거 검토", synthesis: "전체 종합", "synthesis-review": "전체 종합 검토", deliver: "고객 채널 발송 예약", done: "완료"};
   const progress = `${run.completedSubjects} / ${run.totalSubjects}종목 검토 완료 · ${phases[run.phase] || "대기"}`;
   if (run.status === "failed" || run.taskStatus === "failed") return progress + " · 실행 중단. 저장된 진행 기록을 확인해야 합니다.";
+  if (run.runtimeWait === "memory-pressure") return progress + " · 시스템 메모리 부족으로 대기 중. 여유가 생기면 자동으로 재개합니다.";
+  if (run.runtimeWait === "central-ai-paused") return progress + " · 중앙 AI가 설정에서 일시 중지되어 있습니다.";
   if (run.waitReason) return progress + " · 실행 대기 (" + run.waitReason + ") · 다음 확인 " + reportDate(run.nextCheckAt);
   return progress + (run.taskStatus === "pending" ? " · 중앙 AI 실행 순서 대기" : "");
 }

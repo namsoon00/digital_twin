@@ -1,4 +1,4 @@
-import { renderAIReport, reportDate, deliveryLabel, analysisLabel } from "./modules/reports/ai-report.mjs?v=51f8a877d586095e";
+import { renderAIReport, reportDate, deliveryLabel, analysisLabel } from "./modules/reports/ai-report.mjs?v=0e31aae8a59813f0";
 
 const $ = id => document.getElementById(id);
 let current = null;

@@ -119,8 +119,17 @@ class MySQLPortfolioAnalysisStore(MySQLOperationalConnection):
         with self.connect() as connection:
             task = connection.execute("SELECT status,last_error,available_at FROM ai_control_tasks WHERE task_id=%s AND account_id=%s",
                                       (run["taskId"], run["accountId"])).fetchone() or {}
+        runtime_wait = ""
+        if task.get("status") == "pending":
+            from ..domain.planning import enabled
+            from digital_twin.infrastructure.background_capacity import host_memory_pressure
+            if not enabled(self.runtime_settings):
+                runtime_wait = "central-ai-paused"
+            elif host_memory_pressure() == "critical":
+                runtime_wait = "memory-pressure"
         return {key: deepcopy(run[key]) for key in ("analysisId", "accountId", "createdAt", "status", "phase", "step")} | {
             "totalSubjects": len(run["source"]["subjects"]), "completedSubjects": len(run["results"]),
             "reportId": run.get("reportId", ""), "taskStatus": task.get("status", "unknown"),
+            "runtimeWait": runtime_wait,
             "waitReason": task.get("last_error", ""), "nextCheckAt": task.get("available_at", ""),
             "completedModelSteps": len(run["execution"]), "sendWhenReady": run["sendWhenReady"]}

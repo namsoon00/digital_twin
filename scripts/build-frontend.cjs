@@ -44,6 +44,16 @@ async function buildFrontend({ check = false } = {}) {
       });
     outputs.set("public/" + standalone, source);
   }
+  // Bust entry-point URLs as well: an older browser may still have the
+  // unversioned report script or stylesheet cached with immutable headers.
+  let reportPage = fs.readFileSync(path.join(root, "public/ai-reports.html"), "utf8");
+  for (const asset of ["ai-reports.mjs", "ai-reports.css"]) {
+    const content = outputs.get("public/" + asset) || fs.readFileSync(path.join(root, "public", asset), "utf8");
+    const digest = crypto.createHash("sha256").update(content).digest("hex").slice(0, 16);
+    reportPage = reportPage.replace(new RegExp('(["\'])/' + asset.replaceAll(".", "\\.") + '(?:\\?v=[^"\']*)?\\1', "g"),
+      (_match, quote) => quote + "/" + asset + "?v=" + digest + quote);
+  }
+  outputs.set("public/ai-reports.html", reportPage);
   const assets = ["app.js", "app-default-settings.js", "web-runtime.js", "console-workspaces.js", "styles.css", "console-workspaces.css"];
   for (const name of ["public/index.html", "public/service-worker.js"]) {
     let content = fs.readFileSync(path.join(root, name), "utf8");

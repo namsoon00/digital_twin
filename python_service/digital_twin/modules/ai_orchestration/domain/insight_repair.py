@@ -5,6 +5,9 @@ from digital_twin.modules.ai_orchestration.domain.insight_contract import INSIGH
 
 
 def correction_warranted(result):
+    from .analyst_memory import VALUE_ERROR
+    if VALUE_ERROR in result.get("quality", {}).get("errors", []):
+        return False  # Rephrasing prices cannot create missing investment meaning.
     if result.get("insightVersion") != INSIGHT_VERSION or not result.get("notification", {}).get("send"):
         return False
     if result.get("conditionValidation", {}).get("reasonCode") == "condition-baseline-unusable":

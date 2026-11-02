@@ -47,6 +47,10 @@ def reconsider(result, raw, envelope, input_id, history, save, reviewer, planner
         verdict = review.accept(reviewer(frozen, review_id), frozen)
         audit.update(status="completed", **verdict)
         if verdict["decision"] == "reconsider":
+            from ..domain.analyst_memory import reconsideration_supported
+            if not reconsideration_supported(result, verdict):
+                audit.update(resolution="retained-insufficient-investment-meaning", effectiveDecision="retain")
+                return raw, envelope, input_id, False
             stage = "abstention-rewrite"
             correction = freeze_repair_input(envelope, raw,
                 ["보류 재검토에서 추가 설명 후보가 확인됐습니다. 근거·이전 전달과 비교하고 발송 여부를 다시 판단하세요."],

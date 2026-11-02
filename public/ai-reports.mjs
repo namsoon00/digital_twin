@@ -31,6 +31,8 @@ async function api(url, body) {
   return data;
 }
 function controls() {
+  $("resume").hidden = analysis?.status !== "failed";
+  $("resume").disabled = busy || analysis?.status !== "failed";
   $("create").disabled = busy || !$("account").value || Boolean(analysis && !["ready", "completed", "failed"].includes(analysis.status));
   $("refresh").disabled = busy || !$("account").value;
   $("account").disabled = busy;
@@ -82,6 +84,10 @@ $("send").onclick = () => action(async () => {
   deliveryChecks = 0; pollDelivery();
 });
 $("refresh").onclick = () => action(async () => { await refresh(current?.reportId || ""); await loadAnalysis(analysis?.analysisId || ""); });
+$("resume").onclick = () => action(async () => {
+  const data = await api(`/api/ai-reports/analyses/${analysis.analysisId}/resume`, {accountId: analysis.accountId});
+  showAnalysis(data.analysis);
+});
 $("history").onchange = () => action(() => open($("history").value));
 $("account").onchange = () => action(async () => { clearTimeout(analysisTimer); analysis = null; $("analysis-progress").textContent = ""; await refresh(); await loadAnalysis(); });
 $("print").onclick = () => window.print();

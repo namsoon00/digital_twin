@@ -85,6 +85,32 @@ class MySQLPortfolioAnalysisStore(MySQLOperationalConnection):
             if not changed:
                 raise RuntimeError("portfolio-report-state-ownership-lost")
 
+    def resume(self, account, analysis_id):
+        """Explicit owner retry; preserve failed tasks and completed model work."""
+        with self.transaction() as connection:
+            run = unpack(connection.execute("SELECT state_gzip FROM ai_portfolio_analyses "
+                "WHERE analysis_id=%s AND account_id=%s FOR UPDATE", (analysis_id, account)).fetchone())
+            if not run:
+                raise LookupError("portfolio report not found")
+            if run["status"] != "failed":
+                return run
+            active = connection.execute("SELECT analysis_id FROM ai_portfolio_analyses WHERE active_account=%s", (account,)).fetchone()
+            if active:
+                raise ValueError("another portfolio analysis is active")
+            failed = connection.execute("SELECT status FROM ai_control_tasks WHERE task_id=%s AND account_id=%s FOR UPDATE",
+                                        (run["taskId"], account)).fetchone()
+            if not failed or failed["status"] != "failed":
+                raise ValueError("portfolio report failure changed")
+            run.setdefault("resumptions", []).append({"previousTaskId": run["taskId"], "at": stamp(), "step": run["step"]})
+            run["resumeRevision"] = run.get("resumeRevision", 0) + 1
+            run["status"] = "pending"
+            job = contract.task(run, run["step"])
+            run["taskId"] = job["taskId"]
+            MySQLAIControlStore.insert(connection, job)
+            connection.execute("UPDATE ai_portfolio_analyses SET status='pending',active_account=%s,task_id=%s,state_gzip=%s,updated_at=%s "
+                "WHERE analysis_id=%s AND account_id=%s", (account, run["taskId"], pack(run), stamp(), analysis_id, account))
+            return run
+
     def complete(self, connection, job, result, children):
         if job.get("capability") != contract.CAPABILITY:
             return

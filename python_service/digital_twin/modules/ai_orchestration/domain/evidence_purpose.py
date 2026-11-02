@@ -52,6 +52,9 @@ def validate(packet):
 
 
 def author_version(packet):
+    from . import analyst_prompt
+    if analyst_prompt.enabled(packet):
+        return analyst_prompt.PROMPT_VERSION
     from . import opinion_prompt, compact_opinion_prompt
     if compact_opinion_prompt.enabled(packet):
         return compact_opinion_prompt.PROMPT_VERSION
@@ -97,6 +100,9 @@ def author_version(packet):
 
 
 def repair_version(packet):
+    from . import analyst_prompt
+    if analyst_prompt.enabled(packet):
+        return analyst_prompt.REPAIR_VERSION
     from . import opinion_prompt, compact_opinion_prompt
     if compact_opinion_prompt.enabled(packet):
         return compact_opinion_prompt.REPAIR_VERSION
@@ -142,6 +148,9 @@ def repair_version(packet):
 
 
 def review_version(packet):
+    from . import analyst_prompt
+    if analyst_prompt.enabled(packet):
+        return analyst_prompt.REVIEW_VERSION
     from . import opinion_prompt, compact_opinion_prompt
     if compact_opinion_prompt.enabled(packet):
         return compact_opinion_prompt.REVIEW_VERSION

@@ -34,11 +34,13 @@ def selected_packet(session, packet, ids, views):
 def author_packet(session, packet, ids, seen, research, trace, status, reserve=0, contract=legacy_contract):
     views = {key: row for key, row in seen.items() if row.get("evidenceView")}
     protected = {key for key, row in seen.items() if row.get("evidenceCategory") == "quality"}
+    from ..domain import analyst_memory
+    memory_protected = analyst_memory.protected_ids(packet, seen)
     value_protected = set(packet.get("companyValueEvidence", {}).get("factIds", [])) if company_value.enabled(packet) else set()
     scope_packet = {**packet, "researchScope": contract.research_scope(trace, status)} if question_purpose.enabled(packet) else packet
     source_handoff = question_source_handoff.build(scope_packet, research, seen.values())
     source_protected = {key for row in source_handoff.get("questions", []) for key in row["factIds"]}
-    result = {**selected_packet(session, packet, set(ids) | protected | value_protected | source_protected, views),
+    result = {**selected_packet(session, packet, set(ids) | protected | memory_protected | value_protected | source_protected, views),
               "retrieval": contract.trace_summary(trace, status)}
     if evidence_purpose.enabled(result):
         result = evidence_purpose.annotate(result)
@@ -65,6 +67,9 @@ def author_packet(session, packet, ids, seen, research, trace, status, reserve=0
     if question_purpose.enabled(result):
         result["workingEvidence"]["requiredQuestionSourceFactIds"] = sorted(source_protected)
     result = company_value.refresh(result)
+    if analyst_memory.enabled(result):
+        result["workingEvidence"]["requiredMemorySourceFactIds"] = sorted(memory_protected)
+        result["analystMemorySources"] = analyst_memory.source_state(result)
     if evidence_completion.enabled(result) and result.get("researchScope", {}).get("assessmentPolicy") == scoped_retrieval.AUTHOR_SCOPE_POLICY:
         result["researchDeferredQuestions"] = [{key: deepcopy(row[key]) for key in
             ("caseId", "question", "questionContract", "capability", "reviewDue", "revision") if key in row}
@@ -136,7 +141,14 @@ def retrieve_working_evidence(session, packet, history, research, decide, save_i
     baseline_views.update({key: session.read_report(key, metrics)["facts"][0]
                            for key, metrics in baseline.get("reportViews", {}).items()})
     report_index = session.report_index(period_priority=True) if business_insight.enabled(packet) else session.report_index()
-    from .opinion_preparation import gap_reads
+    from ..domain import analyst_memory
+    packet = analyst_memory.prepare(packet, research)
+    from .opinion_preparation import gap_reads, memory_reads
+    memory_views, memory_receipts = memory_reads(session, packet, documents, report_index, set(baseline["factIds"]))
+    if memory_receipts:
+        baseline_views.update(memory_views)
+        baseline["factIds"] = list(dict.fromkeys(baseline["factIds"][:1] + list(memory_views) + baseline["factIds"][1:]))
+        packet["analystMemoryReads"] = memory_receipts
     gap_views, gap_work = gap_reads(session, packet, research, documents, report_index, set(baseline["factIds"]))
     if gap_work:
         packet["gapReadWork"] = gap_work

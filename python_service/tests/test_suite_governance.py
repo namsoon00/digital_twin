@@ -500,7 +500,8 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # release binding, real source proof, strict rejection, and review audit.
         # Two real-lock regressions cover prepared-candidate fairness and its wait boundary.
         # Ready candidate claim fairness also covers idle/control cancellation.
-        self.assertLessEqual(total, 3004)
+        # Five already landed preparation-grace contracts (9efb4409a/c6d9932ed).
+        self.assertLessEqual(total, 3018)  # Analyst memory and report retry/resume add nine.
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

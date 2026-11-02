@@ -13,19 +13,23 @@ def portfolio_report_response(request, path, query, service_factory=build_portfo
         return request.send_payload(403, {"error": "AI 보고서는 소유자만 확인할 수 있습니다."})
     match = re.fullmatch(r"/api/ai-reports/([0-9a-f]{64})(/send|/delivery|/document)?", path)
     analysis_match = re.fullmatch(r"/api/ai-reports/analyses(?:/([0-9a-f]{64}))?", path)
+    resume_match = re.fullmatch(r"/api/ai-reports/analyses/([0-9a-f]{64})/resume", path)
+    resume = bool(resume_match and request.command == "POST")
     analyze = path == "/api/ai-reports/analyses" and request.command == "POST"
     create = path == "/api/ai-reports" and request.command == "POST"
     send = bool(match and match[2] == "/send" and request.command == "POST")
-    if request.command != "GET" and not (create or send or analyze):
+    if request.command != "GET" and not (create or send or analyze or resume):
         return request.send_payload(405, {"error": "지원하지 않는 보고서 요청입니다."})
-    if (create or send or analyze) and not request.ensure_writable("보고서 생성·발송은 소유자만 요청할 수 있습니다."):
+    if (create or send or analyze or resume) and not request.ensure_writable("보고서 생성·발송은 소유자만 요청할 수 있습니다."):
         return None
     try:
-        body = request.read_json_body() if create or send or analyze else {}
+        body = request.read_json_body() if create or send or analyze or resume else {}
         if not isinstance(body, dict):
             raise ValueError("보고서 요청 형식을 확인해 주세요.")
-        account = body.get("accountId") if create or send or analyze else first_query(query, "accountId")
-        service = service_factory(writable=create or analyze)
+        account = body.get("accountId") if create or send or analyze or resume else first_query(query, "accountId")
+        service = service_factory(writable=create or analyze or resume)
+        if resume:
+            return request.send_payload(202, {"analysis": service.resume_analysis(account, resume_match[1])})
         if analyze:
             if not isinstance(body.get("sendWhenReady", False), bool):
                 raise ValueError("발송 설정을 확인해 주세요.")

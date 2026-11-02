@@ -6,6 +6,35 @@ from ..domain import opinion_memory, execution_lanes, evidence_purpose, reliable
 from digital_twin.modules.reasoning.contracts import content_hash
 
 
+def memory_reads(session, packet, documents, reports, already_read):
+    """Reopen at most two issued originals linked to captured research memory."""
+    from ..domain import analyst_memory
+    if not analyst_memory.enabled(packet):
+        return {}, []
+    documents = {r["factId"]: r for r in documents}
+    reports = {r["factId"]: r for r in reports}
+    linked = list(dict.fromkeys(key for row in packet.get("analystMemory", {}).get("items", [])
+                                for key in row["sourceFactIds"]))
+    views, receipts = {}, []
+    for key in linked:
+        if key in already_read or len(receipts) >= 2:
+            continue
+        if key in documents:
+            request = {"tool": "read_document", "factId": key}
+            result = session.read_document(key)
+        elif key in reports and reports[key].get("metrics"):
+            metrics = reports[key]["metrics"][:12]
+            request = {"tool": "read_report", "factId": key, "metrics": metrics}
+            result = session.read_report(key, metrics)
+        else:
+            continue  # An old pointer never grants access outside this capture.
+        views.update({f["id"]: f for f in result.get("facts", [])})
+        receipts.append({"request": request, "factIds": [f["id"] for f in result.get("facts", [])],
+            "memoryIds": [r["memoryId"] for r in packet["analystMemory"]["items"] if key in r["sourceFactIds"]],
+            "resultHash": content_hash(result), "status": "read-needs-assessment"})
+    return views, receipts
+
+
 def quote_blocker(packet):
     if (not opinion_memory.enabled(packet) or not execution_lanes.market(packet)
             or not packet.get("priceInvestigationPolicy")):

@@ -362,6 +362,8 @@ def narrative_digest(result):
         content["judgmentChange"] = result["judgmentChange"]
     if "notificationContribution" in result:
         content["notificationContribution"] = result["notificationContribution"]
+    if "analystAssessment" in result:
+        content["analystAssessment"] = result["analystAssessment"]
     if "externalInfluences" in result:
         content["externalInfluences"] = result["externalInfluences"]
     if "priceExplanation" in result:

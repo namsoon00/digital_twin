@@ -122,6 +122,7 @@ def judgment_links(result):
             "evidence": [{"factId": key, "hash": content_hash(facts[key])} for key in sorted(ids) if key in facts],
             "questions": questions,
             "thesisReviews": deepcopy(business.get("reviews", [])),
+            **({"analystAssessment": deepcopy(result["analystAssessment"])} if "analystAssessment" in result else {}),
             "followUpObservations": [{key: deepcopy(row[key]) for key in
                 ("conditionId", "status", "transitionVerified", "observedAt") if key in row}
                 for row in result.get("followUpEvaluations", [])],

@@ -27,6 +27,10 @@ class PortfolioReportService:
     def accounts(self):
         return self.sources.accounts()
 
+    def resume_analysis(self, account_id, analysis_id):
+        self._account(account_id)
+        return self.analyses.status(self.analyses.resume(account_id, analysis_id))
+
     def _account(self, account_id):
         if account_id not in {a["accountId"] for a in self.accounts()}:
             raise ValueError("사용 가능한 계정을 선택해 주세요.")

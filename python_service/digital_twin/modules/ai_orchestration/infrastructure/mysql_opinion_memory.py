@@ -26,7 +26,7 @@ AND JSON_UNQUOTE(JSON_EXTRACT(result_json,'$.researchQuality.status'))='accepted
 
 
 def search_text(row):
-    return " ".join(str(row.get(k, "")) for k in ("question", "questionContract", "answer", "summary", "hypothesis", "missingRequirements", "asOf", "periods")).casefold()[:12000]
+    return " ".join(str(row.get(k, "")) for k in ("question", "questionContract", "answer", "summary", "hypothesis", "analystAssessment", "missingRequirements", "asOf", "periods")).casefold()[:12000]
 
 
 def archive_record(row):
@@ -57,7 +57,7 @@ class OpinionMemoryPersistence:
                 and not result.get("quality", {}).get("errors")):
             records.append({"kind": "market" if job["capability"] == "market-observe" else "research",
                 "caseId": "", **{k: deepcopy(result[k]) for k in
-                    ("summary", "hypothesis", "counterEvidence", "comparison", "evidenceIds", "questionContributions") if k in result},
+                    ("summary", "hypothesis", "counterEvidence", "comparison", "evidenceIds", "questionContributions", "analystAssessment") if k in result},
                 "reviewInputId": result.get("quality", {}).get("reviewInputId", "")})
         ids = []
         for value in records:

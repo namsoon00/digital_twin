@@ -89,7 +89,7 @@ def assessment(result):
         code = "source-unavailable"
     elif change.get("impact") == "insufficient" or packet.get("retrieval", {}).get("missingEvidence"):
         code = "evidence-insufficient"
-    elif review.get("decision") == "reconsider" and review.get("resolution") != "reauthored":
+    elif review.get("effectiveDecision", review.get("decision")) == "reconsider" and review.get("resolution") != "reauthored":
         code = "review-needed"
     elif result.get("priceExplanation", {}).get("status") == "cause-unconfirmed":
         code = "cause-unconfirmed"

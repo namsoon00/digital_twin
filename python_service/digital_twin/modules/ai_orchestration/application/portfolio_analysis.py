@@ -53,16 +53,29 @@ class PortfolioAnalysisWorker:
             input_id = self.control.save_execution_input(job, envelope)
             if not input_id:
                 raise RuntimeError("portfolio-report-lease-lost")
-            run["work"] = {"envelope": envelope, "inputId": input_id}
+            run["work"] = {"envelope": envelope, "inputId": input_id, "attempt": job.get("attempts", 0)}
             self.runs.checkpoint(job, run)
         work = run["work"]
         if "response" not in work:
+            # Frozen input ownership includes the claim attempt. A timeout must
+            # keep its original audit, but the next claim needs its own input
+            # identity before begin_call can admit another model execution.
+            if (work.get("attempt") != job.get("attempts", 0)
+                    or work["envelope"]["current"]["taskId"] != job["taskId"]):
+                previous = work["inputId"]
+                envelope = contract.freeze(job, phase, work["envelope"]["data"])
+                input_id = self.control.save_execution_input(job, envelope)
+                if not input_id:
+                    raise RuntimeError("portfolio-report-lease-lost")
+                work.update(envelope=envelope, inputId=input_id, attempt=job.get("attempts", 0))
+                work.setdefault("previousInputIds", []).append(previous)
+                self.runs.checkpoint(job, run)
             self.control.execution_wait()
             response = self.model(work["envelope"], work["inputId"])
             # A provider timeout remains uncertain; no fabricated completion.
             work["response"], work["respondedAt"] = response, now()
             self.runs.checkpoint(job, run)
-        run["execution"].append({"taskId": job["taskId"], "inputId": work["inputId"],
+        run["execution"].append({"taskId": work["envelope"]["current"]["taskId"], "inputId": work["inputId"],
             "phase": phase, "promptVersion": work["envelope"]["promptVersion"],
             "promptBytes": len(work["envelope"]["prompt"].encode()), "respondedAt": work["respondedAt"],
             "responseHash": contract.digest(work["response"]), "response": deepcopy(work["response"])})

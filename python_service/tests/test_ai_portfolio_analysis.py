@@ -144,3 +144,12 @@ class PortfolioAnalysisTests(unittest.TestCase):
         factory.reset_mock(); req.command = "POST"
         portfolio_report_response(req, "/api/ai-reports/analyses", {}, factory)
         factory.assert_not_called()
+        path = "/api/ai-reports/analyses/" + "a" * 64 + "/resume"
+        portfolio_report_response(req, path, {}, factory)
+        factory.assert_not_called()
+        req.ensure_writable.return_value = True
+        req.read_json_body.return_value = {"accountId": "analysis-test"}
+        service.resume_analysis = Mock(return_value={"status": "pending"})
+        portfolio_report_response(req, path, {}, factory)
+        service.resume_analysis.assert_called_once_with("analysis-test", "a" * 64)
+        self.assertEqual(202, req.send_payload.call_args.args[0])

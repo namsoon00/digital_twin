@@ -38,7 +38,10 @@ def encoded(value):
 
 
 def task(run, step):
-    return {"taskId": digest([VERSION, run["analysisId"], step]), "accountId": run["accountId"],
+    identity = [VERSION, run["analysisId"], step]
+    if run.get("resumeRevision"):
+        identity.append(run["resumeRevision"])
+    return {"taskId": digest(identity), "accountId": run["accountId"],
             "symbol": "PORTFOLIO", "name": "전체 포트폴리오", "worldId": run["worldId"], "capability": CAPABILITY,
             "analysisId": run["analysisId"], "step": step, "priority": 30, "question": "보유·관심 전체 보고서"}
 

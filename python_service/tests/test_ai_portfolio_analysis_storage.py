@@ -36,6 +36,50 @@ class PortfolioAnalysisStorageTests(unittest.TestCase):
     def create(self):
         return self.runs.create("analysis-test", "analysis-storage-001", source(), False)
 
+    def worker(self, model):
+        return PortfolioAnalysisWorker(self.runs, self.control, lambda scope: None,
+            lambda: [{"accountId": "analysis-test", **s} for s in source()["subjects"]], model,
+            lambda report: None, lambda: [{"accountId": "analysis-test"}])
+
+    def test_timeout_retry_gets_attempt_owned_input_without_erasing_failure(self):
+        self.create(); job = self.control.claim(); seen = []
+        def model(env, input_id):
+            call = self.control.begin_call("independent-observation", env["promptHash"], task_id=job["taskId"], input_id=input_id)
+            seen.append((input_id, call))
+            self.control.finish_call(call, "ai-execution:timeout" if len(seen) == 1 else "")
+            if len(seen) == 1: raise TimeoutError("injected timeout")
+            return response(env, input_id)
+        worker = self.worker(model)
+        with self.assertRaises(TimeoutError): worker(job)
+        self.control.fail(job, "ai-execution:timeout")
+        with self.control.transaction() as db:
+            db.execute("UPDATE ai_control_tasks SET available_at='2000-01-01T00:00:00Z' WHERE task_id=%s", (job["taskId"],))
+        job = self.control.claim(); self.assertEqual(2, job["attempts"])
+        result, children = worker(job)
+        self.assertNotEqual(seen[0][0], seen[1][0])
+        self.assertTrue(self.control.complete(job, result, children))
+        with self.control.connect() as db:
+            rows = db.execute("SELECT status FROM ai_control_calls WHERE call_id IN (%s,%s) ORDER BY status", (seen[0][1], seen[1][1])).fetchall()
+        self.assertEqual(["completed", "failed"], [r["status"] for r in rows])
+
+    def test_explicit_resume_preserves_progress_and_failure_without_duplicate_work(self):
+        run = self.create(); worker = self.worker(response)
+        job = self.control.claim(); result, children = worker(job)
+        self.control.complete(job, result, children)
+        job = self.control.claim(); self.control.fail(job, "injected", terminal=True)
+        failed = self.runs.get(run["accountId"], run["analysisId"])
+        with self.assertRaises(LookupError): self.runs.resume("other", run["analysisId"])
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            resumed = list(pool.map(lambda _: self.runs.resume(run["accountId"], run["analysisId"]), range(2)))
+        self.assertEqual(resumed[0]["taskId"], resumed[1]["taskId"])
+        self.assertNotEqual(job["taskId"], resumed[0]["taskId"])
+        self.assertEqual(failed["execution"], resumed[0]["execution"])
+        self.assertEqual(failed["step"], resumed[0]["step"])
+        with self.control.connect() as db:
+            self.assertEqual("failed", db.execute("SELECT status FROM ai_control_tasks WHERE task_id=%s", (job["taskId"],)).fetchone()["status"])
+        next_job = self.control.claim(); self.assertEqual(resumed[0]["taskId"], next_job["taskId"])
+        result, children = worker(next_job); self.assertTrue(self.control.complete(next_job, result, children))
+
     def test_concurrent_requests_share_one_active_run_and_get_is_scoped(self):
         with ThreadPoolExecutor(max_workers=2) as pool:
             runs = list(pool.map(lambda i: self.runs.create("analysis-test", "analysis-storage-00" + str(i), source(), False), range(2)))

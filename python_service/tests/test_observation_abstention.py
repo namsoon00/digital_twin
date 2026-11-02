@@ -197,7 +197,9 @@ class ObservationAbstentionTests(unittest.TestCase):
         def save(_, env):
             validate_execution_input(env); stored_inputs.append(env); return "frozen-" + str(len(stored_inputs))
         store.save_execution_input.side_effect = save
-        planner = Mock(return_value=raw); reviewer = Mock(return_value=verdict(r))
+        from test_analyst_memory import assessment
+        planner = Mock(side_effect=lambda env, _: {**raw, "analystAssessment": assessment(env["current"])})
+        reviewer = Mock(return_value=verdict(r))
         service = AIControlService(store, lambda: [subject], lambda _: ObservationEvidenceSession(p, p["facts"]),
             planner, Mock(), lambda *_: [], reviewer=reviewer, read_planner=Mock())
         from test_market_explanation_flow import run_reader
@@ -219,7 +221,7 @@ class ObservationAbstentionTests(unittest.TestCase):
         result = store.complete.call_args.args[1]
         self.assertEqual("cause-unconfirmed", result["abstention"]["reasonCode"])
         self.assertEqual("completed", result["abstentionReview"]["status"])
-        from digital_twin.modules.ai_orchestration.domain.compact_opinion_prompt import PROMPT_VERSION
+        from digital_twin.modules.ai_orchestration.domain.analyst_prompt import PROMPT_VERSION
         self.assertEqual(PROMPT_VERSION, result["executionPromptVersion"])
 
 

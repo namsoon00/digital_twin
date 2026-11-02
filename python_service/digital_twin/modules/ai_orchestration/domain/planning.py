@@ -61,6 +61,9 @@ def validate_plan(value, packet, research=(), require_research=False, require_re
     if business_progress.enabled(packet):
         allowed.add("judgmentChange")
     from . import notification_contribution
+    from . import analyst_memory
+    if analyst_memory.enabled(packet):
+        allowed.add("analystAssessment")
     if notification_contribution.enabled(packet):
         allowed.add("notificationContribution")
     if set(value) - allowed:
@@ -70,6 +73,8 @@ def validate_plan(value, packet, research=(), require_research=False, require_re
     if not isinstance(evidence, list) or not evidence or any(not isinstance(item, str) or item not in known for item in evidence):
         raise ValueError("AI plan must cite current packet facts")
     result = {}
+    if analyst_memory.enabled(packet):
+        result["analystAssessment"] = analyst_memory.validate(value.get("analystAssessment"), packet)
     if business_progress.enabled(packet):
         result["judgmentChange"] = business_progress.validate_change(value.get("judgmentChange"), packet)
     if notification_contribution.enabled(packet):

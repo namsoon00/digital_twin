@@ -176,6 +176,8 @@ class AIControlService:
                         packet["retrievalReliabilityPolicy"] = completion_policy
                         if lanes.market(packet):
                             packet["reviewedQuestionContext"] = opinion_memory.question_context(research)
+                            from ..domain.analyst_memory import VERSION as analyst_memory_policy
+                            packet["analystMemoryPolicy"] = analyst_memory_policy
                         if not lanes.market(packet):
                             from ..domain.question_gap_retrieval import MARKER as gap_policy
                             packet["questionGapPolicy"] = gap_policy
@@ -291,6 +293,8 @@ class AIControlService:
                             memory["observations"] = observations
                             business_memory.append(deepcopy(memory))
                     packet["businessThesisMemory"] = business_memory
+                    from ..domain.analyst_memory import prepare as prepare_analyst_memory
+                    packet = prepare_analyst_memory(packet, research)
                     if knowledge:
                         stage = "knowledge-refresh"
                         refreshed = self.knowledge_refresh(knowledge, packet)

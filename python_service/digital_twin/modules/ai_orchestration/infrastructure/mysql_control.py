@@ -3,7 +3,7 @@ from digital_twin.modules.reasoning.contracts import OBSERVATION_QUOTE_KINDS
 
 import json
 import gzip
-from ..domain import reliable_retrieval, opinion_retrieval, opinion_memory
+from ..domain import analyst_prompt, reliable_retrieval, opinion_retrieval, opinion_memory
 from copy import deepcopy
 import threading
 import uuid
@@ -461,24 +461,26 @@ class MySQLAIControlStore(OpinionMemoryPersistence, AIActivityPersistence, AITok
                 raise ValueError("retrieval audit requires owned frozen input")
             envelope = json.loads(gzip.decompress(frozen["artifact_gzip"]))
             validate_execution_input(envelope)
-            if envelope["promptVersion"] not in {reliable_retrieval.VERSION, opinion_retrieval.VERSION, price_investigation_retrieval.VERSION, market_explanation_retrieval.VERSION, external_influence_retrieval.VERSION, efficient_retrieval.VERSION, question_gap_retrieval.VERSION, company_retrieval.VERSION, business_retrieval.VERSION, completion_retrieval.VERSION, quality_retrieval.VERSION, compact_retrieval.VERSION, *purpose_retrieval.SUPPORTED_VERSIONS, bounded_retrieval.VERSION, lane_retrieval.VERSION, RETRIEVAL_PROMPT_VERSION, working_retrieval.VERSION, scoped_retrieval.VERSION, indexed_retrieval.VERSION, question_retrieval.VERSION}:
+            retrieval_version = (reliable_retrieval.VERSION if envelope["promptVersion"] == analyst_prompt.RETRIEVAL_VERSION
+                                 else envelope["promptVersion"])
+            if retrieval_version not in {reliable_retrieval.VERSION, opinion_retrieval.VERSION, price_investigation_retrieval.VERSION, market_explanation_retrieval.VERSION, external_influence_retrieval.VERSION, efficient_retrieval.VERSION, question_gap_retrieval.VERSION, company_retrieval.VERSION, business_retrieval.VERSION, completion_retrieval.VERSION, quality_retrieval.VERSION, compact_retrieval.VERSION, *purpose_retrieval.SUPPORTED_VERSIONS, bounded_retrieval.VERSION, lane_retrieval.VERSION, RETRIEVAL_PROMPT_VERSION, working_retrieval.VERSION, scoped_retrieval.VERSION, indexed_retrieval.VERSION, question_retrieval.VERSION}:
                 raise ValueError("retrieval audit requires retrieval input")
-            validator = (reliable_retrieval.validate_trace if envelope["promptVersion"] == reliable_retrieval.VERSION else opinion_retrieval.validate_trace if envelope["promptVersion"] == opinion_retrieval.VERSION else question_gap_retrieval.validate_trace if envelope["promptVersion"] == question_gap_retrieval.VERSION else price_investigation_retrieval.validate_trace if envelope["promptVersion"] == price_investigation_retrieval.VERSION else market_explanation_retrieval.validate_trace if envelope["promptVersion"] == market_explanation_retrieval.VERSION else external_influence_retrieval.validate_trace if envelope["promptVersion"] == external_influence_retrieval.VERSION else efficient_retrieval.validate_trace if envelope["promptVersion"] == efficient_retrieval.VERSION else company_retrieval.validate_trace if envelope["promptVersion"] == company_retrieval.VERSION else
-                         business_retrieval.validate_trace if envelope["promptVersion"] == business_retrieval.VERSION else
-                         completion_retrieval.validate_trace if envelope["promptVersion"] == completion_retrieval.VERSION else
-                         quality_retrieval.validate_trace if envelope["promptVersion"] == quality_retrieval.VERSION else
-                         compact_retrieval.validate_trace if envelope["promptVersion"] == compact_retrieval.VERSION else
-                         purpose_retrieval.validate_trace if envelope["promptVersion"] in purpose_retrieval.SUPPORTED_VERSIONS else
-                         bounded_retrieval.validate_trace if envelope["promptVersion"] == bounded_retrieval.VERSION else
-                         lane_retrieval.validate_trace if envelope["promptVersion"] == lane_retrieval.VERSION else
-                         question_retrieval.validate_trace if envelope["promptVersion"] == question_retrieval.VERSION else
-                         indexed_retrieval.validate_trace if envelope["promptVersion"] == indexed_retrieval.VERSION else
-                         scoped_retrieval.validate_trace if envelope["promptVersion"] == scoped_retrieval.VERSION else
-                         working_retrieval.validate_trace if envelope["promptVersion"] == working_retrieval.VERSION else validate_trace)
+            validator = (reliable_retrieval.validate_trace if retrieval_version == reliable_retrieval.VERSION else opinion_retrieval.validate_trace if retrieval_version == opinion_retrieval.VERSION else question_gap_retrieval.validate_trace if retrieval_version == question_gap_retrieval.VERSION else price_investigation_retrieval.validate_trace if retrieval_version == price_investigation_retrieval.VERSION else market_explanation_retrieval.validate_trace if retrieval_version == market_explanation_retrieval.VERSION else external_influence_retrieval.validate_trace if retrieval_version == external_influence_retrieval.VERSION else efficient_retrieval.validate_trace if retrieval_version == efficient_retrieval.VERSION else company_retrieval.validate_trace if retrieval_version == company_retrieval.VERSION else
+                         business_retrieval.validate_trace if retrieval_version == business_retrieval.VERSION else
+                         completion_retrieval.validate_trace if retrieval_version == completion_retrieval.VERSION else
+                         quality_retrieval.validate_trace if retrieval_version == quality_retrieval.VERSION else
+                         compact_retrieval.validate_trace if retrieval_version == compact_retrieval.VERSION else
+                         purpose_retrieval.validate_trace if retrieval_version in purpose_retrieval.SUPPORTED_VERSIONS else
+                         bounded_retrieval.validate_trace if retrieval_version == bounded_retrieval.VERSION else
+                         lane_retrieval.validate_trace if retrieval_version == lane_retrieval.VERSION else
+                         question_retrieval.validate_trace if retrieval_version == question_retrieval.VERSION else
+                         indexed_retrieval.validate_trace if retrieval_version == indexed_retrieval.VERSION else
+                         scoped_retrieval.validate_trace if retrieval_version == scoped_retrieval.VERSION else
+                         working_retrieval.validate_trace if retrieval_version == working_retrieval.VERSION else validate_trace)
             full_trace = [*envelope["retrievalContext"].get("trace", []), step]
             validator(full_trace)
-            if envelope["promptVersion"] in {compact_retrieval.VERSION, quality_retrieval.VERSION, completion_retrieval.VERSION, business_retrieval.VERSION, company_retrieval.VERSION, efficient_retrieval.VERSION, question_gap_retrieval.VERSION, external_influence_retrieval.VERSION, price_investigation_retrieval.VERSION, market_explanation_retrieval.VERSION, opinion_retrieval.VERSION, reliable_retrieval.VERSION}:
-                (efficient_retrieval.context_view if envelope["promptVersion"] in {efficient_retrieval.VERSION, question_gap_retrieval.VERSION, external_influence_retrieval.VERSION, price_investigation_retrieval.VERSION, market_explanation_retrieval.VERSION, opinion_retrieval.VERSION, reliable_retrieval.VERSION} else retrieval_view).paths(envelope["current"], {**envelope["retrievalContext"], "trace": full_trace})
+            if retrieval_version in {compact_retrieval.VERSION, quality_retrieval.VERSION, completion_retrieval.VERSION, business_retrieval.VERSION, company_retrieval.VERSION, efficient_retrieval.VERSION, question_gap_retrieval.VERSION, external_influence_retrieval.VERSION, price_investigation_retrieval.VERSION, market_explanation_retrieval.VERSION, opinion_retrieval.VERSION, reliable_retrieval.VERSION}:
+                (efficient_retrieval.context_view if retrieval_version in {efficient_retrieval.VERSION, question_gap_retrieval.VERSION, external_influence_retrieval.VERSION, price_investigation_retrieval.VERSION, market_explanation_retrieval.VERSION, opinion_retrieval.VERSION, reliable_retrieval.VERSION} else retrieval_view).paths(envelope["current"], {**envelope["retrievalContext"], "trace": full_trace})
             connection.execute("INSERT IGNORE INTO ai_control_retrieval_rounds "
                 "(input_id,task_id,attempt,round_status,artifact_hash,artifact_gzip,created_at) VALUES (%s,%s,%s,%s,%s,%s,%s)",
                 (step["inputId"], job["taskId"], job["attempts"], step["status"], digest, gzip.compress(raw, mtime=0), stamp()))

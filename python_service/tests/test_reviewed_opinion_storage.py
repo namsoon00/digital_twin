@@ -59,27 +59,30 @@ class ReviewedOpinionStorageTests(unittest.TestCase):
         other = insight_progress.research_job({**subject, "worldId": "another-world"}, state, stamp())
         self.assertNotEqual(source_job["taskId"], other["taskId"])
 
-    def test_opinion_read_receipts_v21_and_v22_survive_progress_storage_and_reject_tampering(self):
+    def test_opinion_read_receipts_v21_through_v23_survive_progress_storage_and_reject_tampering(self):
         from test_reliable_opinion_completion import packet
         from test_efficient_retrieval import decision
         from digital_twin.modules.ai_orchestration.application.working_retrieval import retrieve_working_evidence
-        from digital_twin.modules.ai_orchestration.domain import reliable_retrieval, opinion_retrieval
+        from digital_twin.modules.ai_orchestration.domain import reliable_retrieval, opinion_retrieval, analyst_prompt, analyst_memory
         from digital_twin.modules.reasoning.contracts import ObservationEvidenceSession, quote_clock_assessment
         from digital_twin.infrastructure.transactions.ai_control_research_knowledge import AIControlResearchKnowledge
         with self.control.transaction() as connection:
             self.control.insert(connection, {**self.storage.subject, "capability": "market-observe", "taskId": "opinion-read-proof"})
         job = self.control.claim()
         self.control.runtime_settings.update(aiDailyTokenBudget=10000000, aiControlDailyCallBudget=32)
-        for protocol in (opinion_retrieval, reliable_retrieval):
+        for protocol in (opinion_retrieval, reliable_retrieval, analyst_prompt):
             value = packet(); value.update(self.storage.subject, taskId=job["taskId"])
             if protocol is opinion_retrieval:
                 value.pop("retrievalReliabilityPolicy")
+            if protocol is analyst_prompt:
+                value["analystMemoryPolicy"] = analyst_memory.VERSION
             value["sourceSnapshots"] = {value["worldId"]: value["sourceSnapshotId"]}
             for fact in value["facts"]:
                 fact.update(symbol=value["symbol"], sourceWorldId=value["worldId"], sourceSnapshotId=value["sourceSnapshotId"])
                 if fact.get("accountId"): fact["accountId"] = value["accountId"]
             value["quoteAssessment"] = quote_clock_assessment(value["facts"], value["capturedAt"])
             def save(env):
+                self.assertEqual(protocol.RETRIEVAL_VERSION if protocol is analyst_prompt else protocol.VERSION, env["promptVersion"])
                 key = self.control.save_execution_input(job, env)
                 call = self.control.begin_call("independent-observation", env["promptHash"], job["taskId"], key)
                 self.control.finish_call(call)
@@ -92,11 +95,13 @@ class ReviewedOpinionStorageTests(unittest.TestCase):
             final, _, _, trace = retrieve_working_evidence(ObservationEvidenceSession(value, value["facts"]),
                 value, [], [], choose, save, 262144, max_rounds=2,
                 record_round=lambda step: self.control.save_retrieval_round(job, step))
-            self.assertEqual(protocol.VERSION, final["retrieval"]["version"])
+            self.assertEqual(reliable_retrieval.VERSION if protocol is analyst_prompt else protocol.VERSION, final["retrieval"]["version"])
             result = {"input": final, "retrievalInputIds": [step["inputId"] for step in trace]}
             with self.control.connect() as connection:
                 self.assertEqual(trace, AIControlResearchKnowledge.read_proof(connection, job, result))
                 forged = deepcopy(result); forged["input"]["retrieval"]["traceHash"] = "changed"
+                with self.assertRaises(ValueError): AIControlResearchKnowledge.read_proof(connection, job, forged)
+                forged = deepcopy(result); forged["input"]["analystMemoryPolicy"] = "changed"
                 with self.assertRaises(ValueError): AIControlResearchKnowledge.read_proof(connection, job, forged)
                 forged = deepcopy(result); forged["input"]["opinionMemoryPolicy"] = "changed"
                 with self.assertRaises(ValueError): AIControlResearchKnowledge.read_proof(connection, job, forged)

@@ -236,7 +236,10 @@ def retrieve_working_evidence(session, packet, history, research, decide, save_i
         if contract in {bounded_retrieval, purpose_retrieval, compact_retrieval, quality_retrieval, completion_retrieval, business_retrieval, company_retrieval, efficient_retrieval, question_gap_retrieval, external_influence_retrieval, price_investigation_retrieval, market_explanation_retrieval, opinion_retrieval, reliable_retrieval}:
             context.update(tools.issued_context())
         try:
-            envelope = contract.freeze(current, context, prompt_bytes)
+            from ..domain import analyst_prompt
+            envelope = (analyst_prompt.freeze_retrieval(current, context, prompt_bytes)
+                        if analyst_memory.enabled(current) and contract is reliable_retrieval
+                        else contract.freeze(current, context, prompt_bytes))
         except EvidenceContractError as error:
             if "exceeds-context-budget" not in error.code:
                 raise
@@ -265,6 +268,10 @@ def retrieve_working_evidence(session, packet, history, research, decide, save_i
                 admission_reserve = market_explanation.trace_reserve(contract, admission_trace) if market_explanation.enabled(packet) else reserve
                 if reliable_retrieval.enabled(packet):
                     admission_reserve = reliable_retrieval.reserve(admission_trace)
+                    if analyst_memory.enabled(packet) and decision["action"] != "read":
+                        # The final decision is already in admission_trace. No
+                        # future read can consume another full trace allowance.
+                        admission_reserve = min(admission_reserve, 2048)
                 proposed = author_packet(session, packet, chosen, seen, research, admission_trace, admission_status, admission_reserve, contract)
                 adjusted = {row["caseId"]: row for row in proposed["businessThesisMemory"]}
                 required_research = [adjusted.get(row.get("caseId"), row) if row.get("kind") == "business-thesis" else row

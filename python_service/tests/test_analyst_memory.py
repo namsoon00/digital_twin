@@ -116,6 +116,12 @@ class AnalystMemoryTests(unittest.TestCase):
         from test_efficient_retrieval import decision
         p = {**packet(), "analystMemoryPolicy": memory.VERSION}
         def decide(env, _):
+            self.assertEqual(analyst_prompt.RETRIEVAL_VERSION, env["promptVersion"])
+            validate_execution_input(env)
+            # V22 inputs containing the new memory marker were already used in
+            # production; they must keep their exact historical prompt contract.
+            legacy = reliable_retrieval.freeze(env["current"], env["retrievalContext"], env["promptBudgetBytes"])
+            validate_execution_input(legacy)
             raw = decision("finish"); raw["selectedFactIds"] = ["quote-1"]; return raw
         final, history, memories, trace = retrieve_working_evidence(ObservationEvidenceSession(p, p["facts"]),
             p, [], [], decide, lambda env: "input", 262144)
@@ -126,3 +132,26 @@ class AnalystMemoryTests(unittest.TestCase):
         blocked = {"id": "blocked-report", "kind": "financial-report", "judgementEvidenceUsable": False}
         marked = {**p, "businessEvidence": {"factIds": [blocked["id"]]}, "analystMemory": {"items": [{"sourceFactIds": [blocked["id"]]}]}}
         self.assertEqual(set(), memory.protected_ids(marked, {blocked["id"]: blocked}))
+
+    def test_completed_trace_does_not_reserve_another_round_and_block_fitting_sources(self):
+        from test_price_investigation_flow import with_sources, decision
+        from test_reliable_opinion_completion import packet as policies
+        from digital_twin.modules.reasoning.contracts import source_packet_bytes
+        p = with_sources(); p.update({k: v for k, v in policies().items() if k.endswith("Policy")})
+        p.update(analystMemoryPolicy=memory.VERSION, frozenAuditMetadata="x" * 70000)
+        original = next(f for f in p["facts"] if f["id"] == "actual-news")
+        original["articleText"] += " exact dated original " * 250
+        def decide(env, _):
+            ids = env["retrievalContext"]["selectedFactIds"]
+            if not env["retrievalContext"]["trace"]:
+                return decision("read", ids, [{"tool": "read_fact", "category": "research", "factId": "actual-news"},
+                                             {"tool": "read_fact", "category": "macro", "factId": "market-index"}])
+            return decision("finish", list(dict.fromkeys(ids + ["actual-news", "market-index"])))
+        model = Mock(side_effect=decide)
+        final, history, research, trace = retrieve_working_evidence(ObservationEvidenceSession(p, p["facts"]),
+            p, [], [], model, lambda env: "input", 262144, max_rounds=2)
+        self.assertEqual("ready", final["retrieval"]["status"]); self.assertEqual(2, model.call_count)
+        self.assertEqual(original["articleText"], next(f for f in final["facts"] if f["id"] == "actual-news")["articleText"])
+        self.assertLess(source_packet_bytes(final), 96000)
+        self.assertGreater(source_packet_bytes(final) + reliable_retrieval.reserve(trace), 96000)
+        validate_execution_input(freeze_execution_input(final, history, research, retrieval_trace=trace))

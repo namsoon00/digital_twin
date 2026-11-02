@@ -501,7 +501,7 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # Two real-lock regressions cover prepared-candidate fairness and its wait boundary.
         # Ready candidate claim fairness also covers idle/control cancellation.
         # Five already landed preparation-grace contracts (9efb4409a/c6d9932ed).
-        self.assertLessEqual(total, 3018)  # Analyst memory and report retry/resume add nine.
+        self.assertLessEqual(total, 3019)  # Analyst memory, terminal budget and report recovery add ten.
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

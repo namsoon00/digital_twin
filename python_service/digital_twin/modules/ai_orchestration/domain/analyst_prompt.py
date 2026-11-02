@@ -9,9 +9,20 @@ from .insight_schema import obj, choice, array, evidence_references
 PROMPT_VERSION = "independent-observation-v37-analyst-memory"
 REPAIR_VERSION = "independent-observation-repair-v33-analyst-memory"
 REVIEW_VERSION = "independent-observation-review-v26-analyst-memory"
-VERSIONS = {PROMPT_VERSION, REPAIR_VERSION, REVIEW_VERSION}
+RETRIEVAL_VERSION = "independent-observation-retrieval-v23-analyst-memory"
+VERSIONS = {PROMPT_VERSION, REPAIR_VERSION, REVIEW_VERSION, RETRIEVAL_VERSION}
 enabled = policy.enabled
 TEXT = {"type": "string", "minLength": 8, "maxLength": 500}
+READ_INSTRUCTIONS = """기업 판단을 위한 조회 목표 (뒤의 가격 조사 목표보다 우선):
+시세 기준·공개 시각·원인 확인의 제약은 유지하되, 조사 충분성은 가격 상태 설명만으로 판단하지 않는다.
+analystMemory.items가 가리키는 기존 질문·확인된 답변·기업 가설을 먼저 대조하고 사업·현금창출·가치 가정·보유 위험에 더할 의미를 찾는다.
+자동으로 읽은 원문과 businessEvidence는 이미 읽은 자료다. 원문을 다시 읽지 말고 부족한 비교 기간·기업 노출·반론만 발급된 목록에서 선택한다.
+읽을 수 있는 기업 노출·공시 원문이 있는데 가격과 평균선만 선택하고 충분하다고 끝내지 않는다. 실제 미해결 판단에 필요한 자료가 있을 때 기존 회차·요청 한도에서 읽는다.
+이번 변동의 원인을 모르는 것과 기업 가치의 의미를 모르는 것은 다르다. 기간별 현금흐름·희석·부채·수익성의 확인 가능한 사실은 날짜를 유지해 검토할 수 있다.
+과거 사업 수치를 이번 가격 변동의 원인으로 소급하지 않는다. 의미 있는 설명을 만들 근거가 없으면 그 한계를 남긴다.
+최종 작성에 보호된 기업 근거가 남을 수 있으므로 authorBudget을 확인한다. 필수 원문이 읽혔거나 더 읽을 적합한 자료가 없으면 finish/defer하고, 같은 조회·질문을 반복하지 않는다.
+출력은 기존 조회 JSON 형식만 사용한다. 이 단계는 analystAssessment 작성이나 투자 행동 결정 단계가 아니다.
+"""
 INSTRUCTIONS = """기업 판단과 기억 연결 계약:
 analystMemory.items의 각 기억을 지정된 path의 과거 답변·기업 가설과 대조한다. 기억은 당시 해석이며 새 사실이나 매매 권한이 아니다.
 이번 자료가 사업의 수익·비용·현금흐름, 가치 가정, 기업 노출이나 보유 위험의 이해를 어떻게 바꾸는지 먼저 검토한다.
@@ -64,10 +75,28 @@ def review_schema(packet):
     return result
 
 
+def freeze_retrieval(current, context, max_bytes):
+    from . import reliable_retrieval
+    if not enabled(current):
+        raise EvidenceContractError("analyst retrieval policy missing")
+    value = reliable_retrieval.freeze(current, context, max_bytes)
+    value.update(promptVersion=RETRIEVAL_VERSION, prompt=READ_INSTRUCTIONS + value["prompt"])
+    value["promptHash"] = hashlib.sha256(value["prompt"].encode()).hexdigest()
+    if len(value["prompt"].encode()) > value["promptBudgetBytes"]:
+        raise EvidenceContractError("analyst retrieval exceeds context budget")
+    return value
+
+
 def validate_input(envelope):
     from .execution_input import prompt_budget
     from .insight_repair import repair_prompt
     packet, version = envelope["current"], envelope["promptVersion"]
+    if version == RETRIEVAL_VERSION:
+        from . import reliable_retrieval
+        if freeze_retrieval(packet, envelope["retrievalContext"], envelope["promptBudgetBytes"]) != envelope:
+            raise EvidenceContractError("analyst retrieval frozen input changed")
+        reliable_retrieval.validate_trace(envelope["retrievalContext"].get("trace", []))
+        return content_hash(envelope)
     if not enabled(packet) or not previous.enabled(packet):
         raise EvidenceContractError("analyst memory policy missing")
     reviewing = version == REVIEW_VERSION

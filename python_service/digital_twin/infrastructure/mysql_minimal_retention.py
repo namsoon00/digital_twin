@@ -829,26 +829,51 @@ class MySQLMinimalRetentionRepository:
         }
 
     def _delete_temporal_feature_snapshots(self, policy, budget, cutoff_iso) -> Dict[str, object]:
+        scan_policy = "temporalFeatureSnapshots:history"
+        cursors = self._candidate_rows(
+            "SELECT after_time, after_id FROM mysql_retention_scan_cursors "
+            "WHERE profile = %s AND policy_name = %s", (policy.profile, scan_policy), budget,
+        )
+        cursor = cursors[0] if cursors else {}
+        after_time = str(_row_value(cursor, "after_time", fallback="") or "")
+        after_id = str(_row_value(cursor, "after_id", 1, "") or "")
+        # Bound the covering-index scan before checking references or loading
+        # windows. Protected prefixes must not make LIMIT scan all history.
+        window = self._candidate_rows(
+            "SELECT snapshot_id, created_at FROM `temporal_feature_snapshots` "
+            "FORCE INDEX (idx_temporal_feature_created) WHERE created_at < %s "
+            "AND (created_at > %s OR (created_at = %s AND snapshot_id > %s)) "
+            "ORDER BY created_at, snapshot_id LIMIT %s",
+            (cutoff_iso, after_time, after_time, after_id, min(8, policy.batch_size)), budget,
+        )
+        if not window:
+            if (after_time or after_id) and self._has_budget(budget):
+                self._save_scan_cursor(policy.profile, scan_policy, "", "")
+            return self._result("temporal_feature_snapshots", 0, 0)
         guard = ("created_at < " + _cutoff_sql()
                  + " AND NOT EXISTS (SELECT 1 FROM statistical_model_signal_snapshots signal_snapshot "
                  "WHERE signal_snapshot.source_feature_snapshot_id = temporal_feature_snapshots.snapshot_id)")
-        candidates = self._byte_bounded_candidates(
-            "SELECT snapshot_id, OCTET_LENGTH(windows_json) AS payload_bytes "
-            "FROM `temporal_feature_snapshots` WHERE " + guard
-            + " ORDER BY created_at, snapshot_id LIMIT %s",
-            (cutoff_iso, min(8, policy.batch_size)),
-            "snapshot_id",
-            policy,
-            budget,
-        )
-        deleted, bytes_deleted = self._delete_candidates(
-            "temporal_feature_snapshots",
-            "snapshot_id",
-            candidates,
-            guard,
-            (cutoff_iso,),
-            budget,
-        )
+        deleted = bytes_deleted = 0
+        for item in window:
+            key = str(_row_value(item, "snapshot_id") or "")
+            rows = self._candidate_rows(
+                "SELECT snapshot_id, OCTET_LENGTH(windows_json) AS payload_bytes "
+                "FROM `temporal_feature_snapshots` WHERE snapshot_id = %s AND " + guard,
+                (key, cutoff_iso), budget,
+            )
+            candidates = self._bounded_candidate_rows(rows, "snapshot_id", policy, budget)
+            # The existing archive boundary verifies exact bytes and rechecks
+            # references and the retention clock before evicting the hot row.
+            count, size = self._delete_candidates(
+                "temporal_feature_snapshots", "snapshot_id", candidates, guard, (cutoff_iso,), budget,
+            )
+            deleted += count
+            bytes_deleted += size
+            if (len(candidates) != len(rows) or not self._has_budget(budget)
+                    or (candidates and not count)):
+                break
+            self._save_scan_cursor(policy.profile, scan_policy,
+                                   str(_row_value(item, "created_at", 1) or ""), key)
         return self._result("temporal_feature_snapshots", deleted, bytes_deleted)
 
     def _delete_statistical_model_signal_snapshots(self, policy, budget, cutoff_iso) -> Dict[str, object]:
@@ -1532,25 +1557,46 @@ class MySQLMinimalRetentionRepository:
         }
 
     def _delete_inactive_evidence(self, policy, budget, cutoff_iso) -> Dict[str, object]:
-        candidates = self._byte_bounded_candidates(
-            """
-            SELECT evidence_id, OCTET_LENGTH(payload_json) AS payload_bytes
-            FROM `research_evidence`
-            WHERE lifecycle_state IN ('expired', 'retracted')
-              AND lifecycle_changed_at < """ + _cutoff_sql() + " ORDER BY lifecycle_changed_at, evidence_id LIMIT %s",
-            (cutoff_iso, policy.batch_size),
-            "evidence_id",
-            policy,
-            budget,
+        scan_policy = "research:inactiveEvidence"
+        cursors = self._candidate_rows(
+            "SELECT after_time, after_id FROM mysql_retention_scan_cursors "
+            "WHERE profile = %s AND policy_name = %s", (policy.profile, scan_policy), budget,
         )
-        deleted, bytes_deleted = self._delete_candidates(
-            "research_evidence",
-            "evidence_id",
-            candidates,
-            "lifecycle_state IN ('expired', 'retracted') AND lifecycle_changed_at < " + _cutoff_sql(),
-            (cutoff_iso,),
-            budget,
+        cursor = cursors[0] if cursors else {}
+        after_id = str(_row_value(cursor, "after_id", 1, "") or "")
+        # lifecycle_changed_at has no ordering index. Sorting inactive rows
+        # before LIMIT reads unbounded cold records. Walk at most eight primary
+        # keys instead, including active rows, and persist progress past them.
+        window = self._candidate_rows(
+            "SELECT evidence_id FROM `research_evidence` FORCE INDEX (PRIMARY) "
+            "WHERE evidence_id > %s ORDER BY evidence_id LIMIT %s",
+            (after_id, min(8, policy.batch_size)), budget,
         )
+        if not window:
+            if after_id and self._has_budget(budget):
+                self._save_scan_cursor(policy.profile, scan_policy, "", "")
+            return self._result("research_evidence", 0, 0)
+        guard = "lifecycle_state IN ('expired', 'retracted') AND lifecycle_changed_at < " + _cutoff_sql()
+        deleted = bytes_deleted = 0
+        for item in window:
+            key = str(_row_value(item, "evidence_id") or "")
+            rows = self._candidate_rows(
+                "SELECT evidence_id, OCTET_LENGTH(payload_json) AS payload_bytes "
+                "FROM `research_evidence` WHERE evidence_id = %s AND " + guard,
+                (key, cutoff_iso), budget,
+            )
+            candidates = self._bounded_candidate_rows(rows, "evidence_id", policy, budget)
+            count, size = self._delete_candidates(
+                "research_evidence", "evidence_id", candidates, guard, (cutoff_iso,), budget,
+            )
+            deleted += count
+            bytes_deleted += size
+            if (len(candidates) != len(rows) or not self._has_budget(budget)
+                    or (candidates and not count)):
+                break
+            # Exceptions/budget exhaustion cannot skip an unfinished key.
+            # Wrapping the sweep revisits evidence that becomes inactive later.
+            self._save_scan_cursor(policy.profile, scan_policy, "", key)
         return self._result("research_evidence", deleted, bytes_deleted)
 
     def _delete_terminal_research_runs(self, policy, budget, cutoff_iso) -> Dict[str, object]:

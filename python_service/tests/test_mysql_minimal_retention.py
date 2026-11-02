@@ -1321,5 +1321,241 @@ class WorldProjectionPayloadRetentionTests(unittest.TestCase):
                 self.assertEqual("{}", self.rows()["old-2"]["payload_json"])
 
 
+class EvidenceAndTemporalRetentionTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        import os
+        from unittest.mock import patch
+        from pymysql.cursors import DictCursor
+        from mysql_fixtures import mysql_test_connection
+        from digital_twin.infrastructure.mysql_operational_connection import MYSQL_SCHEMA, MySQLConnectionProxy
+        with patch.dict(os.environ, {"MYSQL_TEST_DATABASE": "orbit_alpha_test_bounded_evidence_retention"}):
+            raw = mysql_test_connection()
+        raw.cursorclass = DictCursor
+        raw.autocommit(True)
+        cls.connection = MySQLConnectionProxy(raw)
+        cls.addClassCleanup(cls.connection.close)
+        cls.tables = ("research_evidence", "temporal_feature_snapshots", "statistical_model_signal_snapshots",
+                      "mysql_retention_scan_cursors", "storage_archive_records")
+        for table in cls.tables:
+            cls.connection.execute("DROP TABLE IF EXISTS " + table)
+            cls.connection.execute(next(sql for sql in MYSQL_SCHEMA if "CREATE TABLE IF NOT EXISTS " + table + " (" in sql))
+        cls.connection.execute("CREATE INDEX idx_temporal_feature_created "
+                               "ON temporal_feature_snapshots(created_at,snapshot_id)")
+
+    def setUp(self):
+        import tempfile
+        from unittest.mock import patch
+        from digital_twin.infrastructure.history_archive import LocalHistoryArchive
+        for table in self.tables:
+            self.connection.execute("DELETE FROM " + table)
+        self.policy = mysql_minimal_retention_policy({})
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        self.archive = LocalHistoryArchive(folder.name, minimum_free_bytes=0)
+        archive = patch("digital_twin.infrastructure.mysql_history_archive.archive_for_connection", return_value=self.archive)
+        archive.start()
+        self.addCleanup(archive.stop)
+
+    def insert(self, kind, key, *, clock="2026-01-01", state="expired", account="test-a"):
+        payload = json.dumps({"original": key, "text": "한글🙂" * 1000})
+        if kind == "research":
+            self.connection.execute("INSERT INTO research_evidence "
+                "(evidence_id,summary,url,lifecycle_state,lifecycle_changed_at,payload_json) "
+                "VALUES (%s,'summary','',%s,%s,%s)", (key, state, clock, payload))
+        else:
+            self.connection.execute("INSERT INTO temporal_feature_snapshots "
+                "(snapshot_id,feature_set_version,backend_id,account_id,as_of,watermark_json,symbols_json,"
+                "windows_json,payload_hash,created_at) VALUES (%s,'v1','test',%s,%s,'{}','[]',%s,'hash',%s)",
+                (key, account, clock, payload, clock))
+
+    def reference(self, key, *, account="test-a"):
+        self.connection.execute("INSERT INTO statistical_model_signal_snapshots "
+            "(snapshot_id,account_id,source_feature_snapshot_id,model_release_id,subjects_json,payload_json,"
+            "material_hash,created_at) VALUES (%s,%s,%s,'v1','[]','{}','hash','2026-01-01')", ("signal-" + key, account, key))
+
+    def budget(self, **overrides):
+        return {"started": time.monotonic(), "maxSeconds": 30, "remainingBytes": 1024 * 1024,
+                "deletedBytes": 0, **overrides}
+
+    def turn(self, kind, budget=None):
+        repo = MySQLMinimalRetentionRepository(self.connection, candidate_query_timeout_ms=1500)
+        action = repo._delete_inactive_evidence if kind == "research" else repo._delete_temporal_feature_snapshots
+        return action(self.policy, budget if budget is not None else self.budget(), "2026-02-01")
+
+    def position(self, kind):
+        policy = "research:inactiveEvidence" if kind == "research" else "temporalFeatureSnapshots:history"
+        return self.connection.execute("SELECT after_time,after_id FROM mysql_retention_scan_cursors "
+            "WHERE profile=%s AND policy_name=%s", (self.policy.profile, policy)).fetchone()
+
+    def remaining(self, kind):
+        table, key = ("research_evidence", "evidence_id") if kind == "research" else ("temporal_feature_snapshots", "snapshot_id")
+        return {r[key]: r for r in self.connection.execute("SELECT * FROM " + table).fetchall()}
+
+    def test_research_scan_bounds_reads_passes_active_prefixes_and_revisits_changes(self):
+        from unittest.mock import patch
+        for index in range(12):
+            self.insert("research", "a-" + str(index).zfill(2), state="active")
+        self.insert("research", "z-expired")
+        self.insert("research", "z-retracted", state="retracted")
+        self.insert("research", "z-recent", clock="2026-02-02")
+        self.insert("research", "z-boundary", clock="2026-02-01")
+        before = self.remaining("research")
+        execute, reads = self.connection.execute, []
+        def trace(sql, params=()):
+            if sql.startswith("SELECT") and "`research_evidence`" in sql:
+                reads.append((sql, params))
+            return execute(sql, params)
+        with patch.object(self.connection, "execute", side_effect=trace):
+            self.assertEqual(0, self.turn("research")["deleted"])
+        self.assertEqual("a-07", self.position("research")["after_id"])
+        header, params = next((sql, params) for sql, params in reads if "FORCE INDEX" in sql)
+        self.assertNotIn("payload_json", header)
+        self.assertEqual(8, params[-1])
+        plan = execute("EXPLAIN FORMAT=TRADITIONAL " + header, params).fetchall()[0]
+        self.assertEqual("PRIMARY", plan["key"])
+        self.assertNotIn("filesort", plan["Extra"])
+        self.assertEqual(8, len([sql for sql, _ in reads if "OCTET_LENGTH" in sql]))
+        self.assertTrue(all("evidence_id = %s" in sql for sql, _ in reads if "OCTET_LENGTH" in sql))
+        self.assertEqual(2, sum(self.turn("research")["deleted"] for _ in range(2)))
+        after = self.remaining("research")
+        self.assertEqual({k: v for k, v in before.items() if k not in {"z-expired", "z-retracted"}}, after)
+        self.assertEqual("", self.position("research")["after_id"])
+        execute("UPDATE research_evidence SET lifecycle_state='expired' WHERE evidence_id='a-00'")
+        self.assertEqual(1, self.turn("research")["deleted"])
+
+    def test_research_delete_rechecks_reactivation_and_retention_clock(self):
+        from unittest.mock import patch
+        execute = self.connection.execute
+        for mutation in ("lifecycle_state='active'", "lifecycle_changed_at='2026-03-01'"):
+            with self.subTest(mutation=mutation):
+                for table in self.tables:
+                    execute("DELETE FROM " + table)
+                self.insert("research", "candidate")
+                changed = []
+                def race(sql, params=()):
+                    if sql.startswith("DELETE FROM `research_evidence`") and not changed:
+                        changed.append(True)
+                        execute("UPDATE research_evidence SET " + mutation + " WHERE evidence_id='candidate'")
+                    return execute(sql, params)
+                with patch.object(self.connection, "execute", side_effect=race):
+                    self.assertEqual(0, self.turn("research")["deleted"])
+                self.assertTrue(changed)
+                self.assertIn("candidate", self.remaining("research"))
+                self.assertIsNone(self.position("research"))
+                self.assertEqual(0, self.turn("research")["deleted"])
+                self.assertEqual("candidate", self.position("research")["after_id"])
+
+    def test_temporal_scan_preserves_references_and_archives_exact_unreferenced_rows(self):
+        from unittest.mock import patch
+        from digital_twin.infrastructure.mysql_history_archive import read_archived_row, restore_archived_row
+        for index in range(12):
+            key = "a-" + str(index).zfill(2)
+            self.insert("temporal", key, account="test-a" if index % 2 else "test-b")
+            self.reference(key, account="test-a" if index % 2 else "test-b")
+        self.insert("temporal", "z-free", account="test-b")
+        self.insert("temporal", "z-current", clock="2026-02-01")
+        before = self.remaining("temporal")
+        execute, reads = self.connection.execute, []
+        def trace(sql, params=()):
+            if sql.startswith("SELECT") and "FORCE INDEX" in sql:
+                reads.append((sql, params))
+            return execute(sql, params)
+        with patch.object(self.connection, "execute", side_effect=trace):
+            self.assertEqual(0, self.turn("temporal")["deleted"])
+        self.assertEqual("a-07", self.position("temporal")["after_id"])
+        sql, params = reads[0]
+        self.assertNotIn("NOT EXISTS", sql)
+        self.assertNotIn("windows_json", sql)
+        plan = execute("EXPLAIN FORMAT=TRADITIONAL " + sql, params).fetchall()[0]
+        self.assertEqual("idx_temporal_feature_created", plan["key"])
+        self.assertNotIn("filesort", plan["Extra"])
+        self.assertEqual(1, self.turn("temporal")["deleted"])
+        self.assertEqual({k: v for k, v in before.items() if k != "z-free"}, self.remaining("temporal"))
+        key = {"snapshot_id": "z-free"}
+        self.assertEqual(before["z-free"], read_archived_row(self.connection, "temporal_feature_snapshots", key))
+        self.assertEqual(0, self.turn("temporal")["deleted"])
+        self.assertEqual("", self.position("temporal")["after_id"])
+        execute("DELETE FROM statistical_model_signal_snapshots WHERE source_feature_snapshot_id='a-00'")
+        self.assertEqual(1, self.turn("temporal")["deleted"])
+        self.assertTrue(restore_archived_row(self.connection, "temporal_feature_snapshots", key)["verified"])
+        self.assertEqual(before["z-free"], self.remaining("temporal")["z-free"])
+
+    def test_temporal_eviction_rechecks_new_references_clocks_and_original_bytes(self):
+        from unittest.mock import patch
+        from digital_twin.infrastructure.mysql_history_archive import read_archived_row
+        for change in ("reference", "clock", "correction"):
+            with self.subTest(change=change):
+                for table in self.tables:
+                    self.connection.execute("DELETE FROM " + table)
+                self.insert("temporal", "candidate")
+                put = self.archive.put
+                def race(row):
+                    receipt = put(row)
+                    if change == "reference":
+                        self.reference("candidate")
+                    else:
+                        update = "created_at='2026-03-01'" if change == "clock" else "windows_json='{}'"
+                        self.connection.execute("UPDATE temporal_feature_snapshots SET " + update + " WHERE snapshot_id='candidate'")
+                    return receipt
+                with patch.object(self.archive, "put", side_effect=race):
+                    self.assertEqual(0, self.turn("temporal")["deleted"])
+                self.assertIn("candidate", self.remaining("temporal"))
+                self.assertIsNone(self.position("temporal"))
+                self.assertIsNone(read_archived_row(self.connection, "temporal_feature_snapshots", {"snapshot_id": "candidate"}))
+
+    def test_failed_or_budget_deferred_rows_resume_without_skipping(self):
+        from unittest.mock import patch
+        from pymysql.err import OperationalError
+        execute = self.connection.execute
+        for kind in ("research", "temporal"):
+            for failure in ("read-deadline", "write-deadlock", "time-budget", "byte-budget", "admission"):
+                with self.subTest(kind=kind, failure=failure):
+                    for table in self.tables:
+                        execute("DELETE FROM " + table)
+                    self.insert(kind, "a-01")
+                    self.insert(kind, "a-02")
+                    budget = self.budget()
+                    def interrupt(sql, params=()):
+                        if "OCTET_LENGTH" in sql and params[0] == "a-02":
+                            if failure == "read-deadline":
+                                raise OperationalError(3024, "candidate deadline")
+                            result = execute(sql, params)
+                            if failure == "time-budget":
+                                budget["started"] -= 31
+                            if failure == "byte-budget":
+                                budget["remainingBytes"] = 1
+                            return result
+                        if sql.startswith("DELETE FROM `") and params[0] == "a-02" and failure == "write-deadlock":
+                            raise OperationalError(1213, "candidate deadlock")
+                        result = execute(sql, params)
+                        if sql.startswith("INSERT INTO mysql_retention_scan_cursors") and failure == "admission":
+                            budget["started"] -= 29
+                        return result
+                    with patch.object(self.connection, "execute", side_effect=interrupt):
+                        if failure in ("read-deadline", "write-deadlock"):
+                            with self.assertRaises(OperationalError):
+                                self.turn(kind, budget)
+                        else:
+                            self.turn(kind, budget)
+                    self.assertEqual("a-01", self.position(kind)["after_id"])
+                    self.assertEqual({"a-02"}, set(self.remaining(kind)))
+                    self.assertEqual(1, self.turn(kind)["deleted"])
+
+    def test_temporal_archive_failure_or_space_deferral_never_advances_eviction(self):
+        from unittest.mock import patch
+        self.insert("temporal", "candidate")
+        before = self.remaining("temporal")
+        with patch.object(self.archive, "can_stage", return_value=False):
+            self.assertEqual(0, self.turn("temporal")["deleted"])
+        self.assertIsNone(self.position("temporal"))
+        with patch.object(self.archive, "put", side_effect=OSError("archive unavailable")):
+            with self.assertRaises(OSError):
+                self.turn("temporal")
+        self.assertEqual(before, self.remaining("temporal"))
+        self.assertIsNone(self.position("temporal"))
+        self.assertEqual(1, self.turn("temporal")["deleted"])
+
+
 if __name__ == "__main__":
     unittest.main()

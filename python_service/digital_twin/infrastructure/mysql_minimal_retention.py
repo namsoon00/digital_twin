@@ -607,47 +607,98 @@ class MySQLMinimalRetentionRepository:
         return self._result("ontology_world_projection_outbox", deleted, bytes_deleted)
 
     def _compact_obsolete_world_projection_payloads(self, policy, budget) -> Dict[str, object]:
-        candidates = self._byte_bounded_candidates(
-            """
-            SELECT older.job_id,
-                   OCTET_LENGTH(older.payload_json) + OCTET_LENGTH(older.result_json) AS payload_bytes
-            FROM `ontology_world_projection_outbox` older
-            INNER JOIN (
-                SELECT completed.world_id, completed.projection_kind,
-                       completed.completed_at, completed.job_id
-                FROM (
-                    SELECT world_id, projection_kind, completed_at, job_id,
-                           ROW_NUMBER() OVER (
-                               PARTITION BY world_id, projection_kind
-                               ORDER BY completed_at DESC, job_id DESC
-                           ) AS completion_rank
-                    FROM `ontology_world_projection_outbox`
-                    WHERE status = 'completed' AND completed_at <> ''
-                ) completed
-                WHERE completed.completion_rank = 1
-            ) latest
-              ON latest.world_id = older.world_id
-             AND latest.projection_kind = older.projection_kind
-            WHERE older.status IN ('completed', 'superseded')
-              AND (older.payload_json <> '{}' OR older.result_json <> '{}')
-              AND (
-                  latest.completed_at > older.completed_at
-                  OR (latest.completed_at = older.completed_at AND latest.job_id > older.job_id)
-              )
-            ORDER BY older.completed_at, older.job_id LIMIT %s
-            """,
-            (policy.batch_size,),
-            "job_id",
-            policy,
-            budget,
+        scan_policy = "worldProjection:obsoletePayload"
+        cursors = self._candidate_rows(
+            "SELECT after_time, after_id FROM mysql_retention_scan_cursors "
+            "WHERE profile = %s AND policy_name = %s", (policy.profile, scan_policy), budget,
         )
-        return self._compact_payload_candidates(
-            "ontology_world_projection_outbox",
-            candidates,
-            "status IN ('completed', 'superseded')",
-            budget,
-            clear_result=True,
+        cursor = cursors[0] if cursors else {}
+        after_time = str(_row_value(cursor, "after_time", fallback="") or "")
+        after_id = str(_row_value(cursor, "after_id", 1, "") or "")
+        limit = min(8, policy.batch_size)
+        ranges, range_params = [], []
+        for status in TERMINAL_WORLD_PROJECTION_STATUSES:
+            # Separate status ranges use the covering completion index. A
+            # window function or JSON predicate before LIMIT scans all history.
+            ranges.append(
+                "(SELECT job_id, completed_at FROM `ontology_world_projection_outbox` "
+                "FORCE INDEX (idx_world_projection_outbox_completed) "
+                "WHERE status = %s AND (completed_at > %s OR (completed_at = %s AND job_id > %s)) "
+                "ORDER BY completed_at, job_id LIMIT %s)"
+            )
+            range_params.extend((status, after_time, after_time, after_id, limit))
+        # Merge at most sixteen headers using the database's collation, so the
+        # persisted keyset has exactly the same ordering as each status range.
+        window = self._candidate_rows(
+            "SELECT job_id, completed_at FROM (" + " UNION ALL ".join(ranges)
+            + ") candidate ORDER BY completed_at, job_id LIMIT %s", tuple(range_params) + (limit,), budget,
         )
+        if not window:
+            if (after_time or after_id) and self._has_budget(budget):
+                self._save_scan_cursor(policy.profile, scan_policy, "", "")
+            return self._result("ontology_world_projection_outbox", 0, 0)
+
+        compacted = bytes_compacted = 0
+        for item in window:
+            key = str(_row_value(item, "job_id") or "")
+            metadata = self._candidate_rows(
+                "SELECT world_id, projection_kind, completed_at FROM `ontology_world_projection_outbox` "
+                "WHERE job_id = %s AND status IN ('completed', 'superseded')", (key,), budget,
+            )
+            if metadata:
+                row = metadata[0]
+                world = str(_row_value(row, "world_id") or "")
+                kind = str(_row_value(row, "projection_kind", 1) or "")
+                completed_at = str(_row_value(row, "completed_at", 2) or "")
+                newer = self._candidate_rows(
+                    "SELECT job_id FROM `ontology_world_projection_outbox` "
+                    "WHERE status = 'completed' AND world_id = %s AND projection_kind = %s AND completed_at <> '' "
+                    "AND (completed_at > %s OR (completed_at = %s AND job_id > %s)) "
+                    "ORDER BY completed_at DESC, job_id DESC LIMIT 1",
+                    (world, kind, completed_at, completed_at, key), budget,
+                )
+                if newer:
+                    # Read a cold payload only after its indexed identity and
+                    # replacement are known, one primary key per deadline.
+                    rows = self._candidate_rows(
+                        "SELECT job_id, OCTET_LENGTH(payload_json) + OCTET_LENGTH(result_json) AS payload_bytes "
+                        "FROM `ontology_world_projection_outbox` WHERE job_id = %s "
+                        "AND status IN ('completed', 'superseded') "
+                        "AND (payload_json <> '{}' OR result_json <> '{}')", (key,), budget,
+                    )
+                    candidates = self._bounded_candidate_rows(rows, "job_id", policy, budget)
+                    if len(candidates) != len(rows) or not self._has_budget(budget):
+                        break
+                    if candidates:
+                        updated = _execute(
+                            self.connection,
+                            "UPDATE `ontology_world_projection_outbox` older "
+                            "JOIN `ontology_world_projection_outbox` newer ON newer.job_id = %s "
+                            "AND newer.status = 'completed' AND newer.completed_at <> '' "
+                            "AND newer.world_id = older.world_id AND newer.projection_kind = older.projection_kind "
+                            "AND (newer.completed_at > older.completed_at "
+                            "OR (newer.completed_at = older.completed_at AND newer.job_id > older.job_id)) "
+                            "SET older.payload_json = '{}', older.result_json = '{}' "
+                            "WHERE older.job_id = %s AND older.status IN ('completed', 'superseded') "
+                            "AND older.world_id = %s AND older.projection_kind = %s AND older.completed_at = %s "
+                            "AND (older.payload_json <> '{}' OR older.result_json <> '{}')",
+                            (str(_row_value(newer[0], "job_id") or ""), key, world, kind, completed_at),
+                        )
+                        count = max(0, _integer(getattr(updated, "rowcount", 0)))
+                        size = _integer(_row_value(candidates[0], "payload_bytes")) if count else 0
+                        compacted += count
+                        bytes_compacted += size
+                        budget["remainingBytes"] = max(0, _integer(budget.get("remainingBytes")) - size)
+                        budget["deletedBytes"] = _integer(budget.get("deletedBytes")) + size
+            if not self._has_budget(budget):
+                break
+            # Skip protected/empty prefixes, but revisit them after a sweep.
+            # Failed reads/writes and exhausted budgets leave the cursor before
+            # unprocessed work, including after replacement of the worker.
+            self._save_scan_cursor(policy.profile, scan_policy,
+                                   str(_row_value(item, "completed_at", 1) or ""), key)
+        return {"deleted": 0, "compacted": compacted, "estimatedBytes": bytes_compacted,
+                "tables": {"ontology_world_projection_outbox": compacted} if compacted else {}}
 
     def _delete_inference_detail_rows(self, policy, budget, cutoff_iso) -> Dict[str, object]:
         statuses = ("completed", "superseded")

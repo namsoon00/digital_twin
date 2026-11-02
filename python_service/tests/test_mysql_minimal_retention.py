@@ -106,8 +106,15 @@ class DeliveredPayloadConnection(ApplyConnection):
         rendered = str(sql)
         values = tuple(params or ())
         self.calls.append((rendered, values))
-        if "ROW_NUMBER() OVER" in rendered and "ontology_world_projection_outbox" in rendered:
-            return Cursor(rows=[{"job_id": "world-obsolete", "payload_bytes": 8192}])
+        if "ontology_world_projection_outbox" in rendered and rendered.startswith("SELECT"):
+            if "UNION ALL" in rendered:
+                return Cursor(rows=[{"job_id": "world-obsolete", "completed_at": "2026-01-01"}])
+            if "SELECT world_id, projection_kind" in rendered:
+                return Cursor(rows=[{"world_id": "world-a", "projection_kind": "market", "completed_at": "2026-01-01"}])
+            if "ORDER BY completed_at DESC" in rendered:
+                return Cursor(rows=[{"job_id": "world-latest"}])
+            if "OCTET_LENGTH" in rendered:
+                return Cursor(rows=[{"job_id": "world-obsolete", "payload_bytes": 8192}])
         if "FROM `time_series_projection_outbox`" in rendered and "payload_json <> '{}'" in rendered:
             return Cursor(rows=[{"job_id": "ts-completed", "payload_bytes": 4096}])
         if rendered.lstrip().startswith("UPDATE `ontology_world_projection_outbox`"):
@@ -699,7 +706,7 @@ class MySQLMinimalRetentionTests(unittest.TestCase):
             if sql.lstrip().startswith("UPDATE `ontology_world_projection_outbox`")
         ]
         self.assertTrue(world_updates)
-        self.assertIn("result_json = '{}'", world_updates[-1])
+        self.assertIn("older.result_json = '{}'", world_updates[-1])
         self.assertNotIn("notification_jobs", sql_text)
         self.assertNotIn("monitor_snapshot_history", sql_text)
         self.assertNotIn("investment_research_runs", sql_text)
@@ -1145,6 +1152,173 @@ class MySQLReasoningLineageRetentionChecks(unittest.TestCase):
                 (), "survivor_job_id", self.policy, self.budget)
         self.assertEqual(3024, raised.exception.args[0])
         self.assertEqual({("orphan", "b")}, self.remaining())
+
+
+class WorldProjectionPayloadRetentionTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        import os
+        from unittest.mock import patch
+        from pymysql.cursors import DictCursor
+        from mysql_fixtures import mysql_test_connection
+        from digital_twin.infrastructure.mysql_operational_connection import MYSQL_SCHEMA, MySQLConnectionProxy
+
+        with patch.dict(os.environ, {"MYSQL_TEST_DATABASE": "orbit_alpha_test_world_payload_retention"}):
+            raw = mysql_test_connection()
+        raw.cursorclass = DictCursor
+        cls.connection = MySQLConnectionProxy(raw)
+        cls.addClassCleanup(cls.connection.close)
+        for table in ("ontology_world_projection_outbox", "mysql_retention_scan_cursors"):
+            cls.connection.execute("DROP TABLE IF EXISTS " + table)
+            cls.connection.execute(next(sql for sql in MYSQL_SCHEMA if "CREATE TABLE IF NOT EXISTS " + table + " (" in sql))
+        cls.connection.execute("CREATE INDEX idx_world_projection_outbox_status_world_kind_completed "
+                               "ON ontology_world_projection_outbox(status,world_id,projection_kind,completed_at,job_id)")
+
+    def setUp(self):
+        self.connection.execute("DELETE FROM ontology_world_projection_outbox")
+        self.connection.execute("DELETE FROM mysql_retention_scan_cursors")
+        self.policy = mysql_minimal_retention_policy({})
+
+    def insert(self, key, world="world-a", kind="market", status="completed", clock="2026-01-01"):
+        self.connection.execute("INSERT INTO ontology_world_projection_outbox "
+            "(job_id,dedupe_key,world_id,projection_kind,status,completed_at,payload_json,result_json,"
+            "last_error,created_at,updated_at) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,'',%s,%s)",
+            (key, key, world, kind, status, clock, json.dumps({"source": key, "body": "x" * 4096}),
+             json.dumps({"receipt": key}), clock, clock))
+
+    def budget(self, **overrides):
+        return {"started": time.monotonic(), "maxSeconds": 30, "remainingBytes": 1024 * 1024,
+                "deletedBytes": 0, **overrides}
+
+    def turn(self, budget=None):
+        # A fresh repository each time models an isolated/replaced worker.
+        return MySQLMinimalRetentionRepository(self.connection, candidate_query_timeout_ms=1500) \
+            ._compact_obsolete_world_projection_payloads(self.policy, budget if budget is not None else self.budget())
+
+    def rows(self):
+        return {r["job_id"]: r for r in self.connection.execute("SELECT * FROM ontology_world_projection_outbox").fetchall()}
+
+    def position(self):
+        return self.connection.execute("SELECT after_time,after_id FROM mysql_retention_scan_cursors "
+            "WHERE profile=%s AND policy_name='worldProjection:obsoletePayload'", (self.policy.profile,)).fetchone()
+
+    def test_only_obsolete_same_scope_payloads_are_compacted_and_receipts_survive(self):
+        self.insert("old")
+        self.insert("superseded", status="superseded")
+        self.insert("latest", clock="2026-01-03")
+        self.insert("later-superseded", status="superseded", clock="2026-01-04")
+        self.insert("other-world", world="world-b")
+        self.insert("other-kind", kind="portfolio")
+        for status in ("pending", "processing", "failed"):
+            self.insert(status, status=status)
+        self.insert("tie-a", world="tie-world")
+        self.insert("tie-z", world="tie-world")
+        self.insert("uncompleted", world="no-completion", clock="")
+        before = self.rows()
+        results = [self.turn() for _ in range(4)]
+        after = self.rows()
+        self.assertEqual(3, sum(r["compacted"] for r in results))
+        self.assertEqual(set(before), set(after))
+        for key, original in before.items():
+            expected = dict(original)
+            if key in {"old", "superseded", "tie-a"}:
+                expected.update(payload_json="{}", result_json="{}")
+            self.assertEqual(expected, after[key], key)
+        self.assertEqual(0, self.turn()["compacted"])
+
+    def test_metadata_keyset_passes_protected_prefixes_and_wraps(self):
+        from unittest.mock import patch
+        for index in range(12):
+            key = "prefix-" + str(index).zfill(2)
+            self.insert(key, world=key, status="completed" if index % 2 else "superseded")
+        self.insert("z-old", world="replaced")
+        self.insert("z-latest", world="replaced", clock="2026-01-02")
+        execute, reads = self.connection.execute, []
+        def trace(sql, params=()):
+            if sql.startswith("SELECT") and "ontology_world_projection_outbox" in sql:
+                reads.append((sql, params))
+            return execute(sql, params)
+        with patch.object(self.connection, "execute", side_effect=trace):
+            self.assertEqual(0, self.turn()["compacted"])
+        self.assertEqual("prefix-07", self.position()["after_id"])
+        self.assertFalse(any("payload_json" in sql for sql, _ in reads))
+        window_sql, params = next((sql, params) for sql, params in reads if "UNION ALL" in sql)
+        self.assertEqual((8, 8, 8), (params[4], params[9], params[10]))
+        plan = execute("EXPLAIN FORMAT=TRADITIONAL " + window_sql, params).fetchall()
+        ranges = [row for row in plan if row["table"] == "ontology_world_projection_outbox"]
+        self.assertEqual(2, len(ranges))
+        self.assertTrue(all(row["key"] == "idx_world_projection_outbox_completed" for row in ranges))
+        self.assertTrue(all("Using index" in row["Extra"] and "filesort" not in row["Extra"] for row in ranges))
+        self.assertEqual(1, self.turn()["compacted"])
+        self.turn()
+        self.assertEqual("", self.position()["after_id"])
+        self.insert("new-prefix", world="prefix-00", clock="2026-01-03")
+        self.assertEqual(1, self.turn()["compacted"])
+        self.assertEqual("{}", self.rows()["prefix-00"]["payload_json"])
+
+    def test_compaction_rechecks_candidate_and_replacement_at_update(self):
+        from unittest.mock import patch
+        cases = (
+            "UPDATE ontology_world_projection_outbox SET status='processing' WHERE job_id='old'",
+            "UPDATE ontology_world_projection_outbox SET completed_at='2025-12-31' WHERE job_id='old'",
+            "UPDATE ontology_world_projection_outbox SET status='failed' WHERE job_id='new'",
+            "UPDATE ontology_world_projection_outbox SET world_id='another-world' WHERE job_id='new'",
+            "UPDATE ontology_world_projection_outbox SET projection_kind='portfolio' WHERE job_id='new'",
+            "DELETE FROM ontology_world_projection_outbox WHERE job_id='new'",
+        )
+        execute = self.connection.execute
+        for mutation in cases:
+            with self.subTest(mutation=mutation):
+                self.setUp()
+                self.insert("old")
+                self.insert("new", clock="2026-01-02")
+                changed = []
+                def race(sql, params=()):
+                    if sql.startswith("UPDATE `ontology_world_projection_outbox` older") and not changed:
+                        changed.append(True)
+                        execute(mutation)
+                    return execute(sql, params)
+                with patch.object(self.connection, "execute", side_effect=race):
+                    self.assertEqual(0, self.turn()["compacted"])
+                self.assertTrue(changed)
+                self.assertNotEqual("{}", self.rows()["old"]["payload_json"])
+
+    def test_failed_or_unfinished_candidate_is_retried_without_skipping(self):
+        from unittest.mock import patch
+        from pymysql.err import OperationalError
+        execute = self.connection.execute
+        for failure in ("read-deadline", "write-deadlock", "time-budget", "byte-budget"):
+            with self.subTest(failure=failure):
+                self.setUp()
+                self.insert("old-1")
+                self.insert("old-2")
+                self.insert("new", clock="2026-01-02")
+                budget = self.budget()
+                def interrupt(sql, params=()):
+                    if "OCTET_LENGTH" in sql and params == ("old-2",):
+                        if failure == "read-deadline":
+                            raise OperationalError(3024, "candidate deadline")
+                        result = execute(sql, params)
+                        if failure == "time-budget":
+                            budget["started"] -= 31
+                        if failure == "byte-budget":
+                            budget["remainingBytes"] = 1
+                        return result
+                    if (sql.startswith("UPDATE `ontology_world_projection_outbox` older")
+                            and params[1] == "old-2" and failure == "write-deadlock"):
+                        raise OperationalError(1213, "candidate deadlock")
+                    return execute(sql, params)
+                with patch.object(self.connection, "execute", side_effect=interrupt):
+                    if failure in ("read-deadline", "write-deadlock"):
+                        with self.assertRaises(OperationalError):
+                            self.turn(budget)
+                    else:
+                        self.turn(budget)
+                self.assertEqual("old-1", self.position()["after_id"])
+                self.assertEqual("{}", self.rows()["old-1"]["payload_json"])
+                self.assertNotEqual("{}", self.rows()["old-2"]["payload_json"])
+                self.assertEqual(1, self.turn()["compacted"])
+                self.assertEqual("{}", self.rows()["old-2"]["payload_json"])
 
 
 if __name__ == "__main__":

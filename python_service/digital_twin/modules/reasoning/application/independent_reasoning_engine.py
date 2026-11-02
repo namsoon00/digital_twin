@@ -1476,7 +1476,7 @@ class V2ReasoningEngine:
         progress(
             "input_assembly.completed",
             {"durationMs": stages["inputAssemblyMs"], "status": assembled.get("status"),
-             "inputTimingsMs": assembled.get("inputTimingsMs") or {}},
+             **(assembled.get("inputTimingsMs") or {})},
         )
         preflight = dict(assembled.get("preflight") or {})
         if assembled.get("status") != "ready":

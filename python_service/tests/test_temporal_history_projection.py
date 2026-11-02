@@ -92,6 +92,17 @@ class TemporalHistoryProjectionTests(TestCase):
             assembler.history("acct")
         fallback = IndependentReasoningInputAssembler(None, None, SimpleNamespace(load_history=lambda *_a, **_k: [history_state()]))
         self.assertEqual([value], fallback.history("acct"))
+        # Worker progress deliberately admits scalars only. Substage timings
+        # must survive that boundary as well as the completed job receipt.
+        from digital_twin.modules.reasoning.application.independent_reasoning_engine import V2ReasoningEngine, IndependentReasoningJobRunner
+        from test_independent_reasoning_engine import descriptor, source_event, FakeExecutor, FakeCandidateBuilder
+        prepared = SimpleNamespace(assemble=lambda _request: {"status": "deferred", "snapshots": [],
+            "inputTimingsMs": {"inputTemporalHistoryMs": 7}, "preflight": {"ready": False}})
+        engine = V2ReasoningEngine(descriptor(), prepared, FakeExecutor(), FakeCandidateBuilder())
+        runner = IndependentReasoningJobRunner(SimpleNamespace(), engine, SimpleNamespace())
+        result = engine.consume([source_event()], progress_callback=runner.record_progress)
+        self.assertEqual(7, result["stage_durations_ms"]["inputTemporalHistoryMs"])
+        self.assertEqual(7, runner.current_progress()["details"]["inputTemporalHistoryMs"])
 
 
 class TemporalHistoryStorageTests(StabilizationDatabaseCase):

@@ -1135,3 +1135,23 @@ took 129,448 ms on the broad rows versus 327 ms decoding their prepared inputs.
 These measurements exclude SQL/network and do not measure total alert latency.
 Only counts, timing and a digest are recorded here; private source records are
 not checked in.
+
+The production rollout prepared 96 retained rows. Two direct reads, including
+JSON decoding, took 458 and 443 ms. The first three completed live jobs after
+restart recorded input assembly of 22,323, 3,722 and 2,296 ms, with temporal reads
+of 17,897, 1,114 and 492 ms. Their complete execution times were 215,443, 88,183
+and 74,111 ms. The preceding completed job spent 185,245 ms assembling input and
+519,757 ms executing. These jobs have different sources and subjects; they are
+operational observations, not a controlled speedup ratio or a P95 claim. Queue
+debt and historical decision/performance preparation remain material. Successful
+execution without a delivery event does not prove a customer alert was sent.
+
+On the existing partitioned MySQL table, adding these columns required a table
+rebuild; `ALGORITHM=INSTANT` was unavailable. The first startup timed out while
+the server continued DDL, and retries queued behind its metadata lock. Rollout
+was completed with one migration owner, managed history consumers stopped, and
+bounded backfill before normal restart. Future deployments must allow for that
+schema cost and check the server's in-flight DDL before retrying a timed-out
+startup. The two added columns do not require a rebuild on subsequent restarts.
+Input substage timings are flattened at the worker's scalar progress boundary,
+so they remain visible during execution as well as in the final job receipt.

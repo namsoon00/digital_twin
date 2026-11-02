@@ -96,6 +96,7 @@ _EXPORTS.update({
     'default_ontology_relation_reasoning_text': ('digital_twin.modules.model_registry.domain.ontology_prompt_registry', 'default_ontology_relation_reasoning_text'),
     'default_ontology_threshold_policy': ('digital_twin.modules.model_registry.domain.ontology_threshold_policy', 'default_ontology_threshold_policy'),
     'governed_graph_inference_rules': ('digital_twin.modules.model_registry.domain.ontology_rulebox_catalog', 'governed_graph_inference_rules'),
+    'with_valid_temporal_price_paths': ('digital_twin.modules.model_registry.domain.ontology_rulebox_catalog', 'with_valid_temporal_price_paths'),
     'has_material_delta': ('digital_twin.modules.model_registry.domain.hypothesis_lifecycle', 'has_material_delta'),
     'hypothesis_family_definition': ('digital_twin.modules.model_registry.domain.hypothesis_catalog', 'hypothesis_family_definition'),
     'hypothesis_lifecycle_transitioned_event': ('digital_twin.modules.model_registry.domain.events', 'hypothesis_lifecycle_transitioned_event'),

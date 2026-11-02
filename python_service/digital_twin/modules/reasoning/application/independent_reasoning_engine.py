@@ -420,6 +420,7 @@ def compact_projection_result(projection: object) -> Dict[str, object]:
         "temporalFeatureInput": dict(
             graph_input.get("temporalFeatureInput") or {}
         ),
+        "temporalFeatureMigrationInput": dict(graph_input.get("temporalFeatureMigrationInput") or {}),
         # Source-event equality is not proof of equal assembled facts. Retain
         # both the incoming and persisted semantic manifests for comparison.
         **{

@@ -496,7 +496,9 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # and transactional run ownership add nine distinct regressions.
         # Seven concurrently landed valid-observation path contracts also
         # belong to the current manifest (bea6bc9b1).
-        self.assertLessEqual(total, 2996)
+        # Five feature-migration contracts cover preserved artifacts, explicit
+        # release binding, real source proof, strict rejection, and review audit.
+        self.assertLessEqual(total, 3001)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

@@ -1133,6 +1133,7 @@ class ReasoningEnginePlatformService:
         release_seed_artifact: Mapping[str, object] = None,
         expected_baseline_deployment_id: str = "",
         time_series_backend_id: str = "",
+        feature_set_version: str = "",
     ) -> Dict[str, object]:
         """Register a new V2 candidate without disturbing active delivery."""
 
@@ -1268,6 +1269,21 @@ class ReasoningEnginePlatformService:
         } | {TYPEDB_NATIVE_RULE_ENGINE_VERSION}
         registration_runtime = dict(self.settings.get("_runtimeIdentity") or {})
         authored_artifact = dict(release_seed_artifact or {})
+        selected_feature_version = str(feature_set_version or bundle.feature_set_version)
+        if (authored_artifact.get("temporalFeatureMigration")
+                and selected_feature_version != authored_artifact["temporalFeatureMigration"].get("candidateFeatureSetVersion")):
+            return {"status": "blocked", "blockers": ["declared-feature-version-not-selected"]}
+        if selected_feature_version != bundle.feature_set_version:
+            from digital_twin.modules.reasoning.domain.temporal_feature_migration import validate_migration_artifacts
+            try:
+                declaration = validate_migration_artifacts(
+                    self.registry.release_artifact(expected_baseline_deployment_id), authored_artifact,
+                    expected_baseline_deployment_id,
+                )
+                if selected_feature_version != declaration["candidateFeatureSetVersion"]:
+                    raise ValueError("undeclared-feature-version")
+            except (AttributeError, KeyError, TypeError, ValueError) as error:
+                return {"status": "blocked", "blockers": ["unverified-feature-migration"], "reason": str(error)[:160]}
         model_releases = bundle.model_signal_release_id
         if authored_artifact:
             from digital_twin.modules.model_registry.contracts import GraphInferenceRule, rulebox_rules_hash
@@ -1297,7 +1313,7 @@ class ReasoningEnginePlatformService:
                 tbox_release_id=(str(tbox.get("version")) + "@" + str(tbox.get("fingerprint"))) if authored_artifact else bundle.tbox_release_id,
                 rulebox_release_id=("ontology-evolution@" + str(authored_artifact["ruleboxFingerprint"])) if authored_artifact else bundle.rulebox_release_id,
                 prompt_release_id=bundle.prompt_release_id,
-                feature_set_version=bundle.feature_set_version,
+                feature_set_version=selected_feature_version,
                 model_signal_release_id=model_releases,
                 source_contract_versions=tuple(sorted(source_contract_versions | {
                     COMPARISON_INPUT_CONTRACT_VERSION, "target-scope-logical-input-v2", MANAGEMENT_UPGRADE_REVIEW_VERSION, PAIRED_VALIDATION_INPUT_VERSION,
@@ -1624,12 +1640,12 @@ class ReasoningEnginePlatformService:
                 blockers.append("insufficient-independent-comparisons")
             if (
                 int(comparison_summary.get("sampleCount") or 0) > 0
-                and float(comparison_summary.get("minimumFactParityPct") or 0.0) < 100.0
+                and int(comparison_summary.get("unreviewedFactParityGapCount", int(float(comparison_summary.get("minimumFactParityPct") or 0.0) < 100.0))) > 0
             ):
                 blockers.append("independent-fact-parity-incomplete")
             if (
                 int(comparison_summary.get("sampleCount") or 0) > 0
-                and float(comparison_summary.get("minimumRuleSlotCoveragePct") or 0.0) < 100.0
+                and int(comparison_summary.get("unreviewedRuleSlotGapCount", int(float(comparison_summary.get("minimumRuleSlotCoveragePct") or 0.0) < 100.0))) > 0
             ):
                 blockers.append("independent-rule-slot-coverage-incomplete")
             if int(

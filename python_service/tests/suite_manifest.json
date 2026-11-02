@@ -1,5 +1,6 @@
 {
   "tests": [
+    {"file": "test_temporal_feature_migration.py", "tier": "contract", "core": true},
     {"file": "test_ai_portfolio_analysis.py", "tier": "unit", "core": false},
     {"file": "test_ai_portfolio_analysis_storage.py", "tier": "integration", "core": false},
     {"file": "test_ai_portfolio_report.py", "tier": "unit", "core": false},

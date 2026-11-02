@@ -293,6 +293,17 @@ class IndependentReasoningComparisonService:
                         )
                     except Exception as error:  # Unavailable review never clears the original parity failure.
                         comparison["managementUpgradeReview"] = {"status": "unavailable", "reasonCode": str(error)[:160]}
+            artifact_reader = getattr(self.registry, "release_artifact", None)
+            if callable(artifact_reader) and not input_contract["eligible"]:
+                from digital_twin.modules.reasoning.domain.temporal_feature_migration import review_temporal_feature_migration
+                try:
+                    candidate_record = dict(artifact_reader(candidate_id) or {})
+                    if (candidate_record.get("artifact") or {}).get("temporalFeatureMigration"):
+                        comparison["temporalFeatureMigrationReview"] = review_temporal_feature_migration(
+                            baseline_job, candidate_job, comparison,
+                            dict(artifact_reader(baseline_id) or {}), candidate_record)
+                except Exception as error:  # Never clears the original failed comparison.
+                    comparison["temporalFeatureMigrationReview"] = {"status": "unavailable", "reasonCode": str(error)[:160]}
             recorded.append(self.comparison_store.record(
                 baseline_id,
                 candidate_id,

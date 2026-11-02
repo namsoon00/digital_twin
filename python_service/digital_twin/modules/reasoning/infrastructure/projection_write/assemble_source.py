@@ -169,6 +169,7 @@ def assemble_source(
         "temporalFeatureInput": dict(
             graph_assembly.get("temporalFeatureInput") or {}
         ),
+        "temporalFeatureMigrationInput": dict(graph_assembly.get("temporalFeatureMigrationInput") or {}),
         "fallback": False,
         "fallbackReason": "",
     }

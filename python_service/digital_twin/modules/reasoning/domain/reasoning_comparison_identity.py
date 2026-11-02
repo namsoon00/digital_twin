@@ -32,10 +32,14 @@ def job_comparison_identity(job: Mapping[str, object]):
     temporal_inputs = []
     temporal_semantics = []
     abox_inputs = []
+    feature_migration_inputs = []
     for account_id, projection in sorted(
         _mapping(result.get("projection_results") or result.get("projectionResults")).items()
     ):
         projection = _mapping(projection)
+        if projection.get("temporalFeatureMigrationInput"):
+            feature_migration_inputs.append({"accountId": str(account_id),
+                                             "proof": _mapping(projection["temporalFeatureMigrationInput"])})
         scopes = {}
         for name in ("comparisonScope", "persistedComparisonScope"):
             scope = _mapping(projection.get(name))
@@ -83,6 +87,7 @@ def job_comparison_identity(job: Mapping[str, object]):
         "symbols": _texts(payload.get("affectedSymbols") or payload.get("symbols") or payload.get("symbol") or [symbol for item in boundaries for symbol in item.get("symbols") or []]),
         "temporalFeatureInputs": temporal_inputs,
         "temporalFeatureSemantics": temporal_semantics,
+        "featureMigrationInputs": feature_migration_inputs,
         "aboxInputs": abox_inputs if len(abox_inputs) == len(_mapping(result.get("projection_results") or result.get("projectionResults"))) else [],
     }
     if (sorted(row["accountId"] for row in abox_inputs) != inputs["accountIds"]

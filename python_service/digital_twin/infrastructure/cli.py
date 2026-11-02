@@ -1468,11 +1468,22 @@ def reasoning_engine_platform_command(args) -> int:
         }, ensure_ascii=False))
         return 0
     if args.reasoning_engine_action == "register-v2-release":
+        authored = {}
+        if getattr(args, "temporal_valid_price_path", False):
+            from digital_twin.infrastructure.composition.temporal_feature_release import temporal_feature_release_artifact
+            from digital_twin.modules.market_data.contracts import VALID_PRICE_PATH_FEATURE_VERSION
+            baseline_id = platform.registry.control().active_deployment_id
+            authored = {
+                "release_seed_artifact": temporal_feature_release_artifact(platform.registry.release_artifact(baseline_id), baseline_id),
+                "expected_baseline_deployment_id": baseline_id,
+                "feature_set_version": VALID_PRICE_PATH_FEATURE_VERSION,
+            }
         result = platform.register_v2_release(
             args.deployment_id,
             args.release_id,
             graph_database=getattr(args, "graph_database", ""),
             time_series_backend_id=getattr(args, "time_series_backend", ""),
+            **authored,
         )
         if result.get("status") == "registered":
             deployment = dict(result.get("deployment") or {})
@@ -2878,6 +2889,8 @@ def build_parser() -> argparse.ArgumentParser:
     reasoning_register.add_argument("--deployment-id", required=True)
     reasoning_register.add_argument("--release-id", required=True)
     reasoning_register.add_argument("--graph-database", default="")
+    reasoning_register.add_argument("--temporal-valid-price-path", action="store_true",
+                                    help="Preserve the active RuleBox and author its declared valid-price-path successor")
     reasoning_register.add_argument(
         "--time-series-backend",
         default="",

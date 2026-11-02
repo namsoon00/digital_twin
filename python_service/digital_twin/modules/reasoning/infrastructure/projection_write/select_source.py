@@ -138,6 +138,7 @@ def select_source(
                 "temporalFeatureInput": dict(
                     graph_assembly.get("temporalFeatureInput") or {}
                 ),
+                "temporalFeatureMigrationInput": dict(graph_assembly.get("temporalFeatureMigrationInput") or {}),
                 "fallback": True,
                 "fallbackReason": str(
                     target_scoped_patch.get("fallbackReason")

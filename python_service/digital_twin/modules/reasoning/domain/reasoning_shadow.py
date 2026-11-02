@@ -851,13 +851,15 @@ def reasoning_comparison_summary(
     ]
     items, excluded_items, duplicate_items = [], [], []
     execution_rows = {}
+    from digital_twin.modules.reasoning.domain.temporal_feature_migration import temporal_migration_review_valid
     severity = {status: index for index, status in enumerate((
         "equivalent", "explained-input-difference", "input-parity-gap",
         "reasoning-parity-gap", "unexplained-difference", "candidate-failed", "delivery-violation",
     ))}
     for row in validation_items:
         source = _mapping(_mapping(row.get("payload")).get("sourceInput"))
-        if source.get("contractVersion") != COMPARISON_INPUT_CONTRACT_VERSION or source.get("eligible") is not True:
+        if source.get("contractVersion") != COMPARISON_INPUT_CONTRACT_VERSION or (
+                source.get("eligible") is not True and not temporal_migration_review_valid(_mapping(row.get("payload")))):
             excluded_items.append(row)
             continue
         identity = source.get("independentExecutionKey")
@@ -882,6 +884,8 @@ def reasoning_comparison_summary(
             # Multiple representations of one execution retain the strictest
             # raw result; a review of one representation cannot clear another.
             payload.pop("managementUpgradeReview", None)
+            payload.pop("compositionUpgradeReview", None)
+            payload.pop("temporalFeatureMigrationReview", None)
             retained["payload"] = payload
         else:
             execution_rows[identity] = row
@@ -895,6 +899,7 @@ def reasoning_comparison_summary(
     unexplained = nonempty_decisions = nonempty_native = decision_subjects = 0
     shadow_deliveries = sum(int(row.get("shadowDeliveryCount") or 0) for row in all_items)
     reviewed_policy_upgrades = reviewed_compositions = unreviewed_differences = unreviewed_evidence_gaps = 0
+    reviewed_features = unreviewed_fact_gaps = unreviewed_slot_gaps = 0
     for row in items:
         status = str(row.get("status") or "unknown")
         status_counts[status] = status_counts.get(status, 0) + 1
@@ -906,13 +911,17 @@ def reasoning_comparison_summary(
         from digital_twin.modules.reasoning.domain.composition_upgrade_review import composition_upgrade_review_valid
         policy_review = management_upgrade_review_valid(payload)
         composition_review = composition_upgrade_review_valid(payload)
-        review_valid = (policy_review or composition_review) and all(
+        feature_review = temporal_migration_review_valid(payload)
+        review_valid = (policy_review or composition_review or feature_review) and all(
             row.get(key) == payload.get(key) for key in (
                 "status", "factParityPct", "ruleSlotCoveragePct", "unexplainedDecisionDifferenceCount", "shadowDeliveryCount",
             )
         )
         reviewed_policy_upgrades += int(review_valid and policy_review)
         reviewed_compositions += int(review_valid and composition_review)
+        reviewed_features += int(review_valid and feature_review)
+        unreviewed_fact_gaps += int(float(row.get("factParityPct") or 0) < 100 and not (review_valid and feature_review))
+        unreviewed_slot_gaps += int(float(row.get("ruleSlotCoveragePct") or 0) < 100 and not (review_valid and feature_review))
         unreviewed_differences += 0 if review_valid else int(row.get("unexplainedDecisionDifferenceCount") or 0)
         unreviewed_evidence_gaps += int(status == "reasoning-parity-gap" and not review_valid)
         row_symbols = _strings(payload.get("symbols") or [])
@@ -963,6 +972,9 @@ def reasoning_comparison_summary(
         "unreviewedReasoningParityGapCount": unreviewed_evidence_gaps,
         "reviewedPolicyUpgradeSampleCount": reviewed_policy_upgrades,
         "reviewedCompositionSampleCount": reviewed_compositions,
+        "reviewedFeatureMigrationSampleCount": reviewed_features,
+        "unreviewedFactParityGapCount": unreviewed_fact_gaps,
+        "unreviewedRuleSlotGapCount": unreviewed_slot_gaps,
         "shadowDeliveryCount": shadow_deliveries,
         "distinctSymbolCount": len(symbols),
         "symbols": sorted(symbols),

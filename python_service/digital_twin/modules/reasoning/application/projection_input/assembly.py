@@ -52,7 +52,8 @@ def build_graph_assembly(
     input_mode = prepared.input_mode
     observation_input = prepared.observation_input
     input_projection = prepared.input_projection
-    cache_enabled = _inputs.graph_assembly_cache_enabled()
+    validation_only = (reasoning_context or {}).get("validationOnly") is True
+    cache_enabled = _inputs.graph_assembly_cache_enabled() and not validation_only
     emit("cache_key.start")
     cache_key = (
         _inputs.graph_assembly_cache_key(
@@ -85,6 +86,10 @@ def build_graph_assembly(
         active_tbox,
         stage_timings,
     )
+    migration_input = {}
+    if validation_only:
+        from digital_twin.modules.reasoning.domain.temporal_feature_migration import feature_source_proof
+        migration_input = feature_source_proof(graph, prepared, snapshot)
     model_evidence = attach_model_evidence(
         _inputs.model, prepared, snapshot, graph, rule_catalog, stage_timings, emit
     )
@@ -130,6 +135,7 @@ def build_graph_assembly(
             ),
             "externalSignalProjection": input_projection,
             "temporalFeatureInput": temporal_feature_input,
+            "temporalFeatureMigrationInput": migration_input,
             "runtimeStages": stage_timings,
         },
     )

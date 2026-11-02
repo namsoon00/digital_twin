@@ -428,6 +428,43 @@ class RuleDeliveryLatencyTests(TestCase):
             self.assertTrue(delivery.acquire()['acquired'])
             delivery.release()
 
+    def test_waiting_candidate_claim_gets_a_turn_and_cancellation_frees_it(self):
+        for cancellation in ('none', 'idle', 'unselected'):
+            with self.subTest(cancellation=cancellation), tempfile.TemporaryDirectory() as directory:
+                guard = LocalGraphWriterGuard('candidate', 'candidate', Path(directory))
+                delivery = LocalGraphWriterGuard('active', 'delivery', Path(directory))
+                class Queue:
+                    ready = True
+                    def next_lane(self, deployment): return 'GOVERNANCE' if self.ready else ''
+                queue = Queue()
+                runner = IndependentReasoningJobRunner(queue, SimpleNamespace(descriptor=descriptor),
+                    SimpleNamespace(), graph_writer_guard=guard, deployment_role='candidate')
+                runner.prepare_queue_turn = lambda: {'status': 'ready'}
+                runner._run_once = Mock(return_value={'status': 'completed'})
+                self.assertTrue(delivery.acquire()['acquired'])
+                with patch('digital_twin.modules.reasoning.application.independent_reasoning_engine.time.monotonic', return_value=0):
+                    runner.run_once()
+                self.assertFalse(guard.status()['grantedTurnReserved'])
+                with patch('digital_twin.modules.reasoning.application.independent_reasoning_engine.time.monotonic', return_value=10):
+                    runner.run_once()
+                self.assertTrue(guard.status()['grantedTurnReserved'])
+                self.assertTrue(delivery.status()['acquired'])
+                runner._run_once.assert_not_called()
+                if cancellation == 'idle':
+                    queue.ready = False
+                    runner.run_once()
+                elif cancellation == 'unselected':
+                    runner.prepare_queue_turn = lambda: {'status': 'inactive-control-binding'}
+                    runner.run_once()
+                delivery.release()
+                if cancellation == 'none':
+                    self.assertFalse(delivery.acquire()['acquired'])
+                    runner.run_once()
+                    runner._run_once.assert_called_once()
+                self.assertFalse(guard.status()['grantedTurnReserved'])
+                self.assertTrue(delivery.acquire()['acquired'])
+                delivery.release()
+
     def test_retained_input_wait_honors_server_backoff_and_claim_loss_without_a_writer(self):
         for failure in ['backoff', 'lease-lost']:
             with self.subTest(failure=failure), tempfile.TemporaryDirectory() as directory:

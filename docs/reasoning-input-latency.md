@@ -7,6 +7,10 @@ finishes. This prevents consecutive delivery turns from starving an already
 leased validation batch. Claim, control, shutdown and cooldown checks still
 apply; failure or process exit releases the reservation. Real-lock regressions
 are in `test_graph_writer_guard` and `test_rule_delivery_latency`.
+The same bounded turn reservation applies before claiming a ready candidate
+job, so continuous delivery cannot prevent it from reaching preparation at all.
+An empty queue or changed control binding cancels that reservation; immutable
+source reads still release it completely.
 
 Paired validation also captures the complete, secret-filtered factual runtime
 context once. Its compressed receipt binds account, exact source snapshot,

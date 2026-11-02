@@ -2263,14 +2263,20 @@ class IndependentReasoningJobRunner:
     def run_once(self) -> Dict[str, object]:
         preparation = self.prepare_queue_turn()
         if preparation.get("status") != "ready":
+            if getattr(self, "_queued_candidate_wait_started", None) is not None:
+                self.release_graph_writer_ownership()
+            self._queued_candidate_wait_started = None
             return preparation
         ownership = self.acquire_graph_writer_ownership()
         if not bool(ownership.get("acquired")):
+            if ownership.get("status") in {"held-by-other-process", "delivery-waiting", "granted-turn-reserved"}:
+                self.reserve_waiting_candidate_turn()
             return {
                 **self.graph_writer_deferred_result(ownership),
                 "queuePreparation": preparation,
             }
         try:
+            self._queued_candidate_wait_started = None
             self._input_preparation_released_writer = False
             result = self._run_once(preparation)
             if not self._input_preparation_released_writer:
@@ -2279,6 +2285,29 @@ class IndependentReasoningJobRunner:
         finally:
             self.release_graph_writer_ownership()
             self.publish_released_writer_state()
+
+    def reserve_waiting_candidate_turn(self):
+        """Ready work must eventually reach its short claim/preparation turn."""
+        if self.deployment_role != "candidate":
+            return
+        reserve = getattr(self.graph_writer_guard, "reserve_next_turn", None)
+        probe = getattr(type(self.queue), "next_lane", None)
+        if not callable(reserve) or not callable(probe):
+            return
+        try:
+            ready_lane = probe(self.queue, self.engine.descriptor().deployment_id)
+        except Exception:
+            ready_lane = None
+        if not ready_lane:
+            self.release_graph_writer_ownership()
+            self._queued_candidate_wait_started = None
+            return
+        now = time.monotonic()
+        started = getattr(self, "_queued_candidate_wait_started", None)
+        if started is None:
+            self._queued_candidate_wait_started = now
+        elif now - started >= 10:
+            reserve()
 
     def run_watch_turn(self) -> Dict[str, object]:
         """Run one live reasoning turn under a short-lived graph writer lock.
@@ -3473,7 +3502,7 @@ class IndependentReasoningJobRunner:
             now = time.monotonic()
             if now >= deadline:
                 raise InputPreparationDeferred("Prepared input writer wait exceeded the bounded lease interval.")
-            reserve = getattr(self.graph_writer_guard, "reserve_prepared_turn", None)
+            reserve = getattr(self.graph_writer_guard, "reserve_next_turn", None)
             if now - started >= 10 and callable(reserve):
                 # Source reads have finished. Yield to the current delivery
                 # turn, but do not let its next burst starve this leased batch.

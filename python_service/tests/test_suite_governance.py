@@ -499,7 +499,8 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # Five feature-migration contracts cover preserved artifacts, explicit
         # release binding, real source proof, strict rejection, and review audit.
         # Two real-lock regressions cover prepared-candidate fairness and its wait boundary.
-        self.assertLessEqual(total, 3003)
+        # Ready candidate claim fairness also covers idle/control cancellation.
+        self.assertLessEqual(total, 3004)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

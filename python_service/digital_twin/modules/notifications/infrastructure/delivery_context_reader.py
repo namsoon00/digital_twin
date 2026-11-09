@@ -17,8 +17,8 @@ class DeliveredInsightContextReader:
         # its mutable text is never used as a delivered message.
         symbol_sql = ("COALESCE(m.subjectSymbol,m.conversationSymbol,m.aiSymbol,"
                       "CASE WHEN j.account_id=%s THEN j.symbol ELSE NULL END)")
-        # Parse each legacy receipt once in one indexed time-window scan.
-        # Four separate route queries repeatedly parse the same large bodies.
+        # Narrow account and eligible routes before decoding large receipts.
+        # A time-only index also scans every research-activity receipt.
         projection = " JOIN JSON_TABLE(a.metadata_json, '$' COLUMNS (" + ",".join(
             name + " " + column_type + " PATH '$." + path + "' NULL ON EMPTY NULL ON ERROR"
             for name, column_type, path in (
@@ -35,12 +35,14 @@ class DeliveredInsightContextReader:
                 "SELECT a.job_id AS jobId,a.status,a.completed_at AS deliveredAt,"
                 "m.accountId,m.messageType," + symbol_sql + " AS symbol,m.body,m.messageSha256,"
                 "ROW_NUMBER() OVER (PARTITION BY m.messageType ORDER BY a.completed_at DESC,a.attempt_id DESC) AS routeRank "
-                "FROM notification_delivery_attempts a FORCE INDEX (idx_notification_delivery_completed) "
+                "FROM notification_delivery_attempts a FORCE INDEX (idx_notification_delivery_ai_scope) "
                 + projection + "LEFT JOIN notification_jobs j ON j.job_id=a.job_id "
-                "WHERE a.status='delivered' AND a.completed_at>=%s AND a.completed_at<=%s "
+                "WHERE a.receipt_account_id=%s AND a.receipt_message_type IN ("
+                + ",".join(["%s"] * len(TYPES)) + ") "
+                "AND a.status='delivered' AND a.completed_at>=%s AND a.completed_at<=%s "
                 "AND m.accountId=%s AND m.messageType IN (" + ",".join(["%s"] * len(TYPES)) + ") AND "
                 + symbol_sql + "=%s) recent WHERE routeRank<=6",
-                (account_id, start, cutoff, account_id, *TYPES, account_id, symbol)).fetchall()
+                (account_id, account_id, *TYPES, start, cutoff, account_id, *TYPES, account_id, symbol)).fetchall()
         # Unavailable DB history raises for the existing task retry path; it
         # must not become an apparently empty first-observation context.
         return context(rows, account_id, symbol, cutoff,

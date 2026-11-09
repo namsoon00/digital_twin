@@ -259,14 +259,12 @@ class NotificationContributionTests(unittest.TestCase):
 @unittest.skipUnless(os.environ.get("MYSQL_DATABASE") == "orbit_alpha_test", "isolated MySQL required")
 class DeliveredContextStorageTests(unittest.TestCase):
     def test_successful_receipts_survive_job_retention_and_bind_research_subject_without_mutable_text(self):
-        from digital_twin.infrastructure.settings import load_local_env, runtime_settings
+        from digital_twin.infrastructure.settings import load_local_env
         from digital_twin.modules.notifications.infrastructure.mysql_notification_jobs import MySQLNotificationJobStore
         from digital_twin.modules.notifications.application.notification.dispatch import NotificationDispatchService
         from mysql_fixtures import mysql_test_settings
-        # Acquire before runtime_settings also opens the shared schema.
         load_local_env()
-        mysql_test_settings()
-        queue = MySQLNotificationJobStore(runtime_settings())
+        queue = MySQLNotificationJobStore(mysql_test_settings())
         account, jobs = "contribution-storage-test", []
         notifier = Mock(supports_delivery_checkpoints=False, supports_research_replies=False)
         notifier.send.return_value = SimpleNamespace(delivered=True, label="test", reason="", metadata={})

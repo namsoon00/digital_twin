@@ -112,3 +112,58 @@ class ReasoningRuntimeSummaryTests(StabilizationDatabaseCase):
         self.assertEqual(0, self.jobs.runtime_summary("other-deployment")["pendingCount"])
         with self.assertRaises(ValueError):
             self.jobs.runtime_summary("")
+
+
+class SubjectCaseReadIndexTests(StabilizationDatabaseCase):
+    def test_index_install_preserves_frozen_cases_scope_order_and_source_lineage(self):
+        import json
+        from digital_twin.infrastructure.mysql_schema_tuning import MYSQL_OPERATIONAL_INDEXES, ensure_mysql_indexes
+
+        names = {"idx_subject_decision_account_latest", "idx_subject_decision_stage_updated",
+                 "idx_subject_decision_deployment_latest"}
+        definitions = [d for d in MYSQL_OPERATIONAL_INDEXES["investment_subject_decision_cases"] if d.name in names]
+        self.assertEqual(3, len(definitions))
+        prefix = self.deployment
+        account_a, account_b = prefix + ":a", prefix + ":b"
+        cases = [
+            ("old", account_a, "deployment-a", "ARCHIVED", "2026-11-07T00:00:00Z", "2026-11-09T06:10:00Z"),
+            ("tie-1", account_a, "deployment-a", "ARCHIVED", "2026-11-09T00:00:00Z", "2026-11-09T06:00:00Z"),
+            ("tie-2", account_a, "deployment-a", "READY", "2026-11-09T00:00:00Z", "2026-11-09T06:00:00Z"),
+            ("other-account", account_b, "deployment-b", "READY", "2026-11-09T00:00:00Z", "2026-11-09T06:05:00Z"),
+            ("other-deployment", account_a, "deployment-b", "READY", "2026-11-09T00:00:00Z", "2026-11-09T05:50:00Z"),
+        ]
+        with self.jobs.connect() as connection:
+            for suffix, account, deployment, stage, created, updated in cases:
+                payload = json.dumps({"sourceAt": created, "nativeGenerationId": "frozen:" + suffix,
+                                      "facts": {"foreignNetVolume": -123, "institutionNetVolume": 456}})
+                connection.execute(
+                    "INSERT INTO investment_subject_decision_cases "
+                    "(subject_case_id,batch_case_id,request_id,deployment_id,account_id,symbol,stage,"
+                    "payload_json,created_at,updated_at,source_abox_snapshot_id,inference_generation_id) "
+                    "VALUES (%s,%s,%s,%s,%s,'TEST',%s,%s,%s,%s,%s,%s)",
+                    (prefix + ":" + suffix, prefix, prefix, deployment, account, stage,
+                     payload, created, updated, "source:" + suffix, "generation:" + suffix),
+                )
+            for definition in definitions:
+                connection.execute("ALTER TABLE investment_subject_decision_cases DROP INDEX `" + definition.name + "`")
+            queries = [
+                ("SELECT subject_case_id,payload_json FROM investment_subject_decision_cases WHERE account_id=%s "
+                 "ORDER BY updated_at DESC,subject_case_id DESC LIMIT 3", (account_a,)),
+                ("SELECT subject_case_id,payload_json FROM investment_subject_decision_cases WHERE deployment_id=%s "
+                 "AND created_at >= %s ORDER BY updated_at DESC,subject_case_id DESC LIMIT 3",
+                 ("deployment-a", "2026-11-08T00:00:00Z")),
+                ("SELECT subject_case_id,payload_json FROM investment_subject_decision_cases WHERE stage='READY' "
+                 "AND updated_at < %s ORDER BY updated_at ASC LIMIT 100", ("2026-11-09T05:55:00Z",)),
+            ]
+            before = [connection.execute(sql, params).fetchall() for sql, params in queries]
+            frozen_before = connection.execute("SELECT * FROM investment_subject_decision_cases ORDER BY subject_case_id").fetchall()
+            self.assertEqual(names, set(ensure_mysql_indexes(connection, {"investment_subject_decision_cases": definitions})))
+            self.assertEqual([], ensure_mysql_indexes(connection, {"investment_subject_decision_cases": definitions}))
+            self.assertEqual(frozen_before, connection.execute("SELECT * FROM investment_subject_decision_cases ORDER BY subject_case_id").fetchall())
+            self.assertEqual(before, [connection.execute(sql, params).fetchall() for sql, params in queries])
+            self.assertEqual([prefix + ":old", prefix + ":tie-2", prefix + ":tie-1"], [r["subject_case_id"] for r in before[0]])
+            self.assertEqual([prefix + ":tie-2", prefix + ":tie-1"], [r["subject_case_id"] for r in before[1]])
+            self.assertEqual([prefix + ":other-deployment"], [r["subject_case_id"] for r in before[2]])
+            for row in connection.execute("SHOW INDEX FROM investment_subject_decision_cases").fetchall():
+                if row["Key_name"] in names:
+                    self.assertEqual(1, row["Non_unique"])

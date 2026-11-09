@@ -951,6 +951,15 @@ deployment's graph, feature and time-series bindings still reach execution.
 Status, comparison and promotion continue to read their complete evidence;
 this fix does not waive a failed execution or reset a validation window.
 
+The same investigation found subject-case reads scanning roughly 27,000 rows
+and sorting large frozen payloads. Account history, expired READY work and
+deployment diagnostics now have indexes matching their equality filters and
+requested time/ID ordering. The deployment index retains `created_at` for the
+existing cutoff filter. These are non-unique physical indexes: the predicates,
+limits, stored facts, source clocks and native lineage are unchanged. A real
+MySQL regression installs them twice and verifies all case rows, account scope,
+cutoff filtering and timestamp-tie ordering are preserved.
+
 The Oct 30 investigation found a direct restart loop: the worker command called
 `platform.initialize()` with historical queue/comparison diagnostics before
 entering its claim loop. `summary()` read up to thousands of terminal jobs and

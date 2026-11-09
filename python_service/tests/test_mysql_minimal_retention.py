@@ -854,8 +854,9 @@ class MySQLMinimalRetentionTests(unittest.TestCase):
         self.assertFalse(any("'failed'" in sql for sql in model_review_queries))
         self.assertTrue(any("status` IN ('done', 'sent')" in sql for sql in notification_queries))
         self.assertFalse(any("WHERE `created_at` <" in sql for sql in notification_queries))
-        self.assertTrue(any("work_state` = 'completed'" in sql for sql in news_analysis_queries))
-        self.assertFalse(any("retrying" in sql or "running" in sql for sql in news_analysis_queries))
+        self.assertTrue(any("work_state` IN ('completed', 'failed')" in sql for sql in news_analysis_queries))
+        self.assertTrue(any("`completed_at` != ''" in sql for sql in news_analysis_queries))
+        self.assertFalse(any("retrying" in sql or "running" in sql or "queued" in sql for sql in news_analysis_queries))
 
 
 class IndexedRetentionExecutionTests(unittest.TestCase):
@@ -874,7 +875,8 @@ class IndexedRetentionExecutionTests(unittest.TestCase):
         for table in ("statistical_model_signal_heads", "statistical_model_assessment_heads"):
             self.db.execute("CREATE TABLE " + table + " (snapshot_id TEXT)")
         self.db.execute("CREATE TABLE investment_subject_decision_cases "
-                        "(subject_case_id TEXT PRIMARY KEY, completed_at TEXT, payload_json TEXT)")
+                        "(subject_case_id TEXT PRIMARY KEY, completed_at TEXT, payload_json TEXT, "
+                        "account_id TEXT, deployment_id TEXT, stage TEXT, created_at TEXT, updated_at TEXT)")
         for table, key in (("decision_candidate_snapshots", "candidate_set_id"),
                            ("decision_publications", "publication_id")):
             self.db.execute("CREATE TABLE " + table + " (" + key + " TEXT PRIMARY KEY, "
@@ -927,7 +929,8 @@ class IndexedRetentionExecutionTests(unittest.TestCase):
                                ("old-2", "2026-01-02"), ("old-3", "2026-01-03"),
                                ("old-4", "2026-01-04"), ("active", ""),
                                ("recent", "2026-10-12")):
-            self.db.execute("INSERT INTO investment_subject_decision_cases VALUES (?,?,?)",
+            self.db.execute("INSERT INTO investment_subject_decision_cases "
+                            "(subject_case_id,completed_at,payload_json) VALUES (?,?,?)",
                             (key, completed, "{}"))
             if key != "empty":
                 for table in ("decision_candidate_snapshots", "decision_publications"):

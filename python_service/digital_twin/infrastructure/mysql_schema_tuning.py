@@ -236,6 +236,21 @@ MYSQL_OPERATIONAL_INDEXES: Dict[str, Sequence[MySQLIndexDefinition]] = {
     "investment_subject_decision_cases": (
         MySQLIndexDefinition(
             "investment_subject_decision_cases",
+            "idx_subject_decision_account_latest",
+            "`account_id`, `updated_at` DESC, `subject_case_id` DESC",
+        ),
+        MySQLIndexDefinition(
+            "investment_subject_decision_cases",
+            "idx_subject_decision_stage_updated",
+            "`stage`, `updated_at`, `subject_case_id`",
+        ),
+        MySQLIndexDefinition(
+            "investment_subject_decision_cases",
+            "idx_subject_decision_deployment_latest",
+            "`deployment_id`, `updated_at` DESC, `subject_case_id` DESC, `created_at`",
+        ),
+        MySQLIndexDefinition(
+            "investment_subject_decision_cases",
             "idx_subject_decision_retention",
             "`completed_at`, `subject_case_id`",
         ),

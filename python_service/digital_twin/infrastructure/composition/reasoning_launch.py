@@ -27,7 +27,9 @@ def prepare_v2_launch(settings, deployment_id) -> ReasoningLaunch:
     from digital_twin.infrastructure.reasoning_engine_factory import build_reasoning_engine_platform
 
     platform = build_reasoning_engine_platform(configured)
-    platform.initialize()
+    # Release/control reconciliation is required here; historical diagnostics
+    # belong to explicit status and promotion reads, never worker startup.
+    platform.initialize(include_diagnostics=False)
     deployment_id = str(
         deployment_id or configured.get("reasoningEngineV2DeploymentId") or "ontology-v2-shadow"
     ).strip()

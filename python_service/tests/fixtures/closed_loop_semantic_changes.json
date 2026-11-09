@@ -677,6 +677,10 @@
     "publish_job_receipts": {"hash": "10689ef7648659288528605b6c8cf92207b7a86e679da13916b81d689782c082", "reason": "Reviewed comparison-only early return before production anchor/lineage publication; normal atomic receipt SQL remains unchanged. test_independent_reasoning_engine zero-write receipt test; docs/reasoning-input-latency.md."}
   },
   "composition": {
+    "reasoning_launch.py::prepare_v2_launch": {
+      "hash": "2d2f39baff4cf387e640f4ab50cca47e54d929e89befe13b25a4bfaf760f0850",
+      "reason": "Worker release launch reconciles immutable control without historical diagnostics, preventing MySQL history timeouts from killing both claim loops. Frozen deployment graph, feature and time-series bindings and full promotion evidence are unchanged. Regression: test_reasoning_worker_bootstrap.ReasoningWorkerBootstrapTests.test_release_launch_survives_unavailable_historical_diagnostics; docs/reasoning-input-latency.md."
+    },
     "reasoning_delivery.py::wire_v2_decision_services": {"hash": "700d4035a075df05d66e04872ea4ec10d3a5f9fdcd332572e0df130288ca525d", "reason": "Inject scoped successful notification receipt reads before TypeDB publication; test_rule_notification_repair."},
     "reasoning_binding.py::bind_v2_release": {"hash": "7a2da98fddab274189c7c326f4a876b2ba8d940069454e72cee3df85e968d82f", "reason": "A new runtime reusing an already verified authored RuleBox must capture its native executable readback rather than freeze an empty fingerprint; missing or empty reads still fail closed and active/frozen releases retain their immutable checks. Actual r4 startup failure 2026-10-18; test_runtime_composition reused-candidate bootstrap, no-reseed and unavailable-read regressions."}
   }

@@ -68,6 +68,36 @@ class ReasoningWorkerBootstrapTests(unittest.TestCase):
             self.assertEqual(0, cli.reasoning_engine_platform_command(args))
         platform.initialize.assert_called_once_with(include_diagnostics=False)
 
+    def test_release_launch_survives_unavailable_historical_diagnostics(self):
+        from digital_twin.infrastructure import reasoning_engine_factory
+        from digital_twin.infrastructure.composition.reasoning_launch import prepare_v2_launch
+
+        platform = Mock()
+
+        def initialize(*, include_diagnostics=True):
+            if include_diagnostics:
+                raise TimeoutError("terminal history cannot be read during worker startup")
+            return {"diagnosticsStatus": "not-requested"}
+
+        platform.initialize.side_effect = initialize
+        platform.deployment_descriptor.return_value = SimpleNamespace(
+            deployment_id="frozen-candidate", engine_version="v2", status="shadow",
+            time_series_backend_id="frozen-series",
+            release_bundle=SimpleNamespace(feature_set_version="frozen-features"),
+        )
+        platform.registry.get.return_value = {"health": {"releaseFingerprint": "frozen-release"}}
+        platform.graph_database_for.return_value = "frozen-graph"
+        settings = {"typedbDatabase": "other-graph", "reasoningEngineV2DeploymentId": "other-deployment"}
+        with patch.object(reasoning_engine_factory, "build_reasoning_engine_platform", return_value=platform):
+            launch = prepare_v2_launch(settings, "frozen-candidate")
+        platform.initialize.assert_called_once_with(include_diagnostics=False)
+        platform.deployment_descriptor.assert_called_once_with("frozen-candidate")
+        self.assertEqual("frozen-release", launch.deployment_health["releaseFingerprint"])
+        self.assertEqual("frozen-graph", launch.candidate_settings["typedbDatabase"])
+        self.assertEqual("frozen-series", launch.candidate_settings["timeSeriesActiveBackendId"])
+        self.assertEqual("frozen-features", launch.candidate_settings["_reasoningFeatureSetVersion"])
+        self.assertEqual("other-graph", settings["typedbDatabase"])
+
 
 class ReasoningRuntimeSummaryTests(StabilizationDatabaseCase):
     def test_runtime_summary_reads_pending_lane_and_source_age_without_terminal_payloads(self):

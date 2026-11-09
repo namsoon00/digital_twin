@@ -103,7 +103,7 @@ class RuntimeCompositionTests(unittest.TestCase):
         )
         self.assertNotIn("typedbFreshCandidateRebuild", result.candidate_settings)
         self.assertIsNot(result.store_settings, result.candidate_settings)
-        platform.initialize.assert_called_once_with()
+        platform.initialize.assert_called_once_with(include_diagnostics=False)
         platform.registry.get.return_value = {"health": {}}
         with patch(
             "digital_twin.infrastructure.reasoning_engine_factory.build_reasoning_engine_platform",

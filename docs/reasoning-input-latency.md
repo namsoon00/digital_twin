@@ -941,6 +941,16 @@ and `test_projection_input_preflight`, including real isolated MySQL cutoff read
 
 ## Decision memory and host admission (2026-10-30)
 
+The Nov 9 restart investigation found that `prepare_v2_launch`, introduced by
+the composition split, called the default diagnostic initialization again.
+Both delivery and candidate workers timed out reading terminal job history
+before reaching their claim loops. The launch phase now explicitly requests
+`include_diagnostics=False`, just as the outer CLI does. The launch regression
+test makes historical diagnostics unavailable and verifies that the frozen
+deployment's graph, feature and time-series bindings still reach execution.
+Status, comparison and promotion continue to read their complete evidence;
+this fix does not waive a failed execution or reset a validation window.
+
 The Oct 30 investigation found a direct restart loop: the worker command called
 `platform.initialize()` with historical queue/comparison diagnostics before
 entering its claim loop. `summary()` read up to thousands of terminal jobs and

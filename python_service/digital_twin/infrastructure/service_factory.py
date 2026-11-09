@@ -108,6 +108,8 @@ _EXPORTS = {'ActiveDeploymentWorldProjectionSink': ('digital_twin.infrastructure
                                             'build_ontology_world_projection_runner'),
  'build_operational_storage_capacity_service': ('digital_twin.infrastructure.composition.operations',
                                                 'build_operational_storage_capacity_service'),
+ 'build_portfolio_report_service': ('digital_twin.infrastructure.composition.portfolio_reports',
+                                    'build_portfolio_report_service'),
  'build_reasoning_engine_shadow_runner': ('digital_twin.infrastructure.composition.reasoning_shadow',
                                           'build_reasoning_engine_shadow_runner'),
  'build_rule_change_candidate_service': ('digital_twin.infrastructure.composition.model_registry',

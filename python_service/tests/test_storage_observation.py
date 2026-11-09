@@ -75,6 +75,25 @@ class StorageObservationTests(unittest.TestCase):
         self.assertEqual(metrics["mysqlActualBytes"]["value"], 12288)
         self.assertIn("measuredAt", metrics["history-archiveBytes"])
 
+    def test_sessions_can_share_inventory_without_copying_or_refreshing_its_clock(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            for name in ("legacy", "repair"):
+                (root / name).mkdir()
+            measured = (datetime.now(timezone.utc)-timedelta(minutes=10)).isoformat()
+            write_json(root / "shared/component-metrics.json", {"mysqlActualBytes": {
+                "value": 1234, "measuredAt": measured}})
+            connection = MagicMock()
+            connection.cursor.return_value.__enter__.return_value.fetchall.return_value = []
+            with patch.dict(os.environ, {"MYSQL_USER": "test", "MYSQL_DATABASE": "test"}), \
+                 patch("digital_twin.infrastructure.storage_observation.socket.create_connection"):
+                for name in ("legacy", "repair"):
+                    result = collect_sample(root, root/name, connect=lambda **_: connection,
+                        reader=lambda _: (200, {}), metrics_directory=root/"shared")
+                    self.assertEqual(result["mysqlActualBytes"], 1234)
+                    self.assertEqual(result["diskMeasurements"]["mysqlActualBytes"]["measuredAt"], measured)
+                    self.assertFalse((root/name/"component-metrics.json").exists())
+
     def test_launchd_recovers_crashes_but_not_successful_stop_or_deadline(self):
         config = launch_agent("local.test", "/python", "/watch.py", "/repo", "/state")
         self.assertTrue(config["RunAtLoad"])

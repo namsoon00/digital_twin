@@ -24,12 +24,17 @@ def main():
     parser.add_argument("--directory", type=Path, required=True)
     parser.add_argument("--sample", action="store_true")
     parser.add_argument("--disk-scan", action="store_true")
+    parser.add_argument("--disk-directory", type=Path)
     args = parser.parse_args()
     os.umask(0o077)
     directory = args.directory.resolve()
     if directory == args.root.resolve() or args.root.resolve() in directory.parents:
         parser.error("Observation records must be outside the application repository")
     directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+    metrics_directory = args.disk_directory.resolve() if args.disk_directory else directory
+    if metrics_directory == args.root.resolve() or args.root.resolve() in metrics_directory.parents:
+        parser.error("Disk observations must be outside the application repository")
+    metrics_directory.mkdir(mode=0o700, parents=True, exist_ok=True)
     lock = (directory / ("disk-scan.lock" if args.disk_scan else "storage-watch.lock")).open("a")
     try:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -69,7 +74,7 @@ def main():
             import json
             with (directory / "observer-cycle-lifecycle.jsonl").open("a") as stream:
                 stream.write(json.dumps({"at": utc_now(), "action": "started"}) + "\n")
-            sample = collect_sample(args.root, directory)
+            sample = collect_sample(args.root, directory, metrics_directory=metrics_directory)
             previous = read_json(directory / "storage-latest.json")
             if previous.get("observedAt"):
                 sample["previousSampleAt"] = previous["observedAt"]
@@ -87,7 +92,7 @@ def main():
             if (disk_process is None or disk_process.poll() is not None) and time.monotonic() - last_disk_attempt > 1800:
                 disk_process = subprocess.Popen([
                     sys.executable, str(Path(__file__).resolve()), "--root", str(args.root),
-                    "--directory", str(directory), "--disk-scan"],
+                    "--directory", str(metrics_directory), "--disk-scan"],
                     stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                 last_disk_attempt = time.monotonic()
             if args.sample:

@@ -565,6 +565,10 @@ shared with the earlier storage watcher, so a busy collector is not an outage.
 
 Live samples do not traverse component directories. A separate low-priority
 process runs allocated-block inventories at most once per thirty minutes.
+Separate observation sessions can use `--disk-directory` to share that inventory
+and its process lock while keeping their windows, sample logs and STOP controls
+independent. MySQL allocation follows the directory reported by the connected
+server, rather than assuming that a legacy local directory is still active.
 Every component retains its own measurement timestamp, age and failure state.
 Missing bytes stay unknown, and a failed inventory cannot refresh an older
 measurement. `collectorStatus=partial` and `coreCollectorStatus=ok` distinguish

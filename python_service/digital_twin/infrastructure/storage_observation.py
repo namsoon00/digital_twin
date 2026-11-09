@@ -185,8 +185,9 @@ def attach_disk_metrics(result, metrics, now=None):
             result[field] = item["value"]
 
 
-def collect_sample(root, directory, connect=None, reader=http_read):
+def collect_sample(root, directory, connect=None, reader=http_read, metrics_directory=None):
     root, directory = Path(root), Path(directory)
+    metrics_directory = Path(metrics_directory) if metrics_directory is not None else directory
     started = time.monotonic()
     result = {"observedAt": utc_now(), "collectorErrors": [], "queryCount": 0,
               "scope": "bounded-passive-sample-v2", "continuousUptimeProven": False,
@@ -231,13 +232,19 @@ def collect_sample(root, directory, connect=None, reader=http_read):
         import pymysql
         connect = lambda **options: pymysql.connect(**options, cursorclass=pymysql.cursors.DictCursor)
     collect_database(result, connect, os.environ)
+    try:
+        age = (datetime.now(timezone.utc)-parse_time(result["capacity"]["checkedAt"])).total_seconds()
+    except (KeyError, TypeError, ValueError):
+        age = None
+    result["capacityFreshness"] = {"ageSeconds": round(age, 3) if age is not None else None,
+                                    "stale": age is None or age < 0 or age > 600}
     if result.get("mysqlDataDirectory"):
-        write_json(directory / "disk-paths.json", {"mysqlDirectory": result.pop("mysqlDataDirectory"),
+        write_json(metrics_directory / "disk-paths.json", {"mysqlDirectory": result.pop("mysqlDataDirectory"),
                    "observedAt": result["observedAt"]})
-    attach_disk_metrics(result, read_json(directory / "component-metrics.json"))
+    attach_disk_metrics(result, read_json(metrics_directory / "component-metrics.json"))
     result["coreCollectorStatus"] = "partial" if result["collectorErrors"] else "ok"
     result["collectorStatus"] = "partial" if result["collectorErrors"] or any(
-        row["stale"] or row.get("lastError") for row in result["diskMeasurements"].values()) else "ok"
+        row["stale"] or row.get("lastError") for row in result["diskMeasurements"].values()) or result["capacityFreshness"]["stale"] else "ok"
     result["durationSeconds"] = round(time.monotonic() - started, 3)
     return result
 

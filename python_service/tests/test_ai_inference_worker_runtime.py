@@ -92,7 +92,7 @@ class AIInferenceWorkerRuntimeTests(unittest.TestCase):
             service_manager, "supervisor_running", return_value=False
         ), patch.object(service_manager, "stop", return_value=0) as stop, patch.object(
             service_manager, "start", return_value=0
-        ) as start:
+        ) as start, patch.object(service_manager, "supervisor_maintenance_active", return_value=False):
             result = service_manager.restart()
 
         self.assertEqual(0, result)
@@ -109,7 +109,7 @@ class AIInferenceWorkerRuntimeTests(unittest.TestCase):
             service_manager, "supervisor_running", return_value=False
         ), patch.object(service_manager, "stop", return_value=0) as stop, patch.object(
             service_manager, "start", return_value=0
-        ) as start:
+        ) as start, patch.object(service_manager, "supervisor_maintenance_active", return_value=False):
             result = service_manager.restart(restart_share=True)
 
         self.assertEqual(0, result)

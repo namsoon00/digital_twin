@@ -512,7 +512,12 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # Active checkpoint claims cannot be starved by a retired deployment.
         # Four concurrently registered storage/watchdog and index-preservation contracts.
         # Receipt cleanup pages persist across restarts and late source removal.
-        self.assertLessEqual(total, 3074)
+        # Four consolidation/retirement contracts cover explicit activation,
+        # unchanged correctness gates, protected data and shared database ownership.
+        # Six already committed lost-acknowledgement contracts (284c4b108) cover
+        # exact artifact readback and lease fencing; the committed terminal-news
+        # revision contract (ed97f9ca4) preserves retry admission after corrections.
+        self.assertLessEqual(total, 3085)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

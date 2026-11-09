@@ -374,6 +374,7 @@ class ResearchEvidenceStoreTests(unittest.TestCase):
     def test_news_analysis_work_queue_round_trips_against_mysql_schema(self):
         with tempfile.TemporaryDirectory() as temp:
             store = MySQLResearchEvidenceStore(mysql_test_settings(test_store_seed(temp)))
+            store.upsert_many([self.news_evidence("research:005930:news:queue")])
 
             self.assertEqual(1, store.enqueue_news_analysis_work([{
                 "evidenceId": "research:005930:news:queue",
@@ -404,6 +405,75 @@ class ResearchEvidenceStoreTests(unittest.TestCase):
             self.assertEqual(1, len(reclaimed))
             self.assertEqual(2, reclaimed[0]["attemptCount"])
             self.assertEqual(0, store.news_analysis_work_status()["readyCounts"].get("model", 0))
+
+    def test_news_analysis_queue_excludes_inactive_evidence_and_exhausted_retries(self):
+        with tempfile.TemporaryDirectory() as temp:
+            settings = mysql_test_settings(test_store_seed(temp))
+            settings["newsAiAnalysisMaxAttempts"] = "1"
+            store = MySQLResearchEvidenceStore(settings)
+            inactive_id = "research:005930:news:inactive-queue"
+            exhausted_id = "research:005930:news:exhausted-queue"
+            store.upsert_many([
+                self.news_evidence(inactive_id),
+                self.news_evidence(exhausted_id),
+            ])
+            store.enqueue_news_analysis_work([
+                {
+                    "evidenceId": inactive_id,
+                    "subjectRevision": "news-analysis:inactive",
+                    "workClass": "model",
+                    "priority": 100,
+                },
+                {
+                    "evidenceId": exhausted_id,
+                    "subjectRevision": "news-analysis:exhausted",
+                    "workClass": "model",
+                    "priority": 90,
+                },
+            ])
+
+            self.assertTrue(store.delete(inactive_id))
+            inactive_job = store.news_analysis_work_items([inactive_id])[inactive_id]
+            self.assertEqual("completed", inactive_job["workState"])
+            self.assertEqual("evidence-lifecycle-retracted", inactive_job["lastError"])
+
+            claimed = store.claim_news_analysis_work("test-worker", "model", 2, lease_seconds=60)
+            self.assertEqual([exhausted_id], [job["evidenceId"] for job in claimed])
+            self.assertEqual(1, store.finish_news_analysis_work(
+                claimed,
+                "test-worker",
+                retry_minutes=1,
+                error="analysis-status-fallback: provider unavailable",
+            ))
+            mysql_execute(
+                settings,
+                "UPDATE news_analysis_work_items SET not_before_at='' WHERE evidence_id=?",
+                (exhausted_id,),
+            )
+
+            self.assertEqual([], store.claim_news_analysis_work("test-worker-2", "model", 2, lease_seconds=60))
+            exhausted_job = store.news_analysis_work_items([exhausted_id])[exhausted_id]
+            self.assertEqual("failed", exhausted_job["workState"])
+            self.assertEqual("analysis-status-fallback: provider unavailable", exhausted_job["lastError"])
+            self.assertEqual(0, store.news_analysis_work_status()["readyCount"])
+
+    def test_news_analysis_queue_prefers_newer_active_evidence_at_equal_priority(self):
+        with tempfile.TemporaryDirectory() as temp:
+            store = MySQLResearchEvidenceStore(mysql_test_settings(test_store_seed(temp)))
+            older_id = "research:005930:news:older-queue"
+            newer_id = "research:005930:news:newer-queue"
+            store.upsert_many([
+                self.news_evidence(older_id, "2026-11-08T01:00:00Z"),
+                self.news_evidence(newer_id, "2026-11-09T01:00:00Z"),
+            ])
+            store.enqueue_news_analysis_work([
+                {"evidenceId": older_id, "subjectRevision": "older", "workClass": "model", "priority": 100},
+                {"evidenceId": newer_id, "subjectRevision": "newer", "workClass": "model", "priority": 100},
+            ])
+
+            claimed = store.claim_news_analysis_work("test-worker", "model", 1, lease_seconds=60)
+
+            self.assertEqual([newer_id], [job["evidenceId"] for job in claimed])
 
     def test_authoritative_news_enrichment_survives_a_collector_replay(self):
         with tempfile.TemporaryDirectory() as temp:

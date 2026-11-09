@@ -41,8 +41,8 @@ JSON_LD_SCRIPT_RE = re.compile(
 )
 DISABLED_VALUES = {"0", "false", "no", "off", "disabled"}
 ARTICLE_TEXT_LIMIT = 5000
-DEFAULT_NEWS_COLLECTION_PROVIDERS = ["google_rss_us", "yahoo_search", "yahoo_finance", "gdelt"]
-DEFAULT_KOREAN_NEWS_COLLECTION_PROVIDERS = ["google_rss_kr", "yahoo_search", "yahoo_finance", "gdelt"]
+DEFAULT_NEWS_COLLECTION_PROVIDERS = ["google_rss_us", "yahoo_search", "yahoo_finance"]
+DEFAULT_KOREAN_NEWS_COLLECTION_PROVIDERS = ["google_rss_kr", "yahoo_search", "yahoo_finance"]
 KOREAN_ONLY_NEWS_PROVIDER_NAMES = {"google_rss_kr", "google_news_kr", "rss_kr", "kr"}
 NEWS_API_GUARD_STATE: Dict[str, object] = {}
 RSS_PROVIDER_NAMES = {

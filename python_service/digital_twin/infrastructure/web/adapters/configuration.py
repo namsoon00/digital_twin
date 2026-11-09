@@ -483,6 +483,7 @@ def settings_status_payload(access: ShareAccess = None) -> Dict[str, object]:
         "newsAiAnalysisWorkerBatchSize",
         "newsAiAnalysisWorkerScanLimit",
         "newsAiAnalysisRetryMinutes",
+        "newsAiAnalysisMaxAttempts",
         "researchClaimCorpusLimit",
         "investmentCalendarEnabled",
         "investmentCalendarIntervalSeconds",

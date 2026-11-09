@@ -126,6 +126,9 @@ class NewsAnalysisEnrichmentRunner:
     def retry_minutes(self) -> int:
         return int_setting(self.settings, "newsAiAnalysisRetryMinutes", 30, 1, 1440)
 
+    def max_attempts(self) -> int:
+        return int_setting(self.settings, "newsAiAnalysisMaxAttempts", 5, 1, 20)
+
     def timeout_seconds(self) -> int:
         return int_setting(self.settings, "newsAiAnalysisTimeoutSeconds", 90, 5, 300)
 
@@ -336,6 +339,7 @@ class NewsAnalysisEnrichmentRunner:
             "backlogScaleThreshold": self.backlog_scale_threshold(),
             "localRepairBatchSize": self.local_repair_batch_size(),
             "retryMinutes": self.retry_minutes(),
+            "maxAttempts": self.max_attempts(),
             "pendingCount": len(candidates),
             "pendingTranslationCount": pending_translation,
             "candidateScan": dict(getattr(self, "_last_candidate_scan", {}) or {}),
@@ -487,6 +491,14 @@ class NewsAnalysisEnrichmentRunner:
     def run_once(self, limit: int = 0) -> Dict[str, object]:
         if not self.enabled():
             return {"status": "disabled", **self.status(), "processedCount": 0, "savedCount": 0}
+        durable_queue = self.durable_queue_enabled()
+        queue_maintenance: Dict[str, object] = {}
+        maintenance = getattr(self.evidence_store, "reconcile_news_analysis_work", None)
+        if durable_queue and callable(maintenance):
+            try:
+                queue_maintenance = dict(maintenance() or {})
+            except Exception as error:  # noqa: BLE001 - maintenance is observable but must not stop fresh work.
+                queue_maintenance = {"status": "error", "reason": str(error)[:180]}
         storage = self.storage_state()
         if not bool(storage.get("nonEssentialWritesAllowed", True)):
             blocked_status = self.status()
@@ -497,9 +509,9 @@ class NewsAnalysisEnrichmentRunner:
                 "processedCount": 0,
                 "savedCount": 0,
                 "storage": storage,
+                "queueMaintenance": queue_maintenance,
             }
         candidates = self.candidates()
-        durable_queue = self.durable_queue_enabled()
         enqueued_count = self.enqueue_candidates(candidates) if durable_queue else 0
         queue_status = self.durable_queue_status() if durable_queue else {}
         model_backlog_count = self.model_backlog_count(len(candidates), queue_status)
@@ -553,6 +565,8 @@ class NewsAnalysisEnrichmentRunner:
         updated: List[ResearchEvidence] = []
         failures: List[Dict[str, object]] = []
         retry_job_ids = set()
+        failed_job_ids = set()
+        retry_reasons: Dict[str, str] = {}
         stale_result_ids = set()
         translated_count = 0
         now = utc_now_iso()
@@ -576,7 +590,24 @@ class NewsAnalysisEnrichmentRunner:
                     analysis["lastExternalAttemptAt"] = now
                     if str(analysis.get("status") or "").lower() in {"fallback", "error", "deferred", "source-review"}:
                         analysis["nextRetryAfterMinutes"] = self.retry_minutes()
-                        retry_job_ids.add(item.evidence_id)
+                        status = str(analysis.get("status") or "unknown").lower()
+                        raw_limitations = analysis.get("reasoningLimitations")
+                        if not isinstance(raw_limitations, list):
+                            raw_limitations = [raw_limitations] if raw_limitations else []
+                        limitations = [
+                            str(value or "").strip()
+                            for value in raw_limitations
+                            if str(value or "").strip()
+                        ]
+                        retry_reasons[item.evidence_id] = (
+                            "analysis-status-" + status
+                            + ((": " + limitations[-1][:700]) if limitations else "")
+                        )[:1000]
+                        attempt_count = int((selected_jobs.get(item.evidence_id) or {}).get("attemptCount") or 0)
+                        if durable_queue and attempt_count >= self.max_attempts():
+                            failed_job_ids.add(item.evidence_id)
+                        else:
+                            retry_job_ids.add(item.evidence_id)
                     else:
                         analysis["externalCompletedAt"] = now
                 payload["aiAnalysis"] = analysis
@@ -597,7 +628,12 @@ class NewsAnalysisEnrichmentRunner:
                 updated.append(result)
             except Exception as error:  # noqa: BLE001 - one article must not block the backlog.
                 failures.append({"evidenceId": item.evidence_id, "symbol": item.symbol, "message": str(error)[:180]})
-                retry_job_ids.add(item.evidence_id)
+                retry_reasons[item.evidence_id] = ("analysis-exception: " + str(error))[:1000]
+                attempt_count = int((selected_jobs.get(item.evidence_id) or {}).get("attemptCount") or 0)
+                if durable_queue and attempt_count >= self.max_attempts():
+                    failed_job_ids.add(item.evidence_id)
+                else:
+                    retry_job_ids.add(item.evidence_id)
 
         event_state: Dict[str, object] = {}
         saved = 0
@@ -629,6 +665,7 @@ class NewsAnalysisEnrichmentRunner:
 
         queue_completed_count = 0
         queue_retry_count = 0
+        queue_failed_count = 0
         queue_stale_completed_count = 0
         if durable_queue and selected_jobs:
             retry_jobs = [
@@ -636,10 +673,17 @@ class NewsAnalysisEnrichmentRunner:
                 for evidence_id in sorted(retry_job_ids)
                 if evidence_id in selected_jobs
             ]
+            failed_jobs = [
+                selected_jobs[evidence_id]
+                for evidence_id in sorted(failed_job_ids)
+                if evidence_id in selected_jobs
+            ]
             completed_jobs = [
                 job
                 for evidence_id, job in selected_jobs.items()
-                if evidence_id not in retry_job_ids and evidence_id not in stale_result_ids
+                if evidence_id not in retry_job_ids
+                and evidence_id not in failed_job_ids
+                and evidence_id not in stale_result_ids
             ]
             stale_result_jobs = [
                 selected_jobs[evidence_id]
@@ -661,7 +705,20 @@ class NewsAnalysisEnrichmentRunner:
                     retry_jobs,
                     self.worker_id,
                     retry_minutes=self.retry_minutes(),
-                    error="; ".join(item.get("message") or "analysis-retry-required" for item in failures)[:1000],
+                    error="; ".join(
+                        retry_reasons.get(str(job.get("evidenceId") or "")) or "analysis-retry-required"
+                        for job in retry_jobs
+                    )[:1000],
+                )
+            if failed_jobs:
+                queue_failed_count = self.evidence_store.finish_news_analysis_work(
+                    failed_jobs,
+                    self.worker_id,
+                    error="; ".join(
+                        retry_reasons.get(str(job.get("evidenceId") or "")) or "analysis-attempt-budget-exhausted"
+                        for job in failed_jobs
+                    )[:1000],
+                    terminal_state="failed",
                 )
 
         return {
@@ -680,5 +737,7 @@ class NewsAnalysisEnrichmentRunner:
             "queueEnqueuedCount": enqueued_count,
             "queueCompletedCount": queue_completed_count,
             "queueRetryCount": queue_retry_count,
+            "queueFailedCount": queue_failed_count,
             "queueStaleCompletedCount": len(stale_jobs) + queue_stale_completed_count,
+            "queueMaintenance": queue_maintenance,
         }

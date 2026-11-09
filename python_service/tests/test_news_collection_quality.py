@@ -148,6 +148,79 @@ class NewsCollectionQualityTests(unittest.TestCase):
         evidence.raw_payload["articleText"] += " Apple also published a revised subscription outlook."
         self.assertTrue(runner.should_retry(evidence))
 
+    def test_durable_analysis_queue_stops_with_a_specific_reason_at_attempt_limit(self):
+        item = self.evidence({
+            "relationScope": "direct",
+            "articleReadStatus": "body",
+            "articleText": "Apple changed annual services guidance after subscription demand improved. " * 8,
+            "articleFacts": {"bodyAvailable": True, "bodyQualityPassed": True},
+            "aiAnalysis": {"status": "deferred"},
+        })
+        item.published_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        item.observed_at = item.published_at
+        revision = NewsAnalysisEnrichmentRunner.work_revision(item, "model")
+
+        class EvidenceStore:
+            def __init__(self):
+                self.claimed = False
+                self.finished = []
+
+            def latest(self, **_kwargs):
+                return [item]
+
+            def enqueue_news_analysis_work(self, _jobs):
+                return 1
+
+            def claim_news_analysis_work(self, _worker, work_class, _limit, _lease):
+                if work_class != "model" or self.claimed:
+                    return []
+                self.claimed = True
+                return [{
+                    "evidenceId": item.evidence_id,
+                    "subjectRevision": revision,
+                    "workClass": "model",
+                    "attemptCount": 2,
+                }]
+
+            def finish_news_analysis_work(self, jobs, _worker, **kwargs):
+                self.finished.append((list(jobs), dict(kwargs)))
+                return len(list(jobs))
+
+            def news_analysis_work_status(self):
+                return {"readyCounts": {"model": 1}}
+
+            def reconcile_news_analysis_work(self):
+                return {"inactiveCompletedCount": 0, "attemptBudgetFailedCount": 0}
+
+            def get(self, _evidence_id):
+                return item
+
+            def upsert_many(self, _items):
+                return 1
+
+        class AnalysisService:
+            @staticmethod
+            def analyze_evidence(_target, evidence, external_timeout_seconds=0):
+                evidence.raw_payload = dict(evidence.raw_payload or {})
+                evidence.raw_payload["aiAnalysis"] = {
+                    "status": "fallback",
+                    "reasoningLimitations": ["외부 분석 공급자가 응답하지 않았습니다."],
+                }
+                return evidence
+
+        store = EvidenceStore()
+        result = NewsAnalysisEnrichmentRunner(
+            store,
+            AnalysisService(),
+            {"newsAiAnalysisMaxAttempts": "2"},
+        ).run_once()
+
+        self.assertEqual(1, result["queueFailedCount"])
+        failed = [kwargs for _jobs, kwargs in store.finished if kwargs.get("terminal_state") == "failed"]
+        self.assertEqual(1, len(failed))
+        self.assertIn("analysis-status-fallback", failed[0]["error"])
+        self.assertIn("응답하지 않았습니다", failed[0]["error"])
+
     def test_recovered_disclosure_cannot_reenter_digest_from_legacy_event(self):
         enqueuer = NewsDigestEnqueuer(None, None, None)
         event = DomainEvent("research_evidence.collected", "NVDA", payload={"alertEligibleItems": [{

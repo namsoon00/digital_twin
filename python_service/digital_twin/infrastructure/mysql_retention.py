@@ -622,11 +622,11 @@ def _delete_completed_model_review_rows(connection, cutoff_iso: str, batch_size:
 
 
 def _delete_completed_news_analysis_work_rows(connection, cutoff_iso: str, batch_size: int) -> int:
-    """Retain retryable and leased analysis work; prune only completed leases."""
+    """Retain retryable and leased analysis work; prune only terminal leases."""
     cutoff_sql = "CAST(%s AS CHAR CHARACTER SET utf8mb4) COLLATE utf8mb4_unicode_ci"
     sql = (
         "DELETE FROM `news_analysis_work_items`"
-        " WHERE `work_state` = 'completed'"
+        " WHERE `work_state` IN ('completed', 'failed')"
         " AND `completed_at` != '' AND `completed_at` < "
         + cutoff_sql
         + " ORDER BY `completed_at`, `evidence_id` LIMIT %s"

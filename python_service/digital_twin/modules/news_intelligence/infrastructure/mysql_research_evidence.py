@@ -710,6 +710,56 @@ class MySQLResearchEvidenceStore(MySQLOperationalConnection):
 
         return int(self.transaction_with_deadlock_retry("news-analysis-work-enqueue", operation) or 0)
 
+    def news_analysis_max_attempts(self) -> int:
+        try:
+            configured = int(float(str(self.runtime_settings.get("newsAiAnalysisMaxAttempts") or "5")))
+        except (TypeError, ValueError):
+            configured = 5
+        return max(1, min(20, configured))
+
+    def _reconcile_news_analysis_work_with_connection(self, connection, stamp: str) -> Dict[str, int]:
+        stale = connection.execute(
+            """
+            UPDATE news_analysis_work_items work
+            LEFT JOIN research_evidence evidence ON evidence.evidence_id = work.evidence_id
+            SET work.work_state = 'completed', work.lease_owner = '', work.lease_until = '',
+                work.not_before_at = '', work.last_error = 'evidence-lifecycle-not-active',
+                work.updated_at = %s, work.completed_at = %s
+            WHERE work.work_state IN ('pending', 'retrying', 'running')
+              AND (
+                evidence.evidence_id IS NULL
+                OR evidence.kind <> 'news'
+                OR evidence.lifecycle_state <> 'active'
+              )
+            """,
+            (stamp, stamp),
+        )
+        exhausted = connection.execute(
+            """
+            UPDATE news_analysis_work_items
+            SET work_state = 'failed', lease_owner = '', lease_until = '', not_before_at = '',
+                last_error = IF(last_error = '', 'analysis-attempt-budget-exhausted', last_error),
+                updated_at = %s, completed_at = %s
+            WHERE attempt_count >= %s
+              AND (
+                (work_state IN ('pending', 'retrying') AND (not_before_at = '' OR not_before_at <= %s))
+                OR (work_state = 'running' AND (lease_until = '' OR lease_until <= %s))
+              )
+            """,
+            (stamp, stamp, self.news_analysis_max_attempts(), stamp, stamp),
+        )
+        return {
+            "inactiveCompletedCount": max(0, int(getattr(stale, "rowcount", 0) or 0)),
+            "attemptBudgetFailedCount": max(0, int(getattr(exhausted, "rowcount", 0) or 0)),
+        }
+
+    def reconcile_news_analysis_work(self) -> Dict[str, int]:
+        stamp = utc_now()
+        return dict(self.transaction_with_deadlock_retry(
+            "news-analysis-work-reconcile",
+            lambda connection: self._reconcile_news_analysis_work_with_connection(connection, stamp),
+        ) or {})
+
     def claim_news_analysis_work(
         self,
         worker_id: str,
@@ -727,20 +777,27 @@ class MySQLResearchEvidenceStore(MySQLOperationalConnection):
         lease_until = (now + timedelta(seconds=max(30, min(1800, int(lease_seconds or 300))))).isoformat().replace("+00:00", "Z")
 
         def operation(connection):
+            self._reconcile_news_analysis_work_with_connection(connection, stamp)
             rows = connection.execute(
                 """
-                SELECT evidence_id, subject_revision, work_class, priority, attempt_count
-                FROM news_analysis_work_items
-                WHERE work_class = %s
+                SELECT work.evidence_id, work.subject_revision, work.work_class,
+                       work.priority, work.attempt_count
+                FROM news_analysis_work_items work
+                INNER JOIN research_evidence evidence ON evidence.evidence_id = work.evidence_id
+                WHERE work.work_class = %s
+                  AND evidence.kind = 'news'
+                  AND evidence.lifecycle_state = 'active'
+                  AND work.attempt_count < %s
                   AND (
-                    (work_state IN ('pending', 'retrying') AND (not_before_at = '' OR not_before_at <= %s))
-                    OR (work_state = 'running' AND (lease_until = '' OR lease_until <= %s))
+                    (work.work_state IN ('pending', 'retrying') AND (work.not_before_at = '' OR work.not_before_at <= %s))
+                    OR (work.work_state = 'running' AND (work.lease_until = '' OR work.lease_until <= %s))
                   )
-                ORDER BY priority DESC, updated_at ASC, evidence_id ASC
+                ORDER BY work.priority DESC, evidence.published_at DESC,
+                         work.updated_at ASC, work.evidence_id ASC
                 LIMIT %s
                 FOR UPDATE SKIP LOCKED
                 """,
-                (category, stamp, stamp, row_limit),
+                (category, self.news_analysis_max_attempts(), stamp, stamp, row_limit),
             ).fetchall()
             evidence_ids = [str(row.get("evidence_id") or "") for row in rows or [] if str(row.get("evidence_id") or "")]
             if evidence_ids:
@@ -775,6 +832,7 @@ class MySQLResearchEvidenceStore(MySQLOperationalConnection):
         worker_id: str,
         retry_minutes: int = 0,
         error: str = "",
+        terminal_state: str = "",
     ) -> int:
         rows = [dict(job or {}) for job in jobs or [] if str((job or {}).get("evidenceId") or "").strip()]
         if not rows:
@@ -782,10 +840,13 @@ class MySQLResearchEvidenceStore(MySQLOperationalConnection):
         owner = str(worker_id or "").strip()[:191]
         now = datetime.now(timezone.utc)
         stamp = now.isoformat().replace("+00:00", "Z")
+        terminal = str(terminal_state or "").strip().lower()
+        if terminal not in {"", "failed"}:
+            raise ValueError("Unsupported news analysis terminal state: " + terminal)
         retry_at = (
             now + timedelta(minutes=max(1, min(1440, int(retry_minutes or 0))))
-        ).isoformat().replace("+00:00", "Z") if retry_minutes else ""
-        state = "retrying" if retry_at else "completed"
+        ).isoformat().replace("+00:00", "Z") if retry_minutes and not terminal else ""
+        state = terminal or ("retrying" if retry_at else "completed")
 
         def operation(connection):
             cursor = connection.executemany(
@@ -817,6 +878,7 @@ class MySQLResearchEvidenceStore(MySQLOperationalConnection):
 
     def news_analysis_work_status(self) -> Dict[str, object]:
         stamp = utc_now()
+        max_attempts = self.news_analysis_max_attempts()
         with self.connect() as connection:
             rows = connection.execute(
                 """
@@ -830,32 +892,46 @@ class MySQLResearchEvidenceStore(MySQLOperationalConnection):
             reclaimable = connection.execute(
                 """
                 SELECT COUNT(*) AS count
-                FROM news_analysis_work_items
-                WHERE work_state = 'running' AND (lease_until = '' OR lease_until <= %s)
+                FROM news_analysis_work_items work
+                INNER JOIN research_evidence evidence ON evidence.evidence_id = work.evidence_id
+                WHERE work.work_state = 'running'
+                  AND work.attempt_count < %s
+                  AND evidence.kind = 'news' AND evidence.lifecycle_state = 'active'
+                  AND (work.lease_until = '' OR work.lease_until <= %s)
                 """,
-                (stamp,),
+                (max_attempts, stamp),
             ).fetchone()
             ready = connection.execute(
                 """
-                SELECT COUNT(*) AS count, MIN(updated_at) AS oldest_updated_at,
-                       MAX(priority) AS highest_priority
-                FROM news_analysis_work_items
-                WHERE (work_state = 'pending')
-                   OR (work_state = 'retrying' AND (not_before_at = '' OR not_before_at <= %s))
-                   OR (work_state = 'running' AND (lease_until = '' OR lease_until <= %s))
+                SELECT COUNT(*) AS count, MIN(work.updated_at) AS oldest_updated_at,
+                       MAX(work.priority) AS highest_priority
+                FROM news_analysis_work_items work
+                INNER JOIN research_evidence evidence ON evidence.evidence_id = work.evidence_id
+                WHERE evidence.kind = 'news' AND evidence.lifecycle_state = 'active'
+                  AND work.attempt_count < %s
+                  AND (
+                    (work.work_state = 'pending')
+                    OR (work.work_state = 'retrying' AND (work.not_before_at = '' OR work.not_before_at <= %s))
+                    OR (work.work_state = 'running' AND (work.lease_until = '' OR work.lease_until <= %s))
+                  )
                 """,
-                (stamp, stamp),
+                (max_attempts, stamp, stamp),
             ).fetchone() or {}
             ready_by_class = connection.execute(
                 """
-                SELECT work_class, COUNT(*) AS count
-                FROM news_analysis_work_items
-                WHERE (work_state = 'pending')
-                   OR (work_state = 'retrying' AND (not_before_at = '' OR not_before_at <= %s))
-                   OR (work_state = 'running' AND (lease_until = '' OR lease_until <= %s))
-                GROUP BY work_class
+                SELECT work.work_class, COUNT(*) AS count
+                FROM news_analysis_work_items work
+                INNER JOIN research_evidence evidence ON evidence.evidence_id = work.evidence_id
+                WHERE evidence.kind = 'news' AND evidence.lifecycle_state = 'active'
+                  AND work.attempt_count < %s
+                  AND (
+                    (work.work_state = 'pending')
+                    OR (work.work_state = 'retrying' AND (work.not_before_at = '' OR work.not_before_at <= %s))
+                    OR (work.work_state = 'running' AND (work.lease_until = '' OR work.lease_until <= %s))
+                  )
+                GROUP BY work.work_class
                 """,
-                (stamp, stamp),
+                (max_attempts, stamp, stamp),
             ).fetchall()
         oldest_ready = str(ready.get("oldest_updated_at") or "")
         oldest_parsed = parse_datetime(oldest_ready)
@@ -885,6 +961,7 @@ class MySQLResearchEvidenceStore(MySQLOperationalConnection):
             "oldestReadyAt": oldest_ready,
             "oldestReadyAgeMinutes": oldest_age_minutes,
             "highestReadyPriority": int(ready.get("highest_priority") or 0),
+            "maxAttempts": max_attempts,
         }
 
     def news_analysis_work_items(self, evidence_ids: Iterable[str]) -> Dict[str, Dict[str, object]]:
@@ -1190,6 +1267,7 @@ class MySQLResearchEvidenceStore(MySQLOperationalConnection):
             [getattr(research_evidence_from_row(row), "symbol", "") for row in rows],
         )
         target_state = clean_lifecycle_state(lifecycle_state)
+        transitioned_ids: List[str] = []
         for row in rows:
             previous = research_evidence_from_row(row)
             previous_state = self._row_lifecycle_state(row)
@@ -1217,6 +1295,7 @@ class MySQLResearchEvidenceStore(MySQLOperationalConnection):
             if symbol and symbol not in mutation.changed_symbols:
                 mutation.changed_symbols.append(symbol)
             mutation.changed_items.append(previous)
+            transitioned_ids.append(previous.evidence_id)
             mutation.deltas.append(evidence_delta(
                 previous,
                 previous,
@@ -1227,6 +1306,22 @@ class MySQLResearchEvidenceStore(MySQLOperationalConnection):
                 reason=reason,
                 settings=self.runtime_settings,
             ))
+        if target_state != "active" and transitioned_ids:
+            placeholders = ",".join(["%s"] * len(transitioned_ids))
+            connection.execute(
+                """
+                UPDATE news_analysis_work_items
+                SET work_state = 'completed', lease_owner = '', lease_until = '',
+                    not_before_at = '', last_error = %s, updated_at = %s, completed_at = %s
+                WHERE evidence_id IN (""" + placeholders + ")"
+                " AND work_state IN ('pending', 'retrying', 'running')",
+                (
+                    "evidence-lifecycle-" + target_state,
+                    stamp,
+                    stamp,
+                    *transitioned_ids,
+                ),
+            )
         return self._finalize_mutation(connection, mutation)
 
     def _active_rows_by_ids(self, connection, evidence_ids: Iterable[str], skip_locked: bool = False):

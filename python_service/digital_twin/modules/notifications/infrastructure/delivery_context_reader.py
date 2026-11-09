@@ -35,14 +35,15 @@ class DeliveredInsightContextReader:
                 "SELECT a.job_id AS jobId,a.status,a.completed_at AS deliveredAt,"
                 "m.accountId,m.messageType," + symbol_sql + " AS symbol,m.body,m.messageSha256,"
                 "ROW_NUMBER() OVER (PARTITION BY m.messageType ORDER BY a.completed_at DESC,a.attempt_id DESC) AS routeRank "
-                "FROM notification_delivery_attempts a FORCE INDEX (idx_notification_delivery_ai_scope) "
+                "FROM notification_delivery_attempts a FORCE INDEX (idx_notification_delivery_subject_scope) "
                 + projection + "LEFT JOIN notification_jobs j ON j.job_id=a.job_id "
                 "WHERE a.receipt_account_id=%s AND a.receipt_message_type IN ("
                 + ",".join(["%s"] * len(TYPES)) + ") "
+                "AND (a.receipt_subject_symbol=%s OR a.receipt_subject_symbol IS NULL) "
                 "AND a.status='delivered' AND a.completed_at>=%s AND a.completed_at<=%s "
                 "AND m.accountId=%s AND m.messageType IN (" + ",".join(["%s"] * len(TYPES)) + ") AND "
                 + symbol_sql + "=%s) recent WHERE routeRank<=6",
-                (account_id, account_id, *TYPES, start, cutoff, account_id, *TYPES, account_id, symbol)).fetchall()
+                (account_id, account_id, *TYPES, symbol, start, cutoff, account_id, *TYPES, account_id, symbol)).fetchall()
         # Unavailable DB history raises for the existing task retry path; it
         # must not become an apparently empty first-observation context.
         return context(rows, account_id, symbol, cutoff,

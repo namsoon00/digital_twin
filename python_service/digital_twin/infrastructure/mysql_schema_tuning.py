@@ -368,6 +368,11 @@ MYSQL_OPERATIONAL_INDEXES: Dict[str, Sequence[MySQLIndexDefinition]] = {
     "notification_delivery_attempts": (
         MySQLIndexDefinition(
             "notification_delivery_attempts",
+            "idx_notification_delivery_subject_scope",
+            "`receipt_message_type`, `receipt_account_id`, `receipt_subject_symbol`, `status`, `completed_at`, `attempt_id`",
+        ),
+        MySQLIndexDefinition(
+            "notification_delivery_attempts",
             "idx_notification_delivery_ai_scope",
             "`receipt_message_type`, `receipt_account_id`, `status`, `completed_at`, `attempt_id`, `receipt_ai_symbol`",
         ),
@@ -743,6 +748,15 @@ OUTCOME_RECOVERY_CANDIDATE_COLUMN = (
 )
 
 
+# Mirror JSON_TABLE's scalar-to-text and JSON-null behavior before the legacy
+# scoped-job fallback. Original metadata is still rechecked by the reader.
+RECEIPT_SUBJECT_COLUMN = "VARCHAR(191) GENERATED ALWAYS AS (IF(JSON_VALID(metadata_json),COALESCE(" + ",".join(
+    "CASE WHEN JSON_TYPE(JSON_EXTRACT(metadata_json,'$." + path + "')) IN ('STRING','INTEGER','DOUBLE','BOOLEAN','DECIMAL') "
+    "THEN LEFT(JSON_UNQUOTE(JSON_EXTRACT(metadata_json,'$." + path + "')),191) END"
+    for path in ("notificationSubject.symbol", "notificationConversation.symbol", "aiControlObservation.symbol")
+) + "),NULL)) VIRTUAL"
+
+
 MYSQL_OPERATIONAL_COLUMNS: Dict[str, Sequence[MySQLColumnDefinition]] = {
     # Virtual projections index immutable receipt identity without depending on
     # retained job payloads. LEFT keeps unrelated oversized metadata writable;
@@ -757,7 +771,7 @@ MYSQL_OPERATIONAL_COLUMNS: Dict[str, Sequence[MySQLColumnDefinition]] = {
             ("receipt_account_id", "accountId", 191),
             ("receipt_ai_symbol", "aiControlObservation.symbol", 64),
         )
-    ),
+    ) + (MySQLColumnDefinition("notification_delivery_attempts", "receipt_subject_symbol", RECEIPT_SUBJECT_COLUMN),),
     "investment_decision_outcomes": (
         MySQLColumnDefinition("investment_decision_outcomes", "recovery_candidate", OUTCOME_RECOVERY_CANDIDATE_COLUMN),
     ),

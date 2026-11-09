@@ -264,7 +264,7 @@ class DeliveredContextStorageTests(unittest.TestCase):
         from digital_twin.modules.notifications.application.notification.dispatch import NotificationDispatchService
         from mysql_fixtures import mysql_test_settings
         load_local_env()
-        queue = MySQLNotificationJobStore(mysql_test_settings())
+        queue = MySQLNotificationJobStore({**mysql_test_settings(), "mysqlOperationTimeoutSeconds": 120})
         account, jobs = "contribution-storage-test", []
         notifier = Mock(supports_delivery_checkpoints=False, supports_research_replies=False)
         notifier.send.return_value = SimpleNamespace(delivered=True, label="test", reason="", metadata={})
@@ -279,6 +279,23 @@ class DeliveredContextStorageTests(unittest.TestCase):
             reader = DeliveredInsightContextReader(queue)
             before = reader.read(account, "TEST", cutoff)
             self.assertEqual(4, len(before["entries"]))
+            # Old receipts can lack embedded subject identity. Preserve the
+            # scoped-job fallback, including an explicit JSON null symbol.
+            legacy_job = jobs[-1]
+            with queue.connect() as connection:
+                original = json.loads(connection.execute("SELECT metadata_json FROM notification_delivery_attempts WHERE job_id=%s AND status='delivered'", (legacy_job,)).fetchone()['metadata_json'])
+            for explicit_null in (False, True):
+                legacy = deepcopy(original)
+                for key in ('notificationSubject', 'notificationConversation', 'aiControlObservation'):
+                    legacy.pop(key, None)
+                if explicit_null:
+                    legacy['notificationSubject'] = {'symbol': None}
+                with queue.transaction() as connection:
+                    connection.execute("UPDATE notification_jobs SET symbol='TEST' WHERE job_id=%s", (legacy_job,))
+                    connection.execute("UPDATE notification_delivery_attempts SET metadata_json=%s WHERE job_id=%s AND status='delivered'", (json.dumps(legacy), legacy_job))
+                self.assertEqual(before, reader.read(account, 'TEST', cutoff))
+            with queue.transaction() as connection:
+                connection.execute("UPDATE notification_delivery_attempts SET metadata_json=%s WHERE job_id=%s AND status='delivered'", (json.dumps(original), legacy_job))
             with queue.transaction() as connection:
                 for key in jobs: connection.execute("DELETE FROM notification_jobs WHERE job_id=%s", (key,))
             self.assertEqual(before, reader.read(account, "TEST", cutoff))

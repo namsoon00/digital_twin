@@ -108,6 +108,7 @@ class MySQLRetiredReasoningDataStore(MySQLOperationalConnection):
         counts = {}
         compacted = 0
         with self.transaction() as connection:
+            connection.execute("SET TRANSACTION ISOLATION LEVEL READ COMMITTED")
             control, keep, rows = self._selection(connection, expected_control_version, apply)
             ids = [row["deployment_id"] for row in rows]
             if not ids:
@@ -122,9 +123,25 @@ class MySQLRetiredReasoningDataStore(MySQLOperationalConnection):
                 if not columns:
                     raise RuntimeError("A bounded primary key is required for retired cleanup: " + table)
                 selection = ",".join("target." + quote_identifier(col) for col in columns)
+                discovery_selection = selection + (",target.subject_case_id AS _subject_case_id" if table in self.CASE_CHILDREN else "")
                 try:
-                    selected = connection.execute("SELECT " + selection + " FROM " + quoted + " target WHERE "
-                        + condition + " LIMIT %s FOR UPDATE", (*ids, limit)).fetchall()
+                    # Discover without locking the protected history scanned
+                    # by anti-joins. Then lock/recheck only these exact keys.
+                    selected = connection.execute("SELECT " + discovery_selection + " FROM " + quoted + " target WHERE "
+                        + condition + " LIMIT %s", (*ids, limit)).fetchall()
+                    if selected:
+                        if table in self.CASE_CHILDREN:
+                            parents = sorted({row["_subject_case_id"] for row in selected})
+                            connection.execute("SELECT subject_case_id FROM investment_subject_decision_cases WHERE subject_case_id IN ("
+                                + ",".join(["%s"] * len(parents)) + ") ORDER BY subject_case_id FOR UPDATE", tuple(parents)).fetchall()
+                        scoped_fields = "(" + ",".join("target." + quote_identifier(c) for c in columns) + ")"
+                        scoped_values = ",".join("(" + ",".join(["%s"] * len(columns)) + ")" for _ in selected)
+                        scoped_params = tuple(row[col] for row in selected for col in columns)
+                        connection.execute("SELECT " + selection + " FROM " + quoted + " target WHERE "
+                            + scoped_fields + " IN (" + scoped_values + ") FOR UPDATE", scoped_params).fetchall()
+                        selected = connection.execute("SELECT " + selection + " FROM " + quoted + " target WHERE "
+                            + scoped_fields + " IN (" + scoped_values + ") AND " + condition,
+                            (*scoped_params, *ids)).fetchall()
                 except Exception as error:
                     raise RuntimeError("Retired cleanup selection failed for " + table + "; this batch was not deleted.") from error
                 if selected:

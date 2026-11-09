@@ -35,6 +35,13 @@ not rescan their protected historical cases. Graph ownership is still checked
 separately, including already-cleaned releases. Key selection has no forced
 primary-key ordering: the optimizer may use the narrow subject/ownership index
 instead of reading wide historical payload rows to satisfy an irrelevant sort.
+Discovery is nonlocking; only the discovered primary keys are locked and
+rechecked in the same control-fenced transaction using READ COMMITTED. A new
+publication between discovery and recheck protects its case. This avoids
+locking every scanned historical case or observation during an empty scan.
+Child deletion locks its exact parent case first, matching publication's case
+fence. Protection predicates are then read separately, so anti-joins cannot
+turn the bounded key lock back into a locking scan of protected history.
 Old release IDs remain as small ownership/audit records; artifacts still needed
 by retained canonical cases or current comparisons remain protected. Native
 database deletion rechecks all current/experimental bindings under the control
@@ -45,6 +52,9 @@ The explicit `maintenance retired-reasoning --owner-request ...` command default
 to preview. `--apply` deletes bounded batches; `--prune-graphs` additionally
 removes eligible, unreferenced project-owned TypeDB databases. Future maintenance
 remains opt-in through the persisted owner-requested purge policy.
+Automatic maintenance removes MySQL execution rows only. Native database drops
+use the explicit command during a maintenance window; a large database deletion
+must not delay the next live TypeDB inference.
 
 ## Verify the operational notification path before reporting completion
 

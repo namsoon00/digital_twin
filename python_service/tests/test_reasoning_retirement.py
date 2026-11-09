@@ -2,7 +2,8 @@ import json
 import unittest
 from copy import deepcopy
 from types import SimpleNamespace
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
+from digital_twin.infrastructure.mysql_operational_connection import MySQLConnectionProxy
 
 from stabilization_database import StabilizationDatabaseCase
 from digital_twin.modules.reasoning.application.reasoning_engine_platform import ReasoningEnginePlatformService
@@ -71,7 +72,7 @@ class RetiredReasoningDataTests(StabilizationDatabaseCase):
             worker_id="retirement-fixture", claimed_at=jobs[0]["claimedAt"])
         with self.jobs.connect() as c:
             for name, deployment in (("current", current), ("garbage", old), ("canonical", shared), ("candidate", candidate),
-                                     ("learning", old), ("outcome", old), ("queued", old)):
+                                     ("learning", old), ("outcome", old), ("queued", old), ("raced", old)):
                 c.execute("INSERT INTO investment_subject_decision_cases "
                     "(subject_case_id,batch_case_id,request_id,deployment_id,payload_json,created_at,updated_at) "
                     "VALUES (%s,'batch','request',%s,%s,'2026-11-09','2026-11-09')",
@@ -90,13 +91,28 @@ class RetiredReasoningDataTests(StabilizationDatabaseCase):
             frozen = c.execute("SELECT * FROM investment_subject_decision_cases WHERE subject_case_id<>'garbage' ORDER BY subject_case_id").fetchall()
             lineage = c.execute("SELECT * FROM reasoning_engine_job_sources WHERE deployment_id=%s", (current,)).fetchall()
         preview = store.purge(control.version, "owner")
-        self.assertEqual(1, preview["tables"]["investment_subject_decision_cases"])
+        self.assertEqual(2, preview["tables"]["investment_subject_decision_cases"])
         deleted = 0
-        for _ in range(30):
-            result = store.purge(control.version, "owner", apply=True, limit=1)
-            self.assertLessEqual(result["deletedRows"], 1)
-            deleted += result["deletedRows"]
-            if result["status"] == "complete": break
+        execute = MySQLConnectionProxy.execute
+        raced = []
+        def publish_between_discovery_and_lock(connection, sql, params=None):
+            cursor = execute(connection, sql, params)
+            if sql.startswith("SELECT target.") and "FROM `decision_candidate_snapshots` target" in sql and "FOR UPDATE" not in sql:
+                rows = cursor.fetchall()
+                if not raced and any(row["candidate_set_id"] == "raced" for row in rows):
+                    with self.jobs.connect() as other:
+                        other.execute("INSERT INTO decision_publications (publication_id,subject_case_id,outcome_kind,publication_fingerprint,payload_json,created_at) "
+                                      "VALUES ('raced','raced','PUBLISHED','raced','{}','2026-11-09')")
+                    raced.append(True)
+                return SimpleNamespace(fetchall=lambda: rows)
+            return cursor
+        with patch.object(MySQLConnectionProxy, "execute", publish_between_discovery_and_lock):
+            for _ in range(30):
+                result = store.purge(control.version, "owner", apply=True, limit=1)
+                self.assertLessEqual(result["deletedRows"], 1)
+                deleted += result["deletedRows"]
+                if result["status"] == "complete": break
+        self.assertTrue(raced)
         self.assertEqual("complete", result["status"])
         self.assertEqual(2, deleted)
         self.assertEqual("empty", store.purge(control.version, "owner", apply=True)["status"])

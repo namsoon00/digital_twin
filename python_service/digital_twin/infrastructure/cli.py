@@ -2261,10 +2261,6 @@ def maintenance_command(args) -> int:
                     try:
                         result["retiredReasoningData"] = run_retired_reasoning_cleanup(settings,
                             owner_request=settings.get("reasoningRetiredDataPurgeOwnerRequest", ""), apply=True, limit=100)
-                        if result["retiredReasoningData"].get("status") in {"empty", "complete"}:
-                            from digital_twin.modules.reasoning.infrastructure.mysql_retired_data import run_retired_reasoning_graph_cleanup
-                            result["retiredReasoningGraphs"] = run_retired_reasoning_graph_cleanup(settings,
-                                owner_request=settings.get("reasoningRetiredDataPurgeOwnerRequest", ""))
                     except RuntimeError as error:
                         result["retiredReasoningData"] = {"status": "deferred", "reason": str(error)[:240]}
             if result.get("minimalRetention", {}).get("status") in {"ok", "disabled", "preview"}:

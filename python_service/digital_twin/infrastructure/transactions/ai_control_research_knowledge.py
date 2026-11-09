@@ -84,7 +84,7 @@ class AIControlResearchKnowledge:
     @staticmethod
     def read_proof(connection, job, result):
         from digital_twin.modules.ai_orchestration.domain.execution_input import validate_execution_input
-        from digital_twin.modules.ai_orchestration.domain import analyst_prompt, opinion_retrieval, reliable_retrieval, scoped_retrieval, working_retrieval, indexed_retrieval, question_retrieval, lane_retrieval, bounded_retrieval, purpose_retrieval, compact_retrieval, quality_retrieval, completion_retrieval, business_retrieval, company_retrieval, efficient_retrieval, question_gap_retrieval, external_influence_retrieval, price_investigation_retrieval, market_explanation_retrieval, retrieval_view
+        from digital_twin.modules.ai_orchestration.domain import analyst_prompt, investment_meaning_prompt, focused_retrieval, opinion_retrieval, reliable_retrieval, scoped_retrieval, working_retrieval, indexed_retrieval, question_retrieval, lane_retrieval, bounded_retrieval, purpose_retrieval, compact_retrieval, quality_retrieval, completion_retrieval, business_retrieval, company_retrieval, efficient_retrieval, question_gap_retrieval, external_influence_retrieval, price_investigation_retrieval, market_explanation_retrieval, retrieval_view
         from digital_twin.modules.ai_orchestration.domain.question_evidence import captured_index
         from digital_twin.modules.ai_orchestration.domain import question_purpose
         from digital_twin.modules.reasoning.contracts import content_hash, validate_evidence_packet
@@ -104,7 +104,7 @@ class AIControlResearchKnowledge:
                 raise ValueError("research progress requires completed frozen read proof")
             envelope, step = json.loads(gzip.decompress(row["input_gzip"])), json.loads(gzip.decompress(row["round_gzip"]))
             validate_execution_input(envelope)
-            retrieval_version = (reliable_retrieval.VERSION if envelope["promptVersion"] == analyst_prompt.RETRIEVAL_VERSION
+            retrieval_version = (reliable_retrieval.VERSION if envelope["promptVersion"] in {analyst_prompt.RETRIEVAL_VERSION, investment_meaning_prompt.RETRIEVAL_VERSION, focused_retrieval.VERSION}
                                  else envelope["promptVersion"])
             contract = reliable_retrieval if retrieval_version == reliable_retrieval.VERSION else opinion_retrieval if retrieval_version == opinion_retrieval.VERSION else question_gap_retrieval if retrieval_version == question_gap_retrieval.VERSION else price_investigation_retrieval if retrieval_version == price_investigation_retrieval.VERSION else market_explanation_retrieval if retrieval_version == market_explanation_retrieval.VERSION else external_influence_retrieval if retrieval_version == external_influence_retrieval.VERSION else efficient_retrieval if retrieval_version == efficient_retrieval.VERSION else company_retrieval if retrieval_version == company_retrieval.VERSION else business_retrieval if retrieval_version == business_retrieval.VERSION else completion_retrieval if retrieval_version == completion_retrieval.VERSION else quality_retrieval if retrieval_version == quality_retrieval.VERSION else compact_retrieval if retrieval_version == compact_retrieval.VERSION else purpose_retrieval if retrieval_version in purpose_retrieval.SUPPORTED_VERSIONS else bounded_retrieval if retrieval_version == bounded_retrieval.VERSION else lane_retrieval if retrieval_version == lane_retrieval.VERSION else question_retrieval if retrieval_version == question_retrieval.VERSION else indexed_retrieval if retrieval_version == indexed_retrieval.VERSION else scoped_retrieval if retrieval_version == scoped_retrieval.VERSION else working_retrieval
             if (retrieval_version != (purpose_retrieval.version_for(envelope["current"]) if contract is purpose_retrieval else contract.VERSION) or step["inputId"] != input_id or content_hash(step) != row["artifact_hash"]
@@ -116,7 +116,7 @@ class AIControlResearchKnowledge:
                     or envelope["current"].get("researchKnowledge") != packet.get("researchKnowledge")
                     or envelope["current"].get("analystMemoryPolicy") != packet.get("analystMemoryPolicy")
                     or any(envelope["current"].get(key) != packet.get(key)
-                           for key in ("companyValuePolicy", "companyValueEvidence", "previousCompanyValue", "businessInsightPolicy", "companyResearchPolicy", "questionGapPolicy", "questionPurposePolicy", "opinionMemoryPolicy", "retrievalReliabilityPolicy", "externalInfluencePolicy", "marketExplanationPolicy", "priceInvestigationPolicy", "priceMoveAnchor", "priceInvestigationScope"))
+                           for key in ("companyValuePolicy", "companyValueEvidence", "previousCompanyValue", "businessInsightPolicy", "companyResearchPolicy", "questionGapPolicy", "questionPurposePolicy", "opinionMemoryPolicy", "retrievalReliabilityPolicy", "externalInfluencePolicy", "marketExplanationPolicy", "priceInvestigationPolicy", "priceMoveAnchor", "priceInvestigationScope", "historicalContextPolicy", "investmentMeaningPolicy"))
                     or envelope["retrievalContext"].get("questionEvidencePolicy") != packet.get("questionEvidencePolicy")
                     or (packet.get("questionEvidencePolicy") and captured_index(envelope["retrievalContext"].get("questionIndex", []), preserve_sources=question_purpose.enabled(packet)) != packet.get("questionEvidenceIndex"))
                     or step.get("authorScopePolicy") != envelope["retrievalContext"].get("authorScopePolicy")):
@@ -138,7 +138,7 @@ class AIControlResearchKnowledge:
             trace.append(step)
             contract.validate_trace(trace)
             if contract in {compact_retrieval, quality_retrieval, completion_retrieval, business_retrieval, company_retrieval, efficient_retrieval, question_gap_retrieval, external_influence_retrieval, price_investigation_retrieval, market_explanation_retrieval, opinion_retrieval, reliable_retrieval}:
-                getattr(contract, "context_view", retrieval_view).paths(envelope["current"], {**envelope["retrievalContext"], "trace": trace})
+                (focused_retrieval.context_view if envelope["promptVersion"] == focused_retrieval.VERSION else getattr(contract, "context_view", retrieval_view)).paths(envelope["current"], {**envelope["retrievalContext"], "trace": trace})
         if (packet["retrieval"] != contract.trace_summary(trace, packet["retrieval"]["status"])
                 or any(digest(fact) not in captured_versions.get(fact["id"], set()) for fact in packet["facts"])):
             raise ValueError("research progress evidence changed after capture")

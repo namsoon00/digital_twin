@@ -152,3 +152,19 @@ class ObservationEvidenceProtocolTests(unittest.TestCase):
         self.assertEqual("lease-lost", service.run_once()["status"])
         planner.assert_not_called()
         store.complete.assert_not_called()
+
+
+    def test_historical_budget_preserves_sources_and_cannot_hide_unbounded_context(self):
+        from digital_twin.modules.reasoning.contracts import HISTORICAL_CONTEXT_BUDGET_POLICY, source_packet_bytes, EvidenceContractError
+        legacy = copy.deepcopy(PACKET)
+        legacy["sourceAudit"] = "s" * 55000
+        legacy["lastDeliveredNotification"] = {"summary": "h" * 50000}
+        with self.assertRaises(EvidenceContractError): validate_evidence_packet(legacy)
+        current = {**legacy, "historicalContextPolicy": HISTORICAL_CONTEXT_BUDGET_POLICY}
+        validate_evidence_packet(current)
+        self.assertEqual(legacy["facts"], current["facts"])
+        self.assertLess(source_packet_bytes(current), 96000)
+        for patch in ({"lastDeliveredNotification": {"summary": "h" * 66000}},
+                      {"sourceAudit": "s" * 97000}, {"historicalContextPolicy": "invented"}):
+            with self.subTest(patch=list(patch)), self.assertRaises(EvidenceContractError):
+                validate_evidence_packet({**current, **patch})

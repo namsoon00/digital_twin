@@ -4,8 +4,13 @@ import re
 from datetime import date
 
 
-VERSION = 'question-passages-v5-event-originals'
+VERSION = 'question-passages-v6-debt-notes'
 _TOPICS = (
+    (r'차입|차입금|debt|borrowing|신용.?약정|credit facility',
+     ('borrowings', 'debt', 'credit facility', 'revolving credit', 'outstanding', '차입금', '유동성장기차입금')),
+    (r'리스.?부채|lease liabil', ('lease liabilities', 'operating lease', 'finance lease', '리스부채')),
+    (r'희석|주식.?보상|dilution|stock.based compensation',
+     ('diluted', 'stock-based compensation', 'shares outstanding', '주식보상', '희석주당')),
     (r'순손실|적자|손실|net loss', ('net loss', 'operating loss', 'losses')),
     (r'순이익|수익성|profitability', ('net income', 'profitability', 'operating income')),
     (r'매출|revenue|sales', ('revenue', 'net sales')),
@@ -58,6 +63,7 @@ def select_question_passages(blocks, tasks, limit=6000, *, max_block_chars=12000
                                   r'operating.{0,20}cash|cash.{0,20}operating|working capital|capital expend',
                                   question_text, re.I))
     consolidated = any('연결' in str(task.get('question', '')) for task in tasks)
+    debt_question = bool(re.search(r'차입|debt|borrowing|신용.?약정|credit facility', question_text, re.I))
     candidates = []
     for index, block in enumerate(dict.fromkeys(blocks)):
         if not 80 <= len(block) <= (max(12000, min(14000, max_block_chars)) if '\n' in block else 2800):
@@ -70,7 +76,13 @@ def select_question_passages(blocks, tasks, limit=6000, *, max_block_chars=12000
             # Original statement rows answer an operating-cash question more
             # directly than long cash-flow-hedging policy paragraphs.
             scope = cash_table and consolidated and '연결' in '\n'.join(block.splitlines()[:4])
-            rank = (cash_table, scope, bool(priority.intersection(matched)), len(set(focus_terms).intersection(matched)), len(matched))
+            debt_table = (debt_question and '\n' in block and ' | ' in block
+                          and bool(re.search(r'\d[\d,]*', block))
+                          and bool(re.search(r'차입|borrowings?|debt|credit facility', text)))
+            debt_note = debt_table and bool(re.search(r'차입|borrowings?|debt|credit facilit',
+                                                     '\n'.join(block.splitlines()[:4]), re.I))
+            rank = (debt_note, debt_table, cash_table, scope, bool(priority.intersection(matched)),
+                    len(set(focus_terms).intersection(matched)), len(matched))
             candidates.append((rank, index, block, matched))
     candidates.sort(key=lambda row: (tuple(-int(value) for value in row[0]), row[1]))
     remaining, result = max(500, min(20000, int(limit))), []

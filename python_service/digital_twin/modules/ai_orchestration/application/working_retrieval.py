@@ -1,5 +1,5 @@
 """Bounded discovery is independent of the final, explicitly selected evidence."""
-from ..domain import external_influence, market_explanation, price_investigation
+from ..domain import external_influence, market_explanation, price_investigation, focused_retrieval
 from digital_twin.modules.reasoning.contracts import OBSERVATION_QUOTE_KINDS
 
 from ..domain import reliable_retrieval, opinion_retrieval, opinion_memory, insight_progress
@@ -233,7 +233,9 @@ def retrieve_working_evidence(session, packet, history, research, decide, save_i
             context.update(tools.issued_context())
         try:
             from ..domain import analyst_prompt, investment_meaning_prompt
-            envelope = (investment_meaning_prompt.freeze_retrieval(current, context, prompt_bytes)
+            envelope = (focused_retrieval.freeze(current, context, prompt_bytes)
+                        if focused_retrieval.enabled(current) else
+                        investment_meaning_prompt.freeze_retrieval(current, context, prompt_bytes)
                         if investment_meaning.enabled(current) and contract is reliable_retrieval else
                         analyst_prompt.freeze_retrieval(current, context, prompt_bytes)
                         if analyst_memory.enabled(current) and contract is reliable_retrieval
@@ -291,7 +293,7 @@ def retrieve_working_evidence(session, packet, history, research, decide, save_i
             plans = []
             for i, request in enumerate(decision["requests"]):
                 if request["tool"] == "read_context" and contract in {compact_retrieval, quality_retrieval, completion_retrieval, business_retrieval, company_retrieval, efficient_retrieval, question_gap_retrieval, external_influence_retrieval, price_investigation_retrieval, market_explanation_retrieval, opinion_retrieval, reliable_retrieval}:
-                    getattr(contract, "context_view", retrieval_view).read(current, context, request)  # Validate issued path before any reads.
+                    focused_retrieval.view(current, contract).read(current, context, request)  # Validate issued path before any reads.
                     plans.append(None)
                 elif request["tool"] == "read_document":
                     if request["factId"] not in document_ids:
@@ -334,7 +336,7 @@ def retrieve_working_evidence(session, packet, history, research, decide, save_i
             else:
                 requests_seen.add(key)
                 for page_size in range(PAGE_SIZE, 0, -1):
-                    result = (getattr(contract, "context_view", retrieval_view).read(current, context, request) if request["tool"] == "read_context" else
+                    result = (focused_retrieval.view(current, contract).read(current, context, request) if request["tool"] == "read_context" else
                               session.read_document(request["factId"]) if request["tool"] == "read_document" else
                               session.read_report(request["factId"], request["metrics"]) if plan is None
                               else tools.read(plan, page_size))

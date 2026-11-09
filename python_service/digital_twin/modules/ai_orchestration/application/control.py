@@ -174,6 +174,8 @@ class AIControlService:
                         packet["opinionMemoryPolicy"] = opinion_policy
                         from ..domain.reliable_retrieval import MARKER as completion_policy
                         packet["retrievalReliabilityPolicy"] = completion_policy
+                        from digital_twin.modules.reasoning.contracts import HISTORICAL_CONTEXT_BUDGET_POLICY
+                        packet["historicalContextPolicy"] = HISTORICAL_CONTEXT_BUDGET_POLICY
                         if lanes.market(packet):
                             packet["reviewedQuestionContext"] = opinion_memory.question_context(research)
                             from ..domain.analyst_memory import VERSION as analyst_memory_policy
@@ -513,8 +515,11 @@ class AIControlService:
                 if getattr(error, "budget_diagnostic", None):
                     diagnostic["budget"] = error.budget_diagnostic
             failure_result = {"failure": diagnostic}
+            if getattr(error, "author_validation", None):
+                failure_result["authorValidation"] = error.author_validation
             stable_failure = ("packet" in locals() and lanes.identified(packet) and "retry_identity" in locals()
-                              and (diagnostic.get("category") == "validation" or isinstance(error, EvidenceContractError)))
+                              and (diagnostic.get("category") == "validation" or isinstance(error, EvidenceContractError)
+                                   or bool(getattr(error, "author_validation", None))))
             if stable_failure:
                 failure_result.update(input={"executionLane": packet["executionLane"]},
                     processingOutcome=disposition(packet, retry_identity, "output-invalid", [reason]))

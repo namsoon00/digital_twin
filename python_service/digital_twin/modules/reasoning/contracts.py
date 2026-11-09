@@ -12,6 +12,7 @@ _EXPORTS["company_value_context"] = ("digital_twin.modules.reasoning.domain.obse
 _EXPORTS["OBSERVATION_QUOTE_KINDS"] = ("digital_twin.modules.reasoning.domain.observation_evidence", "OBSERVATION_QUOTE_KINDS")
 _EXPORTS["CRYPTO_EVIDENCE_PROFILE"] = ("digital_twin.modules.reasoning.domain.observation_evidence", "CRYPTO_EVIDENCE_PROFILE")
 _EXPORTS['source_packet_bytes'] = ('digital_twin.modules.reasoning.domain.observation_evidence', 'source_packet_bytes')
+_EXPORTS['HISTORICAL_CONTEXT_BUDGET_POLICY'] = ('digital_twin.modules.reasoning.domain.observation_context_budget', 'VERSION')
 _EXPORTS['OBSERVATION_EVIDENCE_READY'] = ('digital_twin.modules.reasoning.domain.observation_handoff', 'OBSERVATION_EVIDENCE_READY')
 _EXPORTS['completed_observation_evidence_event'] = ('digital_twin.modules.reasoning.domain.observation_handoff', 'completed_observation_evidence_event')
 _EXPORTS['ObservationEvidenceSession'] = ('digital_twin.modules.reasoning.domain.observation_session', 'ObservationEvidenceSession')

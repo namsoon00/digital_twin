@@ -135,7 +135,8 @@ def canonical_json(value):
 
 def source_packet_bytes(packet):
     """The source-owner budget excludes separately validated research memory."""
-    return len(canonical_json({key: value for key, value in packet.items() if key != "researchKnowledge"}).encode())
+    from .observation_context_budget import source_fields
+    return len(canonical_json(source_fields(packet)).encode())
 
 
 def content_hash(value):
@@ -268,6 +269,8 @@ def select_evidence(candidates):
 
 
 def validate_evidence_packet(packet):
+    from .observation_context_budget import validate as validate_historical_budget
+    validate_historical_budget(packet)
     if packet.get("protocolVersion") != EVIDENCE_PROTOCOL or packet.get("profile") not in {EVIDENCE_PROFILE, PORTFOLIO_EVIDENCE_PROFILE, BUSINESS_EVIDENCE_PROFILE, MACRO_EVIDENCE_PROFILE, LEGACY_EVIDENCE_PROFILE, CRYPTO_EVIDENCE_PROFILE}:
         raise EvidenceContractError("unsupported observation evidence contract")
     if not all(packet.get(key) for key in ("accountId", "symbol", "worldId", "sourceSnapshotId", "capturedAt")):

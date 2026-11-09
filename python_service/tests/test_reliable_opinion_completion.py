@@ -164,4 +164,53 @@ class ReliableOpinionCompletionTests(unittest.TestCase):
         self.assertNotIn("frozenAuditMetadata", str(diagnostic))
 
 
+    def test_focused_history_paths_are_scoped_exact_and_preserved_for_author(self):
+        from digital_twin.modules.ai_orchestration.domain import focused_retrieval, focused_retrieval_view
+        from digital_twin.modules.reasoning.contracts import HISTORICAL_CONTEXT_BUDGET_POLICY
+        from test_efficient_retrieval import decision
+        value = packet(); value["historicalContextPolicy"] = HISTORICAL_CONTEXT_BUDGET_POLICY
+        original = "이전에 발송한 본문을 그대로 보존합니다. " * 130
+        value["lastDeliveredNotification"] = {"auditNote": original}
+        inputs = []
+        path = "/current/lastDeliveredNotification/auditNote"
+        def save(env):
+            validate_execution_input(env); inputs.append(deepcopy(env)); return "input-" + str(len(inputs))
+        def choose(env, _):
+            self.assertEqual(focused_retrieval.VERSION, env["promptVersion"])
+            raw = decision("read", [{"tool": "read_context", "path": path}]) if not env["retrievalContext"]["trace"] else decision("finish")
+            raw["selectedFactIds"] = env["retrievalContext"]["selectedFactIds"]
+            return raw
+        final, history, memories, trace = retrieve_working_evidence(ObservationEvidenceSession(value, value["facts"]),
+            value, [], [], choose, save, 262144, max_rounds=2)
+        self.assertEqual(original, trace[0]["reads"][0]["result"]["content"])
+        self.assertEqual(original, final["lastDeliveredNotification"]["auditNote"])
+        validate_execution_input(freeze_execution_input(final, history, memories, retrieval_trace=trace))
+        with self.assertRaises(EvidenceContractError):
+            focused_retrieval_view.read(inputs[0]["current"], inputs[0]["retrievalContext"],
+                {"tool": "read_context", "path": "/current/accountId"})
+        forged = deepcopy(inputs[1]); forged["retrievalContext"]["trace"][0]["reads"][0]["result"]["content"] = "changed"
+        with self.assertRaises(EvidenceContractError): validate_execution_input(forged)
+
+    def test_focused_routing_reduces_repeated_delivery_text_and_preserves_legacy_replay(self):
+        from digital_twin.modules.ai_orchestration.domain import focused_retrieval
+        from digital_twin.modules.reasoning.contracts import HISTORICAL_CONTEXT_BUDGET_POLICY
+        from test_efficient_retrieval import decision
+        value = packet(); original = "동일한 과거 본문의 원문입니다. " * 220
+        value["deliveredNotificationContext"] = {"entries": [{"jobId": "receipt", "text": original}]}
+        # Presentation alone is tested here; notification eligibility remains
+        # owned by the separate receipt/quality contracts.
+        envelopes = []
+        def choose(env, _):
+            envelopes.append(deepcopy(env))
+            return {**decision("defer"), "missingEvidence": ["같은 기간의 원문이 더 필요합니다."], "blocker": "required-source"}
+        retrieve_working_evidence(ObservationEvidenceSession(value, value["facts"]), value, [], [], choose, lambda _: "input", 262144)
+        old = envelopes[0]; validate_execution_input(old)
+        current = {**old["current"], "historicalContextPolicy": HISTORICAL_CONTEXT_BUDGET_POLICY}
+        new = focused_retrieval.freeze(current, old["retrievalContext"], 262144); validate_execution_input(new)
+        self.assertLess(len(new["prompt"].encode()), len(old["prompt"].encode()))
+        self.assertEqual(old["current"]["facts"], new["current"]["facts"])
+        self.assertEqual(original, new["current"]["deliveredNotificationContext"]["entries"][0]["text"])
+        validate_execution_input(old)
+
+
 if __name__ == "__main__": unittest.main()

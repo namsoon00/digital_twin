@@ -60,6 +60,8 @@ def material_key(packet, research, *, evidence_identity=None):
               "binding": packet.get("reasoningBinding", {}).get("deploymentId")}
     if packet.get("retrievalReliabilityPolicy"):
         common["retrievalReliabilityPolicy"] = packet["retrievalReliabilityPolicy"]
+    if packet.get("historicalContextPolicy"):
+        common["historicalContextPolicy"] = packet["historicalContextPolicy"]
     if packet.get("evidenceReadPolicy"):
         common["readPolicy"] = packet["evidenceReadPolicy"]
     if packet.get("evidenceReadCompletionPolicy"):

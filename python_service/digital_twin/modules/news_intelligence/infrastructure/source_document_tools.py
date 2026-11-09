@@ -14,7 +14,7 @@ from digital_twin.modules.market_data.contracts import issuer_ir_source, parse_d
 from digital_twin.infrastructure.sec_report_passages import question_document_blocks
 from digital_twin.infrastructure.external_api.adapters.issuer_ir import parse_ir_documents, _date
 from ..domain.investment_research import ResearchEvidence, target_aliases
-from ..domain.question_passages import select_question_passages
+from ..domain.question_passages import select_question_passages, VERSION as PASSAGE_SELECTION_VERSION
 from ..domain.source_exploration import VERSION, public_url
 from ..domain.source_recovery import EXTRACTION_VERSION
 from ..domain.source import SourceRegistry
@@ -195,7 +195,9 @@ class SourceDocumentTools:
             if not date and not date_proof and source_bound and url == candidate["url"]:
                 date, date_proof = index_publication(candidate, hosts)
             title = page_title or title
-            blocks = question_document_blocks(markup, include_context=bool(focus))
+            # Preserve the statement/note heading, units and accounting scope
+            # on the first read instead of spending another fetch to recover them.
+            blocks = question_document_blocks(markup, include_context=True)
             pages, document_type = [], "html"
             for link in parse_ir_documents(markup, url, limit=40):
                 try:
@@ -218,6 +220,7 @@ class SourceDocumentTools:
             if matches:
                 passage["page"] = matches[0]
         document = {"url": url, "title": title[:300], "documentType": document_type,
+            "passageSelectionVersion": PASSAGE_SELECTION_VERSION,
             "sourceDocumentHash": document_hash, "observedAt": now, "publishedAt": date,
             "publicationProof": date_proof, "passages": passages, **page_info,
             "issuerVerification": "registered-issuer-source" if source_bound else "official-issuer-redirect" if issuer_redirect else "official-linked-document" if linked_pdf else "unverified-source",

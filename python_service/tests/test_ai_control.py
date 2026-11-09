@@ -135,6 +135,17 @@ class AIControlTests(unittest.TestCase):
         self.assertEqual("deferred", service.run_once()["status"])
         self.assertEqual(2, planner.call_count)
         store.complete.assert_not_called()
+        # An unknown validator bug must retain an input identity and stop;
+        # another expensive call with the same output cannot fix application code.
+        from digital_twin.modules.ai_orchestration.application.author_validation import validate_author
+        from digital_twin.modules.ai_orchestration.domain.execution_input import freeze_execution_input
+        with patch("digital_twin.modules.ai_orchestration.application.author_validation.validate_plan", side_effect=KeyError("private-key")):
+            model = Mock()
+            with self.assertRaises(KeyError) as caught:
+                validate_author(PLAN, freeze_execution_input(PACKET, [], []), "owned", model, Mock())
+            self.assertEqual("owned", caught.exception.author_validation["inputId"])
+            self.assertNotIn("private", repr(caught.exception.author_validation))
+            model.assert_not_called()
         self.assertEqual("business-text-numeric", store.fail.call_args.kwargs["result"]["failure"]["reasonCode"])
         self.assertNotIn("20일", repr(store.fail.call_args))
         service, store, planner = self.runner()
@@ -157,6 +168,25 @@ class AIControlTests(unittest.TestCase):
         self.assertEqual("unclassified", diagnostic["reasonCode"])
         self.assertNotIn("private", repr(diagnostic))
         self.assertEqual("due-brain-cases-require-an-explicit-review", task_failure("plan-validation", ValueError("due brain cases require an explicit review"))[1]["reasonCode"])
+
+    def test_failed_author_retains_owned_output_identity_and_precise_question_diagnostics(self):
+        from digital_twin.modules.ai_orchestration.domain.validation_diagnostic import task_failure
+        from digital_twin.modules.ai_orchestration.domain.question_answer import validate as validate_answer
+        with self.assertRaises(ValueError) as caught:
+            validate_answer({}, {}, {}, {}, {})
+        _, issue = task_failure("plan-validation", caught.exception)
+        self.assertEqual("questionResolutions.answerParts", issue["field"])
+        self.assertNotEqual("unclassified", issue["reasonCode"])
+        service, store, planner = self.runner()
+        planner.return_value = {**PLAN, "unexpectedPrivateDraft": "draft"}
+        service.run_once()
+        audit = store.fail.call_args.kwargs["result"]["authorValidation"]
+        self.assertTrue(audit["correctionConsumed"])
+        self.assertEqual("frozen-input", audit["inputId"])
+        self.assertNotIn("text", audit["response"])
+        self.assertEqual(64, len(audit["response"]["hash"]))
+        self.assertEqual(2, planner.call_count)
+        store.complete.assert_not_called()
 
     def test_missing_facts_do_not_call_ai_or_schedule_followups(self):
         service, store, planner = self.runner(evidence=Mock(return_value={}))

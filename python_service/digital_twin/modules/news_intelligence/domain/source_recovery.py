@@ -44,7 +44,8 @@ def failure_cause(code):
         return "access-denied"
     if code in {"document-http-429", "deferred", "cooldown"}:
         return "rate-limited"
-    if code.startswith("document-http-") or code in {"document-unavailable", "TimeoutError", "URLError"}:
+    if code.startswith("document-http-") or code in {"document-unavailable", "TimeoutError", "URLError",
+            "timeout", "request-timeout", "document-timeout", "connection-error"}:
         return "transport-failed"
     if code in {"configuration-required", "unsupported-document-source"}:
         return "configuration-required" if code == "configuration-required" else "unsupported-source"

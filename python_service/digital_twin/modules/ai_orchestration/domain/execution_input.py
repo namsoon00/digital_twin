@@ -129,6 +129,9 @@ def freeze_execution_input(packet, history, research, max_prompt_bytes=DEFAULT_P
 
 
 def validate_execution_input(envelope):
+    from . import focused_retrieval
+    if envelope.get("promptVersion") == focused_retrieval.VERSION:
+        return focused_retrieval.validate_input(envelope)
     from . import portfolio_analysis
     if str(envelope.get("promptVersion", "")).startswith(portfolio_analysis.VERSION + "-"):
         return portfolio_analysis.validate_input(envelope)

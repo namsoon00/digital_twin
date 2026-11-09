@@ -65,7 +65,7 @@ class SourceExplorationTests(unittest.TestCase):
         tools = tools_for(markup)
         candidate = {"url": URL, "title": "NVIDIA original results"}
         first = tools.read(TARGET, candidate, [TASK], 10)
-        self.assertNotIn("USD in millions", first["evidence"].raw_payload["officialDocumentText"])
+        self.assertIn("USD in millions, unaudited", first["evidence"].raw_payload["officialDocumentText"])
         focused = tools.extract(TARGET, candidate, [TASK], first["document"], ["revenue units"], 10)
         text = focused["evidence"].raw_payload["officialDocumentText"]
         for value in ("USD in millions, unaudited", "Current quarter", "Prior year quarter", "120", "100"):
@@ -137,6 +137,10 @@ class SourceExplorationTests(unittest.TestCase):
         historical = source_recovery_summary({"steps": [{"step": 1, "errorKind": "unexpected-error"}]})
         self.assertFalse(historical["progress"]["measured"])
         self.assertEqual("unclassified-failure", historical["issues"][0]["cause"])
+        timeout = source_recovery_summary({"steps": [{"step": 1, "errorKind": "timeout"}]})
+        self.assertEqual("transport-failed", timeout["issues"][0]["cause"])
+        self.assertEqual("research", timeout["issues"][0]["planningAction"])
+        self.assertEqual("search", timeout["issues"][0]["nextAction"])
 
     def _assert_original_publication_dates_accept_iso_and_exclude_related_stories(self):
         from digital_twin.infrastructure.external_api.adapters.issuer_ir import _date

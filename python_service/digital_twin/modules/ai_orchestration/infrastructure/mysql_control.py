@@ -3,7 +3,7 @@ from digital_twin.modules.reasoning.contracts import OBSERVATION_QUOTE_KINDS
 
 import json
 import gzip
-from ..domain import analyst_prompt, reliable_retrieval, opinion_retrieval, opinion_memory
+from ..domain import analyst_prompt, investment_meaning_prompt, focused_retrieval, reliable_retrieval, opinion_retrieval, opinion_memory
 from copy import deepcopy
 import threading
 import uuid
@@ -461,7 +461,7 @@ class MySQLAIControlStore(OpinionMemoryPersistence, AIActivityPersistence, AITok
                 raise ValueError("retrieval audit requires owned frozen input")
             envelope = json.loads(gzip.decompress(frozen["artifact_gzip"]))
             validate_execution_input(envelope)
-            retrieval_version = (reliable_retrieval.VERSION if envelope["promptVersion"] == analyst_prompt.RETRIEVAL_VERSION
+            retrieval_version = (reliable_retrieval.VERSION if envelope["promptVersion"] in {analyst_prompt.RETRIEVAL_VERSION, investment_meaning_prompt.RETRIEVAL_VERSION, focused_retrieval.VERSION}
                                  else envelope["promptVersion"])
             if retrieval_version not in {reliable_retrieval.VERSION, opinion_retrieval.VERSION, price_investigation_retrieval.VERSION, market_explanation_retrieval.VERSION, external_influence_retrieval.VERSION, efficient_retrieval.VERSION, question_gap_retrieval.VERSION, company_retrieval.VERSION, business_retrieval.VERSION, completion_retrieval.VERSION, quality_retrieval.VERSION, compact_retrieval.VERSION, *purpose_retrieval.SUPPORTED_VERSIONS, bounded_retrieval.VERSION, lane_retrieval.VERSION, RETRIEVAL_PROMPT_VERSION, working_retrieval.VERSION, scoped_retrieval.VERSION, indexed_retrieval.VERSION, question_retrieval.VERSION}:
                 raise ValueError("retrieval audit requires retrieval input")
@@ -480,7 +480,8 @@ class MySQLAIControlStore(OpinionMemoryPersistence, AIActivityPersistence, AITok
             full_trace = [*envelope["retrievalContext"].get("trace", []), step]
             validator(full_trace)
             if retrieval_version in {compact_retrieval.VERSION, quality_retrieval.VERSION, completion_retrieval.VERSION, business_retrieval.VERSION, company_retrieval.VERSION, efficient_retrieval.VERSION, question_gap_retrieval.VERSION, external_influence_retrieval.VERSION, price_investigation_retrieval.VERSION, market_explanation_retrieval.VERSION, opinion_retrieval.VERSION, reliable_retrieval.VERSION}:
-                (efficient_retrieval.context_view if retrieval_version in {efficient_retrieval.VERSION, question_gap_retrieval.VERSION, external_influence_retrieval.VERSION, price_investigation_retrieval.VERSION, market_explanation_retrieval.VERSION, opinion_retrieval.VERSION, reliable_retrieval.VERSION} else retrieval_view).paths(envelope["current"], {**envelope["retrievalContext"], "trace": full_trace})
+                (focused_retrieval.context_view if envelope["promptVersion"] == focused_retrieval.VERSION else
+                 efficient_retrieval.context_view if retrieval_version in {efficient_retrieval.VERSION, question_gap_retrieval.VERSION, external_influence_retrieval.VERSION, price_investigation_retrieval.VERSION, market_explanation_retrieval.VERSION, opinion_retrieval.VERSION, reliable_retrieval.VERSION} else retrieval_view).paths(envelope["current"], {**envelope["retrievalContext"], "trace": full_trace})
             connection.execute("INSERT IGNORE INTO ai_control_retrieval_rounds "
                 "(input_id,task_id,attempt,round_status,artifact_hash,artifact_gzip,created_at) VALUES (%s,%s,%s,%s,%s,%s,%s)",
                 (step["inputId"], job["taskId"], job["attempts"], step["status"], digest, gzip.compress(raw, mtime=0), stamp()))

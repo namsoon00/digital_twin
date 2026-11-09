@@ -147,6 +147,13 @@ class QuestionCollectionScopeTests(unittest.TestCase):
         self.assertIn('(200)', selected[0]['quote'], 'keep signs, whole rows and original units')
         policy = {'question': '현금흐름위험회피와 신용손상 판단 정책은?', 'queryTerms': []}
         self.assertEqual(hedge, select_question_passages([table, hedge], [policy], 2000)[0]['quote'])
+        debt_task = {"question": "연결 차입금의 유동·비유동 잔액과 미인출 신용약정을 구분한다.", "queryTerms": ["차입금"]}
+        debt_note = "Note 6. Borrowings\nUSD in thousands, consolidated\nCurrent borrowings | 0 | 0\nNon-current borrowings | 0 | 0\nUndrawn revolving credit facility | 500000 | 500000"
+        narrative = "The company discusses revenue, net income and borrowing capacity as background information. " * 2
+        selected = select_question_passages([narrative, debt_note], [debt_task], 1000)
+        self.assertEqual(debt_note, selected[0]['quote'])
+        self.assertIn('borrowings', question_terms([debt_task]))
+
 
     def test_explicit_original_periods_reach_new_source_work_and_preserve_checkpoint(self):
         from digital_twin.modules.ai_orchestration.application.research import execute_research

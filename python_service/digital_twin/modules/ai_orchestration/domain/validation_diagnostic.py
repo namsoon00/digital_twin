@@ -27,6 +27,26 @@ PLAN_REASONS = {
 # Only developer-authored messages are admitted; arbitrary exception text must
 # never become a diagnostic or a model correction instruction.
 COMPONENT_REASONS = {
+    "questionResolutions.answerParts": (
+        "question answer requires confirmed parts and gaps", "question answer parts exceed bounds",
+        "question answer requires bounded confirmed text", "confirmed answer requires its own usable selected evidence",
+        "question gap requires original requirement, cause and next action",
+        "question answer cannot drop or duplicate unmet requirements", "completed question requires a cited answer",
+        "answer parts belong only to research questions",
+    ),
+    "questionContinuations": (
+        "research chain requires at most one next question", "invalid research chain fields",
+        "next question requires its own current cited parent answer",
+        "research chain already continued or reached its depth limit", "research chain requires an explicit next insight",
+        "next question repeats a previous chain step", "next question repeats an existing question or completion contract",
+        "research assessment questions require answer lineage",
+    ),
+    "questionPurposes": (
+        "question purposes must be bounded", "invalid question purpose fields", "purpose must name one new research question",
+        "question requires decision relevance and uncertainty", "question purpose requires current usable evidence",
+        "question requires bounded evidence tasks", "evidence task requires target, period and completion criterion",
+        "duplicate evidence tasks", "every new research question requires its decision purpose",
+    ),
     "priceExplanation": (
         "price explanation requires an explicit investigated outcome",
         "price explanation requires the frozen dated price anchor",
@@ -93,6 +113,25 @@ def correction_issue(error):
     return None
 
 
+def validator_location(error):
+    """Identify our validator, never retain exception text or frame locals."""
+    fields = {"question_answer": "questionResolutions.answerParts", "question_resolution": "questionResolutions",
+        "question_purpose": "questionPurposes", "research_chain": "questionContinuations",
+        "brain_management": "caseReviews", "business_research": "businessResearch",
+        "judgment_impact": "questionResolutions.judgmentImpact", "knowledge_research": "knowledgeResearch",
+        "analyst_memory": "analystAssessment", "investment_meaning": "investmentMeaning",
+        "scoped_research": "researchScope", "question_source_handoff": "questionSourceHandoff"}
+    location = {}
+    trace = error.__traceback__
+    while trace:
+        module = trace.tb_frame.f_globals.get("__name__", "")
+        name = module.rsplit(".", 1)[-1]
+        if module.startswith("digital_twin.modules.ai_orchestration.domain.") and name in fields:
+            location = {"validator": name, "field": fields[name], "validatorLine": trace.tb_lineno}
+        trace = trace.tb_next
+    return location
+
+
 def task_failure(stage, error):
     execution = exception_diagnostic(error)
     if execution:
@@ -102,10 +141,12 @@ def task_failure(stage, error):
     if issue:
         return "validation:" + issue["reasonCode"], {"version": "ai-task-failure-v2", "stage": stage,
             "category": "validation", **issue, "rawErrorRetained": False}
-    code = "validation:" + known if known else type(error).__name__
+    location = validator_location(error)
+    code = "validation:" + known if known else "validation:validator-contract:" + location["validator"] if location else type(error).__name__
     return code, {"version": "ai-task-failure-v1", "stage": stage,
                   "category": "data" if known == "current-facts-unavailable" else "validation" if isinstance(error, ValueError) else "application",
-                  "reasonCode": known or "unclassified", "rawErrorRetained": False}
+                  "reasonCode": known or ("validator-contract" if location else "unclassified"),
+                  **location, "rawErrorRetained": False}
 
 
 def quality_diagnostics(result, errors, stage="local-validation"):

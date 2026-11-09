@@ -1,6 +1,7 @@
 """Web console boundary."""
 
 from concurrent.futures import ThreadPoolExecutor
+import logging
 from datetime import datetime
 from datetime import timezone
 from digital_twin.infrastructure import operational_store as stores
@@ -94,6 +95,15 @@ def _console_dashboard_source_payload(query: Dict[str, List[str]]) -> Dict[str, 
             try:
                 results[key] = future.result()
             except Exception as error:  # noqa: BLE001 - dashboard sections degrade independently.
+                trace = error.__traceback__
+                while trace and trace.tb_next:
+                    trace = trace.tb_next
+                code = error.args[0] if error.args and isinstance(error.args[0], int) else None
+                logging.getLogger(__name__).warning(
+                    "dashboard-section-unavailable section=%s exception=%s code=%s leaf=%s",
+                    key, type(error).__name__, code,
+                    trace.tb_frame.f_code.co_name if trace else "unknown",
+                )
                 results[key] = {"status": "unavailable", "error": str(error)[:240]}
     payload = console_read_model_service(settings).dashboard_summary(
         results.get("snapshot") or {},

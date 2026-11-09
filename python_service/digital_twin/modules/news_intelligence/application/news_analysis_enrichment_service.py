@@ -236,6 +236,36 @@ class NewsAnalysisEnrichmentRunner:
             and str(refreshed_article_summary_quality(item).get("state") or "") == "ready"
         )
 
+    def work_class_for(self, item: ResearchEvidence) -> str:
+        return "local" if self.deterministic_repair(item) else "model"
+
+    def exclude_terminal_failed_revisions(
+        self,
+        candidates: Iterable[ResearchEvidence],
+    ) -> tuple:
+        rows = list(candidates or [])
+        work_loader = getattr(self.evidence_store, "news_analysis_work_items", None)
+        if not rows or not callable(work_loader):
+            return rows, 0
+        try:
+            work_items = dict(work_loader([item.evidence_id for item in rows]) or {})
+        except Exception:  # noqa: BLE001 - queue diagnostics must not hide fresh evidence.
+            return rows, 0
+        actionable = []
+        terminal_count = 0
+        for item in rows:
+            work_class = self.work_class_for(item)
+            job = work_items.get(item.evidence_id) or {}
+            terminal_same_revision = bool(
+                str(job.get("workState") or "").lower() == "failed"
+                and str(job.get("subjectRevision") or "") == self.work_revision(item, work_class)
+            )
+            if terminal_same_revision:
+                terminal_count += 1
+                continue
+            actionable.append(item)
+        return actionable, terminal_count
+
     def candidates(self) -> List[ResearchEvidence]:
         rows = list(self.evidence_store.latest(kind="news", limit=self.scan_limit()) or [])
         ordered = sorted((item for item in rows if self.should_retry(item)), key=self.priority, reverse=True)
@@ -247,12 +277,15 @@ class NewsAnalysisEnrichmentRunner:
                 continue
             seen.add(story_key)
             selected.append(item)
+        actionable, terminal_count = self.exclude_terminal_failed_revisions(selected)
         self._last_candidate_scan = {
             "scannedCount": len(rows),
             "retryableCount": len(ordered),
             "deduplicatedCount": max(0, len(ordered) - len(selected)),
+            "terminalFailedCount": terminal_count,
+            "actionableCount": len(actionable),
         }
-        return selected
+        return actionable
 
     def durable_queue_enabled(self) -> bool:
         return all(callable(getattr(self.evidence_store, name, None)) for name in (
@@ -295,7 +328,7 @@ class NewsAnalysisEnrichmentRunner:
             return 0
         jobs = []
         for item in candidates or []:
-            work_class = "local" if self.deterministic_repair(item) else "model"
+            work_class = self.work_class_for(item)
             jobs.append({
                 "evidenceId": item.evidence_id,
                 "subjectRevision": self.work_revision(item, work_class),

@@ -221,6 +221,41 @@ class NewsCollectionQualityTests(unittest.TestCase):
         self.assertIn("analysis-status-fallback", failed[0]["error"])
         self.assertIn("응답하지 않았습니다", failed[0]["error"])
 
+    def test_terminal_failed_revision_is_not_pending_until_the_source_changes(self):
+        item = self.evidence({
+            "relationScope": "direct",
+            "articleReadStatus": "body",
+            "articleText": "Apple changed annual services guidance after subscription demand improved. " * 8,
+            "articleFacts": {"bodyAvailable": True, "bodyQualityPassed": True},
+            "aiAnalysis": {"status": "fallback"},
+        })
+        revision = NewsAnalysisEnrichmentRunner.work_revision(item, "model")
+
+        class EvidenceStore:
+            def latest(self, **_kwargs):
+                return [item]
+
+            def news_analysis_work_items(self, _evidence_ids):
+                return {item.evidence_id: {
+                    "evidenceId": item.evidence_id,
+                    "subjectRevision": revision,
+                    "workClass": "model",
+                    "workState": "failed",
+                }}
+
+        runner = NewsAnalysisEnrichmentRunner(EvidenceStore(), object(), {})
+        runner.item_is_fresh = lambda _item: True
+
+        self.assertEqual([], runner.candidates())
+        self.assertEqual(1, runner._last_candidate_scan["terminalFailedCount"])
+        self.assertEqual(0, runner._last_candidate_scan["actionableCount"])
+
+        item.raw_payload["articleText"] += " Apple then published a corrected outlook."
+
+        self.assertEqual([item.evidence_id], [row.evidence_id for row in runner.candidates()])
+        self.assertEqual(0, runner._last_candidate_scan["terminalFailedCount"])
+        self.assertEqual(1, runner._last_candidate_scan["actionableCount"])
+
     def test_recovered_disclosure_cannot_reenter_digest_from_legacy_event(self):
         enqueuer = NewsDigestEnqueuer(None, None, None)
         event = DomainEvent("research_evidence.collected", "NVDA", payload={"alertEligibleItems": [{

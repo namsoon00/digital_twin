@@ -1,5 +1,28 @@
 # Reasoning Input Latency
 
+## Verify the operational notification path before reporting completion
+
+A running worker, a pushed commit, or a healthy shadow deployment does not
+complete an operational cutover. Confirm the active and delivery control pointers,
+the persisted read-side graph binding, and the managed delivery worker all refer
+to the promoted release. Verify a new, non-validation source request completes
+native inference with aligned generations, the intended feature version, and
+delivery authorization. Stop the former comparison worker when it no longer owns
+an admitted candidate; leaving both versions running retains writer contention.
+
+Use the normal promotion gates and fresh paired evidence. Expired comparison
+records require new same-input comparisons; do not reset execution history or
+increase thresholds to make a release appear ready. Historical queue recovery
+warnings must remain visible even when the current queue has drained.
+
+When a customer reports missing alerts, inspect the last successful relation
+receipt, source ingestion, current delivery jobs, subject-case dispatch reasons,
+and notification outbox separately. A completed inference archived for unchanged
+meaning or an unqualified hypothesis is different from failed inference, an
+expired send premise, or an unavailable transport. An authorized execution with
+no newly eligible notice verifies the processing path, not customer delivery or
+the accuracy of a trading signal. Report those outcomes separately.
+
 ## Bound short input preparation before operational cutover (2026-11-03)
 
 Overnight candidate telemetry showed 127 successful executions and no shadow

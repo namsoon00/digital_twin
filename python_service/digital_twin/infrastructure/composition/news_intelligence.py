@@ -151,7 +151,7 @@ def build_news_analysis_enrichment_runner(settings=None, event_publisher=None) -
     from digital_twin.infrastructure import operational_store as stores
     from digital_twin.infrastructure.composition.events import news_event_bus
     from digital_twin.infrastructure.news_ai_analyzer import news_ai_analyzer_from_settings
-    from digital_twin.infrastructure.operational_storage_guard import operational_storage_inventory
+    from digital_twin.infrastructure.operational_storage_guard import operational_storage_health
     from digital_twin.infrastructure.settings import runtime_settings
     from digital_twin.modules.news_intelligence.public import (
         NewsAiAnalysisService,
@@ -167,7 +167,9 @@ def build_news_analysis_enrichment_runner(settings=None, event_publisher=None) -
         ),
         settings=configured_settings,
         event_publisher=event_publisher or news_event_bus(configured_settings),
-        storage_guard=lambda: operational_storage_inventory(configured_settings),
+        # Enrichment only needs the write-admission decision. Full component
+        # inventory walks TypeDB checkpoints and can delay fresh news by minutes.
+        storage_guard=lambda: operational_storage_health(configured_settings),
     )
 
 

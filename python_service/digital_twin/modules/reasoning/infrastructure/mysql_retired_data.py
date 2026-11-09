@@ -78,16 +78,19 @@ class MySQLRetiredReasoningDataStore(MySQLOperationalConnection):
     def _phases(self, ids):
         placeholders = ",".join(["%s"] * len(ids))
         owned = "subject.deployment_id IN (" + placeholders + ") AND " + self._disposable_subject()
-        phases = [(table, "EXISTS (SELECT 1 FROM investment_subject_decision_cases subject "
-                   "WHERE subject.subject_case_id=target.subject_case_id AND " + owned + ")") for table in self.CASE_CHILDREN]
-        phases.append(("investment_subject_decision_cases", "target.deployment_id IN (" + placeholders + ") AND " + self._disposable_subject("target")))
-        phases.append(("investment_reasoning_cases", "target.deployment_id IN (" + placeholders + ") AND NOT EXISTS "
-                       "(SELECT 1 FROM investment_subject_decision_cases subject WHERE subject.batch_case_id=target.case_id)"))
+        phases = []
         for table, column in self.OWNED_TABLES:
             condition = "target." + quote_identifier(column) + " IN (" + placeholders + ")"
             if table == "shared_instrument_inference_snapshots":
                 condition += " AND NOT EXISTS (SELECT 1 FROM shared_instrument_inference_heads h WHERE h.snapshot_id=target.snapshot_id)"
             phases.append((table, condition))
+        # Drain indexed execution data before scanning protected historical
+        # cases, so each large-table batch does not repeat that lineage scan.
+        phases.extend((table, "EXISTS (SELECT 1 FROM investment_subject_decision_cases subject "
+                      "WHERE subject.subject_case_id=target.subject_case_id AND " + owned + ")") for table in self.CASE_CHILDREN)
+        phases.append(("investment_subject_decision_cases", "target.deployment_id IN (" + placeholders + ") AND " + self._disposable_subject("target")))
+        phases.append(("investment_reasoning_cases", "target.deployment_id IN (" + placeholders + ") AND NOT EXISTS "
+                       "(SELECT 1 FROM investment_subject_decision_cases subject WHERE subject.batch_case_id=target.case_id)"))
         phases.append(("reasoning_engine_release_artifacts", "target.deployment_id IN (" + placeholders + ") "
                        "AND NOT EXISTS (SELECT 1 FROM investment_subject_decision_cases s WHERE s.deployment_id=target.deployment_id) "
                        "AND NOT EXISTS (SELECT 1 FROM reasoning_engine_comparisons c WHERE c.baseline_deployment_id=target.deployment_id)"))
@@ -114,8 +117,11 @@ class MySQLRetiredReasoningDataStore(MySQLOperationalConnection):
                 if not columns:
                     raise RuntimeError("A bounded primary key is required for retired cleanup: " + table)
                 selection = ",".join("target." + quote_identifier(col) for col in columns)
-                selected = connection.execute("SELECT " + selection + " FROM " + quoted + " target WHERE "
-                    + condition + " ORDER BY " + selection + " LIMIT %s FOR UPDATE", (*ids, limit)).fetchall()
+                try:
+                    selected = connection.execute("SELECT " + selection + " FROM " + quoted + " target WHERE "
+                        + condition + " ORDER BY " + selection + " LIMIT %s FOR UPDATE", (*ids, limit)).fetchall()
+                except Exception as error:
+                    raise RuntimeError("Retired cleanup selection failed for " + table + "; this batch was not deleted.") from error
                 if selected:
                     fields = "(" + ",".join(quote_identifier(c) for c in columns) + ")"
                     values = ",".join("(" + ",".join(["%s"] * len(columns)) + ")" for _ in selected)

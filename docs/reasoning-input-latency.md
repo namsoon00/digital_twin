@@ -27,6 +27,9 @@ archive copy. Current comparison proofs, published/AI memory case roots and
 cases linked to hypothesis-observation candidates or decision-outcome generations
 remain intact, alongside shared model outcomes, prices, portfolios and customer
 delivery history.
+The candidate-set lookup in hypothesis observations is indexed: otherwise the
+locking deletion preflight repeatedly scans observation history for each case.
+Selection failures name the table and roll back the bounded batch.
 Old release IDs remain as small ownership/audit records; artifacts still needed
 by retained canonical cases or current comparisons remain protected. Native
 database deletion rechecks all current/experimental bindings under the control

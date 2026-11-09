@@ -28,17 +28,18 @@ class CheckpointEvidenceReader:
 
 
 class ObservationCheckpointService:
-    def __init__(self, store, reader, binding_reader, subjects, enabled=lambda: True, clock=None):
+    def __init__(self, store, reader, binding_reader, subjects, enabled=lambda: True, clock=None, failure_diagnostic=None):
         self.store, self.reader, self.binding_reader = store, reader, binding_reader
         self.subjects, self.enabled = subjects, enabled
         self.clock = clock or (lambda: datetime.now(timezone.utc))
+        self.failure_diagnostic = failure_diagnostic or (lambda error: {})
 
     def run_once(self):
         if not self.enabled():
             return {"status": "paused"}
         subjects, binding = list(self.subjects()), self.binding_reader()
         self.store.seed(subjects, binding, self.clock())
-        job = self.store.claim()
+        job = self.store.claim(eligible_scopes=[scope(subject, binding) for subject in subjects])
         if not job:
             return {"status": "idle"}
         try:
@@ -60,5 +61,8 @@ class ObservationCheckpointService:
         except Exception as error:
             # Never expose vendor SQL, account identifiers or original content.
             reason = error.code if isinstance(error, (EvidenceContractError, EvidenceReadError)) else type(error).__name__
+            diagnostic = self.failure_diagnostic(error)
+            reason = diagnostic.get("reasonCode", reason)
             saved = self.store.fail(job, reason)
-            return {"status": "deferred" if saved else "lease-lost", "reason": reason}
+            return {"status": "deferred" if saved else "lease-lost", "reason": reason,
+                    **({"failure": diagnostic} if diagnostic else {})}

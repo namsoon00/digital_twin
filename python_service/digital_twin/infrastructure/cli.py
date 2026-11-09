@@ -29,6 +29,7 @@ from .mysql_operational_connection import (
     mysql_deadlock_retry_delay_milliseconds,
     mysql_is_connection_lost,
     mysql_is_deadlock,
+    mysql_failure_diagnostic,
     mysql_operation_timeout_seconds,
 )
 from .mysql_retention import (
@@ -465,11 +466,19 @@ def ai_evidence_command(args) -> int:
     stop = threading.Event()
     while True:
         result = {"status": "unavailable"}
+        stage = "service-construction"
         try:
-            result = managed_background_call(lambda: build_ai_evidence_service().run_once(), {"status": "resource-deferred"})
+            def execute_turn():
+                nonlocal stage
+                service = build_ai_evidence_service()
+                stage = "evidence-preparation"
+                return service.run_once()
+            result = managed_background_call(execute_turn, {"status": "resource-deferred"})
             print(json.dumps(result, ensure_ascii=False), flush=True)
         except Exception as error:
-            print(json.dumps({"status": "unavailable", "reason": type(error).__name__}), flush=True)
+            diagnostic = mysql_failure_diagnostic(error)
+            print(json.dumps({"status": "unavailable", "reason": type(error).__name__,
+                              "failure": {"stage": stage, **diagnostic}}), flush=True)
         if args.ai_evidence_action == "once" or managed_background_should_retire():
             return 0
         stop.wait(5 if result.get("status") == "prepared" else 15)
@@ -484,28 +493,51 @@ def ai_control_command(args) -> int:
         return 0
     stop = threading.Event()
     store = build_ai_control_runtime()
+    telemetry = []
+    def pulse(activity):
+        if telemetry:
+            return  # Do not repeatedly wait on unavailable telemetry this turn.
+        try:
+            store.record_runtime_pulse(activity=activity)
+        except Exception as error:
+            diagnostic = mysql_failure_diagnostic(error)
+            if not diagnostic.get("retryable"):
+                raise
+            telemetry.append({"stage": "runtime-heartbeat", "activity": activity, **diagnostic})
     while True:
+        telemetry = []
+        stage = "runtime-heartbeat"
         try:
             # Liveness is recorded even when memory/capacity defers the turn.
             # Reuse the ledger instead of running schema setup every minute.
-            store.record_runtime_pulse(activity="checking")
+            pulse("checking")
+            stage = "settings-read"
             configured = runtime_settings(fast_operational_read=True, require_store_read=True)
             store.runtime_settings = configured
+            stage = "worker-preflight"
             preflight = store.worker_preflight()
             def execute_turn():
-                store.record_runtime_pulse(activity="running")
-                return build_ai_control_service(configured, store=store).run_once()
+                nonlocal stage
+                pulse("running")
+                stage = "service-construction"
+                service = build_ai_control_service(configured, store=store)
+                stage = "scheduled-turn"
+                return service.run_once()
             result = preflight or managed_background_call(
                 execute_turn, {"status": "resource-deferred"},
             )
-            store.record_runtime_pulse(activity=result.get("status"))
+            pulse(result.get("status"))
+            if telemetry:
+                result = {**result, "telemetryFailures": telemetry}
             print(json.dumps(result, ensure_ascii=False), flush=True)
         except Exception as error:
             try:
-                store.record_runtime_pulse(activity="unavailable")
+                pulse("unavailable")
             except Exception:
                 pass  # An unavailable DB cannot prove liveness or success.
-            print(json.dumps({"status": "unavailable", "reason": type(error).__name__}), flush=True)
+            diagnostic = mysql_failure_diagnostic(error)
+            print(json.dumps({"status": "unavailable", "reason": type(error).__name__,
+                              "failure": {"stage": stage, **diagnostic}}), flush=True)
         if args.ai_control_action == "once" or managed_background_should_retire():
             return 0
         stop.wait(60)

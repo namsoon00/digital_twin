@@ -135,6 +135,18 @@ class CheckpointContractTests(unittest.TestCase):
         self.assertEqual("deferred", service.run_once()["status"])
         store.complete.assert_not_called()
         self.assertNotIn("private", repr(store.fail.call_args))
+        from pymysql.err import OperationalError
+        from digital_twin.infrastructure.mysql_operational_connection import mysql_failure_diagnostic
+        service.failure_diagnostic = mysql_failure_diagnostic
+        error = OperationalError(2013, 'private SQL')
+        error.orbit_mysql_statement = 'SELECT observation_evidence_checkpoints'
+        error.orbit_mysql_elapsed_ms = 30000
+        reader.capture_session.side_effect = error
+        result = service.run_once()
+        self.assertEqual('mysql-connection-lost', result['reason'])
+        self.assertEqual(2013, result['failure']['mysql']['code'])
+        self.assertNotIn('private', repr(result))
+        store.complete.assert_not_called()
         service.binding_reader = lambda: {**BINDING, "controlVersion": 2}
         reader.reset_mock()
         self.assertEqual("retired", service.run_once()["status"])
@@ -148,6 +160,7 @@ class CheckpointContractTests(unittest.TestCase):
         result = ObservationCheckpointService(store, reader, lambda: BINDING, lambda: [SUBJECT], clock=lambda: NOW).run_once()
         self.assertEqual("prepared", result["status"])
         artifact = store.complete.call_args.args[1]
+        store.claim.assert_called_once_with(eligible_scopes=[scope(SUBJECT, BINDING)])
         self.assertEqual(VERSION, artifact["version"])
         self.assertEqual(2, len(artifact["inventory"]))
 
@@ -206,6 +219,65 @@ class CheckpointStorageTests(unittest.TestCase):
         artifact["packet"]["capturedAt"] = now.isoformat().replace("+00:00", "Z")
         self.assertTrue(self.store.complete(job, artifact))
         return job, artifact
+
+    def test_current_checkpoint_scope_cannot_wait_behind_retired_deployment_leases(self):
+        now = datetime.now(timezone.utc)
+        retired_binding = {**BINDING, 'controlVersion': 0}
+        old_key = scope(SUBJECT, retired_binding)
+        self.store.request(old_key, SUBJECT, retired_binding, now - timedelta(hours=1))
+        old_job = self.store.claim(eligible_scopes=[old_key])
+        self.assertIsNotNone(old_job)
+        self.store.request(self.key, SUBJECT, BINDING, now)
+        self.assertIsNone(self.store.claim(eligible_scopes=[]))
+        with self.store.transaction() as connection:
+            connection.execute("UPDATE observation_evidence_checkpoints SET available_at='2000',lease_until='2000' WHERE scope_id=%s", (old_key,))
+        current = self.store.claim(eligible_scopes=[self.key])
+        self.assertEqual(self.key, current['scopeId'])
+        self.assertEqual(BINDING, current['binding'])
+        self.assertIsNone(self.store.claim(eligible_scopes=[self.key]))
+        with self.store.connect() as connection:
+            old = connection.execute('SELECT lease_token,status FROM observation_evidence_checkpoints WHERE scope_id=%s', (old_key,)).fetchone()
+        self.assertEqual(old_job['leaseToken'], old['lease_token'])
+        self.assertEqual('processing', old['status'])
+        # Recovery still reaches an expired lease in the exact active scope.
+        with self.store.transaction() as connection:
+            connection.execute("UPDATE observation_evidence_checkpoints SET available_at='2000',lease_until='2000' WHERE scope_id=%s", (self.key,))
+        recovered = self.store.claim(eligible_scopes=[self.key])
+        self.assertEqual(self.key, recovered['scopeId'])
+        self.assertNotEqual(current['leaseToken'], recovered['leaseToken'])
+        # No active scopes still permits bounded retention, never a live lease.
+        with self.store.transaction() as connection:
+            connection.execute("UPDATE observation_evidence_checkpoints SET updated_at=%s,lease_until='2099' WHERE scope_id=%s",
+                ((now - timedelta(days=8)).isoformat().replace('+00:00', 'Z'), old_key))
+        self.assertIsNone(self.store.claim(eligible_scopes=[]))
+        with self.store.connect() as connection:
+            self.assertIsNotNone(connection.execute('SELECT scope_id FROM observation_evidence_checkpoints WHERE scope_id=%s', (old_key,)).fetchone())
+        with self.store.transaction() as connection:
+            connection.execute("UPDATE observation_evidence_checkpoints SET lease_until='2000' WHERE scope_id=%s", (old_key,))
+        self.assertIsNone(self.store.claim(eligible_scopes=[]))
+        with self.store.connect() as connection:
+            self.assertIsNone(connection.execute('SELECT scope_id FROM observation_evidence_checkpoints WHERE scope_id=%s', (old_key,)).fetchone())
+        # Server-side cancellation must leave the socket usable and the exact
+        # active producer lease intact, rather than becoming an empty inventory.
+        from pymysql.err import OperationalError
+        with self.store.connect() as connection:
+            deadline = connection.execute('SELECT @@session.max_execution_time AS milliseconds').fetchone()['milliseconds']
+            self.assertGreater(deadline, 0)
+            try:
+                connection.execute('SET SESSION max_execution_time=10')
+                # Use iterator work: a short SLEEP can finish before the native
+                # timer granularity on macOS and does not prove cancellation.
+                query = ('WITH d AS (' + ' UNION ALL '.join('SELECT ' + str(n) + ' AS n' for n in range(10))
+                    + ') SELECT SUM(a.n+b.n+c.n+d.n+e.n+f.n) FROM d a '
+                    'JOIN d b ON TRUE JOIN d c ON TRUE JOIN d d ON TRUE JOIN d e ON TRUE JOIN d f ON TRUE')
+                with self.assertRaises(OperationalError) as raised:
+                    connection.execute(query)
+                self.assertEqual(3024, raised.exception.args[0])
+                connection.execute('SET SESSION max_execution_time=%s', (deadline,))
+                row = connection.execute('SELECT lease_token FROM observation_evidence_checkpoints WHERE scope_id=%s', (self.key,)).fetchone()
+                self.assertEqual(recovered['leaseToken'], row['lease_token'])
+            finally:
+                connection.execute('SET SESSION max_execution_time=%s', (deadline,))
 
     def test_integrity_and_failed_refresh_preserve_original_artifact(self):
         job, artifact = self.prepare()

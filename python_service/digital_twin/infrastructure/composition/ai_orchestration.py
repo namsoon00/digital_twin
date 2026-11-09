@@ -69,8 +69,10 @@ def build_ai_evidence_service(settings=None):
             macro = typedb_repository_from_settings({**configured, "typedbDatabase": binding["sharedGraphStoreBinding"]})
             source = WorldRoutedObservationEvidenceSource(source, TypeDBObservationEvidenceSource(macro), job["marketWorldId"])
         return ObservationEvidenceReader(source, macro_world_id=job.get("marketWorldId", ""))
+    from digital_twin.infrastructure.mysql_operational_connection import mysql_failure_diagnostic
     return ObservationCheckpointService(store, DeploymentObservationEvidenceReader(binding_reader, factory),
-        binding_reader, lambda: ai_control_subjects(configured), enabled=lambda: enabled(configured))
+        binding_reader, lambda: ai_control_subjects(configured), enabled=lambda: enabled(configured),
+        failure_diagnostic=mysql_failure_diagnostic)
 
 
 def build_ai_control_runtime(settings=None):
@@ -216,7 +218,9 @@ def build_ai_control_service(settings=None, *, store=None):
     report_runs = MySQLPortfolioAnalysisStore(configured, initialize=True)
     store.portfolio_report_writer, store.portfolio_report_failure = report_runs.complete, report_runs.failed
     report_worker = PortfolioAnalysisWorker(report_runs, store, evidence, subjects, planner, reports.publisher, reports.accounts)
+    from digital_twin.infrastructure.mysql_operational_connection import mysql_failure_diagnostic
     return AIControlService(store, subjects, evidence, planner, researcher, research_memory, configured,
+                            failure_diagnostic=mysql_failure_diagnostic,
                             portfolio_reports=report_worker,
                             delivery_memory=publication.memory,
                             delivery_context=DeliveredInsightContextReader(publication.notifications).read,

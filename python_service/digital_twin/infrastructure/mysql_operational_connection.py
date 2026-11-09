@@ -83,6 +83,25 @@ def mysql_is_connection_lost(error: Exception) -> bool:
     return mysql_error_code(error) in MYSQL_CONNECTION_LOST_ERROR_CODES
 
 
+def mysql_failure_diagnostic(error: Exception) -> Dict[str, object]:
+    """Bounded operational context; never SQL, parameters or exception text."""
+    if not (type(error).__module__.startswith("pymysql.")
+            or getattr(error, "orbit_mysql_statement", None)):
+        return {}
+    code = mysql_error_code(error)
+    reasons = {1205: "mysql-lock-wait", 1213: "mysql-deadlock", 2006: "mysql-connection-lost",
+               2013: "mysql-connection-lost", 2055: "mysql-connection-lost", 3024: "mysql-read-deadline"}
+    details = {"code": code}
+    label = str(getattr(error, "orbit_mysql_statement", "") or "")
+    if re.fullmatch(r"(?:SELECT|INSERT|REPLACE|UPDATE|DELETE)(?: [A-Za-z0-9_]+)?(?: \[[a-z][a-z0-9-]{0,63}\])?|mysql statement", label):
+        details["statement"] = label
+    elapsed = getattr(error, "orbit_mysql_elapsed_ms", None)
+    if isinstance(elapsed, (int, float)) and not isinstance(elapsed, bool) and 0 <= elapsed <= 86400000:
+        details["elapsedMs"] = int(elapsed)
+    return {"category": "storage", "reasonCode": reasons.get(code, "mysql-operation-failed"),
+            "retryable": code in reasons, "mysql": details, "rawErrorRetained": False}
+
+
 def mysql_statement_label(sql: object) -> str:
     """Return only a safe verb/table label for timeout diagnostics."""
 
@@ -332,6 +351,10 @@ class MySQLOperationalConnection:
             "connect_timeout": timeout_seconds,
             "read_timeout": timeout_seconds,
             "write_timeout": timeout_seconds,
+            # Socket timeout alone leaves abandoned SELECTs executing on the
+            # server. Bound read-only work before the client gives up; writes,
+            # commits and schema operations keep their existing semantics.
+            "init_command": "SET SESSION max_execution_time=" + str(max(100, timeout_seconds * 1000 - 500)),
         }
         if self.mysql_config.get("unix_socket"):
             kwargs["unix_socket"] = self.mysql_config["unix_socket"]

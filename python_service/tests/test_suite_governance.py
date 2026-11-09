@@ -507,7 +507,11 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # registered storage-observation and operational-read latency contracts.
         # Three shared-world retirement/manifest-admission contracts, plus
         # concurrently registered storage, read and worker-lifecycle coverage.
-        self.assertLessEqual(total, 3066)
+        # Calendar source-cache isolation and transient wake failure isolation
+        # retain their own boundaries; required evidence still fails closed.
+        # Active checkpoint claims cannot be starved by a retired deployment.
+        # Four concurrently registered storage/watchdog and index-preservation contracts.
+        self.assertLessEqual(total, 3073)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

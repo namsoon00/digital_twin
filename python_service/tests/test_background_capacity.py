@@ -37,6 +37,25 @@ class BackgroundCapacityTests(unittest.TestCase):
             self.assertEqual(0, ai_control_command(SimpleNamespace(ai_control_action='once')))
         build.assert_not_called()
         self.assertEqual(['checking', 'resource-deferred'], [call.kwargs['activity'] for call in store.record_runtime_pulse.call_args_list])
+        # A transient heartbeat write cannot discard a successful owned turn.
+        from pymysql.err import OperationalError
+        store = Mock()
+        store.worker_preflight.return_value = None
+        store.record_runtime_pulse.side_effect = OperationalError(2013, 'private SQL')
+        service = Mock()
+        service.run_once.return_value = {'status': 'completed'}
+        with patch('digital_twin.infrastructure.service_factory.build_ai_control_runtime', return_value=store), \
+                patch('digital_twin.infrastructure.service_factory.build_ai_control_service', return_value=service), \
+                patch('digital_twin.infrastructure.cli.runtime_settings', return_value={}), \
+                patch.object(api, 'managed_background_call', side_effect=lambda call, fallback: call()), patch('builtins.print') as output:
+            self.assertEqual(0, ai_control_command(SimpleNamespace(ai_control_action='once')))
+        import json
+        result = json.loads(output.call_args.args[0])
+        self.assertEqual('completed', result['status'])
+        self.assertEqual(2013, result['telemetryFailures'][0]['mysql']['code'])
+        self.assertNotIn('private', repr(result))
+        service.run_once.assert_called_once()
+        store.record_runtime_pulse.assert_called_once()
 
     def test_pressure_defers_before_claim_and_resumes_after_stable_recovery(self):
         with tempfile.TemporaryDirectory() as directory:

@@ -22,7 +22,7 @@ from digital_twin.modules.ai_orchestration.domain.validation_diagnostic import t
 
 
 class AIControlService:
-    def __init__(self, store, subjects, evidence, planner, researcher, research_memory, settings=None, delivery_memory=None, reviewer=None, development_memory=None, brain_memory=None, brain_waker=None, read_planner=None, evidence_waker=None, read_round_budget=None, company_memory=None, research_plan_memory=None, research_gate=None, knowledge_context=None, knowledge_refresh=None, rulebox_feedback=None, market_brain_memory=None, source_refresher=None, delivery_context=None, portfolio_reports=None):
+    def __init__(self, store, subjects, evidence, planner, researcher, research_memory, settings=None, delivery_memory=None, reviewer=None, development_memory=None, brain_memory=None, brain_waker=None, read_planner=None, evidence_waker=None, read_round_budget=None, company_memory=None, research_plan_memory=None, research_gate=None, knowledge_context=None, knowledge_refresh=None, rulebox_feedback=None, market_brain_memory=None, source_refresher=None, delivery_context=None, portfolio_reports=None, failure_diagnostic=None):
         self.store, self.subjects, self.evidence = store, subjects, evidence
         self.planner, self.researcher, self.research_memory = planner, researcher, research_memory
         self.settings = dict(settings or {})
@@ -44,16 +44,38 @@ class AIControlService:
         self.knowledge_refresh = knowledge_refresh or (lambda context, packet: context)
         self.rulebox_feedback = rulebox_feedback or (lambda packet: [])
         self.source_refresher = source_refresher or (lambda job, packet: {})
+        self.failure_diagnostic = failure_diagnostic or (lambda error: {})
 
     def run_once(self):
-        self.store.record_runtime_pulse()
+        preparation = []
+        try:
+            self.store.record_runtime_pulse()
+        except Exception as error:
+            diagnostic = self.failure_diagnostic(error)
+            if not diagnostic.get("retryable"):
+                raise
+            preparation.append({"stage": "runtime-heartbeat", **diagnostic})
         if not enabled(self.settings):
-            return {"status": "paused"}
+            return {"status": "paused", **({"preparationFailures": preparation} if preparation else {})}
         subjects = list(self.subjects())
         for subject in subjects:
             self.store.seed(subject)
-        self.brain_waker(subjects)
-        self.evidence_waker(subjects)
+        for stage, refresh in (("brain-wake", self.brain_waker), ("evidence-wake", self.evidence_waker)):
+            try:
+                refresh(subjects)
+            except Exception as error:
+                diagnostic = self.failure_diagnostic(error)
+                if not diagnostic.get("retryable"):
+                    raise
+                # Refresh transactions retry on a later turn. Existing leased
+                # work still has to pass all mandatory evidence/memory reads.
+                preparation.append({"stage": stage, **diagnostic})
+        result = self.run_scheduled(subjects)
+        if preparation:
+            result["preparationFailures"] = preparation
+        return result
+
+    def run_scheduled(self, subjects):
         try:
             job = self.store.claim(subjects=subjects)
         except (AIControlBudgetWait, AIExecutionDeferred) as wait:
@@ -501,6 +523,7 @@ class AIControlService:
         except Exception as error:
             # Persist a safe category, never raw provider/credential-bearing errors.
             reason, diagnostic = task_failure(stage, error)
+            diagnostic.update(self.failure_diagnostic(error))
             if isinstance(error, EvidenceContractError) and getattr(error, "required_baseline_budget", False):
                 state = disposition(packet, retry_identity, "retrieval-blocked",
                     ["필수 근거와 기억을 보존한 입력이 용량 한도를 넘어 조회를 시작하지 않았습니다."])

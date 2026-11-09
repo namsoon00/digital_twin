@@ -78,20 +78,31 @@ class MySQLObservationCheckpointStore(MySQLOperationalConnection):
             raise EvidenceContractError("checkpoint integrity failure") from error
         return artifact, state
 
-    def claim(self):
+    def claim(self, eligible_scopes=None):
         now, token = datetime.now(timezone.utc), uuid.uuid4().hex
+        keys = tuple(sorted(set(eligible_scopes))) if eligible_scopes is not None else None
+        scope_sql = " AND scope_id IN (" + ",".join(["%s"] * len(keys)) + ")" if keys else ""
+        hint = " FORCE INDEX(PRIMARY)" if keys else ""
+        params = (stamp(now), *(keys or ()))
         with self.transaction() as connection:
             # Idle routes/deployments cannot retain account evidence forever.
             connection.execute("DELETE FROM observation_evidence_checkpoints WHERE status IN ('ready','pending') "
                 "AND updated_at<%s ORDER BY updated_at LIMIT 10", (stamp(now - timedelta(days=7)),))
+            # Once dispatch ignores retired routes, expired leases on those
+            # routes also need bounded cleanup. Live producer leases survive.
+            connection.execute("DELETE FROM observation_evidence_checkpoints WHERE status='processing' "
+                "AND available_at<%s AND lease_until<%s AND updated_at<%s ORDER BY available_at LIMIT 10",
+                (stamp(now), stamp(now), stamp(now - timedelta(days=7))))
+            if keys == ():
+                return None
             # Separate indexed scans avoid an OR scan across completed artifacts.
-            row = connection.execute("SELECT scope_id,request_json,binding_json,available_at FROM observation_evidence_checkpoints "
-                "WHERE status='processing' AND available_at<=%s ORDER BY available_at,scope_id LIMIT 1 FOR UPDATE SKIP LOCKED",
-                (stamp(now),)).fetchone()
+            row = connection.execute("SELECT scope_id,request_json,binding_json,available_at FROM observation_evidence_checkpoints"
+                + hint + " WHERE status='processing' AND available_at<=%s" + scope_sql
+                + " ORDER BY available_at,scope_id LIMIT 1 FOR UPDATE SKIP LOCKED", params).fetchone()
             if not row:
-                row = connection.execute("SELECT scope_id,request_json,binding_json,available_at FROM observation_evidence_checkpoints "
-                    "WHERE status='pending' AND available_at<=%s ORDER BY available_at,scope_id LIMIT 1 FOR UPDATE SKIP LOCKED",
-                    (stamp(now),)).fetchone()
+                row = connection.execute("SELECT scope_id,request_json,binding_json,available_at FROM observation_evidence_checkpoints"
+                    + hint + " WHERE status='pending' AND available_at<=%s" + scope_sql
+                    + " ORDER BY available_at,scope_id LIMIT 1 FOR UPDATE SKIP LOCKED", params).fetchone()
             if not row:
                 return None
             until = stamp(now + timedelta(minutes=5))

@@ -25,6 +25,51 @@ PLAN = {"summary": "이전 관찰과 비교할 첫 근거입니다.", "hypothesi
 
 
 class AIControlTests(unittest.TestCase):
+    def test_transient_wake_failure_keeps_owned_work_and_required_evidence_gate(self):
+        from pymysql.err import OperationalError
+        from digital_twin.infrastructure.mysql_operational_connection import mysql_failure_diagnostic
+        error = OperationalError(2013, "private SQL and credentials")
+        error.orbit_mysql_statement = 'SELECT domain_events'
+        error.orbit_mysql_elapsed_ms = 30000
+        for hook in ('brain_waker', 'evidence_waker'):
+            service, store, model = self.runner(failure_diagnostic=mysql_failure_diagnostic,
+                                              **{hook: Mock(side_effect=error)})
+            result = service.run_once()
+            self.assertEqual('completed', result['status'])
+            self.assertEqual('mysql-connection-lost', result['preparationFailures'][0]['reasonCode'])
+            self.assertEqual(2013, result['preparationFailures'][0]['mysql']['code'])
+            self.assertNotIn('private', repr(result))
+            store.claim.assert_called_once()
+            model.assert_called_once()
+        service, store, model = self.runner(failure_diagnostic=mysql_failure_diagnostic)
+        store.record_runtime_pulse.side_effect = error
+        result = service.run_once()
+        self.assertEqual('completed', result['status'])
+        self.assertEqual('runtime-heartbeat', result['preparationFailures'][0]['stage'])
+        model.assert_called_once()
+        # Optional wake failure does not authorize inventing required facts.
+        service, store, model = self.runner(failure_diagnostic=mysql_failure_diagnostic,
+            brain_waker=Mock(side_effect=error), evidence=Mock(side_effect=error))
+        self.assertEqual('deferred', service.run_once()['status'])
+        model.assert_not_called()
+        store.complete.assert_not_called()
+        failure = store.fail.call_args.kwargs['result']['failure']
+        self.assertEqual('evidence-capture', failure['stage'])
+        self.assertEqual('storage', failure['category'])
+        self.assertNotIn('private', repr(failure))
+        # Programming/schema failures must remain visible and stop admission.
+        for error in (ValueError('private bug'), OperationalError(1054, 'private column')):
+            service, store, model = self.runner(failure_diagnostic=mysql_failure_diagnostic,
+                                               brain_waker=Mock(side_effect=error))
+            with self.assertRaises(type(error)):
+                service.run_once()
+            store.claim.assert_not_called()
+            model.assert_not_called()
+        error = OperationalError(2013, 'private SQL')
+        error.orbit_mysql_statement = "SELECT t WHERE secret='private'"
+        error.orbit_mysql_elapsed_ms = float('nan')
+        self.assertEqual({'code': 2013}, mysql_failure_diagnostic(error)['mysql'])
+
     def test_provider_wait_stops_before_evidence_memory_and_model_input_preparation(self):
         from digital_twin.modules.ai_orchestration.domain.execution_resilience import AIExecutionDeferred
         service, store, planner = self.runner()

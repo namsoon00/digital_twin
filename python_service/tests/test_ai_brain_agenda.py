@@ -114,11 +114,11 @@ class BrainManagementContractTests(unittest.TestCase):
 @unittest.skipUnless(os.environ.get("MYSQL_DATABASE") == "orbit_alpha_test", "isolated MySQL required")
 class BrainAgendaStorageTests(unittest.TestCase):
     def setUp(self):
-        from digital_twin.infrastructure.settings import runtime_settings
         from mysql_fixtures import mysql_test_settings
         from digital_twin.modules.ai_orchestration.infrastructure.mysql_control import MySQLAIControlStore
         from digital_twin.modules.ai_orchestration.infrastructure.mysql_brain_agenda import MySQLBrainAgendaStore
-        settings = {**runtime_settings(), **mysql_test_settings(), "aiControlBudgetEnabled": "false", "aiTokenBudgetEnabled": "false"}
+        settings = {**mysql_test_settings(), "mysqlOperationTimeoutSeconds": 120, "aiControlEnabled": "true",
+                    "aiControlBudgetEnabled": "false", "aiTokenBudgetEnabled": "false"}
         self.control, self.brain = MySQLAIControlStore(settings), MySQLBrainAgendaStore(settings)
         self.control.agenda_writer, self.control.agenda_failure = self.brain.record, self.brain.failed
         self.subject = {key: packet()[key] for key in ("accountId", "symbol", "worldId", "name")}

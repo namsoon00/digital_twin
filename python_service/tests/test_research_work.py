@@ -34,6 +34,35 @@ def answer(task_id, status="answered"):
 
 
 class ResearchWorkTests(unittest.TestCase):
+    def test_unchanged_empty_plan_completes_without_a_model_input_or_authored_work(self):
+        from test_ai_control import AIControlTests
+        from digital_twin.modules.ai_orchestration.infrastructure.mysql_research_work import record_plan
+        service, store, planner = AIControlTests().runner(research_plan_memory=lambda *_: [])
+        store.claim.return_value.update(capability='research-plan', researchGaps=['원래 질문의 추가 원문이 필요한지 확인합니다.'])
+        store.last_processing_outcome.return_value = {}
+        planner.return_value = {'reviews': [], 'questions': []}
+        self.assertEqual('completed', service.run_once()['status'])
+        first = deepcopy(store.complete.call_args.args[1])
+        store.last_processing_outcome.return_value = first['processingOutcome']
+        planner.reset_mock(); store.save_execution_input.reset_mock()
+        connection = Mock()
+        store.complete.side_effect = lambda job, result, children: bool(record_plan(Mock(), connection, job, result, children))
+        with patch.object(type(store), 'last_processing_outcome', return_value=first['processingOutcome'], create=True):
+            self.assertEqual('completed', service.run_once()['status'])
+        result = store.complete.call_args.args[1]
+        self.assertEqual('research-plan-unchanged', result['status'])
+        self.assertFalse(result['processingOutcome']['modelCalled'])
+        planner.assert_not_called(); store.save_execution_input.assert_not_called()
+        connection.execute.assert_not_called()
+        before = deepcopy(result)
+        for extra in ({'researchPlan': {}}, {'executionInputId': 'forged'}, {'summary': 'unauthorized work'},
+                      {'processingOutcome': {**result['processingOutcome'], 'modelCalled': True}},
+                      {'processingOutcome': {**result['processingOutcome'], 'emptyPlanKey': 'invalid'}}):
+            with self.subTest(extra=list(extra)), self.assertRaises(ValueError):
+                record_plan(Mock(), connection, {}, {**result, **extra}, [])
+        with self.assertRaises(ValueError): record_plan(Mock(), connection, {}, result, [{'taskId': 'extra'}])
+        self.assertEqual(before, result)
+
     def test_source_completion_is_independent_and_requires_original_receipt(self):
         result = {"runId": "run", "documentaryAnswer": answer("task")}
         resolution = work.answer_resolution(result, "task")
@@ -237,6 +266,30 @@ class ResearchWorkTests(unittest.TestCase):
 
 @unittest.skipUnless(os.environ.get("MYSQL_DATABASE") == "orbit_alpha_test", "isolated MySQL required")
 class ResearchWorkStorageTests(unittest.TestCase):
+    def test_unchanged_plan_commits_without_new_calls_cases_or_notifications(self):
+        from test_ai_brain_agenda import BrainAgendaStorageTests
+        fixture = BrainAgendaStorageTests()
+        fixture.setUp()
+        try:
+            with fixture.control.transaction() as c:
+                fixture.control.insert(c, {**fixture.subject, 'taskId': 'unchanged-research-plan', 'capability': 'research-plan'})
+            task = fixture.control.claim()
+            result = {'status': 'research-plan-unchanged', 'processingOutcome': {
+                'emptyPlanKey': identity('empty-plan'), 'modelCalled': False, 'reasonCode': 'no-actionable-research-work'}}
+            fixture.control.outbox_writer = Mock(side_effect=AssertionError('a skipped plan cannot notify'))
+            self.assertFalse(fixture.control.complete({**task, 'leaseToken': 'foreign'}, result, []))
+            self.assertTrue(fixture.control.complete(task, result, []))
+            self.assertFalse(fixture.control.complete(task, result, []))
+            self.assertEqual('unchanged', result['brain']['status'])
+            fixture.control.outbox_writer.assert_not_called()
+            with fixture.control.connect() as c:
+                saved = c.execute('SELECT status,result_json FROM ai_control_tasks WHERE task_id=%s', (task['taskId'],)).fetchone()
+                self.assertEqual('completed', saved['status'])
+                for table in ('ai_control_calls', 'ai_control_inputs', 'ai_brain_cases'):
+                    self.assertEqual(0, c.execute('SELECT COUNT(*) AS n FROM '+table).fetchone()['n'])
+        finally:
+            fixture.tearDown()
+
     def test_timer_checks_do_not_replan_but_new_cached_content_reopens_once(self):
         from question_recovery_checks import check_recovery_transaction
         check_recovery_transaction(self)

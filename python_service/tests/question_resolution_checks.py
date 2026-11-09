@@ -59,8 +59,7 @@ def assert_question_loop(t):
     from digital_twin.modules.news_intelligence.infrastructure.mysql_observation_development import MySQLObservationDevelopmentStore
     from digital_twin.modules.ai_orchestration.infrastructure.mysql_question_resolution import refresh_development
     from digital_twin.modules.model_registry.application.hypothesis_proposal_service import HypothesisProposalService
-    from digital_twin.infrastructure.settings import runtime_settings
-    source = MySQLObservationDevelopmentStore(runtime_settings())
+    source = MySQLObservationDevelopmentStore(t.control.runtime_settings)
     from digital_twin.modules.model_registry.domain.hypothesis_development import HypothesisDevelopmentCase
     candidate = HypothesisDevelopmentCase(case_id="candidate-case", fingerprint="candidate-fingerprint",
         account_id=t.subject["accountId"], symbol="TEST", title="검증할 가설", claim="관측한 충돌이 반복될 수 있습니다.",
@@ -124,7 +123,7 @@ def assert_question_loop(t):
         t.assertTrue(retried["reusedProposals"])
         t.assertEqual(1, len(persisted))
         from digital_twin.modules.news_intelligence.infrastructure.mysql_investment_research import MySQLInvestmentResearchStore
-        queue = MySQLInvestmentResearchStore(runtime_settings())
+        queue = MySQLInvestmentResearchStore(t.control.runtime_settings)
         with t.control.transaction() as c:
             c.execute("UPDATE investment_hypothesis_proposal_requests SET created_at='2000-01-01T00:00:00Z' WHERE request_id=%s", (record["requestId"],))
         first = queue.claim_hypothesis_proposal_requests("worker-one")[0]

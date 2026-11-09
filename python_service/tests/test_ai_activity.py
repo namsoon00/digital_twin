@@ -65,6 +65,63 @@ class AIActivityContractTests(unittest.TestCase):
 
 @unittest.skipUnless(os.environ.get("MYSQL_DATABASE") == "orbit_alpha_test", "isolated MySQL required")
 class AIActivityStorageTests(unittest.TestCase):
+    def test_lost_admission_replies_execute_the_model_body_and_reserve_budget_once(self):
+        from test_ai_control import PACKET
+        from digital_twin.modules.ai_orchestration.domain.execution_input import freeze_execution_input
+        from digital_twin.modules.ai_orchestration.infrastructure.execution import ai_execution, CURRENT_TASK, CURRENT_INPUT, current_execution_metrics
+        from digital_twin.infrastructure.mysql_operational_connection import MySQLConnectionProxy
+        from pymysql.err import OperationalError
+        job = self.claim()
+        envelope = freeze_execution_input({**PACKET, 'taskId': job['taskId']}, [], [])
+        key = self.store.save_execution_input(job, envelope)
+        original, commits, invoke = MySQLConnectionProxy.commit, [], Mock()
+        def lost_reply(connection):
+            original(connection); commits.append(True)
+            error = OperationalError(2013, 'synthetic lost commit reply'); error.orbit_mysql_statement = 'COMMIT'
+            raise error
+        task_token, input_token = CURRENT_TASK.set(job['taskId']), CURRENT_INPUT.set(key)
+        try:
+            with patch.object(MySQLConnectionProxy, 'commit', lost_reply):
+                with ai_execution('independent-observation', envelope['prompt'], store=self.store) as call_id:
+                    invoke()
+                    current_execution_metrics().update(usage={'input_tokens': 100, 'output_tokens': 20})
+        finally:
+            CURRENT_TASK.reset(task_token); CURRENT_INPUT.reset(input_token)
+        invoke.assert_called_once()
+        self.assertEqual(4, len(commits))  # Admission, reservation, settlement and provider success.
+        with self.store.connect() as c:
+            row = c.execute('SELECT status,started_at FROM ai_control_calls WHERE call_id=%s', (call_id,)).fetchone()
+            budget = c.execute('SELECT used_count FROM ai_control_budget WHERE day_key=%s', ('calls:'+row['started_at'][:10],)).fetchone()
+            self.assertEqual(1, c.execute('SELECT COUNT(*) AS n FROM ai_control_calls').fetchone()['n'])
+        self.assertEqual('completed', row['status']); self.assertEqual(1, budget['used_count'])
+        self.assertEqual(1, sum(e['stage']=='model-started' for e in self.events()))
+        self.assertEqual(1, sum(e['stage']=='model-completed' for e in self.events()))
+
+    def test_committed_call_cannot_start_after_lease_expiry_during_readback(self):
+        from test_ai_control import PACKET
+        from digital_twin.modules.ai_orchestration.domain.execution_input import freeze_execution_input
+        from digital_twin.modules.ai_orchestration.infrastructure.execution import ai_execution, CURRENT_TASK, CURRENT_INPUT
+        from digital_twin.infrastructure.mysql_operational_connection import MySQLConnectionProxy
+        from pymysql.err import OperationalError
+        job = self.claim(); envelope = freeze_execution_input({**PACKET, 'taskId': job['taskId']}, [], [])
+        key = self.store.save_execution_input(job, envelope)
+        original, commits, invoke = MySQLConnectionProxy.commit, [], Mock()
+        error = OperationalError(2013, 'synthetic lost commit reply'); error.orbit_mysql_statement = 'COMMIT'
+        def expire_after_admission(connection):
+            original(connection); commits.append(True)
+            if len(commits)==2:
+                with self.store.connect() as c:
+                    c.execute("UPDATE ai_control_tasks SET lease_until='2000' WHERE task_id=%s", (job['taskId'],))
+                raise error
+        task_token, input_token = CURRENT_TASK.set(job['taskId']), CURRENT_INPUT.set(key)
+        try:
+            with patch.object(MySQLConnectionProxy, 'commit', expire_after_admission), self.assertRaises(OperationalError) as caught:
+                with ai_execution('independent-observation', envelope['prompt'], store=self.store): invoke()
+        finally:
+            CURRENT_TASK.reset(task_token); CURRENT_INPUT.reset(input_token)
+        invoke.assert_not_called(); self.assertIs(error, caught.exception)
+        self.assertEqual('not-confirmed', error.orbit_mysql_commit_verification)
+
     def setUp(self):
         from mysql_fixtures import mysql_test_settings
         from digital_twin.modules.ai_orchestration.infrastructure.mysql_control import MySQLAIControlStore

@@ -31,7 +31,7 @@ from .mysql_token_usage import AITokenUsagePersistence
 from ..domain.token_budget import usage_counts, RESERVATION, execution_pool
 from .mysql_activity import AIActivityPersistence, SCHEMA as ACTIVITY_SCHEMA
 from .mysql_opinion_memory import OpinionMemoryPersistence, SCHEMA as OPINION_SCHEMA, APPROVED_RESULT_SQL
-from .mysql_commit_confirmation import confirm_artifact_commit, confirmed_transaction, call_completion_confirmed
+from .mysql_commit_confirmation import confirm_artifact_commit, confirmed_transaction, call_completion_confirmed, call_admission_confirmed
 from .mysql_read_continuation import ReadContinuationPersistence
 
 
@@ -504,7 +504,8 @@ class MySQLAIControlStore(ReadContinuationPersistence, OpinionMemoryPersistence,
         call_id = uuid.uuid4().hex
         now = stamp()
         workload = workload[:64]
-        with self.transaction() as connection:
+        confirmation = {}
+        with confirmed_transaction(self, lambda c: call_admission_confirmed(c, call_id, confirmation)) as connection:
             prompt_version = ""
             if workload == "independent-observation":
                 frozen = connection.execute("SELECT i.task_id,i.prompt_hash,i.artifact_gzip FROM ai_control_inputs i "
@@ -525,13 +526,16 @@ class MySQLAIControlStore(ReadContinuationPersistence, OpinionMemoryPersistence,
             pool = execution_pool(workload, prompt_version)
             self.reserve_tokens(connection, workload, now, pool)
             connection.execute("INSERT INTO ai_control_calls (call_id,workload,status,task_id,prompt_hash,started_at) VALUES (%s,%s,'running',%s,%s,%s)", (call_id, workload, task_id[:64], prompt_hash, now))
+            metrics = {"tokenReservation": RESERVATION, "tokenPool": pool, "promptVersion": prompt_version}
             connection.execute("INSERT INTO ai_control_call_metrics (call_id,metrics_json) VALUES (%s,%s)",
-                               (call_id, json.dumps({"tokenReservation": RESERVATION, "tokenPool": pool,
-                                                    "promptVersion": prompt_version})))
+                               (call_id, json.dumps(metrics)))
             if input_id:
                 connection.execute("INSERT INTO ai_control_input_calls (call_id,input_id) VALUES (%s,%s)", (call_id, input_id))
-            self.activity(connection, "model-started", call_id, self.activity_subject(connection, task_id),
+            event = self.activity(connection, "model-started", call_id, self.activity_subject(connection, task_id),
                           callId=call_id, workload=workload, promptVersion=prompt_version)
+            confirmation.update(call={"workload": workload, "status": "running", "task_id": task_id[:64],
+                                      "prompt_hash": prompt_hash, "started_at": now}, metrics=metrics,
+                                inputId=input_id, activityId=event["eventId"] if event else "")
         return call_id
 
     def retrieval_round_budget(self):

@@ -2,6 +2,7 @@
 from copy import deepcopy
 import hashlib
 import json
+import re
 
 from .planning import identity
 from .research_request import research_schema, validate_research_request
@@ -13,6 +14,18 @@ PROMPT_VERSION = "independent-research-plan-v2-focused-question"
 PURPOSE_PROMPT_VERSION = "independent-research-plan-v3-question-purpose"
 PRIORITY = 4  # Source planning precedes the recurring observation backlog; collection is 5.
 EMPTY_REQUEST = {"queryTerms": [], "sourceTypes": [], "maxAgeMinutes": 0}
+
+
+def unchanged_plan_receipt(result, children):
+    """A skipped planner is a no-op, never evidence of an authored plan."""
+    outcome = result.get("processingOutcome") or {}
+    key = outcome.get("emptyPlanKey")
+    if (not isinstance(key, str) or not re.fullmatch(r"[0-9a-f]{64}", key)
+            or outcome.get("modelCalled") is not False
+            or outcome.get("reasonCode") != "no-actionable-research-work"
+            or {"researchPlan", "executionInputId", "summary"}.intersection(result) or children):
+        raise ValueError("unchanged research plan must contain no authored or scheduled work")
+    return {"status": "unchanged", "caseIds": [], "deferred": [], "modelCalled": False}
 
 
 def answer_resolution(result, task_id):

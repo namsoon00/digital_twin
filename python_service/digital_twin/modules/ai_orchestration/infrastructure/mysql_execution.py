@@ -37,10 +37,16 @@ class AIExecutionPersistence:
 
     def acquire_execution(self):
         now = datetime.now(timezone.utc)
-        with self.transaction() as connection:
+        confirmation = {}
+        def persisted(connection):
+            row = connection.execute("SELECT state_json,updated_at FROM ai_control_execution_state WHERE scope_key=%s", (SCOPE,)).fetchone()
+            return bool(confirmation and row and row["updated_at"] == stamp(now)
+                        and json.loads(row["state_json"]) == confirmation["state"])
+        with confirmed_transaction(self, persisted) as connection:
             state = self._locked_execution_state(connection, SCOPE, now)
             state, ticket, wait = admit_execution(state, now, uuid.uuid4().hex)
             self._save_execution_state(connection, SCOPE, state, now)
+            confirmation["state"] = state
         if wait:
             raise wait
         return ticket

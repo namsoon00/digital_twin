@@ -11,6 +11,8 @@ from ..domain.research_request import validate_research_request
 
 
 def record_plan(store, connection, job, result, children):
+    if result.get("status") == "research-plan-unchanged":
+        return work.unchanged_plan_receipt(result, children)
     if result.get("status") in {"research-plan-obsolete", "research-plan-suppressed", "retired"}:
         return {"status": "obsolete"}
     row = connection.execute("SELECT i.artifact_gzip FROM ai_control_inputs i JOIN ai_control_input_calls l ON l.input_id=i.input_id "

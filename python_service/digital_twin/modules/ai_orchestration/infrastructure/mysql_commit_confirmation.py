@@ -47,6 +47,31 @@ def call_completion_confirmed(connection, call_id, expected):
         "SELECT event_id FROM ai_activity_events WHERE event_id=%s", (expected["activityId"],)).fetchone())
 
 
+def call_admission_confirmed(connection, call_id, expected):
+    if not expected:
+        return False
+    row = connection.execute("SELECT workload,status,task_id,prompt_hash,started_at FROM ai_control_calls WHERE call_id=%s",
+                             (call_id,)).fetchone()
+    if not row or any(row.get(k) != v for k, v in expected["call"].items()):
+        return False
+    metrics = connection.execute("SELECT metrics_json FROM ai_control_call_metrics WHERE call_id=%s", (call_id,)).fetchone()
+    if not metrics or json.loads(metrics["metrics_json"]) != expected["metrics"]:
+        return False
+    if expected["inputId"]:
+        linked = connection.execute("SELECT input_id FROM ai_control_input_calls WHERE call_id=%s", (call_id,)).fetchone()
+        if not linked or linked["input_id"] != expected["inputId"]:
+            return False
+    if expected["call"]["workload"] == "independent-observation":
+        owned = connection.execute("SELECT t.task_id FROM ai_control_inputs i JOIN ai_control_tasks t "
+            "ON t.task_id=i.task_id AND t.attempts=i.attempt WHERE i.input_id=%s AND t.task_id=%s "
+            "AND i.prompt_hash=%s AND t.status='processing' AND t.lease_until>=%s",
+            (expected["inputId"], expected["call"]["task_id"], expected["call"]["prompt_hash"], stamp())).fetchone()
+        if not owned:
+            return False
+    return not expected.get("activityId") or bool(connection.execute(
+        "SELECT event_id FROM ai_activity_events WHERE event_id=%s", (expected["activityId"],)).fetchone())
+
+
 def _confirmed(store, job, value, kind):
     raw = json.dumps(value, ensure_ascii=False, allow_nan=False).encode()
     if kind == "input":

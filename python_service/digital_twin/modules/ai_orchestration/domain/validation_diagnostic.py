@@ -127,7 +127,7 @@ def validator_location(error):
         "brain_management": "caseReviews", "business_research": "businessResearch",
         "judgment_impact": "questionResolutions.judgmentImpact", "knowledge_research": "knowledgeResearch",
         "analyst_memory": "analystAssessment", "investment_meaning": "investmentMeaning",
-        "opinion_memory": "questionResolutions.judgmentImpact",
+        "opinion_memory": "questionResolutions.judgmentImpact", "research_work": "researchPlan",
         "scoped_research": "researchScope", "question_source_handoff": "questionSourceHandoff"}
     location = {}
     trace = error.__traceback__

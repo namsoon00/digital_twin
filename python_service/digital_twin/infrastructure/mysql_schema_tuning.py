@@ -353,6 +353,11 @@ MYSQL_OPERATIONAL_INDEXES: Dict[str, Sequence[MySQLIndexDefinition]] = {
     "notification_delivery_attempts": (
         MySQLIndexDefinition(
             "notification_delivery_attempts",
+            "idx_notification_delivery_ai_scope",
+            "`receipt_message_type`, `receipt_account_id`, `status`, `completed_at`, `attempt_id`, `receipt_ai_symbol`",
+        ),
+        MySQLIndexDefinition(
+            "notification_delivery_attempts",
             "idx_notification_delivery_completed",
             "`status`, `completed_at`, `attempt_id`",
         ),
@@ -724,6 +729,20 @@ OUTCOME_RECOVERY_CANDIDATE_COLUMN = (
 
 
 MYSQL_OPERATIONAL_COLUMNS: Dict[str, Sequence[MySQLColumnDefinition]] = {
+    # Virtual projections index immutable receipt identity without depending on
+    # retained job payloads. LEFT keeps unrelated oversized metadata writable;
+    # readers also check the full original identity before accepting a receipt.
+    "notification_delivery_attempts": tuple(
+        MySQLColumnDefinition(
+            "notification_delivery_attempts", name,
+            "VARCHAR(" + str(width) + ") GENERATED ALWAYS AS (LEFT(IF(JSON_VALID(metadata_json),"
+            "JSON_UNQUOTE(JSON_EXTRACT(metadata_json,'$." + path + "')),NULL)," + str(width) + ")) VIRTUAL",
+        ) for name, path, width in (
+            ("receipt_message_type", "messageType", 64),
+            ("receipt_account_id", "accountId", 191),
+            ("receipt_ai_symbol", "aiControlObservation.symbol", 64),
+        )
+    ),
     "investment_decision_outcomes": (
         MySQLColumnDefinition("investment_decision_outcomes", "recovery_candidate", OUTCOME_RECOVERY_CANDIDATE_COLUMN),
     ),

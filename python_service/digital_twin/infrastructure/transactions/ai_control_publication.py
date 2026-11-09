@@ -77,10 +77,14 @@ class AIControlPublication:
         with self.notifications.connect() as connection:
             rows = connection.execute(
                 "SELECT job_id,completed_at,metadata_json FROM notification_delivery_attempts "
-                "WHERE status='delivered' AND JSON_UNQUOTE(JSON_EXTRACT(metadata_json,'$.messageType'))=%s "
+                "FORCE INDEX (idx_notification_delivery_ai_scope) "
+                "WHERE receipt_message_type=%s AND receipt_account_id=%s AND status='delivered' "
+                "AND (%s='' OR receipt_ai_symbol=%s) "
+                "AND JSON_UNQUOTE(JSON_EXTRACT(metadata_json,'$.messageType'))=%s "
                 "AND JSON_UNQUOTE(JSON_EXTRACT(metadata_json,'$.accountId'))=%s "
                 "AND (%s='' OR JSON_UNQUOTE(JSON_EXTRACT(metadata_json,'$.aiControlObservation.symbol'))=%s) "
-                "ORDER BY completed_at DESC LIMIT 200", (MESSAGE_TYPE, account_id, symbol, symbol)).fetchall()
+                "ORDER BY completed_at DESC,attempt_id DESC LIMIT 200",
+                (MESSAGE_TYPE, account_id, symbol, symbol, MESSAGE_TYPE, account_id, symbol, symbol)).fetchall()
         result, seen = [], set()
         for row in rows:
             if row["job_id"] in seen:

@@ -256,6 +256,20 @@ class CentralPublicationStorageTests(unittest.TestCase):
         self.assertEqual(98, restored['facts'][0]['ma5'])
         self.assertEqual(task['taskId'], restored['evidenceRestoration']['taskId'])
         self.assertNotIn('currency', self.publication.receipts(job.account_id, 'TEST')[0]['facts'][0])
+        self.assertEqual([], self.publication.receipts(job.account_id, 'OTHER'))
+        # Retention may remove the outbox job; the scoped index is derived from
+        # original receipt metadata, including legacy updates, never from jobs.
+        with self.queue.connect() as connection:
+            indexed = connection.execute("SELECT receipt_message_type,receipt_account_id,receipt_ai_symbol "
+                "FROM notification_delivery_attempts WHERE job_id=%s AND status='delivered'", (job.job_id,)).fetchone()
+        self.assertEqual(('aiObservation', job.account_id, 'TEST'), tuple(indexed.values()))
+        try:
+            with self.queue.transaction() as connection:
+                connection.execute('DELETE FROM notification_jobs WHERE job_id=%s', (job.job_id,))
+            self.assertEqual(job.job_id, self.publication.memory(job.account_id, 'TEST')['jobId'])
+            self.assertEqual(1, len(self.publication.receipts(job.account_id)))
+        finally:
+            self.queue.upsert_job(job)
 
     def test_economic_chain_is_frozen_archived_and_delivered_once_with_original_source_fields(self):
         from test_investment_meaning import authored_company

@@ -2,6 +2,7 @@
 
 from typing import Dict, Iterable
 
+from digital_twin.modules.reasoning.domain.abox_lifecycle import validate_scope_manifest
 from digital_twin.modules.reasoning.domain.ontology_contracts import PortfolioOntology
 from digital_twin.modules.reasoning.infrastructure.typeql.rule_shape import clean_symbols_from_payload
 from .controls import AtomicControlPatchTooLarge
@@ -30,6 +31,18 @@ def activate_scoped_abox_manifest(
             "aboxSnapshotId": clean_manifest_id,
             "worldviewManifestId": clean_manifest_id,
             "reason": "Scoped ABox Manifest is missing or incomplete.",
+        }
+    manifest_validation = validate_scope_manifest(metadata.get("scopePlan") or [])
+    if not manifest_validation.valid:
+        return {
+            "configured": bool(getattr(store, "address", "")),
+            "status": "invalid-scoped-abox-manifest",
+            "graphStore": "typedb",
+            "aboxSnapshotId": clean_manifest_id,
+            "worldId": str(world_id or metadata.get("worldId") or ""),
+            "preservedActiveGeneration": True,
+            "reason": "Scoped Manifest relations do not resolve against the final node inventory.",
+            "manifestValidation": manifest_validation.to_dict(),
         }
     imported = store.driver_imports()
     if imported[0] is None:

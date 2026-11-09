@@ -14,7 +14,7 @@ from unittest.mock import Mock, patch
 
 from digital_twin.modules.reasoning.domain.ontology_contracts import OntologyEntity, PortfolioOntology
 from digital_twin.modules.reasoning.domain.ontology_current_state import CURRENT_STATE_ABOX_PERSISTENCE_MODE
-from digital_twin.modules.reasoning.domain.ontology_scopes import SCOPED_ABOX_MANIFEST_VERSION
+from digital_twin.modules.reasoning.domain.ontology_scopes import SCOPED_ABOX_MANIFEST_VERSION, SCOPED_ABOX_PERSISTENCE_MODE
 from digital_twin.infrastructure import typedb_ontology as api
 from digital_twin.modules.reasoning.infrastructure.abox_candidates import (
     identity, recovery, row_image, rows, scope_plan, selection, validation,
@@ -47,6 +47,32 @@ class CandidateValidationFixture:
 
 
 class ABoxCandidateTests(unittest.TestCase):
+    def test_dangling_manifest_is_rejected_before_staging_and_historical_activation(self):
+        scope_plan = [
+            {"scopeId": EVIDENCE, "scopeType": "symbol", "scopeFamily": "evidence", "generationId": "news-current",
+             "entityCount": 1, "nodeInventoryVersion": "scope-node-inventory-v1", "nodeIds": ["article:current"]},
+            {"scopeId": LINK, "scopeType": "link", "scopeFamily": "evidence", "generationId": "analysis-old",
+             "relationCount": 1, "dependencyScopeIds": [EVIDENCE], "relationEndpointBindingVersion": "relation-endpoint-binding-v1",
+             "relationEndpointNodeIdsByScope": {EVIDENCE: ["article:removed"]}},
+        ]
+        metadata = {"status": "ok", "worldId": WORLD, "worldviewManifestId": NEW, "aboxSnapshotId": NEW,
+                    "persistenceMode": SCOPED_ABOX_PERSISTENCE_MODE, "scopedAboxManifestVersion": SCOPED_ABOX_MANIFEST_VERSION,
+                    "scopePlan": scope_plan}
+        graph = PortfolioOntology("fixture", worldview=copy.deepcopy(metadata))
+        repository = api.TypeDBOntologyGraphRepository("fixture.invalid")
+        with patch.object(repository, "acquire_scoped_abox_write_lease", side_effect=AssertionError("invalid candidate acquired a writer")), \
+             patch.object(repository, "driver_imports", side_effect=AssertionError("invalid candidate opened a driver")), \
+             patch.object(repository, "scoped_manifest_metadata", return_value=metadata):
+            staged = repository.save_scoped_abox_graph(graph)
+            activated = repository.activate_scoped_abox_manifest(NEW, world_id=WORLD)
+        for result in (staged, activated):
+            self.assertEqual("invalid-scoped-abox-manifest", result["status"])
+            self.assertTrue(result["preservedActiveGeneration"])
+            self.assertIn("relation-endpoint-missing-from-final-scope", {
+                row["code"] for row in result["manifestValidation"]["violations"]
+            })
+        self.assertEqual(metadata["scopePlan"], graph.worldview["scopePlan"])
+
     def setUp(self):
         patcher = patch.object(api, "runtime_settings", return_value={})
         patcher.start()

@@ -1,4 +1,4 @@
-"""Pure invariant checks for an incremental Manifest patch plan."""
+"""Pure invariant checks for scoped Manifests and incremental patch plans."""
 
 from __future__ import annotations
 
@@ -61,63 +61,14 @@ def relation_patch_directives(
     return tuple(directives)
 
 
-def validate_manifest_patch_plan(
-    change_set: ABoxChangeSet,
-    plan: ManifestPatchPlan,
-    incoming_scope_plan: Iterable[object],
-    active_scope_plan: Iterable[object],
-) -> PatchPlanValidation:
-    """Reject an internally inconsistent patch before a TypeDB transaction."""
-
-    incoming = _entries(incoming_scope_plan)
-    active = _entries(active_scope_plan)
-    if not plan.applied:
-        return PatchPlanValidation(status="not-applicable")
-
+def _scope_manifest_violations(final_entries: Mapping[str, ScopePlanEntry]) -> Tuple[PatchPlanViolation, ...]:
     violations = []
 
     def add(code: str, scope_id: str = "", dependency_id: str = "", detail: str = "") -> None:
         violations.append(PatchPlanViolation(
-            code=code,
-            scope_id=scope_id,
-            dependency_scope_id=dependency_id,
-            detail=detail,
+            code=code, scope_id=scope_id, dependency_scope_id=dependency_id, detail=detail,
         ))
 
-    selected = set(plan.selected_scope_ids)
-    reused = set(plan.reused_scope_ids)
-    retired = set(plan.retired_scope_ids)
-    replacement_roots = set(plan.replacement_root_scope_ids)
-
-    if plan.source_graph_complete != change_set.source_graph_complete:
-        add(
-            "source-completeness-mismatch",
-            detail=(
-                "change-set=" + change_set.source_completeness.value
-                + ", plan=" + ("complete" if plan.source_graph_complete else "partial")
-            ),
-        )
-    for scope_id in sorted(selected - set(incoming)):
-        add("selected-scope-missing-from-incoming", scope_id)
-    for scope_id in sorted(reused - set(active)):
-        add("reused-scope-missing-from-active", scope_id)
-    for scope_id in sorted(retired - set(active)):
-        add("retired-scope-missing-from-active", scope_id)
-    for scope_id in sorted(selected.intersection(retired)):
-        add("scope-selected-and-retired", scope_id)
-    for scope_id in sorted(reused.intersection(retired)):
-        add("scope-reused-and-retired", scope_id)
-    for scope_id in sorted(replacement_roots - selected):
-        add("replacement-root-not-selected", scope_id)
-    for scope_id in plan.missing_endpoint_scope_ids:
-        add("applied-plan-has-missing-endpoint", dependency_id=scope_id)
-
-    final_entries = dict(active)
-    for scope_id in retired:
-        final_entries.pop(scope_id, None)
-    for scope_id in selected:
-        if scope_id in incoming:
-            final_entries[scope_id] = incoming[scope_id]
     final_ids = set(final_entries)
     for scope_id, entry in sorted(final_entries.items()):
         if not entry.is_relation_scope or entry.relation_count <= 0:
@@ -189,6 +140,73 @@ def validate_manifest_patch_plan(
                         )
                     ),
                 )
+    return tuple(violations)
+
+
+def validate_scope_manifest(scope_plan: Iterable[object]) -> PatchPlanValidation:
+    """Verify the final retained and incoming scopes before staging or activation."""
+    violations = _scope_manifest_violations(_entries(scope_plan))
+    return PatchPlanValidation(status="invalid" if violations else "valid", violations=violations)
+
+
+def validate_manifest_patch_plan(
+    change_set: ABoxChangeSet,
+    plan: ManifestPatchPlan,
+    incoming_scope_plan: Iterable[object],
+    active_scope_plan: Iterable[object],
+) -> PatchPlanValidation:
+    """Reject an internally inconsistent patch before a TypeDB transaction."""
+
+    incoming = _entries(incoming_scope_plan)
+    active = _entries(active_scope_plan)
+    if not plan.applied:
+        return PatchPlanValidation(status="not-applicable")
+
+    violations = []
+
+    def add(code: str, scope_id: str = "", dependency_id: str = "", detail: str = "") -> None:
+        violations.append(PatchPlanViolation(
+            code=code,
+            scope_id=scope_id,
+            dependency_scope_id=dependency_id,
+            detail=detail,
+        ))
+
+    selected = set(plan.selected_scope_ids)
+    reused = set(plan.reused_scope_ids)
+    retired = set(plan.retired_scope_ids)
+    replacement_roots = set(plan.replacement_root_scope_ids)
+
+    if plan.source_graph_complete != change_set.source_graph_complete:
+        add(
+            "source-completeness-mismatch",
+            detail=(
+                "change-set=" + change_set.source_completeness.value
+                + ", plan=" + ("complete" if plan.source_graph_complete else "partial")
+            ),
+        )
+    for scope_id in sorted(selected - set(incoming)):
+        add("selected-scope-missing-from-incoming", scope_id)
+    for scope_id in sorted(reused - set(active)):
+        add("reused-scope-missing-from-active", scope_id)
+    for scope_id in sorted(retired - set(active)):
+        add("retired-scope-missing-from-active", scope_id)
+    for scope_id in sorted(selected.intersection(retired)):
+        add("scope-selected-and-retired", scope_id)
+    for scope_id in sorted(reused.intersection(retired)):
+        add("scope-reused-and-retired", scope_id)
+    for scope_id in sorted(replacement_roots - selected):
+        add("replacement-root-not-selected", scope_id)
+    for scope_id in plan.missing_endpoint_scope_ids:
+        add("applied-plan-has-missing-endpoint", dependency_id=scope_id)
+
+    final_entries = dict(active)
+    for scope_id in retired:
+        final_entries.pop(scope_id, None)
+    for scope_id in selected:
+        if scope_id in incoming:
+            final_entries[scope_id] = incoming[scope_id]
+    violations.extend(_scope_manifest_violations(final_entries))
 
     # A complete source owns removal of its derived companions. Rebinding an
     # older assertion after its source fact changed can reference an entity

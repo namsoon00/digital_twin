@@ -847,6 +847,7 @@ def merge_market_world_scope_manifest(
     observed_at: object = "",
     retention_hours: float = 0,
     max_symbols: int = 0,
+    retired_scope_ids: Iterable[object] = None,
 ) -> Dict[str, object]:
     """Merge a MarketWorld's manifest metadata without loading every live fact.
 
@@ -857,11 +858,10 @@ def merge_market_world_scope_manifest(
     every portfolio projection scale with historical MarketWorld size and can
     starve portfolio-native inference.
 
-    This helper keeps previous scopes from the active Manifest, replaces the
-    incoming scopes, and retires only observations with an explicit source
-    timestamp.  Untimestamped legacy scopes are deliberately retained rather
-    than guessed stale; they can be reconciled safely when their source sends
-    a later observation.
+    This helper honors explicit patch retirements, keeps other previous
+    scopes, and replaces incoming scopes. Retention expires only observations
+    with an explicit source timestamp. Untimestamped legacy scopes are kept
+    until their source sends a later observation or a validated retirement.
     """
     active = dict(active_metadata or {})
     previous_plan = {
@@ -874,7 +874,11 @@ def merge_market_world_scope_manifest(
         for item in incoming_scope_plan or []
         if isinstance(item, Mapping) and _clean(item.get("scopeId"))
     }
-    merged = {**previous_plan, **incoming}
+    explicit_retirements = {_clean(value) for value in retired_scope_ids or [] if _clean(value)}
+    if explicit_retirements.intersection(incoming):
+        raise ValueError("A shared scope cannot be both incoming and retired.")
+    merged = {scope_id: item for scope_id, item in previous_plan.items() if scope_id not in explicit_retirements}
+    merged.update(incoming)
 
     raw_observed = active.get("marketScopeObservedAt")
     scope_observed_at = {
@@ -952,7 +956,7 @@ def merge_market_world_scope_manifest(
         overflow = len(retained_symbols) - symbol_limit
         retired_symbols.update(capacity_candidates[:overflow])
 
-    retired_scope_ids = sorted({
+    retired_scope_ids = sorted(explicit_retirements.intersection(previous_plan) | {
         scope_id
         for symbol in retired_symbols
         for scope_id in scope_ids_by_symbol.get(symbol, set())

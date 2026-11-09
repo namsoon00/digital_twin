@@ -268,6 +268,71 @@ class OntologyWorldContractTests(unittest.TestCase):
 
 
 class MultiAccountProjectionTests(unittest.TestCase):
+    @staticmethod
+    def news_graph(revision):
+        article = "research-evidence:research:066570:news:" + str(revision)
+        analysis = "article-ai-analysis:research:066570:news:" + str(revision)
+        graph = sample_graph("005930", source_observed_at="2026-07-01T00:00:00Z")
+        properties = {"ontologyBox": "ABox", "symbol": "066570", "sourceAsOf": "2026-07-01T00:00:00Z"}
+        graph.entities.extend([
+            OntologyEntity("stock:066570", "Company", "stock", dict(properties)),
+            OntologyEntity(article, "Original news", "research-evidence", dict(properties)),
+            OntologyEntity(analysis, "News analysis", "article-ai-analysis", dict(properties)),
+        ])
+        graph.relations.extend([
+            OntologyRelation("stock:066570", article, "HAS_EXTERNAL_SIGNAL", properties=dict(properties)),
+            OntologyRelation(article, analysis, "HAS_ANALYSIS", properties=dict(properties)),
+        ])
+        # Stocks carry their quote clock on the quote fact, not a promoted
+        # sourceAsOf attribute on the Stock physical class.
+        for entity in graph.entities:
+            if entity.kind == "stock":
+                entity.properties.pop("sourceAsOf", None)
+        return graph, article
+
+    def test_shared_world_keeps_planned_retirements_when_a_news_bucket_is_replaced(self):
+        repository = self.FakeRepository()
+        recorder = PortfolioOntologyProjectionRecorder(repository)
+        world = knowledge_world("kr")
+        first, old_article = self.news_graph(0)
+        self.assertEqual("ok", recorder.project_knowledge_world(first, world)["status"])
+        before = copy.deepcopy(repository.active_abox_metadata(world.world_id))
+        old_scope = next(row["scopeId"] for row in before["scopePlan"] if old_article in row.get("nodeIds", []))
+        unrelated_scope = next(row["scopeId"] for row in before["scopePlan"] if "stock:005930" in row.get("nodeIds", []))
+        incoming, new_article = self.news_graph(11)
+        incoming.worldview["targetScopedManifestPatch"] = {"status": "applied", "targetSymbols": ["066570"]}
+        result = recorder.project_knowledge_world(incoming, world)
+        self.assertEqual("ok", result["status"], result)
+        final = {row["scopeId"]: row for row in repository.active_abox_metadata(world.world_id)["scopePlan"]}
+        self.assertIn(new_article, final[old_scope]["nodeIds"], "reproduce replacement of the original bounded news bucket")
+        retired = result["targetScopedManifestPatch"]["manifestPatchContract"]["plan"]["retiredScopeIds"]
+        self.assertTrue(retired)
+        self.assertFalse(set(retired).intersection(final), "a validated retirement must not be reintroduced by the shared merge")
+        for row in final.values():
+            for dependency, nodes in row.get("relationEndpointNodeIdsByScope", {}).items():
+                self.assertLessEqual(set(nodes), set(final[dependency].get("nodeIds", [])))
+        self.assertEqual(before["scopeGenerationIds"][unrelated_scope], final[unrelated_scope]["generationId"])
+
+    def test_shared_world_rejects_a_dangling_retained_relation_before_save_or_activation(self):
+        from unittest.mock import patch
+        repository = self.FakeRepository()
+        recorder = PortfolioOntologyProjectionRecorder(repository)
+        world = knowledge_world("kr")
+        source, article = self.news_graph(0)
+        self.assertEqual("ok", recorder.project_knowledge_world(source, world)["status"])
+        active = repository.saved_markets[world.world_id]
+        for row in active.worldview["scopePlan"]:
+            row["nodeIds"] = [node for node in row.get("nodeIds", []) if node != article]
+        before = copy.deepcopy(active)
+        update = sample_graph("MSTR", source_observed_at="2026-07-01T00:00:00Z")
+        with patch.object(repository, "save_scoped_abox_graph", side_effect=AssertionError("invalid manifest was written")), \
+             patch.object(repository, "activate_scoped_abox_manifest", side_effect=AssertionError("invalid manifest was activated")):
+            result = recorder.project_knowledge_world(update, world)
+        self.assertEqual("invalid-knowledge-world-manifest", result["status"])
+        self.assertTrue(result["preservedActiveGeneration"])
+        self.assertFalse(result["manifestValidation"]["valid"])
+        self.assertEqual(before, repository.saved_markets[world.world_id])
+
     class FakeRepository:
         store_key = "typedb"
 

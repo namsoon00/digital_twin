@@ -505,7 +505,9 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # expectation provenance, real follow-ups, review and atomic delivery.
         # Five frozen-flow contracts (0ed0c2416), plus fourteen concurrently
         # registered storage-observation and operational-read latency contracts.
-        self.assertLessEqual(total, 3056)  # Four scoped execution/context + concurrent storage coverage.
+        # Three shared-world retirement/manifest-admission contracts, plus
+        # concurrently registered storage, read and worker-lifecycle coverage.
+        self.assertLessEqual(total, 3066)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

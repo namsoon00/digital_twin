@@ -1,6 +1,6 @@
 """manifest: save through explicit injected capabilities."""
 
-from digital_twin.modules.reasoning.domain.abox_lifecycle import MANIFEST_PATCH_BOUNDARY_VERSION
+from digital_twin.modules.reasoning.domain.abox_lifecycle import MANIFEST_PATCH_BOUNDARY_VERSION, validate_scope_manifest
 from digital_twin.modules.reasoning.domain.ontology_contracts import PortfolioOntology
 from digital_twin.modules.reasoning.domain.ontology_current_state import CURRENT_STATE_ABOX_PERSISTENCE_MODE
 from digital_twin.modules.reasoning.domain.ontology_scopes import SCOPED_ABOX_MANIFEST_VERSION, SCOPED_ABOX_PERSISTENCE_MODE
@@ -78,6 +78,19 @@ def save_scoped_abox_graph(
             "status": "invalid-scoped-abox",
             "graphStore": "typedb",
             "reason": "Scoped ABox graph has no complete scope plan or Manifest id.",
+        }
+    manifest_validation = validate_scope_manifest(logical_scope_plan)
+    if not manifest_validation.valid:
+        return {
+            "configured": True,
+            "saved": False,
+            "status": "invalid-scoped-abox-manifest",
+            "graphStore": "typedb",
+            "aboxSnapshotId": manifest_id,
+            "worldId": world_id,
+            "preservedActiveGeneration": True,
+            "reason": "Scoped Manifest relations do not resolve against the final node inventory.",
+            "manifestValidation": manifest_validation.to_dict(),
         }
     # The active pointer protects read consistency, but individual scoped
     # writes commit in bounded batches. Take a durable lease before even

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 from .shared_world_ports import SharedWorldPort
+from digital_twin.modules.reasoning.domain.abox_lifecycle import validate_scope_manifest
 from digital_twin.modules.reasoning.domain.knowledge_world_projection import knowledge_world_coverage
 from digital_twin.modules.reasoning.domain.market_world_projection import market_scope_plan_with_observation_times, market_world_coverage, merge_market_world_scope_manifest
 from digital_twin.modules.reasoning.domain.ontology_contracts import PortfolioOntology
@@ -373,6 +374,7 @@ def project_shared_world_update(
             (update.worldview or {}).get("targetScopedManifestPatch") or {}
         )
         target_symbols = list(source_patch.get("targetSymbols") or [])
+        planned_retirements = []
         if kind == "premise":
             update.worldview["inferenceTargetSymbols"] = list(target_symbols)
         if str(source_patch.get("status") or "") == "applied" and target_symbols:
@@ -382,6 +384,7 @@ def project_shared_world_update(
                 target_symbols,
             )
             if selection.get("applied"):
+                planned_retirements = list(selection.get("retiredScopeIds") or [])
                 incoming_scope_plan = list(
                     selection.get("selectedIncomingScopePlan") or []
                 )
@@ -395,6 +398,7 @@ def project_shared_world_update(
                     "replacementRootScopeIds": list(
                         selection.get("replacementRootScopeIds") or []
                     ),
+                    "retiredScopeIds": planned_retirements,
                     "selectedIncomingScopeCount": len(
                         selection.get("selectedIncomingScopeIds") or []
                     ),
@@ -419,7 +423,19 @@ def project_shared_world_update(
             observed_at=observed_at,
             retention_hours=_store.shared_world_retention_hours(kind),
             max_symbols=_store.shared_market_world_symbol_limit(),
+            retired_scope_ids=planned_retirements,
         )
+        manifest_validation = validate_scope_manifest(manifest_state.get("scopePlan") or [])
+        if not manifest_validation.valid:
+            return {
+                **world_metadata(shared_world),
+                "status": "invalid-" + status_prefix + "-manifest",
+                "saved": False,
+                "preservedActiveGeneration": True,
+                "projectionKind": kind,
+                "reason": "Shared Manifest relations do not resolve against the final node inventory.",
+                "manifestValidation": manifest_validation.to_dict(),
+            }
         scope_generations = dict(manifest_state.get("scopeGenerationIds") or {})
         if not scope_generations:
             return {

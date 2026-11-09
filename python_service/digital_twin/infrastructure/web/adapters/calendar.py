@@ -12,6 +12,15 @@ from digital_twin.infrastructure.web.common import operational_read_settings
 from digital_twin.infrastructure.web.events import RealtimeEventBridge
 from typing import Dict
 from typing import List
+import json
+
+from digital_twin.infrastructure.stale_read_model import StaleReadModelCache
+from digital_twin.infrastructure.web.cache import cached_api_payload
+from digital_twin.infrastructure.web.common import request_bool
+
+
+CALENDAR_READ_MODEL = StaleReadModelCache("investment-calendar-events", ttl_seconds=20,
+                                        retry_cooldown_seconds=10)
 
 
 def investment_calendar_service():
@@ -52,7 +61,17 @@ def investment_calendar_query_payload(query: Dict[str, List[str]]) -> Dict[str, 
 
 
 def investment_calendar_payload(query: Dict[str, List[str]]) -> Dict[str, object]:
-    return investment_calendar_read_service().list_events(investment_calendar_query_payload(query))
+    selected = investment_calendar_query_payload(query)
+    key = json.dumps({"version": 1, "accountId": first_query(query, "accountId") or "default",
+                      "query": selected}, ensure_ascii=False, sort_keys=True)
+    payload = cached_api_payload(
+        CALENDAR_READ_MODEL, key,
+        lambda: investment_calendar_read_service().list_events(selected),
+        force=request_bool(first_query(query, "refresh"), False), blocking_first_load=False,
+    )
+    if "events" not in payload:
+        payload.update(events=[], summary={"status": payload.get("status", "unavailable"), "total": None})
+    return payload
 
 
 def investment_calendar_observation_payload(event):
@@ -91,11 +110,15 @@ def investment_calendar_event_payload(event_id):
 
 
 def save_investment_calendar_event_payload(payload: Dict[str, object]) -> Dict[str, object]:
-    return investment_calendar_service().save_event(payload if isinstance(payload, dict) else {})
+    result = investment_calendar_service().save_event(payload if isinstance(payload, dict) else {})
+    CALENDAR_READ_MODEL.invalidate()
+    return result
 
 
 def delete_investment_calendar_event_payload(event_id: str) -> Dict[str, object]:
-    return investment_calendar_service().delete_event(event_id)
+    result = investment_calendar_service().delete_event(event_id)
+    CALENDAR_READ_MODEL.invalidate()
+    return result
 
 
 def investment_calendar_reminders_once_payload() -> Dict[str, object]:
@@ -105,7 +128,9 @@ def investment_calendar_reminders_once_payload() -> Dict[str, object]:
 
 
 def investment_calendar_sync_official_payload() -> Dict[str, object]:
-    return build_official_calendar_sync_service(runtime_settings(), event_publisher=RealtimeEventBridge()).run_once(force=True)
+    result = build_official_calendar_sync_service(runtime_settings(), event_publisher=RealtimeEventBridge()).run_once(force=True)
+    CALENDAR_READ_MODEL.invalidate()
+    return result
 
 
 def investment_calendar_candidates_query_payload(query: Dict[str, List[str]]) -> Dict[str, object]:
@@ -131,7 +156,9 @@ def discover_investment_calendar_payload(payload: Dict[str, object]) -> Dict[str
 
 
 def approve_investment_calendar_candidate_payload(candidate_id: str, payload: Dict[str, object]) -> Dict[str, object]:
-    return investment_calendar_candidate_service().approve_candidate(candidate_id, payload if isinstance(payload, dict) else {})
+    result = investment_calendar_candidate_service().approve_candidate(candidate_id, payload if isinstance(payload, dict) else {})
+    CALENDAR_READ_MODEL.invalidate()
+    return result
 
 
 def reject_investment_calendar_candidate_payload(candidate_id: str, payload: Dict[str, object]) -> Dict[str, object]:

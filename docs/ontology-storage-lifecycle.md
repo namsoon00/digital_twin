@@ -550,3 +550,39 @@ process is still completing its initial WAL/index recovery.
 Check that the reasoning queue is progressing, the projection circuit is
 closed, the active runtime revision matches the deployed commit, TypeDB usage
 is below capacity thresholds, and inactive manifest counts continue to fall.
+
+## Passive storage observation
+
+`python3 scripts/watch-storage.py --directory /absolute/private/observation-folder`
+collects only loopback HTTP version/performance, TCP availability, a supervisor
+heartbeat and bounded read-only MySQL queries. It never constructs application
+stores or starts analysis, collection or notifications. Records stay outside
+the repository. An existing observation window retains its original start and
+ten-day deadline; a `STOP` file exits successfully. The launchd configuration
+from `storage_observation.launch_agent` restarts crashes and runs after login,
+but does not restart a successful STOP/deadline exit. The observer lock is
+shared with the earlier storage watcher, so a busy collector is not an outage.
+
+Live samples do not traverse component directories. A separate low-priority
+process runs allocated-block inventories at most once per thirty minutes.
+Every component retains its own measurement timestamp, age and failure state.
+Missing bytes stay unknown, and a failed inventory cannot refresh an older
+measurement. `collectorStatus=partial` and `coreCollectorStatus=ok` distinguish
+an incomplete inventory from successful live reads. Per-cycle lifecycle records
+and actual sample times expose crashes, sleep and sampling gaps; PID presence
+or return code alone cannot establish availability. Table space estimates are
+allocator metadata, not bytes reclaimed by the OS.
+
+Explicit physical maintenance uses `operational_table_fingerprint` and
+`optimize_verified_mysql_table` only with writers paused and a backup whose
+restore has been checked. They verify every column of every primary-key row
+before and after the rebuild. Full fingerprints and physical compaction never
+run inside automatic retention, the observer, or a web read. Preserve the
+shared disk reserve plus table-specific staging space, and measure actual
+allocated blocks separately from logical deletion or allocator free pages.
+
+Dashboard and calendar cold reads return a stable, explicitly warming page
+contract while their existing persistent read cache refreshes asynchronously.
+Unavailable counts are unknown rather than zero. Cache keys include account
+and filters; calendar edits invalidate the namespace and reject older in-flight
+responses. Composite dashboard freshness includes its child calendar cache.

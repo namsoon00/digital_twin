@@ -18,6 +18,7 @@ class OfficialReleaseAdapter:
         self.fetch_text = fetch_text or default_text_fetcher
         self.now = now or (lambda: datetime.now(timezone.utc))
         self.guard_state = {}
+        self._access_denied_until = None
         self.descriptor = DatasetDescriptor(
             dataset_id="official." + source + "-release", provider_id="official-" + source,
             capability="official-release", cadence_seconds=1800, freshness_seconds=7200,
@@ -35,6 +36,10 @@ class OfficialReleaseAdapter:
         indicator = job.partition_key
         if indicator not in ({"cpi", "employment"} if self.source == "bls" else {self.source}):
             raise ValueError("Official release partition mismatch")
+        if self._access_denied_until and self.now() < self._access_denied_until:
+            raise ExternalCallDeferred(
+                "BLS 발표문 접근 제한이 계속 적용 중입니다. 공식 통계 API는 별도로 수집합니다.",
+                self._access_denied_until.isoformat().replace("+00:00", "Z"), "access-denied")
         headers = {"Accept": "text/html", "User-Agent": "OrbitAlpha/1.0 (official release reader)"}
         try:
             timeout = max(1, min(30, float(settings.get("externalApiTimeoutSeconds") or 12)))
@@ -48,7 +53,8 @@ class OfficialReleaseAdapter:
             except Exception as error:
                 root = root_api_error(error)
                 if self.source == "bls" and isinstance(root, HTTPError) and root.code in {401, 403}:
-                    retry_at = (self.now() + timedelta(hours=6)).isoformat().replace("+00:00", "Z")
+                    self._access_denied_until = self.now() + timedelta(hours=6)
+                    retry_at = self._access_denied_until.isoformat().replace("+00:00", "Z")
                     raise ExternalCallDeferred("BLS 발표문 접근 거부 (HTTP " + str(root.code) + "). 공식 통계 API는 별도로 수집하며 6시간 후 발표문을 재확인합니다.", retry_at, "access-denied") from error
                 raise
 

@@ -1017,6 +1017,48 @@ def safe_mysql_operational_compaction_tables(
     }
 
 
+def operational_table_fingerprint(connection, table: str) -> Dict[str, object]:
+    """Offline content verification, including every field and primary-key row.
+
+    Never used by the automatic retention worker or a web read. Call only after
+    writers are paused; these complete hashes intentionally exceed sample scope.
+    """
+    import hashlib
+    if table not in MYSQL_OPERATIONAL_COMPACTION_TABLES:
+        raise ValueError("Table is outside operational compaction policy")
+    quoted = quote_identifier(table)
+    columns = _execute(connection, "SHOW COLUMNS FROM " + quoted).fetchall()
+    keys = _execute(connection, "SHOW KEYS FROM " + quoted + " WHERE Key_name='PRIMARY'").fetchall()
+    fields = ",".join(quote_identifier(row["Field"]) for row in columns)
+    order = ",".join(quote_identifier(row["Column_name"]) for row in sorted(keys, key=lambda row: row["Seq_in_index"]))
+    if not fields or not order:
+        raise ValueError("Physical verification requires a primary key and column inventory")
+    rows = _execute(connection, "SELECT SHA2(CAST(JSON_ARRAY(" + fields + ") AS CHAR),256) AS rowHash "
+                    "FROM " + quoted + " ORDER BY " + order).fetchall()
+    digest = hashlib.sha256()
+    for row in rows:
+        value = str(row["rowHash"] or "")
+        if len(value) != 64 or any(char not in "0123456789abcdef" for char in value):
+            raise RuntimeError("Invalid row fingerprint")
+        digest.update(value.encode("ascii"))
+    return {"rows": len(rows), "sha256": digest.hexdigest()}
+
+
+def optimize_verified_mysql_table(connection, table: str, *, writers_paused=False) -> Dict[str, object]:
+    """Explicit offline rebuild with exact full-row verification, never deletion."""
+    if not writers_paused:
+        raise ValueError("Pause writers and verify a restorable backup before compaction")
+    before = operational_table_fingerprint(connection, table)
+    result = optimize_mysql_operational_tables(connection, [table])
+    after = operational_table_fingerprint(connection, table)
+    if before != after:
+        raise RuntimeError("Operational table content changed during compaction")
+    if table not in result["optimizedTables"]:
+        raise RuntimeError("Operational table compaction did not complete")
+    return {"table": table, "status": result["status"], "before": before, "after": after,
+            "metadataFailures": result["metadataFailures"]}
+
+
 def optimize_mysql_operational_tables(connection, tables: Sequence[str]) -> Dict[str, object]:
     """Physically reclaim free pages after an explicit, paused maintenance run.
 

@@ -174,6 +174,17 @@ class ConsoleReadModelService:
         result["detailPathTemplate"] = "/api/decisions/{caseId}"
         return result
 
+    @staticmethod
+    def pending_dashboard(status="warming") -> Dict[str, object]:
+        """Keep the page contract while no successful source read is available."""
+        return {"version": CONSOLE_READ_MODEL_VERSION, "status": status,
+                "dataFreshness": {"status": "unknown"}, "portfolio": {"status": status},
+                "tasks": [], "taskSummary": {"status": status, "decisionCount": None},
+                "blockerGroups": [], "blockerSummary": {"status": status},
+                "upcomingEvents": [], "calendarSummary": {"status": status},
+                "sourceStatus": {"snapshot": {"status": status},
+                                 "portfolio": status, "decisions": status}}
+
     def dashboard_summary(
         self,
         snapshot: Mapping[str, object],

@@ -31,8 +31,23 @@ class StaleReadModelCache:
         self.root = Path(root or (data_dir() / "api-read-models"))
         self.ttl_seconds = max(1, int(ttl_seconds or 60))
         self.retry_cooldown_seconds = max(1, int(retry_cooldown_seconds or 15))
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
         self._inflight = set()
+        self._generation = 0
+        self._invalidated_at = 0.0
+
+    def invalidate(self) -> None:
+        """Discard a namespace after a mutation, including older in-flight loads."""
+        with self._lock:
+            self._generation += 1
+            self._invalidated_at = time.time()
+            for path in self.root.glob(self.namespace + "-*.json"):
+                try:
+                    path.unlink(missing_ok=True)
+                except OSError:
+                    # A completed domain mutation must not become a failed
+                    # HTTP write merely because its optional cache is read-only.
+                    pass
 
     def path_for(self, key: str) -> Path:
         digest = hashlib.sha256(str(key or "default").encode("utf-8")).hexdigest()[:32]
@@ -65,6 +80,13 @@ class StaleReadModelCache:
 
     def snapshot(self, key: str) -> Dict[str, object]:
         entry = self.read_entry(key)
+        if self._invalidated_at:
+            try:
+                invalid = float(entry.get("lastSuccessEpoch") or 0) <= self._invalidated_at
+            except (TypeError, ValueError):
+                invalid = True
+            if invalid:
+                entry = {}
         payload = entry.get("payload") if isinstance(entry.get("payload"), dict) else {}
         age_seconds = self.elapsed_seconds(entry.get("lastSuccessEpoch")) if payload else 0
         last_attempt_age = self.elapsed_seconds(entry.get("lastAttemptEpoch")) if entry.get("lastAttemptEpoch") else 0
@@ -113,13 +135,21 @@ class StaleReadModelCache:
         return self.snapshot(key)
 
     def refresh(self, key: str, loader: Callable[[], Dict[str, object]]) -> Dict[str, object]:
+        with self._lock:
+            generation = self._generation
         try:
             payload = loader()
             if not isinstance(payload, dict) or not payload:
                 raise ValueError("dependency returned an empty read model")
-            return self.store_success(key, payload)
+            with self._lock:
+                if generation != self._generation:
+                    return self.snapshot(key)
+                return self.store_success(key, payload)
         except Exception as error:  # noqa: BLE001 - the last good payload remains authoritative.
-            return self.store_failure(key, error)
+            with self._lock:
+                if generation != self._generation:
+                    return self.snapshot(key)
+                return self.store_failure(key, error)
 
     def refresh_async(self, key: str, loader: Callable[[], Dict[str, object]]) -> bool:
         current = self.snapshot(key)

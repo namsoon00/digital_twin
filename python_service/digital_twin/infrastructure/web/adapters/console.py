@@ -93,24 +93,33 @@ def _console_dashboard_source_payload(query: Dict[str, List[str]]) -> Dict[str, 
                 results[key] = future.result()
             except Exception as error:  # noqa: BLE001 - dashboard sections degrade independently.
                 results[key] = {"status": "unavailable", "error": str(error)[:240]}
-    return console_read_model_service(settings).dashboard_summary(
+    payload = console_read_model_service(settings).dashboard_summary(
         results.get("snapshot") or {},
         results.get("lifecycle") or {},
         results.get("cases") or {"items": []},
         results.get("calendar") or {"events": []},
     )
+    payload["componentFreshness"] = {
+        key: {"status": value.get("status", "ok"), "readCache": value.get("readCache", {})}
+        for key, value in results.items() if isinstance(value, dict)
+    }
+    return payload
 
 
 def console_dashboard_api_payload(query: Dict[str, List[str]]) -> Dict[str, object]:
     account_id = first_query(query, "accountId") or "default"
     watchlist = ",".join(sorted(filter(None, first_query(query, "watchlistSymbols").upper().split(","))))
     cache_key = INVESTMENT_READING_CACHE_VERSION + "|" + account_id + "|" + watchlist
-    return cached_api_payload(
+    payload = cached_api_payload(
         DASHBOARD_READ_MODEL,
         cache_key,
         lambda: _console_dashboard_source_payload(query),
         force=request_bool(first_query(query, "refresh"), False),
+        blocking_first_load=False,
     )
+    if "version" not in payload:
+        return {**ConsoleReadModelService.pending_dashboard(payload.get("status", "unavailable")), **payload}
+    return payload
 
 
 def console_portfolio_api_payload(query: Dict[str, List[str]], view: str) -> Dict[str, object]:

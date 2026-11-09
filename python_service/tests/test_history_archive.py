@@ -186,5 +186,43 @@ class HistoryArchiveTests(unittest.TestCase):
                          {row['request_id'] for row in connection.execute('SELECT request_id FROM ai_inference_requests').fetchall()})
 
 
+
+class PhysicalTablePreservationTests(unittest.TestCase):
+    def test_offline_rebuild_preserves_every_account_key_null_and_original_payload(self):
+        from pymysql.cursors import DictCursor
+        from mysql_fixtures import mysql_test_connection
+        from digital_twin.infrastructure.mysql_operational_connection import MySQLConnectionProxy
+        from digital_twin.infrastructure.mysql_retention import (
+            operational_table_fingerprint, optimize_verified_mysql_table,
+        )
+        with patch.dict(os.environ, {"MYSQL_TEST_DATABASE": "orbit_alpha_test_physical_reclaim"}):
+            raw = mysql_test_connection()
+        raw.cursorclass = DictCursor
+        raw.autocommit(True)
+        connection = MySQLConnectionProxy(raw)
+        self.addCleanup(connection.close)
+        connection.execute("DROP TABLE IF EXISTS monitor_snapshot_history")
+        connection.execute("CREATE TABLE monitor_snapshot_history (account_id VARCHAR(40),"
+                           "snapshot_id VARCHAR(40),payload_json LONGTEXT,source_at VARCHAR(40),"
+                           "PRIMARY KEY(account_id,snapshot_id)) ENGINE=InnoDB")
+        for account in ("scope-one", "scope-two", "scope-three"):
+            for identity in ("snapshot-one", "snapshot-two"):
+                connection.execute("INSERT INTO monitor_snapshot_history VALUES (%s,%s,%s,%s)",
+                    (account, identity, '{"original":"한글 원문","nested":{"receiptVerified":true}}',
+                     None if identity.endswith("one") else "2026-01-01T00:00:00Z"))
+        before = connection.execute("SELECT * FROM monitor_snapshot_history ORDER BY account_id,snapshot_id").fetchall()
+        proof = optimize_verified_mysql_table(connection, "monitor_snapshot_history", writers_paused=True)
+        after = connection.execute("SELECT * FROM monitor_snapshot_history ORDER BY account_id,snapshot_id").fetchall()
+        self.assertEqual(before, after)
+        self.assertEqual(proof["before"], proof["after"])
+        self.assertEqual(proof["before"]["rows"], 6)
+        connection.execute("UPDATE monitor_snapshot_history SET source_at='corrected' "
+                           "WHERE account_id='scope-two' AND snapshot_id='snapshot-two'")
+        self.assertNotEqual(proof["after"], operational_table_fingerprint(connection, "monitor_snapshot_history"))
+        with self.assertRaises(ValueError):
+            optimize_verified_mysql_table(connection, "monitor_snapshot_history")
+        with self.assertRaises(ValueError):
+            operational_table_fingerprint(connection, "not_an_approved_table")
+
 if __name__ == "__main__":
     unittest.main()

@@ -39,7 +39,7 @@ def cached_api_payload(
         if isinstance(value, dict) and (
             (value.get("readCache") or {}).get("stale")
             or (value.get("readCache") or {}).get("lastError")
-            or value.get("status") in {"unavailable", "error"}
+            or value.get("status") in {"unavailable", "error", "warming"}
         )
     ] if isinstance(components, dict) else []
     if snapshot.get("payload") and (snapshot.get("stale") or snapshot.get("lastError") or stale_components):

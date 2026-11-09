@@ -6,6 +6,7 @@ from datetime import datetime, timedelta
 from typing import Callable, Dict, Iterable, List, Mapping
 import urllib.error
 import urllib.parse
+import time
 from zoneinfo import ZoneInfo
 
 from digital_twin.modules.market_data.public import (
@@ -17,6 +18,7 @@ from digital_twin.modules.market_data.public import (
 from digital_twin.modules.portfolio.domain.portfolio import utc_now_iso
 from ...external_signal_utils import default_json_fetcher
 from .base import global_partition, observation, source_revision
+from digital_twin.modules.market_data.contracts import ExternalCallDeferred
 
 
 KRX_API_ROOT = "https://data-dbg.krx.co.kr/svc/apis/idx/"
@@ -147,6 +149,7 @@ class KrxMarketIndexAdapter:
         }
 
     def fetch(self, _job: CollectionJob, settings: Dict[str, object]):
+        started = time.monotonic()
         today = datetime.now(SEOUL).date()
         selected = {}
         selected_date = ""
@@ -156,6 +159,13 @@ class KrxMarketIndexAdapter:
             base_date = (today - timedelta(days=offset)).strftime("%Y%m%d")
             candidate = {}
             for index_key, index_name, endpoint in KRX_INDEX_ENDPOINTS:
+                # Empty recent dates are normal for a daily feed; a slow
+                # twelve-day search must not monopolize this provider turn.
+                if time.monotonic() - started >= 30:
+                    retry_at = (datetime.now(SEOUL) + timedelta(minutes=5)).isoformat()
+                    raise ExternalCallDeferred(
+                        "KRX 일별 지수 조회 시간 예산을 소진했습니다. 이전 관측 시각을 유지하고 재확인합니다.",
+                        retry_at, "source-query-budget")
                 rows = self._rows(settings, endpoint, base_date)
                 row = self._main_index(rows, index_key)
                 if row:

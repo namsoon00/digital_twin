@@ -57,8 +57,21 @@ def metric_value(
     if metric == "smartMoneyNetVolume":
         coverage = facts.get("marketSignalCoverage") or {}
         investor = coverage.get("investor") or {} if isinstance(coverage, Mapping) else {}
-        if not investor or investor.get("usableForJudgement") is not True:
+        if not isinstance(investor, Mapping) or any(investor.get(key) is False for key in (
+            "usableForJudgement", "judgementEvidenceUsable",
+        )):
             return None, "investor-flow-unavailable"
+        # Stored market observations carry the provider contract's usability
+        # name; older prepared outcome packets may carry its normalized name.
+        usable = investor.get("usableForJudgement", investor.get("judgementEvidenceUsable"))
+        if usable is not True:
+            return None, "investor-flow-unavailable"
+        fields = investor.get("observedFields", investor.get("fields"))
+        observed = {field for field in fields if isinstance(field, str)} if isinstance(fields, (list, tuple, set)) else set()
+        if ("usableForJudgement" not in investor or fields is not None) and not {
+            "foreignNetVolume", "institutionNetVolume",
+        }.issubset(observed):
+            return None, "investor-flow-missing"
         foreign, _ = first_number(source, ["foreignNetVolume"])
         institution, _ = first_number(source, ["institutionNetVolume"])
         if foreign is None or institution is None:

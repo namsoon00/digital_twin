@@ -193,6 +193,23 @@ class RuleClaimContractTests(unittest.TestCase):
         observed = evaluate_hypothesis_outcome(contract, "support", facts, 3, 60)
         self.assertEqual("contradicted", observed["thesisValidationStatus"])
 
+    def test_flow_outcomes_accept_the_stored_provider_contract_and_require_both_observed_participants(self):
+        contract = predictive_outcome_contract("flow-accumulation", "support").to_dict()
+        coverage = {"judgementEvidenceUsable": True, "aiUsableAsStrongEvidence": False,
+                    "observedFields": ["foreignNetVolume", "institutionNetVolume"]}
+        facts = {"currentPrice": 103, "foreignNetVolume": 0, "institutionNetVolume": 0,
+                 "observationSourcePolicy": "point-in-time-market-observation",
+                 "marketSignalCoverage": {"investor": coverage}}
+        observed = evaluate_hypothesis_outcome(contract, "support", facts, 3, 60)
+        self.assertEqual("contradicted", observed["thesisValidationStatus"])
+        for mutation in ({"observedFields": ["foreignNetVolume"]}, {"observedFields": [{"field": "foreignNetVolume"}]},
+                         {"observedFields": 2}, {"judgementEvidenceUsable": False},
+                         {"judgementEvidenceUsable": "true"}, {"usableForJudgement": False}):
+            with self.subTest(mutation=mutation):
+                facts["marketSignalCoverage"] = {"investor": {**coverage, **mutation}}
+                unavailable = evaluate_hypothesis_outcome(contract, "support", facts, 3, 60)
+                self.assertEqual("unavailable", unavailable["thesisValidationStatus"])
+
     def test_same_report_refetch_is_not_new_financial_evidence(self):
         company = {"latestFinancials": {"quarterly": [{"period": "2026-06-30"}]}}
         baseline = freeze_outcome_baseline({"companyContext": company, "ma20Distance": -3})

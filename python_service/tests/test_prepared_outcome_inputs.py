@@ -6,10 +6,13 @@ import uuid
 from unittest.mock import patch
 
 from stabilization_database import StabilizationDatabaseCase
-from test_internal_decision_history import episode, outcome, NOW
+from test_internal_decision_history import episode, outcome, NOW, DECIDED
 from digital_twin.infrastructure.transactions.decision_history import MySQLInvestmentDecisionEpisodeStore
 from digital_twin.modules.outcomes.infrastructure import prepared_inputs as cache
 from digital_twin.modules.outcomes.infrastructure.prepared_input_schema import ensure_prepared_input_schema
+from digital_twin.modules.outcomes.domain.hypothesis_outcome_contract import outcome_contract_fingerprint
+from digital_twin.modules.outcomes.domain.hypothesis_outcome_evaluation import metric_value
+from digital_twin.modules.outcomes.domain.outcome_recovery import frozen_outcome_facts
 
 
 class PreparedOutcomeInputTests(StabilizationDatabaseCase):
@@ -40,6 +43,40 @@ class PreparedOutcomeInputTests(StabilizationDatabaseCase):
             connection.execute(query, (self.observed.outcome_id,))
         else:
             self.sql(query, (self.observed.outcome_id,))
+
+    def test_flow_usability_survives_real_outcome_storage_without_cross_account_or_duplicate_writes(self):
+        value = episode("flow-proof:" + uuid.uuid4().hex)
+        value.account_id = self.account
+        contract = value.facts_at_decision["hypothesisOutcomeContract"]
+        contract["effectiveAt"] = DECIDED
+        contract["requiredObservationDomains"] = ["quote", "flow"]
+        contract["criteria"].append({
+            "criterionId": "fixture:flow", "label": "frozen investor flow", "role": "cause",
+            "metric": "smartMoneyNetVolume", "operator": "<", "threshold": 0,
+            "horizonMinutes": 0, "required": True, "requiredObservationDomains": ["flow"],
+        })
+        contract["contractFingerprint"] = outcome_contract_fingerprint(contract)
+        self.decisions.save(value)
+        coverage = {"investor": {"judgementEvidenceUsable": True, "aiUsableAsStrongEvidence": False, "sourceAsOf": NOW,
+                                  "observedFields": ["foreignNetVolume", "institutionNetVolume"]}}
+        observation = {"episodeId": value.episode_id, "horizonMinutes": 60, "observedAt": NOW,
+                       "facts": {"currentPrice": 101, "sourceAsOf": NOW, "dataQuality": "actual",
+                                 "observationSourcePolicy": "point-in-time-market-observation",
+                                 "foreignNetVolume": -120, "institutionNetVolume": 20,
+                                 "marketSignalCoverage": coverage}}
+        self.assertEqual([], self.decisions.record_outcome_observations("other-account", [observation]))
+        saved = self.decisions.record_outcome_observations(self.account, [observation])
+        self.assertEqual(1, len(saved))
+        with self.decisions.connect() as connection:
+            row = connection.execute("SELECT payload_json FROM investment_decision_outcomes WHERE outcome_id=%s",
+                                     (saved[0].outcome_id,)).fetchone()
+        stored = json.loads(row["payload_json"])
+        self.assertEqual(coverage, stored["payload"]["observationFacts"]["marketSignalCoverage"])
+        restored = frozen_outcome_facts(stored)
+        self.assertEqual((-100, "foreign-and-institution-net-volume"), metric_value("smartMoneyNetVolume", restored, 0))
+        self.assertEqual(NOW, restored["sourceAsOf"])
+        self.assertEqual("eligible", stored["payload"]["calibrationEligibility"])
+        self.assertEqual([], self.decisions.record_outcome_observations(self.account, [observation]))
 
     def test_report_reuse_crosses_process_objects_and_skips_history_before_read(self):
         expected = self.uncached_report()

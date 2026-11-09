@@ -9,7 +9,7 @@ from unittest.mock import Mock, patch
 from digital_twin.modules.model_registry.application.hypothesis_development_service import HypothesisDevelopmentService
 from digital_twin.modules.model_registry.domain.hypothesis_development import AUTHORING_SCHEDULE_VERSION, authoring_recovery_eligible, HypothesisDevelopmentCase
 from digital_twin.modules.outcomes.application.investment_outcome_observation_service import InvestmentOutcomeObservationService
-from digital_twin.modules.outcomes.domain.outcome_recovery import frozen_outcome_facts, outcome_needs_data, validate_outcome_repair
+from digital_twin.modules.outcomes.domain.outcome_recovery import frozen_outcome_facts, observation_facts, outcome_needs_data, validate_outcome_repair
 from digital_twin.modules.decisions.domain.decision_continuity import build_decision_continuity_packet, compact_decision_continuity_packet
 from digital_twin.modules.decisions.domain.notification_ai_context_router import _continuity_delta
 from digital_twin.modules.decisions.domain.notification_ai_decision_brief import _minimum_decision_continuity, build_notification_ai_prompt_bundle
@@ -576,6 +576,36 @@ class HypothesisClosedLoopTests(unittest.TestCase):
         development.process_pending.assert_called_once_with(limit=1)
         development.ready_wait_minutes.return_value = 2
         self.assertEqual("deferred-reasoning-queue", service.run_once()["status"])
+
+    def test_flow_criterion_keeps_its_original_usability_proof_after_freeze_and_repair(self):
+        from digital_twin.modules.outcomes.domain.hypothesis_outcome_evaluation import metric_value
+        coverage = {"investor": {"usableForJudgement": True, "sourceAsOf": "2026-09-11T00:59:00Z",
+                                  "observedFields": ["foreignNetVolume", "institutionNetVolume"]}}
+        facts = {"foreignNetVolume": -120, "institutionNetVolume": 20, "marketSignalCoverage": coverage}
+        previous = previous_outcome()
+        previous["payload"]["observationFacts"] = observation_facts(facts)
+        restored = frozen_outcome_facts(previous)
+        self.assertEqual((-100, "foreign-and-institution-net-volume"), metric_value("smartMoneyNetVolume", restored, 0))
+        self.assertEqual(coverage, restored["marketSignalCoverage"])
+        self.assertEqual(previous["observedAt"], restored["sourceAsOf"])
+        coverage["investor"]["observedFields"].append("later-field")
+        restored["marketSignalCoverage"]["investor"]["usableForJudgement"] = False
+        saved = previous["payload"]["observationFacts"]["marketSignalCoverage"]["investor"]
+        self.assertEqual(["foreignNetVolume", "institutionNetVolume"], saved["observedFields"])
+        self.assertIs(saved["usableForJudgement"], True)
+
+    def test_freezing_flow_numbers_does_not_create_or_upgrade_usability(self):
+        from digital_twin.modules.outcomes.domain.hypothesis_outcome_evaluation import metric_value
+        for coverage in ({}, {"investor": {}}, {"investor": {"usableForJudgement": False}},
+                         {"investor": {"usableForJudgement": "true"}}):
+            with self.subTest(coverage=coverage):
+                facts = {"foreignNetVolume": -120, "institutionNetVolume": 20, "marketSignalCoverage": coverage}
+                frozen = observation_facts(facts)
+                self.assertEqual(coverage, frozen["marketSignalCoverage"])
+                self.assertIsNone(metric_value("smartMoneyNetVolume", frozen, 0)[0])
+        legacy = observation_facts({"foreignNetVolume": -120, "institutionNetVolume": 20})
+        self.assertNotIn("marketSignalCoverage", legacy)
+        self.assertIsNone(metric_value("smartMoneyNetVolume", legacy, 0)[0])
 
     def test_outcome_repair_preserves_original_price_time_and_contract(self):
         previous = previous_outcome()

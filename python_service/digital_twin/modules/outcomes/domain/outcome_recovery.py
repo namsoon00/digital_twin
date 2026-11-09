@@ -1,5 +1,6 @@
 """Observation repair never substitutes a later quote for the original outcome."""
 
+from copy import deepcopy
 from datetime import datetime, timedelta
 from math import isfinite
 from typing import Mapping
@@ -42,7 +43,7 @@ def outcome_needs_data(value: Mapping) -> bool:
 
 def frozen_outcome_facts(value: Mapping) -> dict:
     payload = dict(value.get("payload") or {})
-    facts = dict(payload.get("observationFacts") or {})
+    facts = deepcopy(dict(payload.get("observationFacts") or {}))
     facts.update({
         "currentPrice": value.get("price"),
         "decisionPrice": payload.get("decisionPrice"),
@@ -56,7 +57,13 @@ def frozen_outcome_facts(value: Mapping) -> dict:
 
 def observation_facts(value: Mapping) -> dict:
     # Source adapters already return a bounded, secret-free observation packet.
-    return {key: item for key, item in value.items() if isinstance(item, (str, int, float, bool)) or item is None}
+    facts = {key: item for key, item in value.items() if isinstance(item, (str, int, float, bool)) or item is None}
+    # Flow outcome criteria require the original per-source usability proof,
+    # including negative/unknown assessments. Numbers alone cannot renew it.
+    coverage = value.get("marketSignalCoverage")
+    if isinstance(coverage, Mapping):
+        facts["marketSignalCoverage"] = deepcopy(dict(coverage))
+    return facts
 
 
 def validate_outcome_repair(previous: Mapping, incoming: Mapping) -> None:

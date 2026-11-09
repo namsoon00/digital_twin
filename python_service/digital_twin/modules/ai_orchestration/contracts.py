@@ -1,6 +1,7 @@
 from digital_twin.modules._exports import resolve_export
 
 _EXPORTS = {
+    "investment_meaning_presentation": ("digital_twin.modules.ai_orchestration.domain.investment_meaning", "presentation"),
     "render_portfolio_report_document": ("digital_twin.modules.ai_orchestration.domain.portfolio_report_document", "render_document"),
     "verify_portfolio_report": ("digital_twin.modules.ai_orchestration.domain.portfolio_report", "verify_report"),
     "portfolio_report_digest": ("digital_twin.modules.ai_orchestration.domain.portfolio_report", "digest"),

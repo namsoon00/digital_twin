@@ -62,6 +62,9 @@ def validate_plan(value, packet, research=(), require_research=False, require_re
         allowed.add("judgmentChange")
     from . import notification_contribution
     from . import analyst_memory
+    from . import investment_meaning
+    if investment_meaning.enabled(packet):
+        allowed.add("investmentMeaning")
     if analyst_memory.enabled(packet):
         allowed.add("analystAssessment")
     if notification_contribution.enabled(packet):
@@ -75,6 +78,8 @@ def validate_plan(value, packet, research=(), require_research=False, require_re
     result = {}
     if analyst_memory.enabled(packet):
         result["analystAssessment"] = analyst_memory.validate(value.get("analystAssessment"), packet)
+    if investment_meaning.enabled(packet):
+        result["investmentMeaning"] = investment_meaning.validate(value.get("investmentMeaning"), packet)
     if business_progress.enabled(packet):
         result["judgmentChange"] = business_progress.validate_change(value.get("judgmentChange"), packet)
     if notification_contribution.enabled(packet):

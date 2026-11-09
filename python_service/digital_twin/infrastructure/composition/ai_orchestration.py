@@ -95,6 +95,8 @@ def build_ai_control_service(settings=None, *, store=None):
     configured["aiEvidenceReadPolicy"] = read_policy
     from digital_twin.modules.ai_orchestration.domain.judgment_policy import VERSION as judgment_policy
     configured["aiJudgmentQualityPolicy"] = judgment_policy
+    from digital_twin.modules.ai_orchestration.domain.investment_meaning import VERSION as meaning_policy
+    configured["aiInvestmentMeaningPolicy"] = meaning_policy
     store = store if store is not None else MySQLAIControlStore(configured)
     store.runtime_settings = configured
     def projection_status(job):

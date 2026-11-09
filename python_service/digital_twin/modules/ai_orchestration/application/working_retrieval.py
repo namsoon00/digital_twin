@@ -117,12 +117,8 @@ def retrieve_working_evidence(session, packet, history, research, decide, save_i
         packet = {**packet, "researchWindow": window, "questionEvidencePolicy": evidence_policy,
                   "questionEvidenceIndex": captured_index(question_index, preserve_sources=question_purpose.enabled(packet))}
     rounds = max(0, min(MAX_ROUNDS, int(max_rounds)))
-    sources = {}
-    for case in research:
-        if case.get("kind") == "brain-case":
-            for source in question_source_handoff.source_references(case):
-                if source.get("evidenceId"):
-                    sources.setdefault(source["evidenceId"], []).append(case["caseId"])
+    from ..domain import investment_meaning
+    sources = investment_meaning.document_sources(packet, research)
     documents = session.question_document_index(sources, document_views=True) if question_work or contract in {lane_retrieval, bounded_retrieval, purpose_retrieval, compact_retrieval, quality_retrieval, completion_retrieval, business_retrieval, company_retrieval, efficient_retrieval, question_gap_retrieval, external_influence_retrieval, price_investigation_retrieval, market_explanation_retrieval, opinion_retrieval, reliable_retrieval} else session.question_document_index(sources)
     if business_insight.enabled(packet):
         baseline = session.business_baseline(documents, document_views=True, period_priority=True)
@@ -236,8 +232,10 @@ def retrieve_working_evidence(session, packet, history, research, decide, save_i
         if contract in {bounded_retrieval, purpose_retrieval, compact_retrieval, quality_retrieval, completion_retrieval, business_retrieval, company_retrieval, efficient_retrieval, question_gap_retrieval, external_influence_retrieval, price_investigation_retrieval, market_explanation_retrieval, opinion_retrieval, reliable_retrieval}:
             context.update(tools.issued_context())
         try:
-            from ..domain import analyst_prompt
-            envelope = (analyst_prompt.freeze_retrieval(current, context, prompt_bytes)
+            from ..domain import analyst_prompt, investment_meaning_prompt
+            envelope = (investment_meaning_prompt.freeze_retrieval(current, context, prompt_bytes)
+                        if investment_meaning.enabled(current) and contract is reliable_retrieval else
+                        analyst_prompt.freeze_retrieval(current, context, prompt_bytes)
                         if analyst_memory.enabled(current) and contract is reliable_retrieval
                         else contract.freeze(current, context, prompt_bytes))
         except EvidenceContractError as error:

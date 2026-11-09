@@ -58,6 +58,8 @@ def local_quality(result, *, causal_guard_version=CAUSAL_GUARD_VERSION):
     errors.extend(contribution_errors(result))
     from .analyst_memory import quality_errors as analyst_errors
     errors.extend(analyst_errors(result))
+    from .investment_meaning import quality_errors as meaning_errors
+    errors.extend(meaning_errors(result))
     from .external_influence import quality_errors as influence_errors
     errors.extend(influence_errors(result))
     from .price_investigation import quality_errors as investigation_errors
@@ -103,6 +105,8 @@ def accept_review(result, review, input_id):
     errors.extend(contribution_review_errors(result, review))
     from .analyst_memory import review_errors as analyst_review_errors
     errors.extend(analyst_review_errors(result, review))
+    from .investment_meaning import review_errors as meaning_review_errors
+    errors.extend(meaning_review_errors(result, review))
     from .external_influence import review_errors as influence_review_errors
     errors.extend(influence_review_errors(result, review))
     from .market_explanation import review_errors as explanation_review_errors

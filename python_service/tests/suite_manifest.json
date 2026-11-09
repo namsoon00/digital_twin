@@ -1,5 +1,6 @@
 {
   "tests": [
+    {"file": "test_investment_meaning.py", "tier": "contract", "core": true},
     {"file": "test_analyst_memory.py", "tier": "contract", "core": true},
     {"file": "test_temporal_feature_migration.py", "tier": "contract", "core": true},
     {"file": "test_ai_portfolio_analysis.py", "tier": "unit", "core": false},

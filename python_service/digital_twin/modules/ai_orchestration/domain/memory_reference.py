@@ -25,7 +25,7 @@ def brief(row, category):
         return deepcopy(row)
     if category == "analyses":
         fields = ("executionInputId", "observedAt", "completedAt", "accountId", "symbol", "worldId",
-                  "summary", "hypothesis", "counterEvidence", "followUpConditions", "companyValue", "externalInfluences", "priceExplanation")
+                  "summary", "hypothesis", "counterEvidence", "followUpConditions", "companyValue", "externalInfluences", "priceExplanation", "investmentMeaning")
     elif row.get("kind") == "opinion-memory":
         fields = ("kind", "recordId", "caseId", "accountId", "symbol", "worldId", "question", "questionContract",
                   "answerStatus", "summary", "judgment", "judgmentImpact", "missingRequirements", "knownAt", "asOf",

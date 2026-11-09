@@ -1,5 +1,47 @@
 # Central AI control
 
+## Source-backed investment meaning (2026-11-09)
+
+New company observations use `investment-meaning-v1`: author v38, repair v34,
+independent review v27 and retrieval v24. Runtime composition selects this
+contract for the existing independent company observation lane. It evaluates a
+dated economic question; it no longer installs the mandatory price-investigation
+goal, price-clock preflight or price-only source-gap planner for that lane.
+Current-state claims still require eligible current quotes. Original-question
+research and previously frozen price-investigation inputs keep their contracts.
+
+`investmentMeaning` records one question, the economic transmission mechanism,
+usable source fields, two competing explanations with support/counter-evidence,
+an explicit actual/expectation comparison state, and the next discriminating
+source check. Metadata, prices and AI-derived summaries cannot be its economic
+evidence. A compared expectation needs a separate original document or analyst
+revision; valuation assumptions cannot become company guidance or consensus.
+Missing expectations stay unavailable. Independent review checks the mechanism,
+explanations, expectation basis and connection to a real `observe` question.
+The deterministic validators check scope, source eligibility, references and
+task linkage; they do not choose an explanation or investment action.
+
+Approved partial question answers now supply document pointers to the market
+observation reader too. Only documents actually issued by the frozen graph
+inventory can be read. The original question, reporting period, remaining
+requirements and approval state stay exact; a useful economic interpretation
+does not mark the original question answered. Missing originals remain gaps.
+
+The whole argument is covered by the independent-review digest, archived with
+approved opinions and retained in the next dated memory brief. Successful
+delivery receipts preserve its exact source fields, including counter-evidence
+not used in the leading paragraph. New customer messages show the economic
+mechanism, competing explanations, expectation limitations and source-triggered
+support/weakening conditions. A next check must also exist as an actual scheduled
+observation question. Existing quantitatively justified business checkpoints
+remain the path for numeric report comparisons; old data-needed theses are not
+retrospectively given invented ranges or relabelled as validated.
+
+Contract and MySQL tests establish source-to-review-to-receipt continuity,
+account isolation and duplicate-delivery prevention. They do not establish
+investment accuracy. Live source-backed judgments and later reporting outcomes
+are required to assess the quality of the research.
+
 Owner-requested portfolio reports are available at `/ai-reports.html`.
 See [AI portfolio reports](ai-portfolio-reports.md) for the frozen evidence,
 review, account-access and one-time delivery boundaries. Report creation does

@@ -251,6 +251,8 @@ class AIControlPublication:
                     deliveredContextFingerprint=packet["deliveredNotificationContext"]["fingerprint"])
             if "externalInfluences" in result:
                 job.context["aiControlDeliverySnapshot"]["externalInfluences"] = result["externalInfluences"]
+            if "investmentMeaning" in result:
+                job.context["aiControlDeliverySnapshot"]["investmentMeaning"] = result["investmentMeaning"]
             if "priceExplanation" in result:
                 job.context["aiControlDeliverySnapshot"]["priceExplanation"] = result["priceExplanation"]
                 job.context["aiControlDeliverySnapshot"]["priceMoveAnchor"] = result["input"]["priceMoveAnchor"]

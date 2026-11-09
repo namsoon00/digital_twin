@@ -46,6 +46,8 @@ def metric(fact, field):
 
 def render_ai_observation(result, *, sent_at="", debug_number=""):
     packet = result["input"]
+    from digital_twin.modules.ai_orchestration.contracts import investment_meaning_presentation
+    meaning = investment_meaning_presentation(result)
     focus = observation_judgment_focus(result)
     # Persisted jobs without this version retain their original rendered bytes.
     quote = (observation_subject_quote(packet) if result.get("quoteSelectionVersion") in QUOTE_SELECTION_VERSIONS
@@ -65,6 +67,8 @@ def render_ai_observation(result, *, sent_at="", debug_number=""):
     if basis and not basis["currentUseAllowed"] and (quote or not dated):
         lines += [basis["label"] + " 기준 · " + clock_label(basis.get("sourceAsOf")), basis["reason"], ""]
     lines.append(result["summary"])
+    if meaning:
+        lines += ["", "이번에 판단한 질문", meaning["question"]]
     from .company_value_message import value_lines
     if focus not in {"market", "none"}:
         lines += value_lines(result.get("companyValue"), clock_label, figure, packet=packet,
@@ -138,7 +142,15 @@ def render_ai_observation(result, *, sent_at="", debug_number=""):
             lines.append("시세 기준 시각 확인 필요 · 현재 상황으로 해석할 수 없습니다.")
     for title, key in (("가능한 설명", "hypothesis"), ("내 보유·관심 상황에서의 의미", "portfolioImpact"),
                        ("반대 근거와 확인 한계", "counterEvidence")):
-        if result.get(key):
+        if key == "hypothesis" and meaning:
+            lines += ["", "사업·가치에 미치는 경로", meaning["mechanism"], "", "경쟁 설명 비교"]
+            labels = {"preferred": "현재 근거가 더 지지", "possible": "일부 근거가 지지",
+                      "weakened": "반대 근거 확인", "unresolved": "판별 자료 부족"}
+            lines += ["• " + row["explanation"] + " · " + labels[row["assessment"]] + "\n" + row["reason"]
+                      for row in meaning["explanations"]]
+            if meaning["expectation"]["status"] != "not-required":
+                lines += ["", "기대와 실제의 비교", meaning["expectation"]["meaning"]]
+        elif result.get(key):
             lines += ["", title, result[key]]
     citations, seen = [], set()
     # JSON object order differs across task/outbox persistence. Select the same
@@ -198,7 +210,11 @@ def render_ai_observation(result, *, sent_at="", debug_number=""):
     if business.get("reviews"):
         lines += ["", "이전 사업 가설 재검토", *["• " + review["reason"] for review in business["reviews"]]]
     checks = result.get("followUpConditions", [])
-    if result.get("documentaryReview"):
+    if meaning:
+        check = meaning["nextCheck"]
+        lines += ["", "다음 자료에서 판단할 기준", check["question"], "확인할 원천: " + check["source"],
+                  "• 설명을 뒷받침: " + check["supports"], "• 설명을 약화: " + check["weakens"]]
+    elif result.get("documentaryReview"):
         lines += ["", "다음 자료에서 확인할 내용", *["• " + question for question in result["documentaryReview"]["questions"]],
                   "새 원문이나 다음 실적이 들어오면 다시 확인합니다. 가격 전망의 적중 조건은 아닙니다."]
     if checks:

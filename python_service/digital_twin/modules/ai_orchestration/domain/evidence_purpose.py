@@ -52,6 +52,9 @@ def validate(packet):
 
 
 def author_version(packet):
+    from . import investment_meaning_prompt
+    if investment_meaning_prompt.enabled(packet):
+        return investment_meaning_prompt.PROMPT_VERSION
     from . import analyst_prompt
     if analyst_prompt.enabled(packet):
         return analyst_prompt.PROMPT_VERSION
@@ -100,6 +103,9 @@ def author_version(packet):
 
 
 def repair_version(packet):
+    from . import investment_meaning_prompt
+    if investment_meaning_prompt.enabled(packet):
+        return investment_meaning_prompt.REPAIR_VERSION
     from . import analyst_prompt
     if analyst_prompt.enabled(packet):
         return analyst_prompt.REPAIR_VERSION
@@ -148,6 +154,9 @@ def repair_version(packet):
 
 
 def review_version(packet):
+    from . import investment_meaning_prompt
+    if investment_meaning_prompt.enabled(packet):
+        return investment_meaning_prompt.REVIEW_VERSION
     from . import analyst_prompt
     if analyst_prompt.enabled(packet):
         return analyst_prompt.REVIEW_VERSION

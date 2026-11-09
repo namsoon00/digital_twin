@@ -48,6 +48,9 @@ def receipt_facts(result):
             selected[fact["id"]] = copy.deepcopy(fact)
     refs = [ref for values in result.get("claimEvidence", {}).values() for ref in values]
     refs += [row[side] for row in result.get("observations", []) for side in ("left", "right")]
+    from .investment_meaning import enabled, references
+    if enabled(packet):
+        refs += references(result.get("investmentMeaning") or {})
     for ref in refs:
         if ref["period"] != "current":
             continue

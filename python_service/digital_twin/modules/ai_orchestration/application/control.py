@@ -178,10 +178,13 @@ class AIControlService:
                             packet["reviewedQuestionContext"] = opinion_memory.question_context(research)
                             from ..domain.analyst_memory import VERSION as analyst_memory_policy
                             packet["analystMemoryPolicy"] = analyst_memory_policy
+                            from ..domain.investment_meaning import VERSION as meaning_policy
+                            if self.settings.get("aiInvestmentMeaningPolicy") == meaning_policy:
+                                packet["investmentMeaningPolicy"] = meaning_policy
                         if not lanes.market(packet):
                             from ..domain.question_gap_retrieval import MARKER as gap_policy
                             packet["questionGapPolicy"] = gap_policy
-                        if lanes.market(packet):
+                        if lanes.market(packet) and not packet.get("investmentMeaningPolicy"):
                             from ..domain.external_influence import VERSION as influence_policy
                             packet["externalInfluencePolicy"] = influence_policy
                             from ..domain.market_explanation import VERSION as explanation_policy
@@ -193,6 +196,7 @@ class AIControlService:
                             from ..domain.price_investigation_repeat import VERSION as repeat_policy
                             packet["priceInvestigationRepeatPolicy"] = repeat_policy
                             packet["priceInvestigationSourceKey"] = lanes.material_key(packet, research, evidence_identity=session.price_investigation_source_key())
+                        if lanes.market(packet) and not packet.get("investmentMeaningPolicy"):
                             packet["insightProgressPolicy"] = insight_progress.VERSION
                             packet["sourceProgressKey"] = session.progress_identity()
                     from .opinion_preparation import quote_blocker
@@ -213,7 +217,8 @@ class AIControlService:
                         parked_key = retry_key({**packet, "questionWorkPending": previous_outcome["questionWorkPending"]}, research)
                         if unchanged_wait(previous_outcome, parked_key):
                             retry_identity = parked_key
-                    same_quote_wait = (previous_outcome.get("reasonCode") == "current-quote"
+                    same_quote_wait = (bool(packet.get("priceInvestigationPolicy"))
+                        and previous_outcome.get("reasonCode") == "current-quote"
                         and bool(previous_outcome.get("quoteWaitKey"))
                         and previous_outcome["quoteWaitKey"] == evidence_purpose.quote_wait_key(packet, research))
                     due_thesis_review = (previous_outcome.get("reasonCode") == "insight-source-gaps"

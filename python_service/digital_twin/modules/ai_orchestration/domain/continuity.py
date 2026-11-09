@@ -87,7 +87,7 @@ def continuity_memory(history, research, compact_cases=False):
         row = next((row for row in history if row.get("quality", {}).get("status")
                     in {"accepted", "observation-only"}), history[0])
         analyses.append(deepcopy(row) if required_memory(row) else _summary(row, ("executionInputId", "observedAt", "completedAt", "accountId", "symbol",
-            "worldId", "summary", "hypothesis", "counterEvidence", "quality", "followUpConditions", "previousFacts")))
+            "worldId", "summary", "hypothesis", "counterEvidence", "quality", "followUpConditions", "previousFacts", "investmentMeaning")))
         # Quality and conditions retain their meaning whole. They are bounded by
         # the authored observation contract, never silently cut into false claims.
         analyses[0]["quality"] = {key: deepcopy(row.get("quality", {}).get(key)) for key in ("status", "errors")}

@@ -257,6 +257,49 @@ class CentralPublicationStorageTests(unittest.TestCase):
         self.assertEqual(task['taskId'], restored['evidenceRestoration']['taskId'])
         self.assertNotIn('currency', self.publication.receipts(job.account_id, 'TEST')[0]['facts'][0])
 
+    def test_economic_chain_is_frozen_archived_and_delivered_once_with_original_source_fields(self):
+        from test_investment_meaning import authored_company
+        from digital_twin.modules.ai_orchestration.domain.execution_input import freeze_review_input
+        from digital_twin.modules.ai_orchestration.domain.insight_quality import accept_review
+        from ai_insight_fixtures import review
+        with self.control.transaction() as connection:
+            self.control.insert(connection, {**SUBJECT, "capability": "market-observe", "taskId": "economic-meaning-market"})
+        task = self.control.claim()
+        def save(env):
+            key = self.control.save_execution_input(task, env)
+            call = self.control.begin_call("independent-observation", env["promptHash"], task["taskId"], key)
+            self.control.finish_call(call)
+            return key
+        result, _ = authored_company(save, task_id=task["taskId"])
+        verdict = review()
+        verdict.update(judgmentChange={"supported": True, "reason": "원천 자료와 현금창출 판단을 대조했습니다."},
+            analystAssessment={"supported": True, "substantive": True, "memoryIds": [], "reason": "현재 원문이 기업 판단에 더하는 의미를 확인했습니다."},
+            investmentMeaning={"supported": True, "discriminating": True, "expectationsSupported": True,
+                "followUpLinked": True, "reason": "경제적 연결과 경쟁 설명 및 실제 후속 과제를 확인했습니다."})
+        review_id = save(freeze_review_input(result))
+        result["quality"] = accept_review(result, verdict, review_id)
+        self.assertEqual("accepted", result["quality"]["status"], result["quality"])
+        self.assertTrue(self.control.complete(task, result, []))
+        self.assertFalse(self.control.complete(task, result, []))
+        self.assertEqual("queued", result["publication"]["status"], result["publication"])
+        job = self.queue.get(result["publication"]["jobId"])
+        notifier = Mock(supports_delivery_checkpoints=False)
+        notifier.send.return_value = SimpleNamespace(delivered=True, label="test", reason="", metadata={})
+        dispatcher = NotificationDispatchService(self.queue, lambda _: notifier, delivery_guard=self.publication.delivery_guard)
+        with patch("digital_twin.infrastructure.settings.runtime_settings", return_value=self.settings):
+            dispatcher.deliver(job, {job.account_id: object()}, job.text)
+            with self.assertRaises(NotificationDeliverySuppressed): dispatcher.deliver(job, {job.account_id: object()}, job.text)
+        notifier.send.assert_called_once()
+        baseline = self.publication.memory(job.account_id, "TEST")
+        self.assertEqual(result["investmentMeaning"], baseline["investmentMeaning"])
+        report = next(f for f in baseline["facts"] if f["id"] == "report-2026-06-30")
+        self.assertEqual(-30, report["reportedValues"]["capitalExpenditure"])
+        with self.control.connect() as c:
+            import json
+            rows = c.execute("SELECT payload_json FROM ai_opinion_records WHERE task_id=%s", (task["taskId"],)).fetchall()
+        self.assertTrue(any(json.loads(row["payload_json"]).get("investmentMeaning") == result["investmentMeaning"] for row in rows))
+        self.assertEqual({}, self.publication.memory("other-account", "TEST"))
+
     def test_rejected_sections_survive_mysql_object_order_and_exact_delivery_guard(self):
         self.control.seed(SUBJECT)
         task = self.control.claim()

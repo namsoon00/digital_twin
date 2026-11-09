@@ -45,7 +45,7 @@ class MySQLRetiredReasoningDataStore(MySQLOperationalConnection):
                 return True
         return False
 
-    def _selection(self, connection, expected_version, apply):
+    def _selection(self, connection, expected_version, apply, *, include_purged=False):
         control = connection.execute(
             "SELECT * FROM reasoning_engine_control WHERE control_id='global' FOR UPDATE"
         ).fetchone() or {}
@@ -54,19 +54,24 @@ class MySQLRetiredReasoningDataStore(MySQLOperationalConnection):
         if not control.get("active_deployment_id") or control.get("active_deployment_id") != control.get("delivery_deployment_id"):
             raise RuntimeError("Aligned active and delivery versions are required.")
         keep = sorted({control.get(k) for k in ("active_deployment_id", "delivery_deployment_id", "candidate_deployment_id") if control.get(k)})
+        completed_filter = "" if include_purged else (
+            " AND IF(JSON_VALID(last_health_json), "
+            "JSON_EXTRACT(last_health_json,'$.retiredDataPurge.completedAt'),NULL) IS NULL"
+        )
         rows = connection.execute(
             "SELECT deployment_id,graph_store_binding FROM reasoning_engine_deployments "
             "WHERE deployment_status='retired' AND deployment_id NOT IN ("
-            + ",".join(["%s"] * len(keep)) + ") ORDER BY deployment_id", tuple(keep),
+            + ",".join(["%s"] * len(keep)) + ")" + completed_filter + " ORDER BY deployment_id", tuple(keep),
         ).fetchall()
-        if apply and not self._live_proof(connection, control):
+        if apply and rows and not self._live_proof(connection, control):
             raise RuntimeError("A new live native result from the active version is required before deletion.")
         return control, keep, rows
 
     @staticmethod
     def _disposable_subject(alias="subject"):
         return (
-            "NOT EXISTS (SELECT 1 FROM decision_publications p WHERE p.subject_case_id=" + alias + ".subject_case_id) "
+            alias + ".ai_request_id='' AND " + alias + ".notification_job_id='' "
+            "AND NOT EXISTS (SELECT 1 FROM decision_publications p WHERE p.subject_case_id=" + alias + ".subject_case_id) "
             "AND NOT EXISTS (SELECT 1 FROM investment_ai_insight_episodes e WHERE e.subject_case_id=" + alias + ".subject_case_id)"
             " AND NOT EXISTS (SELECT 1 FROM investment_hypothesis_observation_episodes e "
             "JOIN decision_candidate_snapshots s ON s.candidate_set_id=e.candidate_set_id "
@@ -119,7 +124,7 @@ class MySQLRetiredReasoningDataStore(MySQLOperationalConnection):
                 selection = ",".join("target." + quote_identifier(col) for col in columns)
                 try:
                     selected = connection.execute("SELECT " + selection + " FROM " + quoted + " target WHERE "
-                        + condition + " ORDER BY " + selection + " LIMIT %s FOR UPDATE", (*ids, limit)).fetchall()
+                        + condition + " LIMIT %s FOR UPDATE", (*ids, limit)).fetchall()
                 except Exception as error:
                     raise RuntimeError("Retired cleanup selection failed for " + table + "; this batch was not deleted.") from error
                 if selected:
@@ -154,7 +159,7 @@ class MySQLRetiredReasoningDataStore(MySQLOperationalConnection):
             raise ValueError("An explicit owner request is required.")
         removed, absent = [], []
         with self.transaction() as connection:
-            control, keep, retired = self._selection(connection, expected_control_version, True)
+            control, keep, retired = self._selection(connection, expected_control_version, True, include_purged=True)
             owners = connection.execute("SELECT deployment_id,graph_store_binding,deployment_status "
                 "FROM reasoning_engine_deployments FOR UPDATE").fetchall()
             protected = {r["graph_store_binding"] for r in owners

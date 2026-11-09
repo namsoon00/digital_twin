@@ -30,6 +30,11 @@ delivery history.
 The candidate-set lookup in hypothesis observations is indexed: otherwise the
 locking deletion preflight repeatedly scans observation history for each case.
 Selection failures name the table and roll back the bounded batch.
+Completed retired releases retain a cleanup marker, so routine maintenance does
+not rescan their protected historical cases. Graph ownership is still checked
+separately, including already-cleaned releases. Key selection has no forced
+primary-key ordering: the optimizer may use the narrow subject/ownership index
+instead of reading wide historical payload rows to satisfy an irrelevant sort.
 Old release IDs remain as small ownership/audit records; artifacts still needed
 by retained canonical cases or current comparisons remain protected. Native
 database deletion rechecks all current/experimental bindings under the control

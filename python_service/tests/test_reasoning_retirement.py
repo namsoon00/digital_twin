@@ -71,7 +71,7 @@ class RetiredReasoningDataTests(StabilizationDatabaseCase):
             worker_id="retirement-fixture", claimed_at=jobs[0]["claimedAt"])
         with self.jobs.connect() as c:
             for name, deployment in (("current", current), ("garbage", old), ("canonical", shared), ("candidate", candidate),
-                                     ("learning", old), ("outcome", old)):
+                                     ("learning", old), ("outcome", old), ("queued", old)):
                 c.execute("INSERT INTO investment_subject_decision_cases "
                     "(subject_case_id,batch_case_id,request_id,deployment_id,payload_json,created_at,updated_at) "
                     "VALUES (%s,'batch','request',%s,%s,'2026-11-09','2026-11-09')",
@@ -84,6 +84,7 @@ class RetiredReasoningDataTests(StabilizationDatabaseCase):
             c.execute("INSERT INTO investment_hypothesis_observation_episodes (episode_id,candidate_set_id,payload_json,created_at,updated_at) "
                       "VALUES ('learning','learning','{}','2026-11-09','2026-11-09')")
             c.execute("UPDATE investment_subject_decision_cases SET inference_generation_id='verified-generation' WHERE subject_case_id='outcome'")
+            c.execute("UPDATE investment_subject_decision_cases SET ai_request_id='queued-request' WHERE subject_case_id='queued'")
             c.execute("INSERT INTO investment_decision_episodes (episode_id,inference_generation_id,decided_at,payload_json,created_at,updated_at) "
                       "VALUES ('outcome','verified-generation','2026-11-09','{}','2026-11-09','2026-11-09')")
             frozen = c.execute("SELECT * FROM investment_subject_decision_cases WHERE subject_case_id<>'garbage' ORDER BY subject_case_id").fetchall()
@@ -98,6 +99,7 @@ class RetiredReasoningDataTests(StabilizationDatabaseCase):
             if result["status"] == "complete": break
         self.assertEqual("complete", result["status"])
         self.assertEqual(2, deleted)
+        self.assertEqual("empty", store.purge(control.version, "owner", apply=True)["status"])
         with self.jobs.connect() as c:
             self.assertEqual(frozen, c.execute("SELECT * FROM investment_subject_decision_cases ORDER BY subject_case_id").fetchall())
             self.assertEqual(lineage, c.execute("SELECT * FROM reasoning_engine_job_sources WHERE deployment_id=%s", (current,)).fetchall())

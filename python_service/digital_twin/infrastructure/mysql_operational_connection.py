@@ -93,12 +93,16 @@ def mysql_failure_diagnostic(error: Exception) -> Dict[str, object]:
                2013: "mysql-connection-lost", 2055: "mysql-connection-lost", 3024: "mysql-read-deadline"}
     details = {"code": code}
     label = str(getattr(error, "orbit_mysql_statement", "") or "")
-    if re.fullmatch(r"(?:SELECT|INSERT|REPLACE|UPDATE|DELETE)(?: [A-Za-z0-9_]+)?(?: \[[a-z][a-z0-9-]{0,63}\])?|mysql statement", label):
+    if re.fullmatch(r"COMMIT|(?:SELECT|INSERT|REPLACE|UPDATE|DELETE)(?: [A-Za-z0-9_]+)?(?: \[[a-z][a-z0-9-]{0,63}\])?|mysql statement", label):
         details["statement"] = label
     elapsed = getattr(error, "orbit_mysql_elapsed_ms", None)
     if isinstance(elapsed, (int, float)) and not isinstance(elapsed, bool) and 0 <= elapsed <= 86400000:
         details["elapsedMs"] = int(elapsed)
-    return {"category": "storage", "reasonCode": reasons.get(code, "mysql-operation-failed"),
+    commit_lost = label == "COMMIT" and code in MYSQL_CONNECTION_LOST_ERROR_CODES
+    if commit_lost:
+        verification = getattr(error, "orbit_mysql_commit_verification", "unconfirmed")
+        details["commitVerification"] = verification if isinstance(verification, str) and verification in {"read-failed", "not-confirmed"} else "unconfirmed"
+    return {"category": "storage", "reasonCode": "mysql-commit-unconfirmed" if commit_lost else reasons.get(code, "mysql-operation-failed"),
             "retryable": code in reasons, "mysql": details, "rawErrorRetained": False}
 
 
@@ -106,6 +110,8 @@ def mysql_statement_label(sql: object) -> str:
     """Return only a safe verb/table label for timeout diagnostics."""
 
     statement = " ".join(str(sql or "").split())
+    if statement == "COMMIT":
+        return "COMMIT"
     matched = MYSQL_STATEMENT_TABLE_PATTERN.search(statement)
     if not matched:
         return "mysql statement"
@@ -289,7 +295,12 @@ class MySQLConnectionProxy:
         return cursor
 
     def commit(self) -> None:
-        self.connection.commit()
+        started_at = time.monotonic()
+        try:
+            self.connection.commit()
+        except Exception as error:
+            attach_mysql_error_context(error, "COMMIT", started_at)
+            raise
 
     def rollback(self) -> None:
         self.connection.rollback()

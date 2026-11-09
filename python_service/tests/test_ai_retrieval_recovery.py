@@ -22,6 +22,32 @@ import test_ai_control as control_helpers
 
 
 class RetrievalRecoveryTests(unittest.TestCase):
+    def test_only_lost_commit_replies_allow_bounded_readback_and_redacted_diagnostics(self):
+        from digital_twin.infrastructure.mysql_operational_connection import MySQLConnectionProxy, mysql_failure_diagnostic
+        from digital_twin.modules.ai_orchestration.infrastructure.mysql_commit_confirmation import confirm_artifact_commit
+        from pymysql.err import OperationalError
+        error = OperationalError(2013, "private transport details")
+        raw = Mock(); raw.commit.side_effect = error
+        with self.assertRaises(OperationalError):
+            MySQLConnectionProxy(raw).commit()
+        diagnostic = mysql_failure_diagnostic(error)
+        self.assertEqual("mysql-commit-unconfirmed", diagnostic["reasonCode"])
+        self.assertEqual("COMMIT", diagnostic["mysql"]["statement"])
+        self.assertIn("elapsedMs", diagnostic["mysql"])
+        error.orbit_mysql_commit_verification = "private transport details"
+        self.assertNotIn("private", repr(mysql_failure_diagnostic(error)))
+        for statement, code in (("INSERT ai_control_inputs", 2013), ("COMMIT", 1213), ("COMMIT", 1054)):
+            failure = OperationalError(code, "synthetic failure")
+            failure.orbit_mysql_statement = statement
+            @confirm_artifact_commit("input")
+            def save(store, job, value):
+                raise failure
+            store = Mock()
+            with self.assertRaises(OperationalError) as caught:
+                save(store, {}, {})
+            self.assertIs(failure, caught.exception)
+            store.connect.assert_not_called()
+
     def test_pages_advance_only_through_issued_query_bound_cursors_and_known_fact_ids(self):
         _, source = session()
         source.candidates.return_value = [source.candidates.return_value[0], *[
@@ -199,12 +225,12 @@ class RetrievalRecoveryTests(unittest.TestCase):
 @unittest.skipUnless(os.environ.get("MYSQL_DATABASE") == "orbit_alpha_test", "isolated MySQL required")
 class RetrievalAuditStorageTests(unittest.TestCase):
     def setUp(self):
-        from digital_twin.infrastructure.settings import load_local_env, runtime_settings
+        from digital_twin.infrastructure.settings import load_local_env
         from mysql_fixtures import mysql_test_settings
         from digital_twin.modules.ai_orchestration.infrastructure.mysql_control import MySQLAIControlStore
         load_local_env()
         isolated = mysql_test_settings()
-        self.settings = {**runtime_settings(), **isolated, "aiControlBudgetEnabled": "false", "aiTokenBudgetEnabled": "false"}
+        self.settings = {**isolated, "aiControlEnabled": "true", "aiControlBudgetEnabled": "false", "aiTokenBudgetEnabled": "false"}
         self.store = MySQLAIControlStore(self.settings)
         self.clean()
         self.store.seed(SUBJECT)
@@ -273,6 +299,79 @@ class RetrievalAuditStorageTests(unittest.TestCase):
         self.assertEqual({"status": "lease-lost"}, self.store.fail(self.job, "ai-retrieval-invalid-request", terminal=True))
         with self.store.connect() as c:
             self.assertEqual(1, c.execute("SELECT COUNT(*) AS n FROM ai_control_tasks").fetchone()["n"])
+
+    def test_lost_commit_reply_confirms_exact_artifacts_without_repeating_writes(self):
+        from digital_twin.infrastructure.mysql_operational_connection import MySQLConnectionProxy
+        from pymysql.err import OperationalError
+        original = MySQLConnectionProxy.commit
+        commits = []
+        def committed_without_reply(connection):
+            original(connection)
+            commits.append(True)
+            error = OperationalError(2013, "synthetic lost commit reply")
+            error.orbit_mysql_statement = "COMMIT"
+            raise error
+        self.store.runtime_settings["aiActivityNotificationsEnabled"] = "true"
+        with patch.object(MySQLConnectionProxy, "commit", committed_without_reply):
+            _, rounds = self.record_failure()
+        self.assertEqual(4, len(commits))  # Two inputs and two rounds, each written once.
+        self.assertEqual(2, len(rounds))
+        with self.store.connect() as c:
+            self.assertEqual(2, c.execute("SELECT COUNT(*) AS n FROM ai_control_inputs").fetchone()["n"])
+            self.assertEqual(0, c.execute("SELECT COUNT(*) AS n FROM ai_control_calls").fetchone()["n"])
+        self.assertEqual({"kind": "round", "status": "confirmed"}, self.store.last_artifact_commit_reconciliation)
+
+    def test_uncommitted_or_unreadable_artifact_never_becomes_success(self):
+        from digital_twin.infrastructure.mysql_operational_connection import MySQLConnectionProxy
+        from pymysql.err import OperationalError
+        for verification_fails in (False, True):
+            error = OperationalError(2013, "synthetic lost reply")
+            error.orbit_mysql_statement = "COMMIT"
+            with self.subTest(verification_fails=verification_fails), \
+                 patch.object(MySQLConnectionProxy, "commit", side_effect=error):
+                if verification_fails:
+                    with patch.object(self.store, "connect", side_effect=RuntimeError("synthetic read failure")), \
+                         self.assertRaises(OperationalError) as failure:
+                        self.record_failure()
+                else:
+                    with self.assertRaises(OperationalError) as failure:
+                        self.record_failure()
+            self.assertIs(error, failure.exception)
+            self.assertEqual("read-failed" if verification_fails else "not-confirmed", error.orbit_mysql_commit_verification)
+        with self.store.connect() as c:
+            self.assertEqual(0, c.execute("SELECT COUNT(*) AS n FROM ai_control_inputs").fetchone()["n"])
+
+    def test_committed_artifact_does_not_restore_an_expired_lease(self):
+        from digital_twin.infrastructure.mysql_operational_connection import MySQLConnectionProxy
+        from pymysql.err import OperationalError
+        original = MySQLConnectionProxy.commit
+        def committed_after_lease_expiry(connection):
+            original(connection)
+            with self.store.connect() as c:
+                c.execute("UPDATE ai_control_tasks SET lease_until='2000' WHERE task_id=%s", (self.job["taskId"],))
+            error = OperationalError(2013, "synthetic lost commit reply")
+            error.orbit_mysql_statement = "COMMIT"
+            raise error
+        with patch.object(MySQLConnectionProxy, "commit", committed_after_lease_expiry), self.assertRaises(OperationalError):
+            self.record_failure()
+        with self.store.connect() as c:
+            self.assertEqual(1, c.execute("SELECT COUNT(*) AS n FROM ai_control_inputs").fetchone()["n"])
+            self.assertEqual(0, c.execute("SELECT COUNT(*) AS n FROM ai_control_retrieval_rounds").fetchone()["n"])
+
+    def test_committed_but_different_round_cannot_pass_readback(self):
+        from digital_twin.infrastructure.mysql_operational_connection import MySQLConnectionProxy
+        from pymysql.err import OperationalError
+        _, rounds = self.record_failure()
+        original = MySQLConnectionProxy.commit
+        def changed_after_commit(connection):
+            original(connection)
+            with self.store.connect() as c:
+                c.execute("UPDATE ai_control_retrieval_rounds SET artifact_hash='different' WHERE input_id=%s", (rounds[0]["inputId"],))
+            error = OperationalError(2013, "synthetic lost reply")
+            error.orbit_mysql_statement = "COMMIT"
+            raise error
+        with patch.object(MySQLConnectionProxy, "commit", changed_after_commit), self.assertRaises(OperationalError):
+            self.store.save_retrieval_round(self.job, rounds[0])
 
     def test_terminal_failure_and_delayed_recovery_commit_together_without_publication(self):
         failure, rounds = self.record_failure()

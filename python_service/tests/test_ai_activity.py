@@ -126,6 +126,38 @@ class AIActivityStorageTests(unittest.TestCase):
         self.assertEqual((100, 20), (completed["details"]["inputTokens"], completed["details"]["outputTokens"]))
         self.assertEqual(job["symbol"], completed["symbol"])
 
+    def test_call_settlement_and_provider_success_survive_a_lost_commit_reply_once(self):
+        from test_ai_control import PACKET
+        from digital_twin.modules.ai_orchestration.domain.execution_input import freeze_execution_input
+        from digital_twin.infrastructure.mysql_operational_connection import MySQLConnectionProxy
+        from pymysql.err import OperationalError
+        job = self.claim()
+        envelope = freeze_execution_input({**PACKET, "taskId": job["taskId"]}, [], [])
+        key = self.store.save_execution_input(job, envelope)
+        ticket = self.store.acquire_execution()
+        call_id = self.store.begin_call("independent-observation", envelope["promptHash"], job["taskId"], key)
+        original, commits = MySQLConnectionProxy.commit, []
+        def committed_without_reply(connection):
+            original(connection)
+            commits.append(True)
+            error = OperationalError(2013, "synthetic lost commit reply")
+            error.orbit_mysql_statement = "COMMIT"
+            raise error
+        with patch.object(MySQLConnectionProxy, "commit", committed_without_reply):
+            self.store.finish_call(call_id, metrics={"usage": {"input_tokens": 100, "output_tokens": 20}, "totalMs": 500})
+            self.store.finish_execution(ticket, "success")
+        self.assertEqual(2, len(commits))
+        self.store.finish_call(call_id, "late-failure")
+        with self.store.connect() as c:
+            call = c.execute("SELECT status,error_kind FROM ai_control_calls WHERE call_id=%s", (call_id,)).fetchone()
+            budget = c.execute("SELECT used_count FROM ai_control_budget WHERE day_key=%s", ("calls:" + envelope["current"]["capturedAt"][:10],)).fetchone()
+            measured = json.loads(c.execute("SELECT metrics_json FROM ai_control_call_metrics WHERE call_id=%s", (call_id,)).fetchone()["metrics_json"])
+        self.assertEqual({"status": "completed", "error_kind": ""}, call)
+        self.assertEqual(1, budget["used_count"])
+        self.assertEqual({"input_tokens": 100, "output_tokens": 20}, measured["usage"])
+        self.assertEqual(1, sum(e["stage"] == "model-completed" for e in self.events()))
+        self.store.execution_wait()
+
     def test_outbox_rolls_back_then_retries_without_lost_or_duplicate_receipt(self):
         self.claim()
         enqueue = self.queue.enqueue_with_connection

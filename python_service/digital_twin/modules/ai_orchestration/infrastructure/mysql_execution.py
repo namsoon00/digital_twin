@@ -9,6 +9,7 @@ from digital_twin.modules.ai_orchestration.domain.execution_resilience import (
 from digital_twin.modules.ai_orchestration.infrastructure.mysql_runtime import RUNTIME
 from digital_twin.modules.ai_orchestration.domain.runtime_coverage import runtime_view
 from ..domain.execution_lanes import MARKET, OBSERVATIONS, enabled as lanes_enabled
+from .mysql_commit_confirmation import confirmed_transaction
 
 
 EXECUTION_SCHEMA = """CREATE TABLE IF NOT EXISTS ai_control_execution_state (
@@ -46,10 +47,16 @@ class AIExecutionPersistence:
 
     def finish_execution(self, ticket, outcome, diagnostic=None):
         now = datetime.now(timezone.utc)
-        with self.transaction() as connection:
+        confirmation = {}
+        def persisted(connection):
+            row = connection.execute("SELECT state_json,updated_at FROM ai_control_execution_state WHERE scope_key=%s", (SCOPE,)).fetchone()
+            return bool(confirmation and row and row["updated_at"] == stamp(now)
+                        and json.loads(row["state_json"]) == confirmation["state"])
+        with confirmed_transaction(self, persisted) as connection:
             state = self._locked_execution_state(connection, SCOPE, now)
             updated = finish_state(state, ticket, now, outcome, diagnostic)
             self._save_execution_state(connection, SCOPE, updated, now)
+            confirmation["state"] = updated
 
     def execution_wait(self):
         with self.connect() as connection:

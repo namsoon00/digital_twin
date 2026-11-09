@@ -31,6 +31,7 @@ from .mysql_token_usage import AITokenUsagePersistence
 from ..domain.token_budget import usage_counts, RESERVATION, execution_pool
 from .mysql_activity import AIActivityPersistence, SCHEMA as ACTIVITY_SCHEMA
 from .mysql_opinion_memory import OpinionMemoryPersistence, SCHEMA as OPINION_SCHEMA, APPROVED_RESULT_SQL
+from .mysql_commit_confirmation import confirm_artifact_commit, confirmed_transaction, call_completion_confirmed
 
 
 STATUS_INDEXES = (
@@ -422,6 +423,7 @@ class MySQLAIControlStore(OpinionMemoryPersistence, AIActivityPersistence, AITok
             result[0]["followUpEvaluations"] = json.loads(condition_state["result_json"])["followUpEvaluations"]
         return result
 
+    @confirm_artifact_commit("input")
     def save_execution_input(self, job, envelope):
         digest = validate_execution_input(envelope)
         packet = envelope["current"]
@@ -444,6 +446,7 @@ class MySQLAIControlStore(OpinionMemoryPersistence, AIActivityPersistence, AITok
                           promptVersion=envelope["promptVersion"], inputBytes=len(raw))
         return input_id
 
+    @confirm_artifact_commit("round")
     def save_retrieval_round(self, job, step):
         raw = json.dumps(step, ensure_ascii=False, allow_nan=False).encode()
         if len(raw) > 256 * 1024:
@@ -539,7 +542,8 @@ class MySQLAIControlStore(OpinionMemoryPersistence, AIActivityPersistence, AITok
         return max(0, min(MAX_ROUNDS, maximum - int((row or {}).get("used_count", 0)) - 2))
 
     def finish_call(self, call_id, error_kind="", metrics=None):
-        with self.transaction() as connection:
+        confirmation = {}
+        with confirmed_transaction(self, lambda c: call_completion_confirmed(c, call_id, confirmation)) as connection:
             call = connection.execute("SELECT workload,started_at,status,task_id FROM ai_control_calls WHERE call_id=%s FOR UPDATE", (call_id,)).fetchone()
             if not call or call["status"] != "running":
                 return
@@ -564,14 +568,18 @@ class MySQLAIControlStore(OpinionMemoryPersistence, AIActivityPersistence, AITok
                     safe["usageEvidence"] = {k: proof[k] for k in ("version", "complete", "terminalTurns", "failedTurns")}
                 connection.execute("INSERT INTO ai_control_call_metrics (call_id,metrics_json) VALUES (%s,%s) "
                     "ON DUPLICATE KEY UPDATE metrics_json=VALUES(metrics_json)", (call_id, json.dumps(safe)))
-            connection.execute("UPDATE ai_control_calls SET status=%s,completed_at=%s,error_kind=%s WHERE call_id=%s", ("failed" if error_kind else "completed", stamp(), error_kind[:100], call_id))
+            completed_at, status = stamp(), "failed" if error_kind else "completed"
+            connection.execute("UPDATE ai_control_calls SET status=%s,completed_at=%s,error_kind=%s WHERE call_id=%s", (status, completed_at, error_kind[:100], call_id))
             measured = {"inputTokens": usage["input_tokens"], "outputTokens": usage["output_tokens"],
                         "cachedTokens": usage.get("cached_input_tokens", 0)} if usage is not None else {}
-            self.activity(connection, "model-failed" if error_kind else "model-completed", call_id,
+            event = self.activity(connection, "model-failed" if error_kind else "model-completed", call_id,
                           self.activity_subject(connection, call.get("task_id", "")), callId=call_id,
                           workload=call["workload"], reasonCode=error_kind[:100],
                           promptVersion=admission.get("promptVersion", ""),
                           elapsedMs=(metrics or {}).get("totalMs"), **measured)
+            confirmation.update(status=status, completed_at=completed_at, error_kind=error_kind[:100],
+                                task_id=call["task_id"], metrics=safe,
+                                activityId=event["eventId"] if event else "")
 
     def review_proof(self, input_id):
         with self.connect() as connection:

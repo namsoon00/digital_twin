@@ -184,7 +184,7 @@ class ConsoleDecisionReadModelTest(unittest.TestCase):
             console.console_dashboard_api_payload({"accountId": ["account-a"]})
             dashboard_cache_key = cached.call_args.args[1]
         self.assertEqual("investment-reading-v1|account-a|TEST|3|user", decision_cache_key)
-        self.assertEqual("investment-reading-v1|account-a|", dashboard_cache_key)
+        self.assertEqual("investment-reading-v1|calendar-source-v1|account-a|", dashboard_cache_key)
 
     def test_blocked_saved_opinion_and_technical_checks_remain_read_only(self):
         case = {"decision": {"action": "HOLD", "state": "blocked", "requiredChecks": [

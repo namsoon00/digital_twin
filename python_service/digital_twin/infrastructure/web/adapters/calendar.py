@@ -60,13 +60,18 @@ def investment_calendar_query_payload(query: Dict[str, List[str]]) -> Dict[str, 
     }
 
 
+def investment_calendar_source_payload(query: Dict[str, List[str]]) -> Dict[str, object]:
+    """Direct read for an already asynchronous composite loader."""
+    return investment_calendar_read_service().list_events(investment_calendar_query_payload(query))
+
+
 def investment_calendar_payload(query: Dict[str, List[str]]) -> Dict[str, object]:
     selected = investment_calendar_query_payload(query)
     key = json.dumps({"version": 1, "accountId": first_query(query, "accountId") or "default",
                       "query": selected}, ensure_ascii=False, sort_keys=True)
     payload = cached_api_payload(
         CALENDAR_READ_MODEL, key,
-        lambda: investment_calendar_read_service().list_events(selected),
+        lambda: investment_calendar_source_payload(query),
         force=request_bool(first_query(query, "refresh"), False), blocking_first_load=False,
     )
     if "events" not in payload:

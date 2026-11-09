@@ -8,6 +8,7 @@ import { renderInstrumentWorkspaceLink } from "../instruments/workspace.mjs";
 import { editorWorkDetailPayload, renderWorkDetailButton } from "../navigation/detail.mjs";
 import { mobileInfiniteScrollEnabled, renderMobileInfiniteScrollFooter } from "../navigation/infinite-list.mjs";
 import { renderNotificationDetailMetric } from "../notifications/reasoning.mjs";
+import { readModelIsWarming } from "../requests/json.mjs";
 import { appDateTimeParts } from "../settings/preferences.mjs";
 import { consoleMetricTargetAttributes, renderConsoleManagedPage } from "../shared/console.mjs";
 import { formatClock, latestChangedFirst, renderRecordChangedAt } from "../shared/format.mjs";
@@ -19,6 +20,16 @@ import { settingsState } from "../state/settings.mjs";
 import { shellState } from "../state/shell.mjs";
 
 function renderInvestmentCalendarPage(snapshot) {
+  if (readModelIsWarming(currentInvestmentCalendar())) {
+    return renderConsoleManagedPage("calendar", [], [
+      '<section class="panel investment-calendar-view" aria-busy="true">',
+      renderEmptyState({
+        tone: "watch", label: "Calendar", title: "저장된 투자 일정을 확인하고 있습니다",
+        description: "조회가 끝나면 일정과 등록 건수를 표시합니다.",
+        action: '<button class="text-button" type="button" data-action="refresh-investment-calendar">다시 확인</button>'
+      }), '</section>'
+    ].join(""));
+  }
   return renderConsoleManagedPage("calendar", [], [
     '<section class="admin-grid investment-calendar-view">',
     renderInvestmentCalendarSummaryPanel(),

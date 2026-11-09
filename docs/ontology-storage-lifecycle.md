@@ -594,4 +594,8 @@ Dashboard and calendar cold reads return a stable, explicitly warming page
 contract while their existing persistent read cache refreshes asynchronously.
 Unavailable counts are unknown rather than zero. Cache keys include account
 and filters; calendar edits invalidate the namespace and reject older in-flight
-responses. Composite dashboard freshness includes its child calendar cache.
+responses. Composite dashboard freshness includes its calendar source status.
+The background dashboard loader reads calendar rows directly, so a moving
+query clock cannot keep creating cold nested caches. The calendar screen polls
+a warming response with the shared bounded poller, rejects results for older
+filters, and waits to present event counts until a usable response arrives.

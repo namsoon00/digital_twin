@@ -11,6 +11,14 @@ from digital_twin.platform.domain.typedb_capacity_policy import evaluate_typedb_
 
 
 class TypeDBServiceManagerTests(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        isolated = patch.object(service_manager, "supervisor_maintenance_path",
+                                return_value=Path(temporary.name)/"maintenance.json")
+        isolated.start()
+        self.addCleanup(isolated.stop)
+
     def test_live_maintenance_cannot_be_replaced_or_cleared_by_another_process(self):
         with tempfile.TemporaryDirectory() as temp, \
                 patch.object(service_manager, "supervisor_maintenance_path", return_value=Path(temp)/"maintenance.json"), \
@@ -24,12 +32,33 @@ class TypeDBServiceManagerTests(unittest.TestCase):
                 with patch.object(service_manager, "worker_specs") as specs, \
                         patch.object(service_manager, "stop") as stop:
                     self.assertEqual(1, service_manager.restart())
+                    self.assertEqual(1, service_manager.start())
                 specs.assert_not_called()
                 stop.assert_not_called()
             self.assertEqual(original, service_manager.read_supervisor_maintenance_payload())
             self.assertEqual(token, original["token"])
             service_manager.end_supervisor_maintenance()
             self.assertEqual({}, service_manager.read_supervisor_maintenance_payload())
+
+    def test_replacement_supervisor_waits_for_maintenance_before_starting_writers(self):
+        handlers = {}
+        def sleep(_seconds):
+            handlers[service_manager.signal.SIGTERM](None, None)
+        with tempfile.TemporaryDirectory() as temp, \
+                patch.object(service_manager, "supervisor_pid_path", return_value=Path(temp)/"supervisor.pid"), \
+                patch.object(service_manager, "supervisor_running", return_value=False), \
+                patch.object(service_manager, "append_log"), \
+                patch.object(service_manager, "write_supervisor_heartbeat"), \
+                patch.object(service_manager, "supervisor_maintenance_active", return_value=True), \
+                patch.object(service_manager, "acknowledge_supervisor_maintenance") as ack, \
+                patch.object(service_manager.signal, "signal", side_effect=lambda signum, callback: handlers.update({signum:callback})), \
+                patch.object(service_manager.time, "sleep", side_effect=sleep), \
+                patch.object(service_manager, "start") as start, \
+                patch.object(service_manager, "stop") as stop:
+            self.assertEqual(0, service_manager.supervise())
+            ack.assert_called_once()
+            start.assert_not_called()
+            stop.assert_not_called()
 
     def test_orphaned_maintenance_can_be_reclaimed(self):
         with tempfile.TemporaryDirectory() as temp, \

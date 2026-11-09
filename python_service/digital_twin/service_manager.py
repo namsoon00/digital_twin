@@ -4417,6 +4417,11 @@ def status() -> int:
 
 
 def start(excluded_roles=None, supervisor_async: bool = False) -> int:
+    if supervisor_maintenance_active():
+        owner = int_value(read_supervisor_maintenance_payload().get("pid"), 0, 0)
+        if owner and owner != os.getpid():
+            print("Service start deferred because another process owns active maintenance.")
+            return 1
     excluded = {str(role or "").strip() for role in (excluded_roles or set())}
     for name, spec in ordered_worker_specs(worker_specs()):
         if str(spec.get("role") or "").strip() in excluded:
@@ -4893,6 +4898,14 @@ def supervise() -> int:
     signal.signal(signal.SIGTERM, request_stop)
     signal.signal(signal.SIGINT, request_stop)
     try:
+        # A watchdog/login can replace the supervisor during an external
+        # physical maintenance run. Adopt its lease before starting writers.
+        while not stopping["value"] and supervisor_maintenance_active():
+            acknowledge_supervisor_maintenance()
+            write_supervisor_heartbeat("maintenance")
+            time.sleep(1)
+        if stopping["value"]:
+            return 0
         if start(supervisor_async=True) != 0:
             return 1
         last_log_maintenance_at = 0.0
@@ -5135,7 +5148,8 @@ def supervise() -> int:
             time.sleep(5)
     finally:
         write_supervisor_heartbeat("stopping")
-        stop(include_supervisor=False)
+        if not supervisor_maintenance_active():
+            stop(include_supervisor=False)
         remove_pid(supervisor_pid_path())
         append_log(supervisor_log_path(), "stop")
     return 0

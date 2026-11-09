@@ -110,6 +110,28 @@ class OperationalReadLatencyTests(unittest.TestCase):
         self.assertFalse(cache.get_or_refresh.call_args.kwargs["blocking_first_load"])
         source.assert_not_called()
 
+    def test_background_dashboard_reads_calendar_rows_despite_a_moving_from_clock(self):
+        service = MagicMock()
+        service.list_events.return_value = {"events": [{"eventId": "upcoming"}], "summary": {"total": 1}}
+        model = MagicMock()
+        model.dashboard_summary.side_effect = lambda _s, _l, _c, events: {"upcomingEvents": events["events"]}
+        with patch.object(console, "operational_read_settings", return_value={}), \
+                patch.object(console.stores, "investment_domain_store"), \
+                patch.object(console, "flow_lens_read_payload", return_value={}), \
+                patch.object(console, "investment_case_api_payload", return_value={}), \
+                patch.object(console, "console_read_model_service", return_value=model), \
+                patch.object(calendar, "investment_calendar_read_service", return_value=service), \
+                patch.object(calendar, "CALENDAR_READ_MODEL") as nested_cache:
+            first = console._console_dashboard_source_payload({})
+            second = console._console_dashboard_source_payload({})
+        self.assertEqual(first["upcomingEvents"], [{"eventId": "upcoming"}])
+        self.assertEqual(second["upcomingEvents"], first["upcomingEvents"])
+        self.assertEqual(first["componentFreshness"]["calendar"]["status"], "ok")
+        self.assertEqual(service.list_events.call_count, 2)
+        queries = [call.args[0] for call in service.list_events.call_args_list]
+        self.assertNotEqual(queries[0]["from"], queries[1]["from"])
+        nested_cache.get_or_refresh.assert_not_called()
+
 
 class CollectionTurnBudgetTests(unittest.TestCase):
     def test_bls_access_denial_is_shared_by_partitions_and_expires(self):

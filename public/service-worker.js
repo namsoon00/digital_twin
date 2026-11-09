@@ -1,15 +1,15 @@
-const SHELL_CACHE = "orbit-alpha-shell-modules-5309c71659a80e4a";
+const SHELL_CACHE = "orbit-alpha-shell-modules-76707702854e3596";
 const APP_SHELL = [
   "./",
   "./index.html",
   "./manifest.webmanifest",
   "./favicon.svg",
-  "./styles.css?v=modules-5309c71659a80e4a",
-  "./console-workspaces.css?v=modules-5309c71659a80e4a",
-  "./app-default-settings.js?v=modules-5309c71659a80e4a",
-  "./console-workspaces.js?v=modules-5309c71659a80e4a",
-  "./web-runtime.js?v=modules-5309c71659a80e4a",
-  "./app.js?v=modules-5309c71659a80e4a",
+  "./styles.css?v=modules-76707702854e3596",
+  "./console-workspaces.css?v=modules-76707702854e3596",
+  "./app-default-settings.js?v=modules-76707702854e3596",
+  "./console-workspaces.js?v=modules-76707702854e3596",
+  "./web-runtime.js?v=modules-76707702854e3596",
+  "./app.js?v=modules-76707702854e3596",
   "./icons/house.svg",
   "./icons/chart-no-axes-combined.svg",
   "./icons/brain-circuit.svg",

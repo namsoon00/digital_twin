@@ -3,7 +3,7 @@ import { investmentCalendarDisplayTitle, investmentCalendarMonthDate, investment
 import { mergeUniqueItems, mobileInfiniteScrollEnabled } from "../navigation/infinite-list.mjs";
 import { loadNotificationJobs, loadNotificationSchedules } from "../notifications/requests.mjs";
 import { render } from "../render/scheduler.mjs";
-import { requestJson } from "../requests/json.mjs";
+import { clearReadModelPoll, readModelIsWarming, requestJson, scheduleReadModelPoll } from "../requests/json.mjs";
 import { sendJson } from "../requests/mutations.mjs";
 import { appDateTimeParts, currentAppTimezone } from "../settings/preferences.mjs";
 import { showSnackbar } from "../shell/snackbar.mjs";
@@ -204,27 +204,37 @@ function investmentCalendarCandidateQueryString() {
 
 function loadInvestmentCalendar(force) {
   if (calendarState.investmentCalendarLoading) return Promise.resolve();
-  if (calendarState.investmentCalendar && !force) return Promise.resolve(calendarState.investmentCalendar);
+  if (calendarState.investmentCalendar && !force && !readModelIsWarming(calendarState.investmentCalendar)) return Promise.resolve(calendarState.investmentCalendar);
+  var identity = investmentCalendarQueryString();
   calendarState.investmentCalendarLoading = true;
   calendarState.investmentCalendarError = "";
   render();
   var promise = isStaticPreviewHost()
     ? Promise.resolve(staticInvestmentCalendarPayload("정적 미리보기"))
-    : requestJson("/api/investment-calendar/events" + investmentCalendarQueryString(), {
+    : requestJson("/api/investment-calendar/events" + identity, {
         key: "investment-calendar-events",
         timeoutMs: 8000,
         force: Boolean(force)
       });
   return promise
     .then(function (payload) {
+      if (identity !== investmentCalendarQueryString()) return;
       calendarState.investmentCalendar = payload;
       calendarState.investmentCalendarError = "";
+      if (readModelIsWarming(payload)) {
+        scheduleReadModelPoll("investment-calendar-events", function () { loadInvestmentCalendar(true); });
+      } else {
+        clearReadModelPoll("investment-calendar-events");
+      }
     })
     .catch(function (error) {
+      if (identity !== investmentCalendarQueryString()) return;
+      clearReadModelPoll("investment-calendar-events");
       calendarState.investmentCalendarError = error.message || "투자 캘린더를 불러오지 못했습니다.";
     })
     .finally(function () {
       calendarState.investmentCalendarLoading = false;
+      if (identity !== investmentCalendarQueryString()) loadInvestmentCalendar(true);
       render();
     });
 }

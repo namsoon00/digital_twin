@@ -5,7 +5,7 @@ from datetime import datetime
 from datetime import timezone
 from digital_twin.infrastructure import operational_store as stores
 from digital_twin.infrastructure.stale_read_model import StaleReadModelCache
-from digital_twin.infrastructure.web.adapters.calendar import investment_calendar_payload
+from digital_twin.infrastructure.web.adapters.calendar import investment_calendar_source_payload
 from digital_twin.infrastructure.web.adapters.cases import investment_case_api_payload
 from digital_twin.infrastructure.web.adapters.flow_lens import flow_lens_read_payload
 from digital_twin.infrastructure.web.adapters.research_evidence import research_evidence_payload
@@ -77,7 +77,9 @@ def _console_dashboard_source_payload(query: Dict[str, List[str]]) -> Dict[str, 
             "from": [datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")],
             "limit": ["40"],
         }
-        return investment_calendar_payload(calendar_query)
+        # This composite already loads off the HTTP thread. A nested async
+        # cache keyed by the moving `from` clock would return warming forever.
+        return investment_calendar_source_payload(calendar_query)
 
     readers = {
         "snapshot": lambda: flow_lens_read_payload(query),
@@ -109,7 +111,7 @@ def _console_dashboard_source_payload(query: Dict[str, List[str]]) -> Dict[str, 
 def console_dashboard_api_payload(query: Dict[str, List[str]]) -> Dict[str, object]:
     account_id = first_query(query, "accountId") or "default"
     watchlist = ",".join(sorted(filter(None, first_query(query, "watchlistSymbols").upper().split(","))))
-    cache_key = INVESTMENT_READING_CACHE_VERSION + "|" + account_id + "|" + watchlist
+    cache_key = INVESTMENT_READING_CACHE_VERSION + "|calendar-source-v1|" + account_id + "|" + watchlist
     payload = cached_api_payload(
         DASHBOARD_READ_MODEL,
         cache_key,

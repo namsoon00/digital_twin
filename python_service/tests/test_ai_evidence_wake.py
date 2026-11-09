@@ -78,6 +78,60 @@ class EvidenceWakeContractTests(unittest.TestCase):
 
 
 @unittest.skipUnless(os.environ.get("MYSQL_DATABASE") == "orbit_alpha_test", "isolated MySQL required")
+class ReceiptSweepStorageTests(unittest.TestCase):
+    def setUp(self):
+        from mysql_fixtures import mysql_test_settings, mysql_test_database_config, register_mysql_test_database
+        from digital_twin.infrastructure.settings import load_local_env
+        from digital_twin.infrastructure.mysql_monitoring import ensure_mysql_database_exists
+        from digital_twin.infrastructure.mysql_operational_connection import MySQLOperationalConnection, MYSQL_SCHEMA
+        from digital_twin.modules.ai_orchestration.infrastructure.mysql_execution import EXECUTION_SCHEMA
+        from digital_twin.modules.ai_orchestration.infrastructure.mysql_evidence_wake import SCHEMA
+        from digital_twin.infrastructure.transactions.ai_observation_wake import AIObservationEvidenceWake
+        load_local_env()
+        self.settings = {**mysql_test_settings(), '_skipOperationalSchemaBootstrap': '1'}
+        self.settings['mysqlDatabase'] += '_receipt_gc'
+        config = mysql_test_database_config(self.settings)
+        register_mysql_test_database(config)
+        ensure_mysql_database_exists(config)
+        self.control = MySQLOperationalConnection(self.settings)
+        # Only the three real tables read by receipt retention are required.
+        # Avoid unrelated platform bootstrap/partition work for this contract.
+        with self.control.connect() as connection:
+            for sql in (EXECUTION_SCHEMA, SCHEMA[0], next(q for q in MYSQL_SCHEMA if 'CREATE TABLE IF NOT EXISTS domain_events (' in q)):
+                connection.execute(sql)
+        self.waker = object.__new__(AIObservationEvidenceWake)
+
+    def test_receipt_retirement_pages_survive_restart_and_revisit_late_source_removal(self):
+        from digital_twin.infrastructure.transactions.ai_observation_wake import AIObservationEvidenceWake
+        with self.control.transaction() as connection:
+            connection.executemany('INSERT INTO ai_control_evidence_events(event_id,processed_at) VALUES(%s,%s)',
+                [('retirement-%03d' % n, stamp()) for n in range(205)])
+        with self.control.transaction() as connection:
+            connection.execute("INSERT INTO domain_events(event_id,name,occurred_at,payload_json,event_json) VALUES(%s,%s,%s,'{}','{}')", ('retirement-005','test.receipt-retirement',stamp()))
+        with self.assertRaises(RuntimeError):
+            with self.control.transaction() as connection:
+                self.waker.retire_receipts(connection)
+                raise RuntimeError('rollback sweep')
+        with self.control.connect() as connection:
+            self.assertEqual(205, connection.execute('SELECT COUNT(*) AS n FROM ai_control_evidence_events').fetchone()['n'])
+        with self.control.transaction() as connection:
+            self.waker.retire_receipts(connection)
+        with self.control.connect() as connection:
+            self.assertEqual(106, connection.execute('SELECT COUNT(*) AS n FROM ai_control_evidence_events').fetchone()['n'])
+            state = json.loads(connection.execute("SELECT state_json FROM ai_control_execution_state WHERE scope_key='ai-evidence-receipt-retention'").fetchone()['state_json'])
+        self.assertEqual('retirement-099', state['afterEventId'])
+        restarted = AIObservationEvidenceWake(self.settings)
+        with self.control.transaction() as connection:
+            restarted.retire_receipts(connection)
+            connection.execute("DELETE FROM domain_events WHERE event_id='retirement-005'")
+        for _ in range(3):
+            with self.control.transaction() as connection:
+                restarted.retire_receipts(connection)
+        with self.control.connect() as connection:
+            self.assertEqual(0, connection.execute('SELECT COUNT(*) AS n FROM ai_control_evidence_events').fetchone()['n'])
+
+
+@unittest.skipUnless(os.environ.get("MYSQL_DATABASE") == "orbit_alpha_test", "isolated MySQL required")
 class EvidenceWakeStorageTests(unittest.TestCase):
     def setUp(self):
         from digital_twin.infrastructure.settings import runtime_settings, load_local_env
@@ -93,6 +147,7 @@ class EvidenceWakeStorageTests(unittest.TestCase):
 
     def clean(self):
         with self.control.transaction() as connection:
+            connection.execute("DELETE FROM ai_control_execution_state WHERE scope_key='ai-evidence-receipt-retention'")
             for table in ("ai_control_evidence_events", "ai_control_evidence_wakes", "ai_control_input_calls", "ai_control_inputs",
                           "ai_control_tasks", "ai_control_calls", "ai_control_budget"):
                 connection.execute("DELETE FROM " + table)

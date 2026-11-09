@@ -27,6 +27,13 @@ PLAN_REASONS = {
 # Only developer-authored messages are admitted; arbitrary exception text must
 # never become a diagnostic or a model correction instruction.
 COMPONENT_REASONS = {
+    "questionResolutions.judgmentImpact": (
+        "opinion impact requires separate evidence relation and change", "invalid opinion impact",
+        "opinion change and compatibility effect disagree", "new opinion effect must match its evidence relation",
+        "reviewed prior opinion cannot be described as new",
+        "unchanged question evidence cannot strengthen or weaken its opinion",
+        "opinion comparison requires a reviewed baseline",
+    ),
     "questionResolutions.answerParts": (
         "question answer requires confirmed parts and gaps", "question answer parts exceed bounds",
         "question answer requires bounded confirmed text", "confirmed answer requires its own usable selected evidence",
@@ -120,6 +127,7 @@ def validator_location(error):
         "brain_management": "caseReviews", "business_research": "businessResearch",
         "judgment_impact": "questionResolutions.judgmentImpact", "knowledge_research": "knowledgeResearch",
         "analyst_memory": "analystAssessment", "investment_meaning": "investmentMeaning",
+        "opinion_memory": "questionResolutions.judgmentImpact",
         "scoped_research": "researchScope", "question_source_handoff": "questionSourceHandoff"}
     location = {}
     trace = error.__traceback__
@@ -136,6 +144,13 @@ def task_failure(stage, error):
     execution = exception_diagnostic(error)
     if execution:
         return "ai-execution:" + execution["category"], {"stage": stage, "category": "execution", "execution": execution}
+    if isinstance(error, ValueError) and str(error) == "investment meaning requires usable source content, not prices or metadata":
+        # This is a source-admission failure, not permission to spend another
+        # author call inventing or rephrasing an unsupported economic claim.
+        return "validation:economic-source-reference", {"version": "ai-task-failure-v2", "stage": stage,
+            "category": "data-or-reference", "reasonCode": "economic-source-reference",
+            **validator_location(error), "field": "investmentMeaning.evidence",
+            "expected": "captured usable original content", "rawErrorRetained": False}
     known = PLAN_REASONS.get(str(error)) if isinstance(error, ValueError) else None
     issue = correction_issue(error)
     if issue:

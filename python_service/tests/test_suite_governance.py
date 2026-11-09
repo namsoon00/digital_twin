@@ -511,7 +511,8 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # retain their own boundaries; required evidence still fails closed.
         # Active checkpoint claims cannot be starved by a retired deployment.
         # Four concurrently registered storage/watchdog and index-preservation contracts.
-        self.assertLessEqual(total, 3073)
+        # Receipt cleanup pages persist across restarts and late source removal.
+        self.assertLessEqual(total, 3074)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

@@ -30,6 +30,28 @@ class AIObservationEvidenceWake:
             + placeholders + ")", tuple(row["event_id"] for row in keys)).fetchall()
         return sorted(rows, key=lambda row: (row["occurred_at"], row["event_id"]))
 
+    @staticmethod
+    def retire_receipts(connection):
+        """Sweep receipt keys in bounded pages, never the full retained ledger."""
+        from digital_twin.modules.ai_orchestration.infrastructure.mysql_execution import AIExecutionPersistence
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc)
+        scope = "ai-evidence-receipt-retention"
+        state = AIExecutionPersistence._locked_execution_state(connection, scope, now)
+        after = state.get("afterEventId", "")
+        if not isinstance(after, str):
+            after = ""
+        rows = connection.execute("SELECT /*+ MAX_EXECUTION_TIME(5000) */ event_id "
+            "FROM ai_control_evidence_events FORCE INDEX(PRIMARY) WHERE event_id>%s "
+            "ORDER BY event_id LIMIT 100", (after,)).fetchall()
+        if rows:
+            ids = [row["event_id"] for row in rows]
+            connection.execute("DELETE FROM ai_control_evidence_events WHERE event_id IN ("
+                + ",".join(["%s"] * len(ids)) + ") AND NOT EXISTS "
+                "(SELECT 1 FROM domain_events e WHERE e.event_id=ai_control_evidence_events.event_id)", tuple(ids))
+        AIExecutionPersistence._save_execution_state(connection, scope,
+            {"version": "bounded-receipt-retention-v1", "afterEventId": rows[-1]["event_id"] if rows else ""}, now)
+
     def run_once(self, subjects):
         def deliver(connection):
             # Per-event receipts, rather than an occurred_at watermark, also
@@ -43,9 +65,6 @@ class AIObservationEvidenceWake:
                         self.store.record(connection, event, target)
             woken = self.store.wake_pending(connection, subjects)
             # Receipts can retire only after their source event has retired.
-            retired = connection.execute("SELECT r.event_id FROM ai_control_evidence_events r "
-                "WHERE NOT EXISTS (SELECT 1 FROM domain_events e WHERE e.event_id=r.event_id) LIMIT 100").fetchall()
-            for row in retired:
-                connection.execute("DELETE FROM ai_control_evidence_events WHERE event_id=%s", (row["event_id"],))
+            self.retire_receipts(connection)
             return {"eventsConsumed": len(rows), "tasksWoken": woken}
         return self.store.transaction_with_deadlock_retry("ai-evidence-wake", deliver)

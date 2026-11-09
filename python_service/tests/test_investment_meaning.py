@@ -107,7 +107,10 @@ class InvestmentMeaningTests(unittest.TestCase):
             with self.subTest(field=field), self.assertRaises(ValueError): meaning.validate(bad, p)
         fact = next(f for f in p["facts"] if f["id"] == value["evidence"][0]["factId"])
         fact["judgementEvidenceUsable"] = False
-        with self.assertRaises(ValueError): meaning.validate(value, p)
+        with self.assertRaises(ValueError) as caught: meaning.validate(value, p)
+        from digital_twin.modules.ai_orchestration.domain.validation_diagnostic import task_failure, correction_issue
+        self.assertEqual('economic-source-reference', task_failure('plan-validation', caught.exception)[1]['reasonCode'])
+        self.assertIsNone(correction_issue(caught.exception))
         fact["judgementEvidenceUsable"] = True; fact["sourceAsOf"] = "2099-01-01T00:00:00Z"
         with self.assertRaises(ValueError): meaning.validate(value, p)
 
@@ -213,7 +216,8 @@ class InvestmentMeaningTests(unittest.TestCase):
         service.read_planner = Mock(side_effect=decide)
         service.run_once()
         self.assertTrue(captured)
-        self.assertEqual(prompts.RETRIEVAL_VERSION, captured[0]["promptVersion"])
+        from digital_twin.modules.ai_orchestration.domain.focused_retrieval import VERSION as retrieval_version
+        self.assertEqual(retrieval_version, captured[0]["promptVersion"])
         self.assertNotIn("priceInvestigationPolicy", captured[0]["current"])
         self.assertEqual(meaning.VERSION, captured[0]["current"]["investmentMeaningPolicy"])
         validate_execution_input(captured[0])

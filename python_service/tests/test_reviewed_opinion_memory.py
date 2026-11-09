@@ -50,6 +50,24 @@ class ReviewedOpinionTests(unittest.TestCase):
         self.assertEqual("independent-observation-v30-question-purpose", legacy["promptVersion"])
         self.assertNotIn("opinionChange", legacy["outputSchema"]["properties"]["questionResolutions"]["items"]["properties"]["judgmentImpact"]["properties"])
         validate_execution_input(legacy); validate_plan(raw, p, memories)
+        from digital_twin.modules.ai_orchestration.application.author_validation import validate_author
+        from digital_twin.modules.ai_orchestration.domain.validation_diagnostic import correction_issue
+        p, memories, trace, _, raw = fixture()
+        envelope = freeze_execution_input(p, [], memories, retrieval_trace=trace)
+        invalid = deepcopy(raw)
+        invalid['questionResolutions'][0]['judgmentImpact']['effect'] = 'supports'
+        model, save = Mock(return_value=raw), Mock(return_value='correction')
+        _, _, corrected, _, receipt = validate_author(invalid, envelope, 'original', model, save)
+        self.assertEqual('questionResolutions.judgmentImpact', receipt['diagnostic']['field'])
+        self.assertEqual('validated', receipt['status'])
+        model.assert_called_once(); save.assert_called_once()
+        validate_execution_input(corrected)
+        model, save = Mock(return_value=invalid), Mock(return_value='correction')
+        with self.assertRaises(ValueError) as caught:
+            validate_author(invalid, envelope, 'original', model, save)
+        self.assertTrue(caught.exception.author_validation['correctionConsumed'])
+        self.assertIsNotNone(correction_issue(caught.exception))
+        model.assert_called_once(); save.assert_called_once()
 
     def test_support_can_leave_opinion_unchanged_and_rejected_drafts_cannot_replace_baseline(self):
         p, memories, _, case, raw = fixture(); result = approved(p, memories, raw)

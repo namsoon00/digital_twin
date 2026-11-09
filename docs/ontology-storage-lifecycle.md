@@ -576,6 +576,13 @@ an incomplete inventory from successful live reads. Per-cycle lifecycle records
 and actual sample times expose crashes, sleep and sampling gaps; PID presence
 or return code alone cannot establish availability. Table space estimates are
 allocator metadata, not bytes reclaimed by the OS.
+Observation coverage excludes active maintenance leases. Healthy interval
+estimates additionally require HTTP 200, all service ports and a fresh running
+supervisor; completed observation coverage is reported separately. Neither
+estimate proves continuous uptime. The first inventory starts immediately even
+on Python versions whose monotonic clock starts at process launch. Inventory
+errors are logged separately and a denied priority adjustment cannot suppress
+the measurement.
 
 Explicit physical maintenance uses `operational_table_fingerprint` and
 `optimize_verified_mysql_table` only with writers paused and a backup whose

@@ -199,6 +199,13 @@ def collect_sample(root, directory, connect=None, reader=http_read, metrics_dire
         age = None
     result["supervisor"] = {"state": heartbeat.get("state", "unavailable"),
                             "ageSeconds": age, "scope": "heartbeat-only"}
+    lease = read_json(root / "data/python-supervisor-maintenance.json")
+    try:
+        leased = float(lease.get("expiresAtEpoch") or 0) > time.time()
+    except (TypeError, ValueError):
+        leased = False
+    result["maintenance"] = {"active": leased or heartbeat.get("state") == "maintenance",
+                             "scope": "local-lease-and-heartbeat"}
     result["ports"] = {}
     for name, port in (("web", 3000), ("mysql", 3306), ("typedb", 1729), ("questdb", 9000)):
         try:
@@ -280,14 +287,24 @@ def summarize_observations(directory):
     def valid(row):
         return (not row.get("collectorErrors") and row.get("collectorStatus", "ok") == "ok"
                 and int(row.get("queryCount") or 0) >= 8 and len(row.get("http") or []) == 2
-                and bool(row.get("capacity")))
-    seconds, gaps, clocks = 0.0, [], {}
+                and bool(row.get("capacity")) and not (row.get("maintenance") or {}).get("active")
+                and (row.get("supervisor") or {}).get("state") != "maintenance")
+    def healthy(row):
+        supervisor = row.get("supervisor") or {}
+        age = supervisor.get("ageSeconds")
+        return (valid(row) and not row.get("serviceIssues")
+                and all(item.get("status") == 200 for item in row.get("http", []))
+                and all((row.get("ports") or {}).get(name) is True for name in ("web", "mysql", "typedb", "questdb"))
+                and supervisor.get("state") == "running" and isinstance(age, (int, float)) and 0 <= age <= 120)
+    seconds, healthy_seconds, gaps, clocks = 0.0, 0.0, [], {}
     for left, right in zip(rows, rows[1:]):
         delta = (parse_time(right["observedAt"]) - parse_time(left["observedAt"])).total_seconds()
         if delta > 600:
             gaps.append({"from": left["observedAt"], "to": right["observedAt"], "seconds": delta})
         elif delta > 0 and valid(left) and valid(right):
             seconds += delta
+            if healthy(left) and healthy(right):
+                healthy_seconds += delta
     for row in rows:
         for quote in row.get("marketSample", []):
             if quote.get("data_quality") != "actual":
@@ -320,8 +337,12 @@ def summarize_observations(directory):
             "sampleCount": len(rows), "invalidLines": invalid,
             "collectorErrorFreeSamples": sum(not row.get("collectorErrors") for row in rows),
             "completeSamples": sum(valid(row) for row in rows), "gapsOver10Minutes": gaps,
+            "healthySamples": sum(healthy(row) for row in rows),
+            "maintenanceExcludedSamples": sum(bool((row.get("maintenance") or {}).get("active"))
+                or (row.get("supervisor") or {}).get("state") == "maintenance" for row in rows),
             "sampledSpanHours": round((last-started).total_seconds()/3600, 3),
             "validAdjacentIntervalHours": round(hours, 3), "continuousUptimeProven": False,
+            "healthyAdjacentIntervalHours": round(healthy_seconds/3600, 3),
             "actualMarketSourceClocks": coverage, "sufficientRegularSessionSamples": sufficient,
             "eligibleForFinalReview": hours >= float(window.get("minimumHours", 72)) and all(sufficient.values()),
             "limitation": "Adjacent valid sample coverage is an observation estimate, not proof of uninterrupted uptime. "

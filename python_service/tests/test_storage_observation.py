@@ -2,6 +2,7 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import runpy
 import tempfile
 import unittest
 from datetime import datetime, timezone, timedelta
@@ -13,6 +14,40 @@ from digital_twin.infrastructure.storage_observation import (
 
 
 class StorageObservationTests(unittest.TestCase):
+    def test_disk_inventory_survives_a_denied_priority_adjustment(self):
+        script = Path(__file__).resolve().parents[2]/"scripts/watch-storage.py"
+        with tempfile.TemporaryDirectory() as folder:
+            root, records = Path(folder)/"repo", Path(folder)/"records"
+            root.mkdir()
+            with patch.object(os.sys,"argv",[str(script),"--root",str(root),"--directory",str(records),"--disk-scan"]), \
+                    patch.object(os,"umask"), \
+                    patch.object(os,"nice",side_effect=PermissionError("priority denied")), \
+                    patch("digital_twin.infrastructure.storage_observation.disk_inventory",return_value={"mysqlActualBytes":{"value":1234}}), \
+                    self.assertRaises(SystemExit) as exited:
+                runpy.run_path(str(script),run_name="__main__")
+            self.assertEqual(exited.exception.code,0)
+            metrics=json.loads((records/"component-metrics.json").read_text())
+            self.assertEqual(metrics["mysqlActualBytes"]["value"],1234)
+            self.assertEqual(metrics["priorityAdjustmentError"],"PermissionError")
+
+    def test_first_inventory_starts_even_when_macos_monotonic_clock_starts_at_zero(self):
+        script=Path(__file__).resolve().parents[2]/"scripts/watch-storage.py"
+        with tempfile.TemporaryDirectory() as folder:
+            root,records=Path(folder)/"repo",Path(folder)/"records"
+            root.mkdir()
+            sample={"observedAt":datetime.now(timezone.utc).isoformat(),"collectorStatus":"partial","coreCollectorStatus":"ok"}
+            with patch.object(os.sys,"argv",[str(script),"--root",str(root),"--directory",str(records),"--sample"]), \
+                    patch.object(os,"umask"), \
+                    patch("signal.signal"), patch("time.monotonic",return_value=0), \
+                    patch("subprocess.Popen") as launch, \
+                    patch("digital_twin.infrastructure.storage_observation.collect_sample",return_value=sample), \
+                    patch("digital_twin.infrastructure.storage_observation.summarize_observations",return_value={}), \
+                    self.assertRaises(SystemExit) as exited:
+                runpy.run_path(str(script),run_name="__main__")
+            self.assertEqual(exited.exception.code,0)
+            launch.assert_called_once()
+            self.assertIn("--disk-scan",launch.call_args.args[0])
+
     def test_slow_inventory_preserves_old_measurement_and_reports_staleness(self):
         now = datetime.now(timezone.utc)
         previous = {"history-archiveBytes": {"value": 4096,
@@ -173,3 +208,24 @@ class StorageObservationTests(unittest.TestCase):
             self.assertEqual(clocks["US 2026-10-30"]["uniqueClocks"], 1)
             self.assertEqual(clocks["US 2026-11-02"]["uniqueClocks"], 1)
             self.assertIn("14:30", clocks["US 2026-11-02"]["first"])
+
+    def test_maintenance_and_service_failures_cannot_be_reported_as_healthy_intervals(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            stamp = datetime(2026, 11, 9, tzinfo=timezone.utc)
+            write_json(root / "observation-window.json", {"startedAt": stamp.isoformat()})
+            def row(minutes, **extra):
+                return {"observedAt": (stamp+timedelta(minutes=minutes)).isoformat(),
+                    "queryCount": 8, "http": [{"status":200}, {"status":200}], "capacity":{"state":"healthy"},
+                    "supervisor":{"state":"running", "ageSeconds":1},
+                    "ports":dict.fromkeys(["web","mysql","typedb","questdb"],True), **extra}
+            rows = [row(0), row(5, maintenance={"active":True}),
+                row(10, http=[{"status":503},{"status":200}]), row(15),
+                row(20, supervisor={"state":"running","ageSeconds":900})]
+            (root/"storage-samples.jsonl").write_text("\n".join(json.dumps(item) for item in rows))
+            result = summarize_observations(root)
+            self.assertEqual(result["maintenanceExcludedSamples"],1)
+            self.assertEqual(result["completeSamples"],4)
+            self.assertEqual(result["healthySamples"],2)
+            self.assertAlmostEqual(result["validAdjacentIntervalHours"],10/60,places=3)
+            self.assertEqual(result["healthyAdjacentIntervalHours"],0)

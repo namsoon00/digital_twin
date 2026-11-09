@@ -42,11 +42,19 @@ def main():
         print('{"collectorStatus":"busy"}')
         return 0
     if args.disk_scan:
-        os.nice(10)
+        priority_error = None
+        try:
+            os.nice(10)
+        except OSError as error:
+            priority_error = type(error).__name__
         source = read_json(directory / "disk-paths.json")
         directory_age = (datetime.now(timezone.utc)-parse_time(source["observedAt"])).total_seconds() if source.get("observedAt") else 1e9
         metrics = disk_inventory(args.root, read_json(directory / "component-metrics.json"),
             mysql_directory=source.get("mysqlDirectory") if 0 <= directory_age <= 1800 else None)
+        if priority_error:
+            metrics["priorityAdjustmentError"] = priority_error
+        else:
+            metrics.pop("priorityAdjustmentError", None)
         write_json(directory / "component-metrics.json", metrics)
         return 0
     load_env_file(args.root / ".env.local")
@@ -66,7 +74,7 @@ def main():
     signal.signal(signal.SIGTERM, request_stop)
     signal.signal(signal.SIGINT, request_stop)
     disk_process = None
-    last_disk_attempt = 0.0
+    last_disk_attempt = None
     if not args.sample:
         (directory / "storage-watch.pid").write_text(str(os.getpid()))
     try:
@@ -89,11 +97,15 @@ def main():
             write_json(directory / "storage-summary.json", summarize_observations(directory))
             # Inventory processes cannot delay the core sample or overlap one
             # another, and old observations keep their original expiration.
-            if (disk_process is None or disk_process.poll() is not None) and time.monotonic() - last_disk_attempt > 1800:
-                disk_process = subprocess.Popen([
-                    sys.executable, str(Path(__file__).resolve()), "--root", str(args.root),
-                    "--directory", str(metrics_directory), "--disk-scan"],
-                    stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            if (disk_process is None or disk_process.poll() is not None) and (
+                    last_disk_attempt is None or time.monotonic() - last_disk_attempt > 1800):
+                log_path = metrics_directory / "disk-inventory.log"
+                mode = "wb" if log_path.exists() and log_path.stat().st_size > 256*1024 else "ab"
+                with log_path.open(mode) as output:
+                    disk_process = subprocess.Popen([
+                        sys.executable, str(Path(__file__).resolve()), "--root", str(args.root),
+                        "--directory", str(metrics_directory), "--disk-scan"],
+                        stdin=subprocess.DEVNULL, stdout=output, stderr=subprocess.STDOUT)
                 last_disk_attempt = time.monotonic()
             if args.sample:
                 print(json.dumps({key: sample.get(key) for key in

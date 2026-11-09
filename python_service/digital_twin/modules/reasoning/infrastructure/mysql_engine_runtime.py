@@ -1057,6 +1057,13 @@ class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
     @staticmethod
     def event_priority(event) -> int:
         payload = dict(getattr(event, "payload", {}) or {})
+        if (payload.get("candidateValidationReplay") is True
+                and payload.get("trigger") == "paired-current-source-validation"
+                and isinstance(payload.get("validationPair"), Mapping)):
+            # Explicit, finite operator validation must not starve behind an
+            # endless market mailbox. This is execution priority, not a market
+            # review level, and validation requests retain zero delivery.
+            return 100
         level = str(payload.get("reviewLevel") or payload.get("materialityReviewLevel") or "").lower()
         return {"critical": 100, "urgent": 90, "caution": 80, "check": 70, "observe": 50}.get(level, 60)
 

@@ -571,7 +571,14 @@ class ReasoningEnginePlatformService:
     def initialize(self, *, include_diagnostics: bool = True) -> Dict[str, object]:
         descriptors = self.descriptors()
         control = self.registry.control()
+        selected = {control.active_deployment_id, control.delivery_deployment_id, control.candidate_deployment_id}
+        active_value = self.registry.get(control.active_deployment_id)
+        existing_active = dict(active_value) if isinstance(active_value, Mapping) else {}
         for descriptor in descriptors:
+            if (descriptor.engine_version == "v1" and descriptor.deployment_id not in selected
+                    and existing_active.get("engineVersion") == "v2"):
+                # A purged legacy release must not be recreated by a V2 worker.
+                continue
             # A deployment ID is an immutable release identity. Runtime status
             # must not silently rewrite its bundle after a code update; a new
             # bundle is introduced only through register_v2_release().
@@ -1865,6 +1872,61 @@ class ReasoningEnginePlatformService:
             "previousDeploymentQueueCleanup": cleanup,
             "controlCapabilitySync": capability_sync,
         }
+
+    def consolidate_delivery(self, deployment_id: str, owner_request: str) -> Dict[str, object]:
+        """Owner-requested single-engine operation; retain every correctness gate.
+
+        Dual-engine latency is recorded as an outstanding operational warning,
+        never rewritten as a passing promotion measurement. Ordinary promotion
+        continues to require all of its existing performance gates.
+        """
+        reason = str(owner_request or "").strip()
+        control = self.registry.control()
+        if not reason:
+            return {"status": "blocked", "blockers": ["explicit-owner-request-required"]}
+        if (control.active_deployment_id == deployment_id
+                and control.delivery_deployment_id == deployment_id
+                and not control.candidate_deployment_id):
+            return {"status": "consolidated", "control": control.to_dict(), "alreadyConsolidated": True}
+        if control.candidate_deployment_id != deployment_id:
+            return {"status": "blocked", "blockers": ["selected-candidate-required"]}
+        readiness = self.independent_promotion_readiness(deployment_id, allow_recovered_queue_wait=True)
+        performance = {
+            "candidate-absolute-latency-slo-breached", "candidate-queue-wait-slo-breached",
+            "candidate-end-to-end-latency-slo-breached", "independent-queue-stale",
+        }
+        correctness = [code for code in readiness.get("blockers") or [] if code not in performance]
+        comparisons = dict(readiness.get("comparisonEvidence") or {})
+        if int(comparisons.get("sampleCount") or 0) < max(5, int(readiness.get("minimumComparisons") or 5)):
+            correctness.append("insufficient-independent-comparisons")
+        if readiness.get("mode") != "independent-v2":
+            correctness.append("independent-v2-validation-required")
+        if correctness:
+            return {"status": "blocked", "blockers": sorted(set(correctness)), "promotionReadiness": readiness}
+        activation = {
+            **readiness, "activationMode": "owner-requested-single-engine",
+            "ownerRequest": reason[:500],
+            "outstandingPerformanceWarnings": [code for code in readiness.get("blockers") or [] if code in performance],
+            "postActivationPerformanceVerificationRequired": True,
+        }
+        row = self.registry.get(deployment_id)
+        if row.get("status") == "shadow":
+            self.registry.transition(deployment_id, "candidate")
+        result = self.activate(deployment_id, activation)
+        activated = self.registry.control()
+        single = self.registry.set_control(deployment_id, deployment_id, "", expected_version=activated.version)
+        retired = []
+        for version in ("v1", "v2"):
+            retired.extend((self.registry.retire_unselected(version, [deployment_id]) or {}).get("retiredDeploymentIds") or [])
+        health = dict((self.registry.get(deployment_id) or {}).get("health") or {})
+        health["ownerConsolidation"] = {
+            "ownerRequest": reason[:500], "controlVersion": single.version,
+            "performanceWarnings": activation["outstandingPerformanceWarnings"],
+            "promotionPerformancePassed": bool(readiness.get("ready")),
+        }
+        self.registry.update_health(deployment_id, health)
+        return {**result, "status": "consolidated", "control": single.to_dict(),
+                "retiredDeploymentIds": sorted(set(retired)), "activation": activation}
 
     def supersede_inactive_pending_work(self, deployment_id: str) -> Dict[str, object]:
         cleanup = getattr(self.independent_job_store, "supersede_pending_deployment", None)

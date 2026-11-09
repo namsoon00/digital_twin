@@ -1428,7 +1428,7 @@ def reasoning_engine_platform_command(args) -> int:
     configured = runtime_settings()
     platform = build_reasoning_engine_platform(configured)
     state = platform.initialize(include_diagnostics=args.reasoning_engine_action not in {
-        "v2-watch", "v2-once", "shadow-watch", "shadow-once",
+        "v2-watch", "v2-once", "shadow-watch", "shadow-once", "consolidate",
     })
     if args.reasoning_engine_action == "status":
         print(json.dumps(
@@ -1531,6 +1531,23 @@ def reasoning_engine_platform_command(args) -> int:
             })
         print(json.dumps(result, ensure_ascii=False))
         return 0 if result.get("status") == "registered" else 2
+    if args.reasoning_engine_action == "consolidate":
+        result = platform.consolidate_delivery(args.deployment_id, args.owner_request)
+        if result.get("status") == "consolidated":
+            control = result["control"]
+            patch = {
+                "reasoningEngineActiveDeploymentId": control["active_deployment_id"],
+                "reasoningEngineDeliveryDeploymentId": control["delivery_deployment_id"],
+                "reasoningEngineCandidateDeploymentId": "", "reasoningEngineCandidateReleaseId": "",
+                "reasoningEngineV2DeploymentId": args.deployment_id, "reasoningEngineActiveVersion": "v2",
+                "typedbDatabase": platform.graph_database_for(args.deployment_id),
+                "reasoningEngineV2TypeDbDatabase": platform.graph_database_for(args.deployment_id),
+            }
+            if args.purge_retired:
+                patch.update(reasoningRetiredDataPurgeEnabled="1", reasoningRetiredDataPurgeOwnerRequest=args.owner_request)
+            save_runtime_settings(patch)
+        print(json.dumps(result, ensure_ascii=False))
+        return 0 if result.get("status") == "consolidated" else 2
     if args.reasoning_engine_action == "candidate":
         allow_recovered_queue_wait = bool(
             getattr(args, "allow_recovered_queue_wait", False)
@@ -2066,6 +2083,14 @@ def run_mysql_temporal_snapshot_compaction(
 def maintenance_command(args) -> int:
     """Run storage maintenance outside the realtime inference path."""
     settings = dict(runtime_settings(fast_operational_read=True))
+    if args.maintenance_action == "retired-reasoning":
+        from digital_twin.modules.reasoning.infrastructure.mysql_retired_data import run_retired_reasoning_cleanup, run_retired_reasoning_graph_cleanup
+        result = run_retired_reasoning_cleanup(settings, owner_request=args.owner_request,
+            apply=args.apply, max_batches=args.max_batches, limit=args.batch_size)
+        if args.apply and args.prune_graphs:
+            result["graphCleanup"] = run_retired_reasoning_graph_cleanup(settings, owner_request=args.owner_request, limit=3)
+        print(json.dumps(result, ensure_ascii=False))
+        return 0
     if args.maintenance_action == "history-archive":
         from .mysql_history_archive import history_archive_status, verify_history_archive, restore_archived_row
         configured = {**settings, "_skipOperationalSchemaBootstrap": True, "_skipOperationalHistoryRetention": True}
@@ -2231,6 +2256,17 @@ def maintenance_command(args) -> int:
                     settings,
                     include_legacy=admission.include_legacy,
                 )
+                if str(settings.get("reasoningRetiredDataPurgeEnabled") or "0") == "1":
+                    from digital_twin.modules.reasoning.infrastructure.mysql_retired_data import run_retired_reasoning_cleanup
+                    try:
+                        result["retiredReasoningData"] = run_retired_reasoning_cleanup(settings,
+                            owner_request=settings.get("reasoningRetiredDataPurgeOwnerRequest", ""), apply=True, limit=100)
+                        if result["retiredReasoningData"].get("status") in {"empty", "complete"}:
+                            from digital_twin.modules.reasoning.infrastructure.mysql_retired_data import run_retired_reasoning_graph_cleanup
+                            result["retiredReasoningGraphs"] = run_retired_reasoning_graph_cleanup(settings,
+                                owner_request=settings.get("reasoningRetiredDataPurgeOwnerRequest", ""))
+                    except RuntimeError as error:
+                        result["retiredReasoningData"] = {"status": "deferred", "reason": str(error)[:240]}
             if result.get("minimalRetention", {}).get("status") in {"ok", "disabled", "preview"}:
                 maintenance_state["deferralStartedAt"] = time.time() if pending_count else 0.0
             if admission.include_legacy:
@@ -2942,6 +2978,10 @@ def build_parser() -> argparse.ArgumentParser:
                 "independent V2 queue is completely drained"
             ),
         )
+    reasoning_consolidate = reasoning_engine_actions.add_parser("consolidate")
+    reasoning_consolidate.add_argument("--deployment-id", required=True)
+    reasoning_consolidate.add_argument("--owner-request", required=True)
+    reasoning_consolidate.add_argument("--purge-retired", action="store_true")
     reasoning_engine_actions.add_parser("rollback")
     reasoning_engine.set_defaults(func=reasoning_engine_platform_command)
 
@@ -3002,6 +3042,12 @@ def build_parser() -> argparse.ArgumentParser:
     mysql_temporal_compaction.add_argument("--apply", action="store_true")
     mysql_temporal_compaction.add_argument("--batch-size", default="25")
     mysql_temporal_compaction.add_argument("--drain-max-passes", default="100")
+    retired_reasoning = maintenance_actions.add_parser("retired-reasoning")
+    retired_reasoning.add_argument("--owner-request", required=True)
+    retired_reasoning.add_argument("--apply", action="store_true")
+    retired_reasoning.add_argument("--prune-graphs", action="store_true")
+    retired_reasoning.add_argument("--max-batches", type=int, default=1)
+    retired_reasoning.add_argument("--batch-size", type=int, default=250)
     mysql_retention_watch = maintenance_actions.add_parser("watch")
     mysql_retention_watch.add_argument("--interval", default="")
     maintenance.set_defaults(func=maintenance_command)

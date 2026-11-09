@@ -661,6 +661,8 @@ TEXT_SETTING_KEYS = [
     "reasoningEngineShadowYieldToActiveQueue",
     "reasoningEngineShadowActiveQueueMaxPending",
     "reasoningEngineV2IndependentEnabled",
+    "reasoningRetiredDataPurgeEnabled",
+    "reasoningRetiredDataPurgeOwnerRequest",
     "reasoningEngineV2StaleObservationMaxAgeSeconds",
     "marketObservationReasoningAnchorReconcileSeconds",
     "marketObservationReasoningPendingTimeoutSeconds",
@@ -2740,6 +2742,8 @@ def runtime_settings(fast_operational_read: bool = False, *, require_store_read:
         "reasoningEngineShadowYieldToActiveQueue": value("reasoningEngineShadowYieldToActiveQueue", "REASONING_ENGINE_SHADOW_YIELD_TO_ACTIVE_QUEUE", "1"),
         "reasoningEngineShadowActiveQueueMaxPending": value("reasoningEngineShadowActiveQueueMaxPending", "REASONING_ENGINE_SHADOW_ACTIVE_QUEUE_MAX_PENDING", "0"),
         "reasoningEngineV2IndependentEnabled": value("reasoningEngineV2IndependentEnabled", "REASONING_ENGINE_V2_INDEPENDENT_ENABLED", "1"),
+        "reasoningRetiredDataPurgeEnabled": value("reasoningRetiredDataPurgeEnabled", "REASONING_RETIRED_DATA_PURGE_ENABLED", "0"),
+        "reasoningRetiredDataPurgeOwnerRequest": value("reasoningRetiredDataPurgeOwnerRequest", "REASONING_RETIRED_DATA_PURGE_OWNER_REQUEST", ""),
         "reasoningEngineV2StaleObservationMaxAgeSeconds": value(
             "reasoningEngineV2StaleObservationMaxAgeSeconds",
             "REASONING_ENGINE_V2_STALE_OBSERVATION_MAX_AGE_SECONDS",

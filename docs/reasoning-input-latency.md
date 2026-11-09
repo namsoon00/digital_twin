@@ -1,5 +1,41 @@
 # Reasoning Input Latency
 
+## Owner-requested single-engine operation and retired-data deletion
+
+The Nov 9 owner request explicitly asks to align the running version and delete
+old-version data. The local `reasoning-engine consolidate` command is distinct
+from ordinary promotion: it still requires a healthy selected candidate, five
+fresh paired comparisons and every native/source/fact/rule correctness gate.
+Only latency/queue SLO blockers may remain as recorded operational warnings.
+It never changes the original readiness result to passing, waives native
+execution failures, changes hypothesis qualification or relaxes send-time
+evidence validation. Post-cutover live performance must be measured separately.
+Explicit paired validation receives bounded operator execution priority rather
+than a fabricated market review level. It retains its original source/queue
+timestamps and hard zero-delivery contract; ordinary market priority is unchanged.
+
+Successful consolidation aligns active/delivery/configured deployment and graph
+bindings, clears the rollback/candidate pointer and retires the preceding
+workers. `--purge-retired` enables bounded maintenance of retired-only execution
+data. Actual deletion requires a new, non-validation, delivery-authorized native
+result with aligned generations after the current control change. Each batch
+locks/rechecks control ownership and preserves every selected deployment.
+
+Retired jobs, their source-lineage copies, unused inference caches, disposable
+subject/batch cases and their children are hard-deleted without writing another
+archive copy. Current comparison proofs, published/AI memory case roots, shared
+model outcomes, prices, portfolios and customer delivery history remain intact.
+Old release IDs remain as small ownership/audit records; artifacts still needed
+by retained canonical cases or current comparisons remain protected. Native
+database deletion rechecks all current/experimental bindings under the control
+lock and never deletes a shared store merely because an older release used it.
+MySQL row deletion does not itself guarantee immediate file-size reduction.
+
+The explicit `maintenance retired-reasoning --owner-request ...` command defaults
+to preview. `--apply` deletes bounded batches; `--prune-graphs` additionally
+removes eligible, unreferenced project-owned TypeDB databases. Future maintenance
+remains opt-in through the persisted owner-requested purge policy.
+
 ## Verify the operational notification path before reporting completion
 
 A running worker, a pushed commit, or a healthy shadow deployment does not

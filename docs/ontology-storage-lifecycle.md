@@ -584,6 +584,11 @@ before and after the rebuild. Full fingerprints and physical compaction never
 run inside automatic retention, the observer, or a web read. Preserve the
 shared disk reserve plus table-specific staging space, and measure actual
 allocated blocks separately from logical deletion or allocator free pages.
+Supervisor maintenance leases are claimed under a local process lock. Another
+live process cannot replace or clear the owner, and an ordinary service restart
+defers until that maintenance ends. Expired or orphaned leases remain
+recoverable. Keep the supervisor and storage processes running while pausing
+application writers, and recheck lease ownership before each physical rebuild.
 
 Dashboard and calendar cold reads return a stable, explicitly warming page
 contract while their existing persistent read cache refreshes asynchronously.

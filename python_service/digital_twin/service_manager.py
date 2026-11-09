@@ -1,4 +1,5 @@
 import hashlib
+import fcntl
 import os
 import signal
 import shutil
@@ -12,6 +13,7 @@ import plistlib
 import shlex
 import uuid
 from pathlib import Path
+from contextlib import contextmanager
 from typing import Dict, List
 
 from .infrastructure.mysql_monitoring import mysql_settings
@@ -4464,6 +4466,11 @@ def restart(
     restart path; explicit infrastructure maintenance can opt in to a full
     TypeDB restart and seed.
     """
+    if supervisor_maintenance_active():
+        owner = int_value(read_supervisor_maintenance_payload().get("pid"), 0, 0)
+        if owner and owner != os.getpid():
+            print("Service restart deferred because another process owns active maintenance.")
+            return 1
     excluded = set()
     if not restart_typedb:
         typedb_spec = worker_specs().get("typedb")
@@ -4663,17 +4670,34 @@ def typedb_restart_maintenance_window_seconds(spec: Dict[str, object]) -> int:
     ))
 
 
+@contextmanager
+def supervisor_maintenance_guard():
+    path = supervisor_maintenance_path().with_suffix(".lock")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a+") as stream:
+        fcntl.flock(stream.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
+
+
 def begin_supervisor_maintenance(reason: str, max_age_seconds: int = 300) -> str:
-    token = str(os.getpid()) + "-" + str(time.time_ns())
-    duration_seconds = max(30, int(max_age_seconds or 300))
-    write_supervisor_maintenance_payload({
-        "pid": os.getpid(),
-        "token": token,
-        "reason": str(reason or "maintenance"),
-        "startedAt": iso_now(),
-        "expiresAtEpoch": time.time() + duration_seconds,
-    })
-    return token
+    with supervisor_maintenance_guard():
+        if supervisor_maintenance_active():
+            owner = int_value(read_supervisor_maintenance_payload().get("pid"), 0, 0)
+            if owner and owner != os.getpid():
+                raise RuntimeError("Another process owns active supervisor maintenance")
+        token = str(os.getpid()) + "-" + str(time.time_ns())
+        duration_seconds = max(30, int(max_age_seconds or 300))
+        write_supervisor_maintenance_payload({
+            "pid": os.getpid(),
+            "token": token,
+            "reason": str(reason or "maintenance"),
+            "startedAt": iso_now(),
+            "expiresAtEpoch": time.time() + duration_seconds,
+        })
+        return token
 
 
 def acknowledge_supervisor_maintenance() -> None:
@@ -4703,7 +4727,11 @@ def wait_for_supervisor_maintenance_ack(token: str, timeout_seconds: float = 10.
 
 
 def end_supervisor_maintenance() -> None:
-    remove_pid(supervisor_maintenance_path())
+    with supervisor_maintenance_guard():
+        owner = int_value(read_supervisor_maintenance_payload().get("pid"), 0, 0)
+        if owner and owner != os.getpid():
+            return
+        remove_pid(supervisor_maintenance_path())
 
 
 def supervisor_maintenance_active(max_age_seconds: int = 300) -> bool:

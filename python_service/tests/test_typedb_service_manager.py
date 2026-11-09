@@ -11,6 +11,38 @@ from digital_twin.platform.domain.typedb_capacity_policy import evaluate_typedb_
 
 
 class TypeDBServiceManagerTests(unittest.TestCase):
+    def test_live_maintenance_cannot_be_replaced_or_cleared_by_another_process(self):
+        with tempfile.TemporaryDirectory() as temp, \
+                patch.object(service_manager, "supervisor_maintenance_path", return_value=Path(temp)/"maintenance.json"), \
+                patch.object(service_manager, "pid_exists", return_value=True):
+            token = service_manager.begin_supervisor_maintenance("physical-rebuild", 1200)
+            original = service_manager.read_supervisor_maintenance_payload()
+            with patch.object(service_manager.os, "getpid", return_value=os.getpid()+1000):
+                with self.assertRaisesRegex(RuntimeError, "Another process owns"):
+                    service_manager.begin_supervisor_maintenance("restart")
+                service_manager.end_supervisor_maintenance()
+                with patch.object(service_manager, "worker_specs") as specs, \
+                        patch.object(service_manager, "stop") as stop:
+                    self.assertEqual(1, service_manager.restart())
+                specs.assert_not_called()
+                stop.assert_not_called()
+            self.assertEqual(original, service_manager.read_supervisor_maintenance_payload())
+            self.assertEqual(token, original["token"])
+            service_manager.end_supervisor_maintenance()
+            self.assertEqual({}, service_manager.read_supervisor_maintenance_payload())
+
+    def test_orphaned_maintenance_can_be_reclaimed(self):
+        with tempfile.TemporaryDirectory() as temp, \
+                patch.object(service_manager, "supervisor_maintenance_path", return_value=Path(temp)/"maintenance.json"), \
+                patch.object(service_manager, "append_log"):
+            with patch.object(service_manager.os, "getpid", return_value=os.getpid()+1000):
+                abandoned = service_manager.begin_supervisor_maintenance("old")
+            with patch.object(service_manager, "pid_exists", return_value=False):
+                replacement = service_manager.begin_supervisor_maintenance("recovery")
+            self.assertNotEqual(abandoned, replacement)
+            self.assertEqual(os.getpid(), service_manager.read_supervisor_maintenance_payload()["pid"])
+            service_manager.end_supervisor_maintenance()
+
     def _assert_candidate_cleanup_rejects_active_typedb_specification(self):
         with tempfile.TemporaryDirectory() as temp:
             active_path = Path(temp) / "typedb-data"

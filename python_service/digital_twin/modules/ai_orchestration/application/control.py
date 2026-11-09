@@ -282,10 +282,20 @@ class AIControlService:
                     retrieval_trace = []
                     stage = "evidence-retrieval"
                     if session and self.read_planner:
+                        read_plans = []
+                        if callable(getattr(type(self.store), "retrieval_read_plans", None)):
+                            try:
+                                read_plans = self.store.retrieval_read_plans(job)
+                            except Exception as error:
+                                diagnostic = self.failure_diagnostic(error)
+                                if not diagnostic.get("retryable"):
+                                    raise
+                                packet["readContinuationFailure"] = {"stage": "read-continuation", **diagnostic}
                         packet, history, research, retrieval_trace = retrieve_working_evidence(session, packet, history, research,
                             self.read_planner, lambda value: self.store.save_execution_input(job, value),
                             self.settings.get("aiObservationPromptMaxBytes", 256 * 1024), self.read_round_budget(),
                             record_round=lambda step: self.store.save_retrieval_round(job, step),
+                            resume_read_plans=read_plans,
                             memory_search=(lambda query, offset, limit: self.store.search_opinions(
                                 job["accountId"], job["symbol"], job["worldId"], packet["capturedAt"], query, offset, limit))
                                 if callable(getattr(type(self.store), "search_opinions", None)) else None)

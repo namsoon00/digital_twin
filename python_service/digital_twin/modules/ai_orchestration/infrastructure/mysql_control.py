@@ -32,6 +32,7 @@ from ..domain.token_budget import usage_counts, RESERVATION, execution_pool
 from .mysql_activity import AIActivityPersistence, SCHEMA as ACTIVITY_SCHEMA
 from .mysql_opinion_memory import OpinionMemoryPersistence, SCHEMA as OPINION_SCHEMA, APPROVED_RESULT_SQL
 from .mysql_commit_confirmation import confirm_artifact_commit, confirmed_transaction, call_completion_confirmed
+from .mysql_read_continuation import ReadContinuationPersistence
 
 
 STATUS_INDEXES = (
@@ -87,7 +88,7 @@ SCHEMA = (
 )
 
 
-class MySQLAIControlStore(OpinionMemoryPersistence, AIActivityPersistence, AITokenUsagePersistence, DiagnosticProgressPersistence, AITaskDispatchPersistence, AIRuntimePersistence, AIExecutionPersistence, MySQLOperationalConnection):
+class MySQLAIControlStore(ReadContinuationPersistence, OpinionMemoryPersistence, AIActivityPersistence, AITokenUsagePersistence, DiagnosticProgressPersistence, AITaskDispatchPersistence, AIRuntimePersistence, AIExecutionPersistence, MySQLOperationalConnection):
     def __init__(self, settings=None, *, initialize=True):
         configured = dict(settings or {})
         if not initialize:
@@ -298,7 +299,8 @@ class MySQLAIControlStore(OpinionMemoryPersistence, AIActivityPersistence, AITok
             if changed and terminal and job["capability"] in OBSERVATIONS:
                 next_due = (now + timedelta(seconds=recovery_delay)).isoformat().replace("+00:00", "Z")
                 self.insert(connection, {**{k: job[k] for k in ("accountId", "symbol", "name", "worldId")},
-                    "capability": job["capability"], "taskId": identity(job["taskId"], "recovery"), "availableAt": next_due})
+                    "capability": job["capability"], "taskId": identity(job["taskId"], "recovery"), "availableAt": next_due,
+                    "recoveryOf": job["taskId"]})
             if changed:
                 self.activity(connection, "task-failed", identity(job["taskId"], job["attempts"]), job,
                               status=status, reasonCode=error_kind[:100], nextCheckAt=due if not terminal else "")
@@ -464,7 +466,7 @@ class MySQLAIControlStore(OpinionMemoryPersistence, AIActivityPersistence, AITok
                 raise ValueError("retrieval audit requires owned frozen input")
             envelope = json.loads(gzip.decompress(frozen["artifact_gzip"]))
             validate_execution_input(envelope)
-            retrieval_version = (reliable_retrieval.VERSION if envelope["promptVersion"] in {analyst_prompt.RETRIEVAL_VERSION, investment_meaning_prompt.RETRIEVAL_VERSION, focused_retrieval.VERSION}
+            retrieval_version = (reliable_retrieval.VERSION if envelope["promptVersion"] in {analyst_prompt.RETRIEVAL_VERSION, investment_meaning_prompt.RETRIEVAL_VERSION, *focused_retrieval.VERSIONS}
                                  else envelope["promptVersion"])
             if retrieval_version not in {reliable_retrieval.VERSION, opinion_retrieval.VERSION, price_investigation_retrieval.VERSION, market_explanation_retrieval.VERSION, external_influence_retrieval.VERSION, efficient_retrieval.VERSION, question_gap_retrieval.VERSION, company_retrieval.VERSION, business_retrieval.VERSION, completion_retrieval.VERSION, quality_retrieval.VERSION, compact_retrieval.VERSION, *purpose_retrieval.SUPPORTED_VERSIONS, bounded_retrieval.VERSION, lane_retrieval.VERSION, RETRIEVAL_PROMPT_VERSION, working_retrieval.VERSION, scoped_retrieval.VERSION, indexed_retrieval.VERSION, question_retrieval.VERSION}:
                 raise ValueError("retrieval audit requires retrieval input")
@@ -483,7 +485,7 @@ class MySQLAIControlStore(OpinionMemoryPersistence, AIActivityPersistence, AITok
             full_trace = [*envelope["retrievalContext"].get("trace", []), step]
             validator(full_trace)
             if retrieval_version in {compact_retrieval.VERSION, quality_retrieval.VERSION, completion_retrieval.VERSION, business_retrieval.VERSION, company_retrieval.VERSION, efficient_retrieval.VERSION, question_gap_retrieval.VERSION, external_influence_retrieval.VERSION, price_investigation_retrieval.VERSION, market_explanation_retrieval.VERSION, opinion_retrieval.VERSION, reliable_retrieval.VERSION}:
-                (focused_retrieval.context_view if envelope["promptVersion"] == focused_retrieval.VERSION else
+                (focused_retrieval.context_view if envelope["promptVersion"] in focused_retrieval.VERSIONS else
                  efficient_retrieval.context_view if retrieval_version in {efficient_retrieval.VERSION, question_gap_retrieval.VERSION, external_influence_retrieval.VERSION, price_investigation_retrieval.VERSION, market_explanation_retrieval.VERSION, opinion_retrieval.VERSION, reliable_retrieval.VERSION} else retrieval_view).paths(envelope["current"], {**envelope["retrievalContext"], "trace": full_trace})
             connection.execute("INSERT IGNORE INTO ai_control_retrieval_rounds "
                 "(input_id,task_id,attempt,round_status,artifact_hash,artifact_gzip,created_at) VALUES (%s,%s,%s,%s,%s,%s,%s)",

@@ -21,6 +21,53 @@ def packet():
 
 
 class ReliableOpinionCompletionTests(unittest.TestCase):
+    def test_retry_reopens_current_report_and_finishes_without_repeating_the_read_plan(self):
+        from digital_twin.modules.ai_orchestration.domain import read_continuation, focused_retrieval
+        from digital_twin.modules.reasoning.contracts import HISTORICAL_CONTEXT_BUDGET_POLICY
+        from test_efficient_retrieval import decision
+        value, saved = packet(), []
+        value['historicalContextPolicy'] = HISTORICAL_CONTEXT_BUDGET_POLICY
+        source = ObservationEvidenceSession(value, value['facts'])
+        request = {'tool': 'read_report', 'factId': 'report-2025-12-31', 'metrics': ['revenue']}
+        plan = {'request': request, 'fromInputId': 'prior-input', 'fromAttempt': 1,
+                'questionScope': read_continuation.question_scope([]), 'sourceFactHash': 'older-revision'}
+        def save(env):
+            validate_execution_input(env); saved.append(deepcopy(env)); return 'resume-' + str(len(saved))
+        def choose(env, _):
+            self.assertEqual(focused_retrieval.CONTINUATION_VERSION, env['promptVersion'])
+            read = env['retrievalContext']['resumedSourceReads']['reads'][0]
+            self.assertTrue(read['sourceChanged'])
+            self.assertNotIn('result', read)
+            self.assertIn(request['factId'], {f['id'] for f in env['current']['facts']})
+            return {**decision('finish'), 'selectedFactIds': env['retrievalContext']['selectedFactIds'] + [request['factId']]}
+        model = Mock(side_effect=choose)
+        final, history, memories, trace = retrieve_working_evidence(source, value, [], [], model, save,
+            262144, resume_read_plans=[plan])
+        self.assertEqual(1, model.call_count)
+        self.assertEqual('ready', final['retrieval']['status'])
+        self.assertEqual(1, len(trace))
+        self.assertFalse(trace[0]['reads'])
+        self.assertIn(request['factId'], {f['id'] for f in final['facts']})
+        validate_execution_input(freeze_execution_input(final, history, memories, retrieval_trace=trace))
+
+    def test_read_resume_rejects_changed_question_unissued_sources_cursors_and_budget_overflow(self):
+        from digital_twin.modules.ai_orchestration.application.read_continuation import reopen
+        from digital_twin.modules.ai_orchestration.domain import read_continuation as policy
+        source = Mock()
+        source.read_document.side_effect = lambda key: {'facts': [{'id': key, 'evidenceView': {'sourceFactHash': 'current'}, 'text': 'x' * 13000}]}
+        def plan(key, **extra):
+            return {'request': {'tool': 'read_document', 'factId': key}, 'fromInputId': key, 'fromAttempt': 1,
+                    'sourceFactHash': 'current', 'questionScope': policy.question_scope([]), **extra}
+        a, b = plan('a'), plan('b')
+        invalid = plan('cursor'); invalid['request']['cursor'] = 'old-session-cursor'
+        work = reopen(source, [plan('changed', questionScope='old-question'), plan('missing'), invalid], [], [], [], set())
+        self.assertEqual({'question-contract-changed', 'source-not-issued', 'unsupported-read-plan'}, {r['reason'] for r in work['omitted']})
+        source.read_document.assert_not_called()
+        work = reopen(source, [a, b], [{'factId': 'a'}, {'factId': 'b'}], [], [], set())
+        self.assertEqual(1, len(work['reads']))
+        self.assertEqual('context-budget', work['omitted'][0]['reason'])
+        self.assertLessEqual(work['bytes'], policy.MAX_BYTES)
+
     def test_terminal_scoped_gaps_are_preserved_without_a_repair_call(self):
         from test_scoped_knowledge_research import scoped_decision
         scope = {"caseId": "original-question", "status": "waiting", "selectedFactIds": [],

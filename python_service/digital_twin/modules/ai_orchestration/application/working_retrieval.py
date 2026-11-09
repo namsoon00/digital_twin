@@ -99,7 +99,7 @@ def author_packet(session, packet, ids, seen, research, trace, status, reserve=0
 
 
 def retrieve_working_evidence(session, packet, history, research, decide, save_input, prompt_bytes,
-                             max_rounds=MAX_ROUNDS, record_round=None, memory_search=None):
+                             max_rounds=MAX_ROUNDS, record_round=None, memory_search=None, resume_read_plans=()):
     investigation_index = None
     if price_investigation.enabled(packet):
         anchor, investigation_index, scope = session.price_investigation(**({"prefer_original": True} if insight_progress.enabled(packet) else {}))
@@ -179,8 +179,40 @@ def retrieve_working_evidence(session, packet, history, research, decide, save_i
     event_index = investigation_index or (session.event_index() if market_explanation.enabled(packet) else None)
     if event_index:
         tools.known.update({row["factId"]: row["category"] for row in event_index["events"] + event_index["context"]})
+    resumed = None
+    if resume_read_plans and contract is reliable_retrieval:
+        from .read_continuation import reopen
+        resumed = reopen(session, resume_read_plans, documents, report_index, question_index, set(seen))
+        for read in resumed["reads"]:
+            tools.admit(read["result"])
+            seen.update({f["id"]: f for f in read["result"]["facts"]})
+        audit = {**{k: deepcopy(v) for k, v in resumed.items() if k != "reads"},
+                 "reads": [{k: deepcopy(v) for k, v in r.items() if k != "result"} |
+                           {"factIds": [f["id"] for f in r["result"]["facts"]]} for r in resumed["reads"]]}
+        packet = {**packet, "readContinuation": audit}
+        current = {**current, "readContinuation": audit}
     continuity = (memory_reference.continuity(history, research) if indexed else
                   continuity_memory(history, research, compact_cases=scoped))
+    if resumed and resumed["reads"]:
+        baseline_current = current
+        try:
+            views = {f["id"]: f for f in current["facts"] if f.get("evidenceView")}
+            views.update({f["id"]: f for r in resumed["reads"] for f in r["result"]["facts"]})
+            current = selected_packet(session, current, {f["id"] for f in current["facts"]} | set(views), views)
+            trial = author_packet(session, packet, selected, seen, research, [], "round-limit", contract=contract)
+            freeze_execution_input(trial, continuity["previousAnalyses"], continuity["researchResults"], prompt_bytes)
+        except EvidenceContractError as error:
+            from .completion_admission import budget_error
+            if not budget_error(error):
+                raise
+            for read in resumed["reads"]:
+                for fact in read["result"]["facts"]:
+                    if fact["id"] not in selected:
+                        seen.pop(fact["id"], None)
+                resumed["omitted"].append({"fromInputId": read["fromInputId"], "reason": "author-packet-budget"})
+            resumed.update(reads=[], bytes=0)
+            packet = {**packet, "readContinuation": deepcopy(resumed)}
+            current = {**baseline_current, "readContinuation": deepcopy(resumed)}
     context = {**({"executionLane": packet["executionLane"]} if execution_lanes.identified(packet) else {}), **({"evidenceUses": current["evidenceUses"]} if evidence_purpose.enabled(packet) else {}), "catalog": session.catalog(), "continuity": continuity, "reportIndex": report_index,
                "questionDocumentIndex": documents,
                "reportIndexLimit": 32, "reportIndexOrdering": "source-time-descending; excluded older reports remain queryable",
@@ -195,12 +227,17 @@ def retrieve_working_evidence(session, packet, history, research, decide, save_i
         context["opinionMemorySearch"] = {"version": opinion_memory.VERSION, "scope": "current-subject", "asOf": packet["capturedAt"]}
     if indexed:
         context["memoryIndex"] = tools.memory_index
+    if resumed:
+        context["resumedSourceReads"] = deepcopy(packet["readContinuation"])
     if scoped:
         context["questionIndex"] = question_index
         context["questionEvidencePolicy"] = packet["questionEvidencePolicy"]
         context["authorScopePolicy"] = contract.AUTHOR_SCOPE_POLICY
     trace, recalled, requests_seen = [], {"analyses": [], "memories": []}, set()
     used, corrections, status = 0, 0, "deferred"
+    if resumed:
+        used = resumed["bytes"]
+        requests_seen.update(content_hash(r["request"]) for r in resumed["reads"])
     reports = {row["factId"]: row for row in context["reportIndex"]}
     document_ids = {row["factId"] for row in documents}
 

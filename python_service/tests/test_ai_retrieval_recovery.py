@@ -373,6 +373,61 @@ class RetrievalAuditStorageTests(unittest.TestCase):
         with patch.object(MySQLConnectionProxy, "commit", changed_after_commit), self.assertRaises(OperationalError):
             self.store.save_retrieval_round(self.job, rounds[0])
 
+    def test_read_plans_resume_through_current_source_and_persisted_lineage_without_old_answers(self):
+        from test_reliable_opinion_completion import packet
+        from test_efficient_retrieval import decision
+        from digital_twin.modules.reasoning.contracts import ObservationEvidenceSession, HISTORICAL_CONTEXT_BUDGET_POLICY
+        from digital_twin.modules.ai_orchestration.application.working_retrieval import retrieve_working_evidence
+        from digital_twin.infrastructure.transactions.ai_control_research_knowledge import AIControlResearchKnowledge
+        with self.store.transaction() as c:
+            c.execute("UPDATE ai_control_tasks SET capability='market-observe',payload_json=JSON_SET(payload_json,'$.capability','market-observe') WHERE task_id=%s", (self.job['taskId'],))
+        self.job['capability'] = 'market-observe'
+        value = packet(); value.update(taskId=self.job['taskId'], historicalContextPolicy=HISTORICAL_CONTEXT_BUDGET_POLICY)
+        request = {'tool': 'read_report', 'factId': 'report-2025-12-31', 'metrics': ['revenue']}
+        def run(job, plans=()):
+            saved = []
+            def save(env):
+                key = self.store.save_execution_input(job, env); saved.append((key, env)); return key
+            def choose(env, key):
+                call = self.store.begin_call('independent-observation', env['promptHash'], job['taskId'], key)
+                self.store.finish_call(call, metrics={'usage': {'input_tokens': 10, 'output_tokens': 5}})
+                raw = decision('finish') if plans or env['retrievalContext']['trace'] else decision('read', [request])
+                raw['selectedFactIds'] = env['retrievalContext']['selectedFactIds'] + ([request['factId']] if plans else [])
+                return raw
+            result = retrieve_working_evidence(ObservationEvidenceSession(value, value['facts']), value, [], [], choose, save,
+                262144, record_round=lambda step: self.store.save_retrieval_round(job, step), resume_read_plans=plans)
+            return result, saved
+        (_, _, _, first_trace), _ = run(self.job)
+        self.assertEqual(2, len(first_trace))
+        self.assertEqual('pending', self.store.fail(self.job, 'ai-execution:timeout')['status'])
+        with self.store.transaction() as c:
+            c.execute("UPDATE ai_control_tasks SET available_at='2000' WHERE task_id=%s", (self.job['taskId'],))
+        retry = self.store.claim()
+        plans = self.store.retrieval_read_plans(retry)
+        self.assertEqual(1, len(plans))
+        self.assertEqual(request, plans[0]['request'])
+        self.assertNotIn('reportedValues', repr(plans))
+        for changed in ({'worldId': 'foreign'}, {'accountId': 'foreign'}, {'leaseToken': 'expired'}, {'capability': 'observe'}):
+            self.assertEqual([], self.store.retrieval_read_plans({**retry, **changed}))
+        (final, _, _, trace), saved = run(retry, plans)
+        self.assertEqual(1, len(saved))
+        self.assertIn(request['factId'], {f['id'] for f in final['facts']})
+        result = {'input': final, 'retrievalInputIds': [s['inputId'] for s in trace]}
+        with self.store.connect() as c:
+            self.assertEqual(trace, AIControlResearchKnowledge.read_proof(c, retry, result))
+        # A terminal recovery carries only a verified lineage pointer, not old facts.
+        self.store.fail(retry, 'ai-execution:timeout', terminal=True)
+        with self.store.connect() as c:
+            rows = c.execute("SELECT payload_json FROM ai_control_tasks WHERE status='pending'").fetchall()
+        child = json.loads(rows[0]['payload_json'])
+        self.assertEqual(retry['taskId'], child['recoveryOf'])
+        with self.store.transaction() as c:
+            c.execute("UPDATE ai_control_tasks SET available_at='2000' WHERE task_id=%s", (child['taskId'],))
+        successor = self.store.claim()
+        continued = self.store.retrieval_read_plans(successor)
+        self.assertEqual(request, continued[0]['request'])
+        self.assertEqual([], self.store.retrieval_read_plans({**successor, 'recoveryOf': 'forged-parent'}))
+
     def test_terminal_failure_and_delayed_recovery_commit_together_without_publication(self):
         failure, rounds = self.record_failure()
         self.store.outbox_writer = Mock()

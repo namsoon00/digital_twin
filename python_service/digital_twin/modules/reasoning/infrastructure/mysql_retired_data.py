@@ -68,6 +68,11 @@ class MySQLRetiredReasoningDataStore(MySQLOperationalConnection):
         return (
             "NOT EXISTS (SELECT 1 FROM decision_publications p WHERE p.subject_case_id=" + alias + ".subject_case_id) "
             "AND NOT EXISTS (SELECT 1 FROM investment_ai_insight_episodes e WHERE e.subject_case_id=" + alias + ".subject_case_id)"
+            " AND NOT EXISTS (SELECT 1 FROM investment_hypothesis_observation_episodes e "
+            "JOIN decision_candidate_snapshots s ON s.candidate_set_id=e.candidate_set_id "
+            "WHERE s.subject_case_id=" + alias + ".subject_case_id)"
+            " AND NOT EXISTS (SELECT 1 FROM investment_decision_episodes e "
+            "WHERE " + alias + ".inference_generation_id<>'' AND e.inference_generation_id=" + alias + ".inference_generation_id)"
         )
 
     def _phases(self, ids):

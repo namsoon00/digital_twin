@@ -70,7 +70,8 @@ class RetiredReasoningDataTests(StabilizationDatabaseCase):
             "projection_results": {"fixture": {"nativeTypeDbReasoningCompleted": True, "generationAligned": True}}},
             worker_id="retirement-fixture", claimed_at=jobs[0]["claimedAt"])
         with self.jobs.connect() as c:
-            for name, deployment in (("current", current), ("garbage", old), ("canonical", shared), ("candidate", candidate)):
+            for name, deployment in (("current", current), ("garbage", old), ("canonical", shared), ("candidate", candidate),
+                                     ("learning", old), ("outcome", old)):
                 c.execute("INSERT INTO investment_subject_decision_cases "
                     "(subject_case_id,batch_case_id,request_id,deployment_id,payload_json,created_at,updated_at) "
                     "VALUES (%s,'batch','request',%s,%s,'2026-11-09','2026-11-09')",
@@ -80,7 +81,12 @@ class RetiredReasoningDataTests(StabilizationDatabaseCase):
                     "VALUES (%s,%s,%s,%s,'2026-11-09')", (name, name, name, json.dumps({"frozen": name})))
             c.execute("INSERT INTO decision_publications (publication_id,subject_case_id,outcome_kind,publication_fingerprint,payload_json,created_at) "
                       "VALUES ('canonical','canonical','PUBLISHED','canonical','{}','2026-11-09')")
-            frozen = c.execute("SELECT * FROM investment_subject_decision_cases WHERE subject_case_id IN ('current','canonical','candidate') ORDER BY subject_case_id").fetchall()
+            c.execute("INSERT INTO investment_hypothesis_observation_episodes (episode_id,candidate_set_id,payload_json,created_at,updated_at) "
+                      "VALUES ('learning','learning','{}','2026-11-09','2026-11-09')")
+            c.execute("UPDATE investment_subject_decision_cases SET inference_generation_id='verified-generation' WHERE subject_case_id='outcome'")
+            c.execute("INSERT INTO investment_decision_episodes (episode_id,inference_generation_id,decided_at,payload_json,created_at,updated_at) "
+                      "VALUES ('outcome','verified-generation','2026-11-09','{}','2026-11-09','2026-11-09')")
+            frozen = c.execute("SELECT * FROM investment_subject_decision_cases WHERE subject_case_id<>'garbage' ORDER BY subject_case_id").fetchall()
             lineage = c.execute("SELECT * FROM reasoning_engine_job_sources WHERE deployment_id=%s", (current,)).fetchall()
         preview = store.purge(control.version, "owner")
         self.assertEqual(1, preview["tables"]["investment_subject_decision_cases"])

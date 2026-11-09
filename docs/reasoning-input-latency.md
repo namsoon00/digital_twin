@@ -23,8 +23,10 @@ locks/rechecks control ownership and preserves every selected deployment.
 
 Retired jobs, their source-lineage copies, unused inference caches, disposable
 subject/batch cases and their children are hard-deleted without writing another
-archive copy. Current comparison proofs, published/AI memory case roots, shared
-model outcomes, prices, portfolios and customer delivery history remain intact.
+archive copy. Current comparison proofs, published/AI memory case roots and
+cases linked to hypothesis-observation candidates or decision-outcome generations
+remain intact, alongside shared model outcomes, prices, portfolios and customer
+delivery history.
 Old release IDs remain as small ownership/audit records; artifacts still needed
 by retained canonical cases or current comparisons remain protected. Native
 database deletion rechecks all current/experimental bindings under the control

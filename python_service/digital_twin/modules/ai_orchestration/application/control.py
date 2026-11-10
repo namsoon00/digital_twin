@@ -206,6 +206,9 @@ class AIControlService:
                             from ..domain.investment_meaning import VERSION as meaning_policy
                             if self.settings.get("aiInvestmentMeaningPolicy") == meaning_policy:
                                 packet["investmentMeaningPolicy"] = meaning_policy
+                                from ..domain import argument_quality
+                                if self.settings.get("aiArgumentQualityPolicy") == argument_quality.VERSION:
+                                    packet[argument_quality.FIELD] = argument_quality.VERSION
                         if not lanes.market(packet):
                             from ..domain.question_gap_retrieval import MARKER as gap_policy
                             packet["questionGapPolicy"] = gap_policy
@@ -382,6 +385,7 @@ class AIControlService:
                         result["validationRepair"] = validation_repair
                     if packet.get("dataRecovery"):
                         result["dataRecovery"] = packet["dataRecovery"]
+                    feedback_research = envelope["researchResults"]
                     reconsidered = False
                     if observation_abstention.enabled(packet):
                         result["quality"] = local_quality(result)
@@ -452,6 +456,10 @@ class AIControlService:
                     if result.get("conditionValidation", {}).get("reasonCode") == "condition-baseline-unusable":
                         result["dataRecovery"] = {"status": "awaiting-next-observation", "reasonCode": "condition-baseline-unusable",
                                                   "sameSnapshotRepairSkipped": True}
+                    from ..domain.argument_quality import feedback_use
+                    feedback_receipt = feedback_use(result, envelope, feedback_research)
+                    if feedback_receipt:
+                        result["reviewFeedbackUse"] = feedback_receipt
                     if judgment_policy.enabled(packet):
                         result["judgmentLinks"] = judgment_policy.judgment_links(result)
                         from ..domain.opinion_memory import contribution

@@ -3,14 +3,14 @@ from copy import deepcopy
 import hashlib
 
 from digital_twin.modules.reasoning.contracts import EvidenceContractError, content_hash
-from . import investment_meaning as policy, analyst_prompt as previous
+from . import investment_meaning as policy, analyst_prompt as previous, argument_quality
 from .insight_schema import obj, evidence_references
 
 PROMPT_VERSION = "independent-observation-v38-investment-meaning"
 REPAIR_VERSION = "independent-observation-repair-v34-investment-meaning"
 REVIEW_VERSION = "independent-observation-review-v27-investment-meaning"
 RETRIEVAL_VERSION = "independent-observation-retrieval-v24-investment-meaning"
-VERSIONS = {PROMPT_VERSION, REPAIR_VERSION, REVIEW_VERSION, RETRIEVAL_VERSION}
+VERSIONS = {PROMPT_VERSION, REPAIR_VERSION, REVIEW_VERSION, RETRIEVAL_VERSION, *argument_quality.VERSIONS.values()}
 enabled = policy.enabled
 INSTRUCTIONS = """투자 의미 연결 계약:
 investmentMeaning에 하나의 핵심 question, 수익·비용·현금창출·주당 가치 또는 구체적인 보유 위험으로 이어지는 mechanism과 현재 원천 evidence를 기록한다.
@@ -36,7 +36,12 @@ READ_INSTRUCTIONS = """기업 판단을 위한 자료 선택:
 
 
 def prompt(packet, history, research):
-    return INSTRUCTIONS + previous.prompt(packet, history, research)
+    return (argument_quality.INSTRUCTIONS if argument_quality.enabled(packet) else "") + INSTRUCTIONS + previous.prompt(packet, history, research)
+
+
+def version_for(packet, phase):
+    return argument_quality.VERSIONS[phase] if argument_quality.enabled(packet) else {
+        "author": PROMPT_VERSION, "repair": REPAIR_VERSION, "review": REVIEW_VERSION}[phase]
 
 
 def schema(packet, research):
@@ -48,7 +53,7 @@ def schema(packet, research):
 
 
 def review_prompt(packet, draft):
-    return (INSTRUCTIONS + "\n독립 검토 investmentMeaning={supported,discriminating,expectationsSupported,followUpLinked,reason}를 작성한다. "
+    return ((argument_quality.REVIEW_INSTRUCTIONS if argument_quality.enabled(packet) else "") + INSTRUCTIONS + "\n독립 검토 investmentMeaning={supported,discriminating,expectationsSupported,followUpLinked,reason}를 작성한다. "
         "단순 원문 인용이 아니라 경제적 연결과 두 설명의 판별력을 확인한다. 근거 없는 기대 비교·서로 다른 기준의 비교·확인 불가를 반증으로 쓰면 거부한다. "
         "후속 질문이 실제 observe 과제로 연결되고 지지·약화 조건이 서로 다른지 검토한다. 분석 불가를 정직하게 남긴 경우에는 그 한계와 무발송 판단의 타당성을 검토한다.\n"
         + previous.review_prompt(packet, draft))
@@ -84,19 +89,22 @@ def validate_input(envelope):
         old = previous.freeze_retrieval(packet, envelope["retrievalContext"], envelope["promptBudgetBytes"])
         previous.validate_input(old)
         return content_hash(envelope)
-    reviewing = version == REVIEW_VERSION
+    phase = next((name for name in ("author", "repair", "review") if version == version_for(packet, name)), None)
+    if phase is None:
+        raise EvidenceContractError("investment argument prompt policy mismatch")
+    reviewing = phase == "review"
     expected = review_prompt(packet, envelope["draft"]) if reviewing else prompt(packet, envelope["previousAnalyses"], envelope["researchResults"])
-    if version == REPAIR_VERSION:
+    if phase == "repair":
         expected = repair_prompt(expected, envelope["repair"])
     if (expected != envelope["prompt"] or hashlib.sha256(expected.encode()).hexdigest() != envelope["promptHash"]
             or envelope["outputSchema"] != (review_schema(packet) if reviewing else schema(packet, envelope["researchResults"]))
             or len(expected.encode()) > prompt_budget(envelope.get("promptBudgetBytes"))):
         raise EvidenceContractError("investment meaning frozen input changed")
     old = deepcopy(envelope)
-    old["promptVersion"] = {PROMPT_VERSION: previous.PROMPT_VERSION, REPAIR_VERSION: previous.REPAIR_VERSION,
-                            REVIEW_VERSION: previous.REVIEW_VERSION}[version]
+    old["promptVersion"] = {"author": previous.PROMPT_VERSION, "repair": previous.REPAIR_VERSION,
+                            "review": previous.REVIEW_VERSION}[phase]
     old["prompt"] = previous.review_prompt(packet, envelope["draft"]) if reviewing else previous.prompt(packet, envelope["previousAnalyses"], envelope["researchResults"])
-    if version == REPAIR_VERSION:
+    if phase == "repair":
         old["prompt"] = repair_prompt(old["prompt"], envelope["repair"])
     old["promptHash"] = hashlib.sha256(old["prompt"].encode()).hexdigest()
     old["outputSchema"] = previous.review_schema(packet) if reviewing else previous.schema(packet, envelope["researchResults"])

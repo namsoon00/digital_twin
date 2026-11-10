@@ -289,6 +289,45 @@ class RetrievalAuditStorageTests(unittest.TestCase):
             c.execute("UPDATE ai_control_inputs SET input_hash='different' WHERE input_id=%s", (r['executionInputId'],))
         self.assertEqual([], self.store.review_feedback(*scope, cutoff))
 
+    def test_feedback_check_audit_persists_with_its_own_input_without_rewriting_prior_rejection(self):
+        from ai_insight_fixtures import observation
+        from digital_twin.modules.ai_orchestration.domain import execution_lanes, argument_quality
+        from digital_twin.modules.ai_orchestration.domain.insight_quality import local_quality
+        from digital_twin.modules.ai_orchestration.domain.planning import stamp
+        from digital_twin.modules.reasoning.contracts import content_hash
+        self.job['capability'] = execution_lanes.MARKET
+        with self.store.transaction() as c:
+            c.execute("UPDATE ai_control_tasks SET capability=%s WHERE task_id=%s", (execution_lanes.MARKET, self.job['taskId']))
+        def author(job, memories):
+            r = observation()
+            r['input'] = execution_lanes.annotate({**r['input'], 'taskId': job['taskId']}, job)
+            r['counterEvidence'] = '기관 매도 때문에 주가가 하락했습니다.'
+            r['quality'] = local_quality(r)
+            env = freeze_execution_input(r['input'], [], memories)
+            r['executionInputId'] = self.store.save_execution_input(job, env)
+            call = self.store.begin_call('independent-observation', env['promptHash'], job['taskId'], r['executionInputId'])
+            self.store.finish_call(call)
+            return r, env
+        old, _ = author(self.job, [])
+        self.assertTrue(self.store.complete(self.job, old, []))
+        scope = [self.job[k] for k in ('accountId', 'symbol', 'worldId', 'capability')]
+        memories = self.store.review_feedback(*scope, stamp())
+        self.assertEqual(1, len(memories))
+        with self.store.transaction() as c:
+            original = c.execute('SELECT result_json FROM ai_control_tasks WHERE task_id=%s', (self.job['taskId'],)).fetchone()['result_json']
+            self.store.insert(c, {**SUBJECT, 'capability': execution_lanes.MARKET, 'taskId': 'feedback-follow-up', 'availableAt': stamp()})
+        job = self.store.claim()
+        new, env = author(job, memories)
+        new['reviewFeedbackUse'] = argument_quality.feedback_use(new, env, memories)
+        self.assertEqual(content_hash(env), new['reviewFeedbackUse']['authorInputHash'])
+        self.assertEqual({'repeated'}, {i['checkStatus'] for f in new['reviewFeedbackUse']['feedback'] for i in f['issues']})
+        self.assertTrue(self.store.complete(job, new, []))
+        with self.store.connect() as c:
+            saved = json.loads(c.execute('SELECT result_json FROM ai_control_tasks WHERE task_id=%s', (job['taskId'],)).fetchone()['result_json'])
+            self.assertEqual(new['reviewFeedbackUse'], saved['reviewFeedbackUse'])
+            self.assertEqual(original, c.execute('SELECT result_json FROM ai_control_tasks WHERE task_id=%s', (self.job['taskId'],)).fetchone()['result_json'])
+        self.assertEqual([], self.store.reviewed_memory(*scope))
+
     def test_independent_feedback_checks_review_call_draft_and_newer_accepted_insight(self):
         from ai_insight_fixtures import observation, review
         from digital_twin.modules.ai_orchestration.domain import execution_lanes
@@ -500,6 +539,8 @@ class RetrievalAuditStorageTests(unittest.TestCase):
             c.execute("UPDATE ai_control_tasks SET capability='market-observe',payload_json=JSON_SET(payload_json,'$.capability','market-observe') WHERE task_id=%s", (self.job['taskId'],))
         self.job['capability'] = 'market-observe'
         value = {**packet(), 'taskId': self.job['taskId']}
+        from digital_twin.modules.ai_orchestration.domain import argument_quality
+        value[argument_quality.FIELD] = argument_quality.VERSION
         def save(env):
             key = self.store.save_execution_input(self.job, env)
             call = self.store.begin_call('independent-observation', env['promptHash'], self.job['taskId'], key)

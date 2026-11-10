@@ -78,6 +78,68 @@ def authored_company(save=lambda env: "frozen", task_id=""):
 
 
 class InvestmentMeaningTests(unittest.TestCase):
+    def test_argument_revision_preserves_sources_legacy_inputs_and_repeat_identity(self):
+        from digital_twin.modules.ai_orchestration.domain import argument_quality as argument, execution_lanes
+        r, legacy = authored_company()
+        before = deepcopy(legacy)
+        p = deepcopy(legacy['current'])
+        key = execution_lanes.material_key(p, legacy['researchResults'])
+        p[argument.FIELD] = argument.VERSION
+        self.assertEqual(key, execution_lanes.material_key(p, legacy['researchResults']))
+        current = freeze_execution_input(p, legacy['previousAnalyses'], legacy['researchResults'], retrieval_trace=legacy['retrievalTrace'])
+        self.assertEqual(argument.VERSIONS['author'], current['promptVersion'])
+        self.assertEqual(legacy['current']['facts'], current['current']['facts'])
+        self.assertEqual(legacy['outputSchema'], current['outputSchema'])
+        repair = freeze_repair_input(current, r, ['문단의 정확한 원천 필드가 필요합니다.'], 'parent')
+        review = freeze_review_input({**r, 'input': p})
+        self.assertEqual(argument.VERSIONS['repair'], repair['promptVersion'])
+        self.assertEqual(argument.VERSIONS['review'], review['promptVersion'])
+        for env in (current, repair, review, legacy):
+            validate_execution_input(env)
+        self.assertEqual(before, legacy)
+        for env in (current, repair, review):
+            forged = deepcopy(env); forged['current'].pop(argument.FIELD)
+            with self.assertRaises(ValueError): validate_execution_input(forged)
+        self.assertLess(len(argument.INSTRUCTIONS.encode()) + len(argument.REVIEW_INSTRUCTIONS.encode()), 4096)
+        self.assertNotIn('review-feedback', review['prompt'])  # Reviewer remains blind to process memory.
+
+    def test_feedback_audit_separates_inclusion_repeated_checks_and_partial_check_passes(self):
+        from digital_twin.modules.ai_orchestration.domain import argument_quality as argument, rejection_feedback
+        from digital_twin.modules.ai_orchestration.domain.insight_quality import accept_review
+        from ai_insight_fixtures import review
+        r, _ = authored_company()
+        verdict = review()
+        verdict.update(judgmentChange={'supported': True, 'reason': '현재 원문과 의견의 변경 범위를 확인했습니다.'},
+            analystAssessment={'supported': True, 'substantive': True, 'memoryIds': [], 'reason': '사업 현금창출의 의미를 원문과 대조했습니다.'},
+            investmentMeaning={'supported': True, 'discriminating': False, 'expectationsSupported': True,
+                'followUpLinked': True, 'reason': '두 설명은 함께 성립할 수 있어 경쟁 설명을 판별하지 못했습니다.'})
+        verdict['sections']['portfolioImpact'] = {'supported': False, 'reason': '이익 비교 문장에 정확한 영업이익 필드가 인용되지 않았습니다.'}
+        reviewed = freeze_review_input(r)
+        r['quality'] = accept_review(r, verdict, 'old-review')
+        memory = rejection_feedback.extract(r, 'old-rejected-task', r['observedAt'], reviewed)
+        env = freeze_execution_input(r['input'], [], [memory])
+        r['executionInputId'] = 'new-author'
+        r['quality'] = accept_review(r, verdict, 'new-review')
+        receipt = argument.feedback_use(r, env, [memory])
+        self.assertTrue(receipt['feedback'][0]['includedInFinalInput'])
+        self.assertEqual({'repeated'}, {i['checkStatus'] for i in receipt['feedback'][0]['issues'] if i['section'] != 'overall'})
+        verdict['sections']['portfolioImpact']['supported'] = True
+        r['quality'] = accept_review(r, verdict, 'newer-review')
+        receipt = argument.feedback_use(r, env, [memory])
+        states = {i['section']: i['checkStatus'] for i in receipt['feedback'][0]['issues']}
+        self.assertEqual('repeated', states['investmentMeaning'])
+        self.assertEqual('check-passed', states['portfolioImpact'])
+        self.assertEqual('rejected', receipt['finalQualityStatus'])
+        self.assertEqual('execution-audit-only', receipt['authority'])
+        self.assertNotIn(memory['issues'][0]['reason'], str(receipt))
+        r['hypothesis'] = '검토 이후 새 문장으로 변경된 초안입니다.'
+        stale = argument.feedback_use(r, env, [memory])
+        self.assertEqual('', stale['reviewInputId'])
+        self.assertEqual({'not-reviewed'}, {i['checkStatus'] for i in stale['feedback'][0]['issues']})
+        omitted = {**env, 'researchResults': []}
+        self.assertEqual({'not-in-final-input'}, {i['checkStatus'] for i in argument.feedback_use(r, omitted, [memory])['feedback'][0]['issues']})
+        self.assertIsNone(argument.feedback_use(r, env, [{**memory, 'symbol': 'foreign'}]))
+
     def test_rejected_feedback_reaches_routing_and_author_without_becoming_evidence(self):
         from digital_twin.modules.ai_orchestration.domain import rejection_feedback as feedback, execution_lanes
         from digital_twin.modules.ai_orchestration.application.working_retrieval import retrieve_working_evidence

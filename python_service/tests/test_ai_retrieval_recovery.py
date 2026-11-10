@@ -224,13 +224,106 @@ class RetrievalRecoveryTests(unittest.TestCase):
 
 @unittest.skipUnless(os.environ.get("MYSQL_DATABASE") == "orbit_alpha_test", "isolated MySQL required")
 class RetrievalAuditStorageTests(unittest.TestCase):
+    def test_rejection_feedback_is_read_only_scoped_cutoff_bound_and_requires_completed_call(self):
+        from ai_insight_fixtures import observation
+        from digital_twin.modules.ai_orchestration.domain import execution_lanes, rejection_feedback
+        from digital_twin.modules.ai_orchestration.domain.insight_quality import local_quality
+        from digital_twin.modules.ai_orchestration.domain.planning import stamp
+        r = observation()
+        self.job['capability'] = execution_lanes.MARKET
+        with self.store.transaction() as c:
+            c.execute("UPDATE ai_control_tasks SET capability=%s WHERE task_id=%s", (execution_lanes.MARKET, self.job['taskId']))
+        r['input'] = execution_lanes.annotate({**r['input'], 'taskId': self.job['taskId']}, self.job)
+        r['counterEvidence'] = '기관 매도 때문에 주가가 하락했습니다.'
+        r['quality'] = local_quality(r)
+        author = freeze_execution_input(r['input'], [], [])
+        r['executionInputId'] = self.store.save_execution_input(self.job, author)
+        call = self.store.begin_call('independent-observation', author['promptHash'], self.job['taskId'], r['executionInputId'])
+        self.store.finish_call(call)
+        self.assertTrue(self.store.complete(self.job, r, []))
+        scope = [self.job[k] for k in ('accountId', 'symbol', 'worldId', 'capability')]
+        cutoff = stamp()
+        def snapshot():
+            with self.store.connect() as c:
+                return {t: c.execute('SELECT * FROM ' + t).fetchall() for t in
+                        ('ai_control_tasks', 'ai_control_inputs', 'ai_control_calls', 'ai_control_input_calls')}
+        before = snapshot()
+        rows = self.store.review_feedback(*scope, cutoff)
+        self.assertEqual(1, len(rows))
+        self.assertEqual(rejection_feedback.VERSION, rows[0]['version'])
+        self.assertEqual(rows, self.store.review_feedback(*scope, cutoff))
+        self.assertEqual(before, snapshot())  # No draft, call, source or ledger rewrites.
+        for index, other in enumerate(('foreign-account', 'foreign-symbol', 'foreign-world', 'observe')):
+            changed = list(scope); changed[index] = other
+            self.assertEqual([], self.store.review_feedback(*changed, cutoff))
+        self.assertEqual([], self.store.review_feedback(*scope, '2000-01-01T00:00:00Z'))
+        with self.store.transaction() as c:
+            c.execute("UPDATE ai_control_calls SET status='running' WHERE call_id=%s", (call,))
+        self.assertEqual([], self.store.review_feedback(*scope, cutoff))
+        with self.store.transaction() as c:
+            c.execute("UPDATE ai_control_calls SET status='completed' WHERE call_id=%s", (call,))
+            c.execute("UPDATE ai_control_inputs SET input_hash='different' WHERE input_id=%s", (r['executionInputId'],))
+        self.assertEqual([], self.store.review_feedback(*scope, cutoff))
+
+    def test_independent_feedback_checks_review_call_draft_and_newer_accepted_insight(self):
+        from ai_insight_fixtures import observation, review
+        from digital_twin.modules.ai_orchestration.domain import execution_lanes
+        from digital_twin.modules.ai_orchestration.domain.execution_input import freeze_review_input
+        from digital_twin.modules.ai_orchestration.domain.insight_quality import accept_review
+        from digital_twin.modules.ai_orchestration.domain.planning import stamp
+        r = observation(); self.job['capability'] = execution_lanes.MARKET
+        with self.store.transaction() as c:
+            c.execute("UPDATE ai_control_tasks SET capability=%s WHERE task_id=%s", (execution_lanes.MARKET, self.job['taskId']))
+        r['input'] = execution_lanes.annotate({**r['input'], 'taskId': self.job['taskId']}, self.job)
+        author = freeze_execution_input(r['input'], [], [])
+        r['executionInputId'] = self.store.save_execution_input(self.job, author)
+        call = self.store.begin_call('independent-observation', author['promptHash'], self.job['taskId'], r['executionInputId'])
+        self.store.finish_call(call)
+        env = freeze_review_input(r)
+        review_id = self.store.save_execution_input(self.job, env)
+        verdict = review(); verdict['sections']['hypothesis'] = {'supported': False, 'reason': '경쟁 설명의 근거를 구분하지 못했습니다.'}
+        r['quality'] = accept_review(r, verdict, review_id)
+        call = self.store.begin_call('independent-observation', env['promptHash'], self.job['taskId'], review_id)
+        self.store.finish_call(call)
+        self.assertTrue(self.store.complete(self.job, r, []))
+        scope = [self.job[k] for k in ('accountId', 'symbol', 'worldId', 'capability')]
+        self.assertEqual('independent-review', self.store.review_feedback(*scope, stamp())[0]['stage'])
+        with self.store.transaction() as c:
+            c.execute("UPDATE ai_control_calls SET status='failed' WHERE call_id=%s", (call,))
+        self.assertEqual([], self.store.review_feedback(*scope, stamp()))
+        with self.store.transaction() as c:
+            c.execute("UPDATE ai_control_calls SET status='completed' WHERE call_id=%s", (call,))
+            changed = copy.deepcopy(r); changed['summary'] = '검토 이후 다른 문장으로 바뀐 초안입니다.'
+            c.execute("UPDATE ai_control_tasks SET result_json=%s WHERE task_id=%s", (json.dumps(changed), self.job['taskId']))
+        self.assertEqual([], self.store.review_feedback(*scope, stamp()))
+        with self.store.transaction() as c:
+            c.execute("UPDATE ai_control_tasks SET result_json=%s WHERE task_id=%s", (json.dumps(r), self.job['taskId']))
+        # Approval of internal research cannot approve the rejected market opinion.
+        r['researchQuality'] = {'status': 'accepted', 'reviewInputId': 'research-only', 'admissions': {'assessment': True}}
+        with self.store.transaction() as c:
+            c.execute("UPDATE ai_control_tasks SET result_json=%s WHERE task_id=%s", (json.dumps(r), self.job['taskId']))
+        self.assertEqual([], self.store.reviewed_memory(scope[0], scope[1], scope[2], scope[3]))
+        self.assertEqual([], self.store.search_opinions(scope[0], scope[1], scope[2], stamp(), '단기', 200000)['records'])
+        with self.store.transaction() as c:
+            latest = {**self.job, 'taskId': 'newer-approved', 'availableAt': stamp()}
+            self.store.insert(c, latest)
+            c.execute("UPDATE ai_control_tasks SET status='completed',result_json=%s WHERE task_id=%s",
+                      (json.dumps({'summary': 'new approved insight', 'input': r['input'], 'quality': {'status': 'accepted'}}), latest['taskId']))
+        self.assertEqual([], self.store.review_feedback(*scope, stamp()))
+        self.assertEqual('new approved insight', self.store.reviewed_memory(scope[0], scope[1], scope[2], scope[3])[0]['summary'])
+        self.assertEqual(1, len(self.store.search_opinions(scope[0], scope[1], scope[2], stamp(), 'approved', 200000)['records']))
+
     def setUp(self):
         from digital_twin.infrastructure.settings import load_local_env
-        from mysql_fixtures import mysql_test_settings
+        from mysql_fixtures import mysql_test_settings, mysql_test_database_config, ensure_mysql_database_exists
         from digital_twin.modules.ai_orchestration.infrastructure.mysql_control import MySQLAIControlStore
         load_local_env()
         isolated = mysql_test_settings()
-        self.settings = {**isolated, "aiControlEnabled": "true", "aiControlBudgetEnabled": "false", "aiTokenBudgetEnabled": "false"}
+        self.settings = {**isolated, "aiControlEnabled": "true", "aiControlBudgetEnabled": "false", "aiTokenBudgetEnabled": "false",
+                         "mysqlOperationTimeoutSeconds": "120", "_skipOperationalSchemaBootstrap": "1"}
+        # These audits use only the AI owner's tables. Do not rebuild every
+        # portfolio/history schema just to verify input lineage and feedback.
+        ensure_mysql_database_exists(mysql_test_database_config(self.settings), timeout_seconds=120)
         self.store = MySQLAIControlStore(self.settings)
         self.clean()
         self.store.seed(SUBJECT)

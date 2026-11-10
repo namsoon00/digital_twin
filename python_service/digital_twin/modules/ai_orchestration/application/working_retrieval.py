@@ -99,7 +99,7 @@ def author_packet(session, packet, ids, seen, research, trace, status, reserve=0
 
 
 def retrieve_working_evidence(session, packet, history, research, decide, save_input, prompt_bytes,
-                             max_rounds=MAX_ROUNDS, record_round=None, memory_search=None, resume_read_plans=()):
+                             max_rounds=MAX_ROUNDS, record_round=None, memory_search=None, resume_read_plans=(), review_feedback=()):
     investigation_index = None
     if price_investigation.enabled(packet):
         anchor, investigation_index, scope = session.price_investigation(**({"prefer_original": True} if insight_progress.enabled(packet) else {}))
@@ -170,6 +170,21 @@ def retrieve_working_evidence(session, packet, history, research, decide, save_i
     seen = {x["id"]: x for x in current["facts"]}
     selected = set(seen)
     active = deepcopy(seen)
+    if indexed and review_feedback:
+        # Admit process feedback after all source baselines. It must fit with
+        # those exact facts, never make a financial source lose its place.
+        from ..domain.rejection_feedback import admit
+        from .completion_admission import budget_error
+        for row in admit(history, research, review_feedback):
+            trial_research = research + [row]
+            try:
+                trial = author_packet(session, packet, selected, seen, trial_research, [], "round-limit", contract=contract)
+                freeze_execution_input(trial, history, trial_research, prompt_bytes)
+            except EvidenceContractError as error:
+                if not budget_error(error):
+                    raise
+            else:
+                research = trial_research
     tools = ObservationReadTools(session, history, research, indexed=indexed, memory_search=memory_search,
         memory_scope={**{k: packet[k] for k in ("accountId", "symbol", "worldId")}, "asOf": packet["capturedAt"]})
     tools.admit(current)

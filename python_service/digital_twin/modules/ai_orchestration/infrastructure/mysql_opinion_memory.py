@@ -24,6 +24,9 @@ AND (JSON_EXTRACT(result_json,'$.researchQuality.admissions.assessment')=true OR
 (JSON_EXTRACT(result_json,'$.researchQuality.admissions') IS NULL
 AND JSON_UNQUOTE(JSON_EXTRACT(result_json,'$.researchQuality.status'))='accepted'))))"""
 
+APPROVED_NARRATIVE_SQL = """(JSON_UNQUOTE(JSON_EXTRACT(result_json,'$.quality.status')) IN ('accepted','observation-only')
+AND COALESCE(JSON_LENGTH(JSON_EXTRACT(result_json,'$.quality.errors')),0)=0)"""
+
 
 def search_text(row):
     return " ".join(str(row.get(k, "")) for k in ("question", "questionContract", "answer", "summary", "hypothesis", "analystAssessment", "investmentMeaning", "missingRequirements", "asOf", "periods")).casefold()[:12000]
@@ -152,7 +155,9 @@ class OpinionMemoryPersistence:
             "JSON_UNQUOTE(JSON_EXTRACT(result_json,'$.observedAt')) observed_at "
             "FROM ai_control_tasks t FORCE INDEX(ai_control_subject) WHERE account_id=%s AND symbol=%s "
             "AND status='completed' AND capability IN ('observe','market-observe') AND updated_at<=%s "
-            "AND JSON_UNQUOTE(JSON_EXTRACT(payload_json,'$.worldId'))=%s AND " + APPROVED_RESULT_SQL +
+            "AND JSON_UNQUOTE(JSON_EXTRACT(payload_json,'$.worldId'))=%s AND "
+            "((capability='market-observe' AND " + APPROVED_NARRATIVE_SQL + ") OR "
+            "(capability<>'market-observe' AND " + APPROVED_RESULT_SQL + "))" +
             " AND JSON_EXTRACT(result_json,'$.summary') IS NOT NULL "
             "AND NOT EXISTS(SELECT 1 FROM ai_opinion_records o WHERE o.task_id=t.task_id) "
             "ORDER BY updated_at DESC,task_id DESC LIMIT 81 OFFSET %s", (account, symbol, as_of, world, offset-200000)).fetchall()
@@ -166,11 +171,13 @@ class OpinionMemoryPersistence:
                     break
         values = []
         for key in matches:
-            row = connection.execute("SELECT result_json,updated_at FROM ai_control_tasks WHERE task_id=%s AND account_id=%s AND symbol=%s",
+            row = connection.execute("SELECT capability,result_json,updated_at FROM ai_control_tasks WHERE task_id=%s AND account_id=%s AND symbol=%s",
                                      (key, account, symbol)).fetchone()
             result = json.loads(row["result_json"]) if row else {}
             packet = result.get("input", {})
             if (not opinion_memory.approved_result(result) or row["updated_at"] > as_of
+                    or (row["capability"] == 'market-observe' and (result.get('quality', {}).get('status') not in
+                        {'accepted', 'observation-only'} or result.get('quality', {}).get('errors')))
                     or (packet.get("accountId"), packet.get("symbol"), packet.get("worldId")) != (account, symbol, world)):
                 continue
             values.append(archive_record({"recordId": identity("legacy-opinion", key), "taskId": key,

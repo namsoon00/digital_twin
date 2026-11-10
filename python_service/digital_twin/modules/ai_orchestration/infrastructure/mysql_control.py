@@ -30,9 +30,10 @@ from .mysql_diagnostic_progress import DiagnosticProgressPersistence, SCHEMA as 
 from .mysql_token_usage import AITokenUsagePersistence
 from ..domain.token_budget import usage_counts, RESERVATION, execution_pool
 from .mysql_activity import AIActivityPersistence, SCHEMA as ACTIVITY_SCHEMA
-from .mysql_opinion_memory import OpinionMemoryPersistence, SCHEMA as OPINION_SCHEMA, APPROVED_RESULT_SQL
+from .mysql_opinion_memory import OpinionMemoryPersistence, SCHEMA as OPINION_SCHEMA, APPROVED_RESULT_SQL, APPROVED_NARRATIVE_SQL
 from .mysql_commit_confirmation import confirm_artifact_commit, confirmed_transaction, call_completion_confirmed, call_admission_confirmed
 from .mysql_read_continuation import ReadContinuationPersistence
+from .mysql_rejection_feedback import RejectionFeedbackPersistence
 
 
 STATUS_INDEXES = (
@@ -88,7 +89,7 @@ SCHEMA = (
 )
 
 
-class MySQLAIControlStore(ReadContinuationPersistence, OpinionMemoryPersistence, AIActivityPersistence, AITokenUsagePersistence, DiagnosticProgressPersistence, AITaskDispatchPersistence, AIRuntimePersistence, AIExecutionPersistence, MySQLOperationalConnection):
+class MySQLAIControlStore(RejectionFeedbackPersistence, ReadContinuationPersistence, OpinionMemoryPersistence, AIActivityPersistence, AITokenUsagePersistence, DiagnosticProgressPersistence, AITaskDispatchPersistence, AIRuntimePersistence, AIExecutionPersistence, MySQLOperationalConnection):
     def __init__(self, settings=None, *, initialize=True):
         configured = dict(settings or {})
         if not initialize:
@@ -387,7 +388,7 @@ class MySQLAIControlStore(ReadContinuationPersistence, OpinionMemoryPersistence,
     def memory(self, account_id, symbol, capability="observe", world_id=None):
         # Completed includes rejected drafts. Admission is checked before LIMIT,
         # so failed/rejected recent runs cannot displace a prior approved opinion.
-        admitted = APPROVED_RESULT_SQL
+        admitted = APPROVED_NARRATIVE_SQL if capability == MARKET else APPROVED_RESULT_SQL
         scope = "account_id=%s AND symbol=%s AND capability=%s AND status='completed'"
         params = [account_id, symbol, capability]
         if world_id:

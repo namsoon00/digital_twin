@@ -40,6 +40,9 @@ def brief(row, category):
                   "contract", "createdAt", "nextCheckAt", "expiresAt", "observations")
     elif row.get("kind") == "research-context":
         fields = ("kind", "caseId", "question", "status", "authority", "reviewedAssessment")
+    elif row.get("kind") == "review-feedback":
+        from .rejection_feedback import FIELDS
+        fields = FIELDS
     else:
         fields = ("kind", "caseId", "runId", "requestId", "version", "accountId", "symbol", "worldId", "status",
                   "question", "problem", "proposal", "verification", "category", "completedAt", "stopReason",
@@ -48,6 +51,8 @@ def brief(row, category):
     result = _summary(row, fields)
     result.update(memoryBriefVersion=VERSION, memoryId="memory:" + content_hash(row),
                   detailsAvailable=True, omittedFields=sorted(set(row) - set(fields)))
+    if row.get("kind") == "review-feedback":
+        result["authority"] = "rejected-draft-feedback-only"
     if category == "analyses":
         result["quality"] = {"status": row.get("quality", {}).get("status"),
                              "errorCount": len(row.get("quality", {}).get("errors") or [])}

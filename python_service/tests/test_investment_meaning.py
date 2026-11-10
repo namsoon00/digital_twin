@@ -1,7 +1,8 @@
 """Economic meaning must survive source reads, review, memory and customer rendering."""
 from copy import deepcopy
+import json
 import unittest
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 from digital_twin.modules.ai_orchestration.domain import investment_meaning as meaning, investment_meaning_prompt as prompts
 from digital_twin.modules.ai_orchestration.domain.execution_input import (
@@ -77,6 +78,88 @@ def authored_company(save=lambda env: "frozen", task_id=""):
 
 
 class InvestmentMeaningTests(unittest.TestCase):
+    def test_rejected_feedback_reaches_routing_and_author_without_becoming_evidence(self):
+        from digital_twin.modules.ai_orchestration.domain import rejection_feedback as feedback, execution_lanes
+        from digital_twin.modules.ai_orchestration.application.working_retrieval import retrieve_working_evidence
+        from test_reliable_opinion_completion import packet
+        from test_efficient_retrieval import decision
+        r, _ = authored_company()
+        r['counterEvidence'] = '기관 매도 때문에 주가가 하락했습니다.'
+        r['quality'] = local_quality(r)
+        self.assertEqual('rejected', r['quality']['status'])
+        memory = feedback.extract(r, 'rejected-task', r['observedAt'])
+        self.assertEqual('local-validation', memory['stage'])
+        self.assertNotIn(r['counterEvidence'], str(memory))
+        p, saved = packet(), []
+        identity = execution_lanes.material_key(p, [])
+        memories = feedback.admit([], [], [memory, memory])
+        self.assertEqual(1, len(memories))
+        self.assertEqual(identity, execution_lanes.material_key(p, memories))
+        def save(env):
+            validate_execution_input(env); saved.append(deepcopy(env)); return 'feedback-read'
+        def choose(env, _):
+            item = env['retrievalContext']['continuity']['researchResults'][0]
+            self.assertEqual(memory['issues'], item['issues'])
+            self.assertEqual('rejected-draft-feedback-only', item['authority'])
+            return decision('finish')
+        final, history, research, trace = retrieve_working_evidence(ObservationEvidenceSession(p, p['facts']),
+            p, [], [], choose, save, 262144, review_feedback=memories)
+        author = freeze_execution_input(final, history, research, retrieval_trace=trace)
+        validate_execution_input(author)
+        self.assertEqual(memory['issues'], author['researchResults'][0]['issues'])
+        self.assertEqual(final['facts'], author['current']['facts'])
+        self.assertNotIn(feedback.KIND, {f['kind'] for f in final['facts']})
+        self.assertLessEqual(sum(len(json.dumps(x, ensure_ascii=False).encode()) for x in memories), feedback.MAX_BYTES)
+        from digital_twin.modules.ai_orchestration.domain.continuity import judgment_continuity
+        blinded = freeze_review_input({**r, 'input': final, 'judgmentContinuity': judgment_continuity(author)})
+        self.assertNotIn(memory['purpose'], blinded['prompt'])
+        # A crowded author input loses optional process feedback, not its
+        # already admitted financial baselines or the entire analysis turn.
+        from digital_twin.modules.ai_orchestration.application import working_retrieval as engine
+        from digital_twin.modules.reasoning.contracts import EvidenceContractError
+        original = engine.freeze_execution_input
+        def crowded(current, history, research, *args, **kwargs):
+            if any(row.get('kind') == feedback.KIND for row in research):
+                raise EvidenceContractError('observation execution exceeds context budget')
+            return original(current, history, research, *args, **kwargs)
+        model = Mock(return_value=decision('finish'))
+        with patch.object(engine, 'freeze_execution_input', side_effect=crowded):
+            fallback, _, fallback_memory, _ = retrieve_working_evidence(ObservationEvidenceSession(p, p['facts']),
+                p, [], [], model, save, 262144, review_feedback=memories)
+        model.assert_called_once()
+        self.assertFalse(any(row.get('kind') == feedback.KIND for row in fallback_memory))
+        self.assertEqual(final['facts'], fallback['facts'])
+        from digital_twin.modules.ai_orchestration.domain.insight_contract import resolve_ref
+        with self.assertRaises(ValueError):
+            resolve_ref(final, {'period': 'current', 'factId': memory['taskId'], 'field': 'issues'})
+        # Required memory always wins admission; feedback is optional.
+        large = {'kind': 'research-context', 'reviewedAssessment': {'answer': 'x' * 40500}}
+        self.assertEqual([], feedback.admit([], [large], [memory]))
+        r['quality']['errors'] = ['fabricated criticism']
+        self.assertIsNone(feedback.extract(r, 'forged', r['observedAt']))
+
+    def test_independent_feedback_requires_the_exact_reviewed_draft_and_never_approves_it(self):
+        from digital_twin.modules.ai_orchestration.domain import rejection_feedback as feedback
+        from digital_twin.modules.ai_orchestration.domain.insight_quality import accept_review, quality_block
+        from ai_insight_fixtures import review
+        r, _ = authored_company()
+        env = freeze_review_input(r)
+        verdict = review()
+        verdict['sections']['hypothesis'] = {'supported': False, 'reason': '경쟁 설명을 비교할 별도의 원문 근거가 부족합니다.'}
+        verdict['investmentMeaning'] = {'supported': True, 'discriminating': False, 'expectationsSupported': True,
+            'followUpLinked': True, 'reason': '경쟁 설명이 서로 판별 가능한 방식으로 비교되지 않았습니다.'}
+        r['quality'] = accept_review(r, verdict, 'review-id')
+        self.assertIsNone(feedback.extract(r, 'task', r['observedAt']))
+        memory = feedback.extract(r, 'task', r['observedAt'], env)
+        self.assertEqual('independent-review', memory['stage'])
+        self.assertEqual('investmentMeaning', memory['issues'][0]['section'])
+        self.assertIn('경쟁 설명', str(memory['issues']))
+        self.assertTrue(quality_block(r))
+        changed = deepcopy(env); changed['draft']['hypothesis'] = 'another draft'
+        self.assertIsNone(feedback.extract(r, 'task', r['observedAt'], changed))
+        r['quality']['status'] = 'accepted'
+        self.assertIsNone(feedback.extract(r, 'task', r['observedAt'], env))
+
     def test_new_author_repair_review_and_old_inputs_keep_exact_frozen_contracts(self):
         from test_analyst_memory import assessment
         from test_reviewed_opinion_memory import fixture, approved
@@ -201,6 +284,18 @@ class InvestmentMeaningTests(unittest.TestCase):
         from digital_twin.modules.reasoning.contracts import quote_clock_assessment
         p["quoteAssessment"] = quote_clock_assessment(p["facts"], p["capturedAt"])
         service, store, planner = AIControlTests().runner()
+        from digital_twin.modules.ai_orchestration.domain import rejection_feedback
+        prior, _ = authored_company()
+        prior['counterEvidence'] = '기관 매도 때문에 주가가 하락했습니다.'
+        prior['quality'] = local_quality(prior)
+        feedback = rejection_feedback.extract(prior, 'old-rejection', prior['observedAt'])
+        class Store:
+            feedback_reads = 0
+            def __getattr__(self, name): return getattr(store, name)
+            def review_feedback(self, *_):
+                self.feedback_reads += 1
+                return [feedback]
+        service.store = wrapped = Store()
         subject = {k: p[k] for k in ("accountId", "symbol", "name", "worldId")}
         store.claim.return_value.update(subject, capability="market-observe")
         service.subjects = lambda: [subject]
@@ -216,11 +311,20 @@ class InvestmentMeaningTests(unittest.TestCase):
         service.read_planner = Mock(side_effect=decide)
         service.run_once()
         self.assertTrue(captured)
+        self.assertEqual(1, wrapped.feedback_reads)
+        self.assertEqual(feedback['issues'], captured[0]['retrievalContext']['continuity']['researchResults'][0]['issues'])
         from digital_twin.modules.ai_orchestration.domain.focused_retrieval import VERSION as retrieval_version
         self.assertEqual(retrieval_version, captured[0]["promptVersion"])
         self.assertNotIn("priceInvestigationPolicy", captured[0]["current"])
         self.assertEqual(meaning.VERSION, captured[0]["current"]["investmentMeaningPolicy"])
         validate_execution_input(captured[0])
+        # Persisted data-wait identity is unchanged by process feedback. It is
+        # checked before another feedback read or paid routing call.
+        store.last_processing_outcome.return_value = store.complete.call_args.args[1]['processingOutcome']
+        reads = service.read_planner.call_count
+        self.assertEqual('unchanged-wait', service.run_once()['status'])
+        self.assertEqual(reads, service.read_planner.call_count)
+        self.assertEqual(1, wrapped.feedback_reads)
 
     def test_company_source_can_be_authored_and_independently_reviewed_without_a_price_anchor(self):
         from ai_insight_fixtures import review

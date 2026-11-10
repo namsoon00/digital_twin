@@ -64,6 +64,100 @@ class PreparedOutcomeInputTests(StabilizationDatabaseCase):
         self.assertEqual(before, after)
         self.assertEqual(expected, self.decisions.outcome_coverage_population(account_id=self.account, as_of=NOW))
 
+    def test_shadow_batches_keep_join_order_scope_consistent_snapshot_and_query_failures(self):
+        from contextlib import contextmanager
+        from digital_twin.infrastructure.transactions.decision_history_parts.calibration_rows import read_shadow_calibration_rows
+        prefix = "shadow-batches:" + uuid.uuid4().hex
+        with self.decisions.transaction() as connection:
+            for index in range(24):
+                identity = prefix + ":%02d" % index
+                account = self.account if index < 23 else self.account + ":foreign"
+                payload = {"episodeId": identity, "accountId": account, "symbol": "AAPL",
+                           "hypothesisId": "shadow", "candidateAction": "REDUCE",
+                           "observedFromAt": DECIDED, "hypothesis": {"hypothesisId": "shadow"},
+                           "auditOnly": "x" * 10000}
+                connection.execute(
+                    "INSERT INTO investment_hypothesis_observation_episodes "
+                    "(episode_id,account_id,symbol,claim_identity,independence_bucket,payload_json,created_at,updated_at) "
+                    "VALUES (%s,%s,'AAPL',%s,%s,%s,%s,%s)",
+                    (identity, account, identity, identity, json.dumps(payload), NOW, NOW))
+                for suffix in ("a", "b"):
+                    connection.execute(
+                        "INSERT INTO investment_hypothesis_observation_outcomes "
+                        "(outcome_id,observation_episode_id,account_id,symbol,observed_at,payload_json,created_at) "
+                        "VALUES (%s,%s,%s,'AAPL',%s,%s,%s)",
+                        (identity + ":" + suffix, identity, self.account + ":legacy-metadata", NOW,
+                         json.dumps({"observedAt": NOW, "price": index, "suffix": suffix}), NOW))
+            for identity, owner, clock in ((prefix + ":orphan", prefix + ":missing", NOW),
+                                            (prefix + ":future", prefix + ":22", "2099-01-01T00:00:00Z")):
+                connection.execute(
+                    "INSERT INTO investment_hypothesis_observation_outcomes "
+                    "(outcome_id,observation_episode_id,account_id,symbol,observed_at,payload_json,created_at) "
+                    "VALUES (%s,%s,%s,'AAPL',%s,'{}',%s)", (identity, owner, self.account, clock, NOW))
+        where = " WHERE episodes.account_id=%s AND episodes.symbol=%s AND outcomes.observed_at<=%s"
+        params = (self.account, "AAPL", NOW, 41)
+        with self.decisions.connect() as connection:
+            expected = connection.execute(
+                "SELECT outcomes.observation_episode_id AS episode_id, outcomes.observed_at, "
+                "outcomes.payload_json AS outcome_json, episodes.payload_json AS episode_json "
+                "FROM investment_hypothesis_observation_outcomes AS outcomes "
+                "JOIN investment_hypothesis_observation_episodes AS episodes ON episodes.episode_id=outcomes.observation_episode_id"
+                + where + " ORDER BY outcomes.observed_at DESC,outcomes.outcome_id DESC LIMIT %s", params).fetchall()
+        original = self.decisions.connect
+        statements = []
+        mutated = []
+        fail_second_batch = []
+        batch_count = []
+
+        class Tracked:
+            def __init__(self, connection):
+                self.connection = connection
+
+            def execute(inner, sql, values=()):
+                statements.append((sql, values))
+                if "operation:shadow-outcomes-batch" in sql:
+                    batch_count.append(1)
+                    if fail_second_batch and len(batch_count) == 2:
+                        raise TimeoutError("bounded shadow batch failed")
+                result = inner.connection.execute(sql, values)
+                if "operation:shadow-outcomes-batch" in sql and not mutated:
+                    with original() as writer:
+                        writer.execute("UPDATE investment_hypothesis_observation_episodes SET payload_json=JSON_SET(payload_json,'$.candidateAction','SELL') WHERE episode_id=%s", (prefix + ":22",))
+                        writer.execute("UPDATE investment_hypothesis_observation_outcomes SET payload_json=JSON_SET(payload_json,'$.price',999) WHERE outcome_id=%s", (prefix + ":22:a",))
+                    mutated.append(1)
+                return result
+
+        @contextmanager
+        def tracked():
+            with original() as connection:
+                yield Tracked(connection)
+
+        with tracked() as connection:
+            actual = read_shadow_calibration_rows(connection, where, params)
+        self.assertEqual(expected, actual)
+        self.assertEqual(41, len(actual))
+        reads = [(sql, values) for sql, values in statements if "-batch */" in sql]
+        self.assertTrue(all(len(values) <= 20 for _, values in reads))
+        episode_values = [value for sql, values in reads if "shadow-episodes-batch" in sql for value in values]
+        self.assertEqual(len(set(row["episode_id"] for row in expected)), len(episode_values))
+        self.assertEqual(len(episode_values), len(set(episode_values)))
+        refreshed = self.decisions.shadow_performance_episodes(account_id=self.account, symbol="AAPL", as_of=NOW)
+        changed = next(row for row in refreshed if row["episodeId"] == prefix + ":22")
+        self.assertEqual("SELL", changed["action"])
+        self.assertIn(999, [row["price"] for row in changed["outcomes"]])
+        self.assertEqual(23, len(refreshed))
+        self.assertEqual([], self.decisions.shadow_performance_episodes(account_id=self.account, symbol="MSFT", as_of=NOW))
+        statements.clear()
+        batch_count.clear()
+        fail_second_batch.append(1)
+        with tracked() as connection:
+            with self.assertRaisesRegex(TimeoutError, "bounded shadow batch failed"):
+                read_shadow_calibration_rows(connection, where, params)
+            # A leaked READ ONLY snapshot would reject this write before the
+            # pooled connection is returned to its owner.
+            connection.execute("UPDATE investment_hypothesis_observation_episodes SET symbol=symbol WHERE episode_id=%s", (prefix + ":22",))
+        self.assertEqual(1, sum(sql == "ROLLBACK" for sql, _ in statements))
+
     def report(self, stamp=NOW, **kwargs):
         return self.decisions.performance(account_id=self.account, as_of=stamp, **kwargs)
 

@@ -57,6 +57,36 @@ temporary separate MySQL server so fixture DDL did not compete with production
 or another development session. Its test-only durability setting is not a
 production configuration change or a database crash-durability test.
 
+## Bound shadow calibration payload reads (2026-11-10)
+
+A read-only production profile reproduced the account-wide shadow-history
+query exceeding its 4.5-second server deadline. The preceding completed worker
+spent 32.117 seconds preparing performance inputs and could use the existing
+subject-history fallback after the broad read failed. The native rule query
+itself took 11.901 seconds in that execution; it was not the only bottleneck.
+
+Shadow calibration now selects the same ordered, scoped outcome identities
+before reading payloads in batches of at most 20 primary keys. Each referenced
+episode body is read once even when several selected outcomes share it. All
+phases use one read-only repeatable-read snapshot, preserving episode-owner
+scope, orphan exclusion, cutoff, tie order, limit and original payload values.
+An error in any batch propagates after rollback; partially read history is not
+a successful result. No cache validity, qualification or alert rule changes.
+
+The same account and historical cutoff completed a cold-history report in
+5.152 seconds with the new reader, including decision history, evaluation and
+fresh archive/coverage counts. This is a bounded component observation under
+concurrent production load, not a controlled whole-pipeline speedup ratio.
+A subsequent warm comparison in one database read snapshot returned identical
+2,000 outcomes grouped into 1,062 episodes (digest
+`cd68f4944e6ffab04cbc1858f50b38fcd35ee6e7a5b37eba083c81713d2bfc9e`).
+The old and new reads took 3,098 and 3,047 ms respectively; this does not establish
+a meaningful warm speedup. The batching bounds individual payload reads and
+removes repeated episode transfer; full latency still needs live validation.
+`test_prepared_outcome_inputs` compares exact raw join rows, including tied and
+shared outcomes, orphan/future/foreign rows, misleading outcome metadata,
+concurrent correction visibility and a failing later batch.
+
 ## Keep recovery available during automatic rotation preparation (2026-11-10)
 
 A supervisor-owned blue-green rotation previously entered maintenance before

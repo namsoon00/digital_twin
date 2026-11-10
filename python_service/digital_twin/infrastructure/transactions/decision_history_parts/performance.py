@@ -6,7 +6,7 @@ from typing import Callable, Dict, Iterable, List, Mapping
 from digital_twin.modules.decisions.domain.investment_brain import canonical_investment_timestamp
 from digital_twin.infrastructure.mysql_operational_helpers import _json_loads
 from .ports import ConnectionFactory
-from .calibration_rows import read_calibration_rows
+from .calibration_rows import read_calibration_rows, read_shadow_calibration_rows
 from digital_twin.modules.outcomes.domain.decision_calibration_input import calibration_ai_judgment
 from digital_twin.modules.outcomes.infrastructure.performance_report_cache import PERFORMANCE_REPORT_CACHE
 
@@ -400,25 +400,7 @@ def shadow_performance_episodes(
     where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
     params.append(max(1, min(5000, int(limit or 500))))
     with _connect() as connection:
-        rows = connection.execute(
-            "SELECT outcomes.observation_episode_id AS episode_id, "
-            "outcomes.observed_at, outcomes.payload_json AS outcome_json, "
-            "episodes.payload_json AS episode_json "
-            "FROM (SELECT outcomes.outcome_id, outcomes.observed_at "
-            "FROM investment_hypothesis_observation_outcomes AS outcomes "
-            "JOIN investment_hypothesis_observation_episodes AS episodes "
-            "ON episodes.episode_id = outcomes.observation_episode_id"
-            + where
-            # Limit only the small identities before fetching off-page evidence.
-            # Keep the original episode scope, orphan exclusion and tie order.
-            + " ORDER BY outcomes.observed_at DESC, outcomes.outcome_id DESC LIMIT %s"
-            ") AS selected STRAIGHT_JOIN investment_hypothesis_observation_outcomes AS outcomes FORCE INDEX (PRIMARY) "
-            "ON outcomes.outcome_id = selected.outcome_id "
-            "STRAIGHT_JOIN investment_hypothesis_observation_episodes AS episodes FORCE INDEX (PRIMARY) "
-            "ON episodes.episode_id = outcomes.observation_episode_id "
-            "ORDER BY selected.observed_at DESC, selected.outcome_id DESC",
-            tuple(params),
-        ).fetchall()
+        rows = read_shadow_calibration_rows(connection, where, params)
     grouped: Dict[str, Dict[str, object]] = {}
     for row in rows or []:
         episode_payload = _json_loads(row.get("episode_json"), {})

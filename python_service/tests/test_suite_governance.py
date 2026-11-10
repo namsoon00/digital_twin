@@ -520,7 +520,9 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # Four latency regressions cover safe audit retry diagnostics,
         # post-observation/exact-clock cache reuse, follow-up preselection,
         # and lossless coverage index installation.
-        self.assertLessEqual(total, 3089)
+        # One shadow-history regression preserves scope, limit/order, a
+        # consistent read snapshot and fail-closed bounded payload batches.
+        self.assertLessEqual(total, 3090)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

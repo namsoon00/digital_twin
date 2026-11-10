@@ -1527,3 +1527,52 @@ schema cost and check the server's in-flight DDL before retrying a timed-out
 startup. The two added columns do not require a rebuild on subsequent restarts.
 Input substage timings are flattened at the worker's scalar progress boundary,
 so they remain visible during execution as well as in the final job receipt.
+
+### Read-only preparation and shared physical endpoints (2026-11-10)
+
+Live inference no longer observes past decision outcomes again for every symbol.
+`MonitoringService.observe_investment_outcomes` already owns that work after the
+source snapshot commits, including retries and durable follow-up transitions.
+The projection reads committed decision/outcome memory at the original source
+cutoff. Context reuse still checks the committed outcome revision before and
+after reads; source clocks and qualification rules are unchanged. The v3
+runtime-context cache contract excludes contexts from the former mutating path.
+
+For releases with frozen TBox metadata, the independent engine prepares this
+read-only MySQL context inside its existing released-writer input scope. It
+retains the exact source snapshot. Before any TypeDB projection, the worker
+reacquires the writer and rechecks the exact claim, deployment control and
+execution readiness. The native stage reuses the context only if its exact
+source/release/subject key and outcome revision still match. Expiry or a repair
+causes a fresh authoritative read. Unfrozen TBox callers and paired validation
+do not use the preparation path. `inputContextPreparationMs` is separate from
+source assembly and retained-input writer wait.
+
+The active-scope relation query now reads relation and endpoint storage IDs
+without joining both endpoints' full JSON and metadata for every relation.
+Already loaded node rows are reused; only distinct missing physical endpoint
+IDs are fetched in bounded batches. Endpoint labels, original generations,
+counter-evidence, source clocks and per-scope row counts remain intact. Missing
+or conflicting endpoints cannot activate a candidate. The existing save timing
+also publishes query/reference/fetched/reused endpoint counts as scalar stages.
+
+Read-only before/after probes used the same native READ snapshot and immutable
+active generations, without modifying the operational graph or sending alerts:
+
+| Bounded native sample | Original query | Shared endpoint query | Equality |
+| --- | ---: | ---: | --- |
+| 8 scopes, 5 relations, four alternating reads | median 11,026.5 ms | median 1,079.9 ms | Every node, relation and endpoint row identical |
+| 16 scopes, 332 relations, one read per plan | 28,706.5 ms | 2,830.1 ms | Every node, relation and endpoint row identical |
+
+The larger sample retained 242 distinct endpoints for 664 references: 20 were
+already loaded and 222 were fetched once. This proves a reduction in that read
+stage, not a tenfold improvement of source-to-delivery latency. Existing queue
+debt, changed-scope persistence, native inference and transport remain separate
+costs and must be measured on newly claimed work after runtime restart.
+
+The pre-existing frozen v6 save oracle was also replayed from its original
+`fb9db4df8a24` source. Committed preparation telemetry was its only difference
+in the successful-save scenario. The oracle remains unchanged: its fixture
+asserts the added preparation duration is zero at the frozen monotonic clock,
+then removes only that operational field before hashing success/failure results.
+The projection-audit regression separately checks nonzero preparation timing.

@@ -19,7 +19,7 @@ PORTFOLIO_GRAPH_ASSEMBLY_CACHE_CONTRACT_VERSION = (
 )
 
 PROJECTION_RUNTIME_CONTEXT_CACHE_CONTRACT_VERSION = (
-    "projection-runtime-context-cache-v2-exact-source-clock"
+    "projection-runtime-context-cache-v3-read-only-outcomes"
 )
 
 
@@ -86,9 +86,9 @@ class ProjectionCacheKeys:
         source_snapshot = projection_source_snapshot(snapshot)
         metadata = dict(source_snapshot.get("metadata") or {})
         investment_brain = dict(metadata.get("investmentBrain") or {})
-        # Outcome observation is attached by this projection's runtime-context
-        # reader. It is derived state, not a new source observation, and must
-        # not turn an otherwise identical retry into a cache miss.
+        # Legacy snapshots can retain an outcome-observation receipt. It is
+        # derived state, not a new source observation, and must not turn an
+        # otherwise identical retry into a cache miss.
         investment_brain.pop("outcomeObservation", None)
         if investment_brain:
             metadata["investmentBrain"] = investment_brain

@@ -1,4 +1,4 @@
-"""Bounded decision and outcome memory reads; outcome observation is an explicit capability."""
+"""Read committed decision and outcome memory without advancing outcome work."""
 
 from __future__ import annotations
 
@@ -43,27 +43,16 @@ def decision_episode_projection_context(
         projection["status"] = "unavailable"
         projection["outcomeHistory"]["status"] = "unavailable"
         return {"episodes": [], "outcomeHistoryEpisodes": [], "projection": projection}
-    try:
-        observation = _inputs.outcome_observation_service.observe_snapshot(snapshot)
-        snapshot.metadata.setdefault("investmentBrain", {})[
-            "outcomeObservation"
-        ] = observation
-        projection["outcomeObservation"] = dict(observation or {})
-    except (
-        Exception
-    ) as error:  # noqa: BLE001 - feedback memory must not block ABox projection.
-        observation = {
-            "status": "error",
-            "reason": str(error)[:180],
-        }
-        snapshot.metadata.setdefault("investmentBrain", {})[
-            "outcomeObservation"
-        ] = observation
-        projection["outcomeObservation"] = observation
-    # Outcome observation is an explicit effect before these reads. Its own
-    # committed revision, rather than the revision from before observation,
-    # must fence reuse of the input assembled below. Keep this operational
-    # receipt outside the frozen ABox context/projection fields.
+    projection["outcomeObservation"] = {
+        "status": "source-lifecycle-owned",
+        "mode": "read-only-committed-outcomes",
+    }
+    # The source-data lifecycle already observes due outcomes after committing
+    # each snapshot and owns retries and follow-up transition events. Repeating
+    # that account-wide work for each symbol's TypeDB projection both held the
+    # native writer and made replay an outcome-history mutation. Read only the
+    # committed, point-in-time image here. A concurrent source-side outcome or
+    # repair still invalidates context reuse through this revision fence.
     outcome_input_revision = ""
     if callable(getattr(type(_inputs.decision_episode_store), "outcome_input_revision", None)):
         try:

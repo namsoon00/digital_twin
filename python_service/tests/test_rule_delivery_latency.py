@@ -211,6 +211,13 @@ class RuleDeliveryLatencyTests(TestCase):
                 contender.release()
                 return original_execute(request, snapshots)
             executor.execute = execute
+            prepared = []
+            def prepare(request, snapshots, progress_callback=None):
+                self.assertFalse(guard.status()['acquired'])
+                self.assertTrue(contender.acquire()['acquired'])
+                contender.release()
+                prepared.append((request.request_id, snapshots[0].account_id))
+            executor.prepare_inputs = prepare
             assembler = FakeAssembler()
             def assemble(request):
                 self.assertFalse(guard.status()['acquired'])
@@ -231,6 +238,9 @@ class RuleDeliveryLatencyTests(TestCase):
                 lambda: runner.unlocked_input_assembly(['job:1'], threading.Event()))
             result = runner.run_once()
             self.assertNotEqual('deferred', result['status'])
+            self.assertEqual(1, len(prepared))
+            self.assertEqual('acct', prepared[0][1])
+            self.assertIn('inputContextPreparationMs', result['stage_durations_ms'])
             runner.control_binding_status.assert_called_once()
             runner.execution_readiness.assert_called_once()
             self.assertFalse(guard.status()['acquired'])

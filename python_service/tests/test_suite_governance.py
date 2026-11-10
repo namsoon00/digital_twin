@@ -524,7 +524,9 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # consistent read snapshot and fail-closed bounded payload batches.
         # Two latency contracts cover durable latest/fair source-ordered
         # claims and exact indexed temporal reads/watermarks on real MySQL.
-        self.assertLessEqual(total, 3092)
+        # Three scope/context contracts protect shared physical endpoint reuse,
+        # missing endpoints and preparation without native writer ownership.
+        self.assertLessEqual(total, 3095)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

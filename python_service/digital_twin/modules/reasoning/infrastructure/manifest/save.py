@@ -516,6 +516,8 @@ def save_scoped_abox_graph(
         ),
         "activeScopeSemanticReuseMs": active_scope_read_ms,
         "activeScopeSemanticReuse": {
+            **({"readPlan": dict(active_scope_rows["readPlan"])}
+               if active_scope_rows.get("readPlan") else {}),
             "status": str(active_scope_rows.get("status") or ""),
             "scopeIds": list(active_scope_rows.get("scopeIds") or []),
             "relationEndpointScopeIds": active_relation_endpoint_scope_ids,

@@ -124,5 +124,16 @@ def native_gate_scenario(api, scenario):
 def execution_contracts(api):
     values = {'save/' + name: save_scenario(api, name) for name in SAVE_SCENARIOS}
     values.update({'native/' + name: native_gate_scenario(api, name) for name in ['ok', 'held', 'error', 'adopted', 'invalid-adopted']})
+    # Committed b3a3c0052 added preparation telemetry after the frozen v6
+    # oracle. A separate audit test asserts the real nonzero stage. At this
+    # fixture's frozen monotonic clock it must be exactly zero; remove only
+    # that operational field and retain the original semantic/callback oracle.
+    for name, value in values.items():
+        if not name.startswith('save/'):
+            continue
+        result = value['result']
+        for timing in (result.get('timing', {}), result.get('aboxPersistenceVerification', {}).get('timing', {})):
+            if 'preparationMs' in timing:
+                assert timing.pop('preparationMs') == 0
     return {key: hashlib.sha256(json.dumps(value, sort_keys=True, ensure_ascii=True, default=str).encode()).hexdigest()
             for key, value in values.items()}

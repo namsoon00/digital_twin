@@ -346,6 +346,10 @@ def attach_abox_persistence_runtime_stages(
         "totalMs": "aboxScopedPersistenceTotalMs",
     }.items():
         record(source_key, target_key, timing)
+    scope_reuse = timing.get("activeScopeSemanticReuse") or {}
+    read_plan = scope_reuse.get("readPlan") or {}
+    for key in ("queryCount", "endpointReferenceCount", "endpointRowsReadCount", "endpointRowsReusedCount"):
+        record(key, "aboxActiveScope" + key[0].upper() + key[1:], read_plan)
     for key in ("completedNodeTransactionCount", "completedRelationTransactionCount"):
         record(key, "abox" + key[0].upper() + key[1:], progress)
     write_strategy = str(timing.get("currentStateWriteStrategy") or "").strip()

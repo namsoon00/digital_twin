@@ -42,10 +42,6 @@ class DecisionMemoryReader(Protocol):
     def performance(self, *, account_id: str, limit: int, as_of: str = "") -> dict: ...
 
 
-class OutcomeObserver(Protocol):
-    def observe_snapshot(self, snapshot: AccountSnapshot) -> dict: ...
-
-
 class PortfolioMemoryReader(Protocol):
     def lifecycle_feedback_for_decisions(self, episode_ids: Iterable[str]) -> dict: ...
     def ontology_portfolio_lifecycle_context(self, portfolio_id: str, as_of: str = "") -> dict: ...
@@ -127,7 +123,6 @@ class DecisionMemoryInputs:
     decision_outcome_history_maximum_episodes: Callable[[], int]
     decision_outcome_history_per_symbol_limit: Callable[[], int]
     investment_domain_store: Optional[PortfolioMemoryReader]
-    outcome_observation_service: OutcomeObserver
 
 
 @dataclass(frozen=True)
@@ -140,6 +135,13 @@ class HypothesisInputs:
 class TemporalInputs:
     market_time_series_store: Optional[TemporalWindowReader]
     settings: Dict[str, object]
+
+
+@dataclass(frozen=True)
+class PrepareContextInputs:
+    frozen_tbox_context: Optional[dict]
+    runtime_context: Callable[..., dict]
+    runtime_context_cache_enabled: Callable[[], bool]
 
 
 @dataclass(frozen=True)

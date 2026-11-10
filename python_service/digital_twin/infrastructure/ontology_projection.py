@@ -57,6 +57,7 @@ import digital_twin.modules.reasoning.application.projection_input.decision_memo
 import digital_twin.modules.reasoning.application.projection_input.hypotheses as projection_hypotheses
 import digital_twin.modules.reasoning.application.projection_input.temporal as projection_temporal
 import digital_twin.modules.reasoning.application.projection_input.context as projection_context
+import digital_twin.modules.reasoning.application.projection_input.preparation as projection_preparation
 import digital_twin.modules.reasoning.application.projection_input.identity as projection_identity
 
 from collections import OrderedDict
@@ -2128,6 +2129,19 @@ class PortfolioOntologyProjectionRecorder:
             self, projection_run, result
         )
 
+    def prepare_runtime_context(self, snapshot, target_symbols=None, progress_callback=None):
+        return projection_preparation.prepare_runtime_context(
+            projection_input_ports.PrepareContextInputs(
+                frozen_tbox_context=(self.active_tbox_context()
+                                     if self._frozen_tbox_metadata is not None else None),
+                runtime_context=self.runtime_context,
+                runtime_context_cache_enabled=self.runtime_context_cache_enabled,
+            ),
+            snapshot,
+            target_symbols,
+            progress_callback,
+        )
+
     def runtime_context(
         self,
         snapshot: AccountSnapshot,
@@ -2232,7 +2246,6 @@ class PortfolioOntologyProjectionRecorder:
                 decision_outcome_history_maximum_episodes=self.decision_outcome_history_maximum_episodes,
                 decision_outcome_history_per_symbol_limit=self.decision_outcome_history_per_symbol_limit,
                 investment_domain_store=self.investment_domain_store,
-                outcome_observation_service=self.outcome_observation_service,
             ),
             snapshot,
             target_symbols,

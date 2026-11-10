@@ -235,6 +235,7 @@ for name in sys.modules:
             "HypothesisInputs": [APP / "hypotheses.py"],
             "TemporalInputs": [APP / "temporal.py"],
             "RuntimeContextInputs": [APP / "context.py"],
+            "PrepareContextInputs": [APP / "preparation.py"],
             "ProjectionIdentityInputs": [APP / "identity.py"],
             "CaptureInputs": [APP / "capture.py"],
             "CacheFlowInputs": [APP / "cache_flow.py"],
@@ -350,7 +351,8 @@ for name in sys.modules:
         again = instance.runtime_context(snapshot, target_symbols=["AAA"])
         self.assertEqual(result, again)
         self.assertEqual(first_calls, calls)
-        observer.assert_called_once_with(snapshot)
+        observer.assert_not_called()
+        self.assertNotIn("investmentBrain", snapshot.metadata)
         self.assertEqual(
             ["episodes", "outcomes", "performance", "temporal"],
             [row[0] for row in calls],
@@ -483,7 +485,7 @@ for name in sys.modules:
         instance.runtime_context(snapshot)
         self.assertEqual("disabled", instance.last_runtime_context_cache_status[snapshot.account_id]["status"])
 
-    def test_context_cache_uses_post_observation_revision_and_rejects_mid_read_changes(self):
+    def test_context_reads_committed_outcomes_without_mutation_and_rejects_mid_read_changes(self):
         class History:
             revision = "observation-cache:before"
             reads = 0
@@ -503,18 +505,19 @@ for name in sys.modules:
         history = History()
         instance.decision_episode_store = history
         instance.market_time_series_store = SimpleNamespace(load_temporal_windows=lambda *a, **kw: {})
-        def observe(_snapshot):
-            if history.revision == "observation-cache:before":
-                history.revision = "observation-cache:committed"
-            return {"status": "observed"}
-        observer = Mock(side_effect=observe)
+        observer = Mock(side_effect=AssertionError("projection must not advance outcome history"))
         instance.outcome_observation_service = SimpleNamespace(observe_snapshot=observer)
+        before = deepcopy(snapshot.metadata)
         first = instance.runtime_context(snapshot)
         second = instance.runtime_context(snapshot)
         self.assertEqual(first, second)
         self.assertEqual("hit", instance.last_runtime_context_cache_status[snapshot.account_id]["status"])
         self.assertEqual(1, history.reads)
-        observer.assert_called_once()
+        observer.assert_not_called()
+        self.assertEqual(before, snapshot.metadata)
+        self.assertEqual("observation-cache:before", history.revision)
+        self.assertEqual("read-only-committed-outcomes",
+                         first["decisionEpisodeProjection"]["outcomeObservation"]["mode"])
         self.assertNotIn("outcomeInputRevision", str(first))
 
         history.revision = "observation-cache:external-repair"
@@ -530,6 +533,31 @@ for name in sys.modules:
         newer = source_snapshot(as_of="2026-07-20T00:02:00Z")
         instance.runtime_context(newer)
         self.assertEqual(4, history.reads)
+
+    def test_prepare_context_reuses_exact_source_and_never_reads_unfrozen_tbox(self):
+        snapshot = source_snapshot()
+        instance = recorder(api, snapshot, cache=True, overrides=False)
+        observer = Mock(side_effect=AssertionError("source outcome lifecycle cannot run here"))
+        instance.outcome_observation_service = SimpleNamespace(observe_snapshot=observer)
+        instance.market_time_series_store = SimpleNamespace(load_temporal_windows=Mock(return_value={}))
+        before = deepcopy(snapshot.metadata)
+        with patch.object(instance.repository, "active_tbox_metadata", create=True,
+                          side_effect=AssertionError("preparation cannot read TypeDB")):
+            self.assertEqual("prepared", instance.prepare_runtime_context(snapshot, ["AAA"])["status"])
+            expected = deepcopy(instance.last_runtime_contexts[snapshot.account_id])
+            actual = instance.runtime_context(snapshot, target_symbols=["AAA"])
+            self.assertEqual(expected, actual)
+            self.assertEqual("hit", instance.last_runtime_context_cache_status[snapshot.account_id]["status"])
+            self.assertEqual(1, instance.market_time_series_store.load_temporal_windows.call_count)
+            # The exact source boundary is part of the key; a later snapshot
+            # must not consume the prepared context's clock or temporal inputs.
+            newer = source_snapshot(as_of="2026-07-20T00:02:00Z")
+            self.assertEqual(newer.generated_at, instance.runtime_context(newer, target_symbols=["AAA"])["asOf"])
+            self.assertEqual(2, instance.market_time_series_store.load_temporal_windows.call_count)
+            instance._frozen_tbox_metadata = None
+            self.assertEqual("not-configured", instance.prepare_runtime_context(newer, ["AAA"])["status"])
+        observer.assert_not_called()
+        self.assertEqual(before, snapshot.metadata)
 
     def test_projection_cache_identity_includes_source_release_clock_account_and_scope(
         self,

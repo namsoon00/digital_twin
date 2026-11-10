@@ -376,10 +376,8 @@ def runtime_context(
     _inputs.last_runtime_contexts[account_id] = frozen
     cache_write_started = time.perf_counter()
     if cache_enabled and callable(revision_reader):
-        # The observer may legitimately create outcomes on this cache miss.
-        # Do not store their resulting context under the obsolete pre-effect
-        # revision. A subsequent Manifest repair used to miss that entry and
-        # repeat the full outcome/performance read for the exact same source.
+        # Source-side observation and repairs may commit while these reads
+        # run. Reuse requires one unchanged committed dependency revision.
         revision_started = time.perf_counter()
         input_revision = str(decision_memory.get("outcomeInputRevision") or "")
         try:

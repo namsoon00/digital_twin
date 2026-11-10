@@ -247,6 +247,10 @@ class OntologyProjectionAuditTests(unittest.TestCase):
                     "preparationMs": 17500,
                     "nativeManifestEvidenceIndexMs": 1200,
                     "activeScopeSemanticReuseMs": 3200,
+                    "activeScopeSemanticReuse": {"readPlan": {
+                        "queryCount": 3, "endpointReferenceCount": 128,
+                        "endpointRowsReadCount": 1, "endpointRowsReusedCount": 63,
+                    }},
                     "changedScopeWritePlan": {
                         "relationWriteMode": "given-batch",
                         "queryCount": 4,
@@ -264,6 +268,10 @@ class OntologyProjectionAuditTests(unittest.TestCase):
         self.assertEqual(17500, stages["aboxPreparationMs"])
         self.assertEqual(1200, stages["aboxNativeManifestEvidenceIndexMs"])
         self.assertEqual(3200, stages["aboxActiveScopeSemanticReuseMs"])
+        self.assertEqual(3, stages["aboxActiveScopeQueryCount"])
+        self.assertEqual(128, stages["aboxActiveScopeEndpointReferenceCount"])
+        self.assertEqual(1, stages["aboxActiveScopeEndpointRowsReadCount"])
+        self.assertEqual(63, stages["aboxActiveScopeEndpointRowsReusedCount"])
         self.assertEqual(4, stages["aboxChangedScopeQueryCount"])
         self.assertNotIn("aboxCurrentStateWriteStrategy", stages)
         self.assertNotIn("aboxRelationWriteMode", stages)

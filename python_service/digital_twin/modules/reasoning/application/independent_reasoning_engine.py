@@ -826,6 +826,20 @@ class ScopedTypeDBInferenceExecutor:
         self.last_shared_publication = {"status": "not-configured"}
         self.last_shared_publication_ms = 0
 
+    def prepare_inputs(self, request, snapshots, progress_callback=None):
+        """Warm revision-checked source contexts while no native writer is held."""
+        prepare = getattr(self.projection_recorder, "prepare_runtime_context", None)
+        if not callable(prepare) or request.context.get("validationOnly") is True:
+            return
+        for snapshot in snapshots:
+            def progress(stage, **details):
+                if callable(progress_callback):
+                    progress_callback("input_context." + stage, {
+                        "accountId": snapshot.account_id, **details,
+                    })
+            prepare(snapshot, target_symbols=list(request.symbols) or None,
+                    progress_callback=progress)
+
     def observe_projection_result(self, snapshot, result: Mapping[str, object]) -> Dict[str, object]:
         """Run audit feedback only after the exact V2 projection is attached."""
 
@@ -1471,6 +1485,13 @@ class V2ReasoningEngine:
             source_scope = input_assembly_scope() if callable(input_assembly_scope) else nullcontext()
             with source_scope as input_scope:
                 assembled = self.input_assembler.assemble(request)
+                prepare = getattr(self.inference_executor, "prepare_inputs", None)
+                if assembled.get("status") == "ready" and callable(prepare):
+                    preparation_started = time.perf_counter()
+                    prepare(request, list(assembled.get("snapshots") or []), progress_callback=progress)
+                    stages["inputContextPreparationMs"] = int(
+                        (time.perf_counter() - preparation_started) * 1000
+                    )
                 if isinstance(input_scope, dict):
                     input_scope["nativeInputReady"] = assembled.get("status") == "ready"
         except InputPreparationDeferred as error:
@@ -1485,7 +1506,7 @@ class V2ReasoningEngine:
         )
         stages["inputAssemblyMs"] = max(0, int(
             (time.perf_counter() - input_started) * 1000
-        ) - stages["preparedInputWriterWaitMs"])
+        ) - stages["preparedInputWriterWaitMs"] - stages.get("inputContextPreparationMs", 0))
         stages.update(assembled.get("inputTimingsMs") or {})
         progress(
             "input_assembly.completed",
@@ -3453,7 +3474,7 @@ class IndependentReasoningJobRunner:
 
     @contextmanager
     def unlocked_input_assembly(self, job_ids, lease_lost):
-        """Only immutable MySQL source reads may run outside the native writer.
+        """Source snapshots and read-only MySQL contexts run outside the writer.
 
         Retain one assembled batch on this execution's stack while delivery has
         the writer. Claims keep their heartbeat; no graph read or publication

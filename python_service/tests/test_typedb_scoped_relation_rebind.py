@@ -173,6 +173,81 @@ class TypeDBScopedRelationRebindTest(unittest.TestCase):
             "relationRows": [self.active_relation],
         }
 
+    def _scope_read_fixture(self, *, link_only=False, missing_endpoint=False):
+        repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
+        nodes = [{
+            "id": row["id"], "storageId": ontology_storage_id(row, row["id"], "node"),
+            "label": row["label"], "kind": row["kind"], "scopeId": row["scopeId"],
+            "generationId": row["scopeGenerationId"], "updatedAt": "2026-10-01T00:00:00Z",
+            "json": row["propertiesJson"],
+        } for row in [self.active_stock, self.active_news]]
+        relations = [{
+            "id": "assertion:" + str(index), "storageId": "physical-assertion:" + str(index),
+            "sourceId": nodes[0]["id"], "sourceStorageId": nodes[0]["storageId"],
+            "targetId": nodes[1]["id"], "targetStorageId": nodes[1]["storageId"],
+            "type": "HAS_EVIDENCE", "scopeId": self.link_scope,
+            "generationId": self.old_link_generation, "updatedAt": "2026-10-01T00:00:00Z",
+            "json": json.dumps({"evidenceRole": "counter", "observedAt": "2026-09-30T00:00:00Z"}),
+            "weight": 1.0,
+        } for index in range(64)]
+        active_plan = [{**row, "generationId": (
+            self.old_state_generation if row["scopeId"] == self.state_scope
+            else self.old_link_generation if row["scopeId"] == self.link_scope
+            else self.evidence_generation
+        ), "relationCount": 64 if row["scopeId"] == self.link_scope else 0}
+            for row in self.physical_scope_plan]
+        active = {"scopePlan": active_plan, "scopeGenerationIds": {
+            row["scopeId"]: row["generationId"] for row in active_plan}}
+
+        def read(query, columns, label):
+            if label.endswith("active-node-rows"):
+                return [] if link_only else nodes
+            if label.endswith("active-relation-rows"):
+                self.assertNotIn("sourceJson", columns)
+                self.assertNotIn("targetJson", columns)
+                self.assertNotIn("ontology-json $source", query)
+                return relations
+            self.assertEqual("typedb.scoped-abox.active-endpoint-rows", label)
+            for row in nodes:
+                self.assertIn(row["storageId"], query)
+            return nodes[:1] if missing_endpoint else nodes
+
+        repository.read_rows = MagicMock(side_effect=read)
+        scopes = [self.link_scope] if link_only else list(active["scopeGenerationIds"])
+        return repository, active, scopes
+
+    def test_shared_relation_endpoints_are_loaded_once_without_losing_counter_evidence(self):
+        repository, active, scopes = self._scope_read_fixture()
+        result = repository.read_active_scoped_abox_rows(active, scopes, self.world_id)
+        self.assertEqual("ok", result["status"])
+        self.assertEqual(64, len(result["relationRows"]))
+        self.assertEqual(2, len(result["endpointNodeRows"]))
+        self.assertEqual(2, repository.read_rows.call_count)
+        self.assertEqual(128, result["readPlan"]["endpointReferenceCount"])
+        self.assertEqual(2, result["readPlan"]["endpointRowsReusedCount"])
+        self.assertEqual(0, result["readPlan"]["endpointRowsReadCount"])
+        for row in result["relationRows"]:
+            self.assertEqual("counter", row["evidenceRole"])
+            self.assertEqual("2026-09-30T00:00:00Z", row["observedAt"])
+            self.assertEqual(self.active_stock["label"], row["sourceLabel"])
+            self.assertEqual(self.active_news["label"], row["targetLabel"])
+        self.assertEqual(self.old_state_generation,
+                         result["endpointNodeRows"][0]["scopeGenerationId"])
+
+    def test_missing_endpoint_is_fetched_by_exact_physical_identity_and_fails_closed(self):
+        repository, active, scopes = self._scope_read_fixture(link_only=True)
+        result = repository.read_active_scoped_abox_rows(active, scopes, self.world_id)
+        self.assertEqual("ok", result["status"])
+        self.assertEqual(3, repository.read_rows.call_count)
+        self.assertEqual(2, result["readPlan"]["endpointRowsReadCount"])
+        self.assertEqual(0, result["readPlan"]["endpointRowsReusedCount"])
+        repository, active, scopes = self._scope_read_fixture(link_only=True, missing_endpoint=True)
+        result = repository.read_active_scoped_abox_rows(active, scopes, self.world_id)
+        self.assertEqual("active-relation-endpoint-missing", result["status"])
+        self.assertEqual([], result["nodeRows"])
+        self.assertEqual([], result["relationRows"])
+        self.assertEqual([], result["endpointNodeRows"])
+
     def test_incremental_save_rejects_unvalidated_manifest_patch_contract(self):
         repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")
         graph = PortfolioOntology(

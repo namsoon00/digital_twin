@@ -27,7 +27,7 @@ from digital_twin.modules.market_data.domain.market_signal_transitions import pr
 from digital_twin.modules.market_data.domain.price_observation_episodes import persist_price_state, acknowledge_transitions
 from digital_twin.modules.market_data.domain.smart_price_observations import movement_cadence
 from digital_twin.modules.market_data.domain.price_observation_diagnostics import record_candidates
-from digital_twin.modules.reasoning.domain.ontology_projection_input import compact_monitor_state_for_ontology, compact_monitor_state_for_reasoning_base, compact_monitor_state_for_reasoning_symbol, reasoning_snapshot_symbols
+from digital_twin.modules.reasoning.domain.ontology_projection_input import compact_external_signals_for_ontology, compact_monitor_state_for_ontology, compact_monitor_state_for_reasoning_base, compact_monitor_state_for_reasoning_symbol, reasoning_snapshot_symbols
 from digital_twin.modules.reasoning.contracts import compact_monitor_history_state, TEMPORAL_HISTORY_PROJECTION_VERSION
 from digital_twin.modules.portfolio.domain.portfolio import AccountSnapshot, AlertEvent, account_snapshot_from_monitor_state, monitor_state_has_live_account_data
 from digital_twin.modules.reasoning.domain.reasoning_source_snapshot import build_reasoning_source_snapshot
@@ -45,6 +45,70 @@ from digital_twin.infrastructure.mysql_operational_helpers import _json_loads, _
 
 from digital_twin.modules.notifications.infrastructure.mysql_notification_config import MySQLNotificationTemplateStore
 from digital_twin.infrastructure.mysql_market_stores import MySQLModelReviewJobStore
+
+
+MONITOR_SNAPSHOT_STORAGE_CONTRACT = "monitor-snapshot-storage-v2-bounded-signals"
+
+
+def bounded_monitor_snapshot_state(state: Dict[str, object], settings=None) -> Dict[str, object]:
+    """Remove provider archives from the hot monitor row before MySQL writes.
+
+    Collection and alert detection use the complete in-memory snapshot. Raw
+    documents and normalized provider revisions have their own durable stores;
+    the monitor row only needs the bounded factual projection used for replay,
+    change detection, and the ABox source contract. Keeping those archives in
+    this row caused the same multi-megabyte document to be rewritten several
+    times in one realtime transaction.
+    """
+
+    source = state if isinstance(state, dict) else {}
+    # Do not clone the archive just to replace it below. The compactors copy
+    # their selected facts and leave the caller-owned provider payload intact.
+    result = {
+        key: copy.deepcopy(value)
+        for key, value in source.items()
+        if key != "externalSignals"
+    }
+    symbols = sorted({
+        str(symbol or "").upper().strip()
+        for group in ("positions", "watchlist")
+        for symbol in (
+            (source.get(group) or {}).keys()
+            if isinstance(source.get(group), dict)
+            else []
+        )
+        if str(symbol or "").strip()
+    })
+    signals = source.get("externalSignals")
+    if isinstance(signals, dict):
+        result["externalSignals"] = compact_external_signals_for_ontology(
+            signals,
+            target_symbols=symbols or None,
+            settings=settings,
+        )
+    metadata = dict(result.get("metadata") or {})
+    metadata["monitorSnapshotStorage"] = {
+        "contractVersion": MONITOR_SNAPSHOT_STORAGE_CONTRACT,
+        "providerArchivesEmbedded": False,
+    }
+    result["metadata"] = metadata
+    return result
+
+
+def monitoring_transaction_settings(settings=None) -> Dict[str, object]:
+    """Give the atomic monitor commit headroom beyond ordinary point reads."""
+
+    result = dict(settings or {})
+    try:
+        ordinary_timeout = int(float(result.get("mysqlOperationTimeoutSeconds") or 30))
+    except (TypeError, ValueError):
+        ordinary_timeout = 30
+    try:
+        monitor_timeout = int(float(result.get("monitoringMysqlOperationTimeoutSeconds") or 90))
+    except (TypeError, ValueError):
+        monitor_timeout = 90
+    result["mysqlOperationTimeoutSeconds"] = str(max(ordinary_timeout, monitor_timeout, 30))
+    return result
 
 
 def snapshot_state_for_persistence(snapshot: AccountSnapshot, previous: Dict[str, object] = None, settings=None) -> Dict[str, object]:
@@ -77,7 +141,7 @@ def snapshot_state_for_persistence(snapshot: AccountSnapshot, previous: Dict[str
         current = hydrate_market_observation_baselines(current, previous or {})
         current = persist_price_state(current, previous or {}, settings)
     if snapshot.has_live_account_data() or not monitor_state_has_live_account_data(previous or {}):
-        return current
+        return bounded_monitor_snapshot_state(current, settings)
 
     retained = copy.deepcopy(previous)
     current_metadata = dict(current.get("metadata") or {})
@@ -91,7 +155,7 @@ def snapshot_state_for_persistence(snapshot: AccountSnapshot, previous: Dict[str
     metadata["connectionFailureStreak"] = failure["connectionFailureStreak"]
     metadata["lastConnectionFailure"] = failure
     retained["metadata"] = metadata
-    return retained
+    return bounded_monitor_snapshot_state(retained, settings)
 
 
 def reasoning_snapshot_for_persisted_boundary(
@@ -1252,15 +1316,16 @@ class MySQLMonitoringCycleRecorder(MySQLOperationalConnection):
         market_time_series_store=None,
         notification_ingress=None,
     ):
+        effective_settings = monitoring_transaction_settings(settings)
         self.monitor_store = monitor_store
         self.market_time_series_store = market_time_series_store
-        super().__init__(settings)
+        super().__init__(effective_settings)
         if self.monitor_store is None:
-            self.monitor_store = MySQLMonitorStore(settings)
+            self.monitor_store = MySQLMonitorStore(effective_settings)
         if self.market_time_series_store is None:
             from digital_twin.infrastructure.time_series_factory import build_versioned_time_series_store
 
-            self.market_time_series_store = build_versioned_time_series_store(settings)
+            self.market_time_series_store = build_versioned_time_series_store(effective_settings)
         if not callable(getattr(self.market_time_series_store, "record_snapshots_with_connection", None)):
             raise TypeError(
                 "Monitoring cycle recorder requires a transaction-compatible market time-series store"

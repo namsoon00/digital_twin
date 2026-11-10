@@ -88,6 +88,51 @@ class ReasoningSourcePreparationTests(TestCase):
                 self.assertEqual(old.to_monitor_state(), prepared.to_monitor_state())
         self.assertEqual(before, current)
 
+    def test_durable_monitor_state_bounds_provider_archives_without_mutating_source(self):
+        current = monitor_state()
+        current['externalSignals'] = {
+            'macro': {'series': {'DGS10': {'value': 4.5, 'observationDate': '2026-11-10'}}},
+            'companyOverviews': {'AAPL': {
+                'symbol': 'AAPL', 'name': 'Apple', 'peRatio': 30,
+                'sourceArchive': {'document': 'overview archive ' * 10000},
+            }},
+            'researchEvidence': {'AAPL': [{
+                'evidenceId': 'evidence:one', 'title': 'Material event',
+                'payload': {'relationScope': 'direct', 'eventType': 'earnings',
+                            'rawArticleBody': 'article body ' * 10000},
+            }]},
+        }
+        before = deepcopy(current)
+
+        persisted = monitoring.bounded_monitor_snapshot_state(current, {})
+
+        self.assertEqual(before, current)
+        self.assertEqual(4.5, persisted['externalSignals']['macro']['series']['DGS10']['value'])
+        self.assertEqual('evidence:one', persisted['externalSignals']['researchEvidence']['AAPL'][0]['evidenceId'])
+        self.assertNotIn('sourceArchive', persisted['externalSignals']['companyOverviews']['AAPL'])
+        self.assertNotIn('rawArticleBody', persisted['externalSignals']['researchEvidence']['AAPL'][0]['payload'])
+        self.assertLess(len(json_dumps(persisted)), len(json_dumps(current)) // 10)
+        self.assertEqual(
+            'monitor-snapshot-storage-v2-bounded-signals',
+            persisted['metadata']['monitorSnapshotStorage']['contractVersion'],
+        )
+
+    def test_monitor_transaction_timeout_is_isolated_and_never_shorter(self):
+        self.assertEqual(
+            '90',
+            monitoring.monitoring_transaction_settings({
+                'mysqlOperationTimeoutSeconds': '30',
+                'monitoringMysqlOperationTimeoutSeconds': '90',
+            })['mysqlOperationTimeoutSeconds'],
+        )
+        self.assertEqual(
+            '120',
+            monitoring.monitoring_transaction_settings({
+                'mysqlOperationTimeoutSeconds': '120',
+                'monitoringMysqlOperationTimeoutSeconds': '60',
+            })['mysqlOperationTimeoutSeconds'],
+        )
+
     def test_repeated_subjects_decode_independently_and_share_only_exact_source(self):
         repository = ReadRepository()
         repository.save('source:one', monitor_state())

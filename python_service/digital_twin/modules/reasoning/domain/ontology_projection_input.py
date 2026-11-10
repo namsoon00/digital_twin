@@ -1367,11 +1367,11 @@ def compact_monitor_state_for_ontology(
 ) -> Dict[str, object]:
     """Create the small historical state used by temporal ABox concepts.
 
-    Full monitor snapshots deliberately retain provider archives so research
-    and notification detail can be reconstructed later.  Those archives do
-    not belong in every historical row read by live reasoning: a 96-row
-    history of article bodies can turn a single quote update into hundreds of
-    megabytes of JSON decoding before TypeDB receives one fact.
+    Provider archives remain in their dedicated evidence stores and immutable
+    source records. They do not belong in every historical row read by live
+    reasoning: a 96-row history of article bodies can turn a single quote
+    update into hundreds of megabytes of JSON decoding before TypeDB receives
+    one fact.
 
     This is a factual projection only.  It preserves the position, watchlist,
     portfolio, and bounded research facts needed by temporal concepts and

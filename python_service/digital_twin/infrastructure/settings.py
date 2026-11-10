@@ -26,6 +26,7 @@ TEXT_SETTING_KEYS = [
     "mysqlUnixSocket",
     "mysqlTablePartitioning",
     "mysqlOperationTimeoutSeconds",
+    "monitoringMysqlOperationTimeoutSeconds",
     "mysqlInnoDbBufferPoolSizeMb",
     "mysqlInnoDbRedoLogCapacityMb",
     "operationalHistoryRetentionEnabled",
@@ -1330,6 +1331,11 @@ def runtime_settings(fast_operational_read: bool = False, *, require_store_read:
         "mysqlUnixSocket": value("mysqlUnixSocket", "MYSQL_UNIX_SOCKET", ""),
         "mysqlTablePartitioning": value("mysqlTablePartitioning", "MYSQL_TABLE_PARTITIONING", "auto"),
         "mysqlOperationTimeoutSeconds": value("mysqlOperationTimeoutSeconds", "MYSQL_OPERATION_TIMEOUT_SECONDS", "30"),
+        "monitoringMysqlOperationTimeoutSeconds": value(
+            "monitoringMysqlOperationTimeoutSeconds",
+            "MONITORING_MYSQL_OPERATION_TIMEOUT_SECONDS",
+            "90",
+        ),
         "reasoningEngineComparisonQueryTimeoutMs": value(
             "reasoningEngineComparisonQueryTimeoutMs",
             "REASONING_ENGINE_COMPARISON_QUERY_TIMEOUT_MS",

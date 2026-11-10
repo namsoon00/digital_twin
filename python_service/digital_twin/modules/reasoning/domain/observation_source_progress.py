@@ -32,3 +32,22 @@ def inventory_identity(packet, inventory):
                 for name, row in packet.get("coverage", {}).items()}
     return content_hash({"version": VERSION, "material": evidence_change_identity(
         {**packet, "facts": [material(row) for row in inventory], "coverage": coverage}, [])})
+
+
+def evidence_wait_identity(packet, inventory):
+    """A read-view lineage hash is not a new source; its actual fields still are.
+
+    Use the entire captured inventory, including unread/budget-excluded facts.
+    Keep quote values, eligibility, reporting periods and real revisions so this
+    identity cannot hide a risk change or a corrected/new source.
+    """
+    rows = []
+    for fact in inventory:
+        value = material(fact)
+        if isinstance(value.get("evidenceView"), dict):
+            value["evidenceView"] = {k: v for k, v in value["evidenceView"].items() if k != "sourceFactHash"}
+        rows.append(value)
+    coverage = {name: {k: v for k, v in row.items() if k != "inventoryHash"}
+                for name, row in packet.get("coverage", {}).items()}
+    return content_hash({"version": "captured-evidence-wait-v1", "material": evidence_change_identity(
+        {**packet, "facts": rows, "coverage": coverage}, [])})

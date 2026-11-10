@@ -34,6 +34,20 @@ def answer(task_id, status="answered"):
 
 
 class ResearchWorkTests(unittest.TestCase):
+    def test_existing_company_handoff_waits_without_a_paid_plan_when_cases_are_not_due(self):
+        from test_ai_control import AIControlTests
+        from digital_twin.modules.ai_orchestration.domain import company_evidence_wait as company_wait
+        value = case(); value.update(questionContract=CONTRACT, nextCheckAt='2000-01-01T00:00:00Z')
+        request = {'processingOutcome': {'companyEvidenceWait': {'version': company_wait.VERSION, 'key': 'source-key'},
+                   'requiredEvidence': [{'question': '원래 질문의 남은 현금흐름 주석을 확인합니다.', 'source': '공식 분기 원문 주석'}]}}
+        job = company_wait.handoff(SUBJECT, request, [value], stamp())
+        value['nextCheckAt'] = '2099-01-01T00:00:00Z'
+        service, store, planner = AIControlTests().runner(research_plan_memory=lambda *_: [value])
+        store.claim.return_value.update(job)
+        self.assertEqual('completed', service.run_once()['status'])
+        self.assertEqual('research-plan-obsolete', store.complete.call_args.args[1]['status'])
+        planner.assert_not_called(); store.save_execution_input.assert_not_called()
+
     def test_unchanged_empty_plan_completes_without_a_model_input_or_authored_work(self):
         from test_ai_control import AIControlTests
         from digital_twin.modules.ai_orchestration.infrastructure.mysql_research_work import record_plan
@@ -266,6 +280,49 @@ class ResearchWorkTests(unittest.TestCase):
 
 @unittest.skipUnless(os.environ.get("MYSQL_DATABASE") == "orbit_alpha_test", "isolated MySQL required")
 class ResearchWorkStorageTests(unittest.TestCase):
+    def test_company_gap_handoff_preserves_original_question_and_schedules_only_once(self):
+        from test_ai_brain_agenda import BrainAgendaStorageTests
+        from digital_twin.modules.ai_orchestration.domain import company_evidence_wait as company_wait
+        fixture = BrainAgendaStorageTests(); fixture.setUp()
+        try:
+            job, result, children = fixture.observation()
+            fixture.control.complete(job, result, children)
+            research = fixture.control.claim()
+            fixture.control.complete(research, {'status': 'completed', 'documentaryAnswer': answer(research['taskId'], 'partial')}, [])
+            saved = next(c for c in fixture.brain.status()['cases'] if c.get('capability') == 'research')
+            with fixture.brain.transaction() as c:
+                saved.update(questionContract=deepcopy(CONTRACT), nextCheckAt='2000-01-01T00:00:00Z')
+                fixture.brain.save(c, saved, 'fixture', 'scoped-source-gap-fixture')
+            saved = next(c for c in fixture.brain.memory(*[fixture.subject[k] for k in ('accountId', 'symbol', 'worldId')], research_only=True)
+                         if c.get('kind') == 'brain-case' and c.get('capability') == 'research')
+            request = {'processingOutcome': {'companyEvidenceWait': {'version': company_wait.VERSION, 'key': 'source-key'},
+                'requiredEvidence': [{'question': '원래 질문의 남은 현금흐름 주석을 확인합니다.', 'source': '공식 분기 원문 주석'}]}}
+            handoff = company_wait.handoff(fixture.subject, request, [saved], stamp())
+            self.assertIsNotNone(handoff)
+            with fixture.control.transaction() as c:
+                fixture.control.insert(c, handoff); fixture.control.insert(c, handoff)
+            task = fixture.control.claim()
+            self.assertEqual(handoff['taskId'], task['taskId'])
+            saved['planDue'] = True
+            env = work.freeze(task, [saved], handoff['researchGaps'])
+            key = fixture.control.save_execution_input(task, env)
+            call = fixture.control.begin_call('independent-observation', env['promptHash'], task['taskId'], key)
+            fixture.control.finish_call(call)
+            completed = {'status': 'research-planned', 'executionInputId': key, 'researchPlan': work.validate_plan(plan(saved), env)}
+            fixture.control.outbox_writer = Mock(side_effect=AssertionError('source planning cannot publish a market insight'))
+            self.assertFalse(fixture.control.complete({**task, 'leaseToken': 'foreign'}, completed, []))
+            self.assertTrue(fixture.control.complete(task, completed, []))
+            self.assertFalse(fixture.control.complete(task, completed, []))
+            cases = [c for c in fixture.brain.status()['cases'] if c.get('capability') == 'research']
+            self.assertEqual(1, len(cases)); self.assertEqual(saved['caseId'], cases[0]['caseId'])
+            self.assertEqual(CONTRACT, cases[0]['questionContract'])
+            self.assertEqual('partial', cases[0]['answerResolution']['status'])
+            fixture.control.outbox_writer.assert_not_called()
+            with fixture.control.connect() as c:
+                self.assertEqual(1, c.execute('SELECT COUNT(*) AS n FROM ai_control_tasks WHERE task_id=%s', (handoff['taskId'],)).fetchone()['n'])
+        finally:
+            fixture.tearDown()
+
     def test_unchanged_plan_commits_without_new_calls_cases_or_notifications(self):
         from test_ai_brain_agenda import BrainAgendaStorageTests
         fixture = BrainAgendaStorageTests()

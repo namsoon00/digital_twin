@@ -405,6 +405,16 @@ class InvestmentMeaningTests(unittest.TestCase):
         self.assertNotIn("priceInvestigationPolicy", captured[0]["current"])
         self.assertEqual(meaning.VERSION, captured[0]["current"]["investmentMeaningPolicy"])
         validate_execution_input(captured[0])
+        # A stored source-dated company gap is not renewed by read-view hashes.
+        from digital_twin.modules.ai_orchestration.domain import company_evidence_wait
+        snapshot = captured[0]['current']
+        wait_key = execution_lanes.material_key(snapshot, [], evidence_identity=snapshot['companyEvidenceInventoryKey'])
+        prior = {'status': 'data-wait', 'reasonCode': 'evidence-insufficient', 'retryKey': 'different-ordinary-key',
+                 'companyEvidenceWait': {'version': company_evidence_wait.VERSION, 'key': wait_key}}
+        store.last_processing_outcome.return_value = prior
+        before_calls = service.read_planner.call_count
+        self.assertEqual('unchanged-wait', service.run_once()['status'])
+        self.assertEqual(before_calls, service.read_planner.call_count)
         # Persisted data-wait identity is unchanged by process feedback. It is
         # checked before another feedback read or paid routing call.
         store.last_processing_outcome.return_value = store.complete.call_args.args[1]['processingOutcome']

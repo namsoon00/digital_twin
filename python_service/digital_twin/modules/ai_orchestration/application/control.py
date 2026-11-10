@@ -230,6 +230,12 @@ class AIControlService:
                         if lanes.market(packet) and not packet.get("investmentMeaningPolicy"):
                             packet["insightProgressPolicy"] = insight_progress.VERSION
                             packet["sourceProgressKey"] = session.progress_identity()
+                    from ..domain import company_evidence_wait as company_wait
+                    company_wait_key = ""
+                    if (packet.get("investmentMeaningPolicy") and lanes.market(packet) and session
+                            and callable(getattr(type(session), "evidence_wait_identity", None))):
+                        packet["companyEvidenceInventoryKey"] = session.evidence_wait_identity()
+                        company_wait_key = lanes.material_key(packet, research, evidence_identity=packet["companyEvidenceInventoryKey"])
                     from .opinion_preparation import quote_blocker
                     blocker = quote_blocker(packet)
                     if blocker:
@@ -253,7 +259,9 @@ class AIControlService:
                         and previous_outcome["quoteWaitKey"] == evidence_purpose.quote_wait_key(packet, research))
                     due_thesis_review = (previous_outcome.get("reasonCode") == "insight-source-gaps"
                         and any(row.get("reviewDue") for row in research if row.get("kind") == "business-thesis"))
-                    if ((unchanged_wait(previous_outcome, retry_identity) or same_quote_wait) and not due_thesis_review
+                    company_waiting = (company_wait.waiting(previous_outcome, company_wait_key)
+                        and not any(row.get("reviewDue") for row in research if row.get("kind") == "business-thesis"))
+                    if ((unchanged_wait(previous_outcome, retry_identity) or same_quote_wait or company_waiting) and not due_thesis_review
                             and not retrieval_budget.retry_allowed(previous_outcome, packet)
                             and not any(row.get("transitionVerified") for row in packet["followUpEvaluations"])):
                         return self.complete_wait(job, packet, previous_outcome, [], "unchanged-wait")
@@ -286,6 +294,12 @@ class AIControlService:
                     abstention_memory = history
                     waiting_source_packet = packet
                     waiting_source_research = research
+                    company_source_cases = []
+                    if company_wait_key:
+                        # Eligibility needs the research owner's repeat/source
+                        # state, which market memory deliberately omits. Read it
+                        # before any paid work, outside the completion writer.
+                        company_source_cases = list(self.research_plan_memory(job["accountId"], job["symbol"], job["worldId"]))
                     retrieval_trace = []
                     stage = "evidence-retrieval"
                     if session and self.read_planner:
@@ -476,6 +490,20 @@ class AIControlService:
                     if observation_abstention.enabled(packet):
                         result["abstention"] = observation_abstention.assessment(result)
                     children = []
+                    company_wait_state = company_wait.state(result, company_wait_key)
+                    if company_wait_state:
+                        result["processingOutcome"]["companyEvidenceWait"] = company_wait_state
+                        captured_cases = {c.get("caseId"): c for row in waiting_source_research
+                                          for c in [row.get("body", {}) if row.get("kind") == "research-context" else row]
+                                          if c.get("kind") == "brain-case" and c.get("capability") == "research"}
+                        source_cases = [c for c in company_source_cases if c.get("caseId") in captured_cases
+                                        and c.get("questionContract") == captured_cases[c["caseId"]].get("questionContract")]
+                        handoff = company_wait.handoff(self.subject(job), result, source_cases, stamp())
+                        if handoff:
+                            children.append(handoff)
+                            result["processingOutcome"]["companyEvidenceWait"]["researchTaskId"] = handoff["taskId"]
+                        result["processingOutcome"]["companyEvidenceWait"]["researchStatus"] = (
+                            "existing-question-plan-queued" if handoff else "waiting-existing-source-opportunity")
                     if source_progress.get("needs"):
                         result["sourceProgress"] = source_progress
                         source_job = insight_progress.research_job(self.subject(job), source_progress, stamp())
@@ -500,6 +528,12 @@ class AIControlService:
                         repeat.initialize(row)
                         row["planDue"] = repeat.planning_due(row, stamp())
                     cases = [repeat.planning_memory(row) for row in cases]
+                    from ..domain import company_evidence_wait as company_wait
+                    existing_only = company_wait.PLAN_FIELD in job
+                    if existing_only:
+                        if not company_wait.requested(job):
+                            raise ValueError("invalid company evidence planning handoff")
+                        cases = [row for row in cases if row["caseId"] in job[company_wait.PLAN_FIELD]["caseIds"]]
                     envelope = freeze(job, cases, job.get("researchGaps", []),
                                       self.settings.get("aiObservationPromptMaxBytes", 256 * 1024))
                     plan_key = identity("research-plan-material-v1", self.subject(job), envelope["promptVersion"], envelope["gaps"],
@@ -509,7 +543,9 @@ class AIControlService:
                          for r in cases if r.get("planDue")])
                     last_plan = (self.store.last_processing_outcome(job["accountId"], job["symbol"], "research-plan")
                                  if callable(getattr(type(self.store), "last_processing_outcome", None)) else {})
-                    if last_plan.get("emptyPlanKey") == plan_key:
+                    if existing_only and not any(row.get("planDue") for row in cases):
+                        result, children = {"status": "research-plan-obsolete", "reasonCode": "existing-source-work-not-due", "modelCalled": False}, []
+                    elif last_plan.get("emptyPlanKey") == plan_key:
                         result, children = {"status": "research-plan-unchanged", "processingOutcome": {**last_plan, "modelCalled": False}}, []
                     elif (not any(row.get("planDue") for row in cases) and (cases or not envelope["gaps"])
                           and not insight_progress.source_gap_request(job)):

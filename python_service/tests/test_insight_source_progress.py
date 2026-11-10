@@ -20,6 +20,56 @@ def missing_sources():
 
 
 class InsightSourceProgressTests(unittest.TestCase):
+    def test_company_wait_inventory_ignores_only_read_hash_churn_and_keeps_all_sources(self):
+        p = missing_sources()['input']
+        p['facts'][-1]['evidenceView'] = {'sourceFactHash': 'old-snapshot-hash', 'metrics': ['value']}
+        before = deepcopy(p)
+        def key(packet, extra=()):
+            return ObservationEvidenceSession(packet, packet['facts'] + list(extra)).evidence_wait_identity()
+        original = key(p)
+        p['facts'][-1]['evidenceView']['sourceFactHash'] = 'new-snapshot-hash'
+        p['coverage']['research']['inventoryHash'] = 'polling-only'
+        self.assertEqual(original, key(p))
+        self.assertNotEqual(before['facts'][-1]['evidenceView'], p['facts'][-1]['evidenceView'])
+        self.assertEqual('new-snapshot-hash', p['facts'][-1]['evidenceView']['sourceFactHash'])
+        for change in (lambda q: q['facts'][0].update(currentPrice=101),
+                       lambda q: q['facts'][0].update(positionWeight=99),
+                       lambda q: q['facts'][-1].update(articleText='정정된 공식 원문입니다.'),
+                       lambda q: q['facts'][-1].update(judgementEvidenceUsable=False),
+                       lambda q: q['facts'][-1]['evidenceView'].update(metrics=['different-field'])):
+            changed = deepcopy(p); change(changed)
+            self.assertNotEqual(original, key(changed))
+        self.assertNotEqual(original, key(p, [{'id': 'unread-new-report', 'kind': 'company-financial-state', 'periodEnd': '2026-09-30'}]))
+
+    def test_company_data_gap_handoff_only_replans_due_existing_cases(self):
+        from digital_twin.modules.ai_orchestration.domain import company_evidence_wait as wait, research_work
+        from digital_twin.modules.ai_orchestration.domain.execution_input import validate_execution_input
+        from test_research_work import case, plan, SUBJECT, CONTRACT
+        value = case(); value['nextCheckAt'] = '2000-01-01T00:00:00Z'
+        value['questionContract'] = deepcopy(CONTRACT)
+        now = '2026-11-10T07:00:00Z'
+        r = {'processingOutcome': {'companyEvidenceWait': {'version': wait.VERSION, 'key': 'captured-key'},
+             'requiredEvidence': [{'question': '확인한 현금흐름의 부족한 주석을 확인합니다.', 'source': '동일 기간 공식 원문 주석'}]}}
+        job = wait.handoff(SUBJECT, r, [{'kind': 'research-context', 'body': value}], now)
+        self.assertTrue(wait.requested(job))
+        changed = deepcopy(r); changed['processingOutcome']['requiredEvidence'][0]['question'] = '같은 원문의 부족 항목을 다시 확인합니다.'
+        self.assertEqual(job['taskId'], wait.handoff(SUBJECT, changed, [value], now)['taskId'])
+        new_source = deepcopy(value); new_source['researchSourceState'] = {'status': 'ready', 'fingerprints': ['new-original']}
+        self.assertNotEqual(job['taskId'], wait.handoff(SUBJECT, r, [new_source], now)['taskId'])
+        self.assertFalse(wait.requested({**job, 'accountId': 'foreign'}))
+        self.assertIsNone(wait.handoff(SUBJECT, r, [{**value, 'nextCheckAt': '2099-01-01T00:00:00Z'}], now))
+        self.assertIsNone(wait.handoff(SUBJECT, r, [{**value, 'researchAttempts': 6}], now))
+        self.assertIsNone(wait.handoff(SUBJECT, r, [{**value, 'symbol': 'foreign'}], now))
+        envelope = research_work.freeze(job, [value], job['researchGaps'])
+        validate_execution_input(envelope)
+        self.assertEqual(research_work.EXISTING_PROMPT_VERSION, envelope['promptVersion'])
+        self.assertEqual(0, envelope['outputSchema']['properties']['questions']['maxItems'])
+        research_work.validate_plan(plan(value), envelope)
+        bad = plan(value); bad['questions'] = [{'question': '같은 질문을 새로 생성합니다.'}]
+        with self.assertRaises(ValueError): research_work.validate_plan(bad, envelope)
+        tampered = deepcopy(envelope); tampered['researchCases'][0]['caseId'] = 'other-question'
+        with self.assertRaises(ValueError): validate_execution_input(tampered)
+
     def test_polling_the_same_macro_print_does_not_wake_paid_work_but_real_changes_do(self):
         p = missing_sources()["input"]
         p["facts"].append({"id": "monthly-print", "kind": "macro-print", "value": 3.0,

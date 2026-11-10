@@ -12,6 +12,7 @@ VERSION = "research-work-v1"
 LEGACY_PROMPT_VERSION = "independent-research-plan-v1"
 PROMPT_VERSION = "independent-research-plan-v2-focused-question"
 PURPOSE_PROMPT_VERSION = "independent-research-plan-v3-question-purpose"
+EXISTING_PROMPT_VERSION = "independent-research-plan-v4-existing-company-gap"
 PRIORITY = 4  # Source planning precedes the recurring observation backlog; collection is 5.
 EMPTY_REQUEST = {"queryTerms": [], "sourceTypes": [], "maxAgeMinutes": 0}
 
@@ -128,12 +129,20 @@ questions는 입력 gaps에 새로운 조사 필요가 있고 기존 질문으�
 
 
 def freeze(job, cases, gaps=(), max_bytes=256 * 1024):
+    from .company_evidence_wait import PLAN_FIELD, requested
     current = {key: job[key] for key in ("accountId", "symbol", "worldId", "taskId", "name")}
+    if PLAN_FIELD in job:
+        if not requested(job):
+            raise ValueError("invalid company evidence planning handoff")
+        current[PLAN_FIELD] = deepcopy(job[PLAN_FIELD])
     selected = deepcopy(cases[:5])
     value = {"protocolVersion": "ai-observation-execution-v1", "promptVersion": PURPOSE_PROMPT_VERSION if any(row.get("questionPurpose") for row in selected) else PROMPT_VERSION,
              "current": current, "researchCases": selected, "gaps": deepcopy(list(gaps)[:4]),
              "promptBudgetBytes": int(max_bytes), "outputSchema": schema(selected)}
-    value["prompt"] = prompt(current, selected, value["gaps"], focused=True, purposeful=value["promptVersion"] == PURPOSE_PROMPT_VERSION)
+    if PLAN_FIELD in current:
+        value["promptVersion"] = EXISTING_PROMPT_VERSION
+        value["outputSchema"]["properties"]["questions"]["maxItems"] = 0
+    value["prompt"] = render(value)
     value["promptHash"] = hashlib.sha256(value["prompt"].encode()).hexdigest()
     validate_input(value)
     return value
@@ -141,20 +150,38 @@ def freeze(job, cases, gaps=(), max_bytes=256 * 1024):
 
 def validate_input(value):
     from digital_twin.modules.reasoning.contracts import content_hash
-    if (value.get("protocolVersion") != "ai-observation-execution-v1" or value.get("promptVersion") not in {PROMPT_VERSION, LEGACY_PROMPT_VERSION, PURPOSE_PROMPT_VERSION}
-            or set(value["current"]) != {"accountId", "symbol", "worldId", "taskId", "name"}
-            or any(not isinstance(v, str) or not v for v in value["current"].values())
+    from .company_evidence_wait import PLAN_FIELD, requested
+    existing = value.get("promptVersion") == EXISTING_PROMPT_VERSION
+    fields = {"accountId", "symbol", "worldId", "taskId", "name"}
+    if (value.get("protocolVersion") != "ai-observation-execution-v1" or value.get("promptVersion") not in {PROMPT_VERSION, LEGACY_PROMPT_VERSION, PURPOSE_PROMPT_VERSION, EXISTING_PROMPT_VERSION}
+            or set(value["current"]) != fields | ({PLAN_FIELD} if existing else set())
+            or any(not isinstance(value["current"].get(k), str) or not value["current"][k] for k in fields)
+            or (existing and not requested(value["current"]))
             or len(value["researchCases"]) > 5 or len(value["gaps"]) > 4):
         raise ValueError("invalid research planning input")
     for row in value["researchCases"]:
         if any(row.get(key) != value["current"][key] for key in ("accountId", "symbol", "worldId")):
             raise ValueError("research planning scope mismatch")
-    rendered = prompt(value["current"], value["researchCases"], value["gaps"], focused=value["promptVersion"] != LEGACY_PROMPT_VERSION, purposeful=value["promptVersion"] == PURPOSE_PROMPT_VERSION)
+        if existing and row["caseId"] not in value["current"][PLAN_FIELD]["caseIds"]:
+            raise ValueError("company evidence planning crossed original question scope")
+    rendered = render(value)
+    expected_schema = schema(value["researchCases"])
+    if existing:
+        expected_schema["properties"]["questions"]["maxItems"] = 0
     if (rendered != value["prompt"] or hashlib.sha256(rendered.encode()).hexdigest() != value["promptHash"]
-            or value["outputSchema"] != schema(value["researchCases"])
+            or value["outputSchema"] != expected_schema
             or len(rendered.encode()) > min(512 * 1024, value["promptBudgetBytes"])):
         raise ValueError("research planning input changed")
     return content_hash(value)
+
+
+def render(value):
+    existing = value["promptVersion"] == EXISTING_PROMPT_VERSION
+    prefix = ("이번 작업은 지정된 기존 질문의 부족 자료 재계획입니다. questions=[]이며 새 질문·가설을 만들지 않습니다. "
+              "원래 기간·완료 기준과 이미 확인한 답을 유지하고 부족한 항목만 계획하세요. 미래 미공개 자료나 소진된 경로는 wait/blocked입니다.\n" if existing else "")
+    return prefix + prompt(value["current"], value["researchCases"], value["gaps"],
+        focused=value["promptVersion"] != LEGACY_PROMPT_VERSION,
+        purposeful=value["promptVersion"] == PURPOSE_PROMPT_VERSION or (existing and any(c.get("questionPurpose") for c in value["researchCases"])))
 
 
 def validate_plan(raw, envelope):
@@ -196,7 +223,7 @@ def validate_plan(raw, envelope):
     if any(row["duplicateOf"] in merges for row in accepted):
         raise ValueError("question merge chains are not allowed")
     questions = raw["questions"]
-    if not isinstance(questions, list) or len(questions) > (1 if envelope["gaps"] else 0):
+    if not isinstance(questions, list) or len(questions) > (1 if envelope["gaps"] and envelope["promptVersion"] != EXISTING_PROMPT_VERSION else 0):
         raise ValueError("new research requires a captured data gap")
     for row in questions:
         if not isinstance(row, dict) or set(row) != {"question", "contract", "research"}:

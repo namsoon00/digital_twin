@@ -121,6 +121,10 @@ class ObservationEvidenceSession:
         from .observation_source_progress import inventory_identity
         return inventory_identity(self._packet, self._facts.values())
 
+    def evidence_wait_identity(self):
+        from .observation_source_progress import evidence_wait_identity
+        return evidence_wait_identity(self._packet, self._facts.values())
+
     def price_investigation(self, *, prefer_original=False):
         from .price_investigation_sources import build
         return build(self._facts.values(), self._packet, prefer_original=prefer_original)

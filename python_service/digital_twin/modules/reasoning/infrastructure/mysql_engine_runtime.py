@@ -1975,7 +1975,7 @@ class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
         with self.connect() as connection:
             order, order_params = claim_order(claim_turn(connection, deployment_id), aged_cutoff)
             row = connection.execute(
-                "SELECT reasoning_lane FROM reasoning_engine_jobs WHERE deployment_id = %s "
+                "SELECT /* operation:reasoning-lane-peek */ reasoning_lane FROM reasoning_engine_jobs WHERE deployment_id = %s "
                 "AND job_status IN ('queued', 'retry', 'awaiting_world_projection') AND (available_at = '' OR available_at <= %s) "
                 + boundary_filter + source_predecessor_filter() +
                 "ORDER BY " + order + " LIMIT 1",
@@ -2026,7 +2026,7 @@ class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
             order, order_params = claim_order(streak, aged_cutoff)
             columns = "job_id, request_json" if bounded > 1 else "*"
             rows = connection.execute(
-                "SELECT " + columns + """ FROM reasoning_engine_jobs
+                "SELECT /* operation:reasoning-claim-candidates */ " + columns + """ FROM reasoning_engine_jobs
                 WHERE deployment_id = %s
                   AND job_status IN ('queued', 'retry', 'awaiting_world_projection')
                   AND (available_at = '' OR available_at <= %s)

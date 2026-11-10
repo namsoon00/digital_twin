@@ -42,6 +42,25 @@ integration checks for data preservation, account isolation, source lineage,
 and duplicate-delivery prevention. Choose the files explicitly after tracing
 the changed behavior; there is no automatic dependency-coverage guarantee.
 
+## MySQL process isolation
+
+Python runs, direct MySQL fixtures and HTTP smoke now use a separate MySQL
+process, not merely a different schema on the application's server. The default
+test process starts automatically on loopback port 33307 with its own socket,
+128 MB buffer pool and `data/test-runtime/mysql-isolated` data directory.
+Concurrent test starts share a startup lock; the existing fixture lock still
+serializes resets of the reusable test schema. The small test server remains
+available for the next run. Selection previews never start it.
+
+Ordinary `MYSQL_*`, `MYSQL_URL` and `DATABASE_URL` application settings cannot
+route tests to the app server. To use a disposable CI/test server explicitly,
+set `MYSQL_TEST_HOST`, `MYSQL_TEST_PORT`, `MYSQL_TEST_USER`,
+`MYSQL_TEST_PASSWORD` and optionally `MYSQL_TEST_UNIX_SOCKET`. The endpoint is
+probed before fixture writes; the project app data directory is rejected.
+An unavailable explicit server fails setup without falling back to the app.
+CI declares its disposable service container through these variables; the
+self-hosted issue runner uses the separate default process.
+
 ## Broader checks
 
 ```bash

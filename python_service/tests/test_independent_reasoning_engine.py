@@ -1823,7 +1823,7 @@ class IndependentReasoningEngineTests(unittest.TestCase):
             def execute(self, sql, _params=()):
                 if sql.startswith("SELECT live_streak"):
                     return SimpleNamespace(fetchone=lambda: {"live_streak": 0})
-                if sql.lstrip().startswith("SELECT *"):
+                if "operation:reasoning-claim-candidates" in sql:
                     return SimpleNamespace(fetchall=lambda: [{
                         "job_id": "job:retry-once",
                         "deployment_id": "ontology-v2-production",

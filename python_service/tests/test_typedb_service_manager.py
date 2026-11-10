@@ -356,6 +356,21 @@ class TypeDBServiceManagerTests(unittest.TestCase):
 
         self.assertEqual("60", connection.call_args.args[0]["mysqlOperationTimeoutSeconds"])
 
+        # Startup configuration must preserve the DB's default unless the
+        # operator explicitly selects the measured log-thread path. This
+        # controls scheduling only; durable commit/doublewrite flags stay intact.
+        executable = str(Path(service_manager.__file__).resolve())
+        with patch.object(service_manager, "mysql_executable", return_value=executable):
+            for raw, expected in (("auto", None), ("OFF", "OFF"), ("1", "ON"), ("bad --skip-log-bin", None)):
+                with self.subTest(log_threads=raw), patch.dict(os.environ, {"MYSQL_INNODB_LOG_WRITER_THREADS": raw}):
+                    command = service_manager.mysql_worker_spec({})["command"]
+                    flags = [arg for arg in command if arg.startswith("--innodb-log-writer-threads=")]
+                    self.assertEqual([] if expected is None else ["--innodb-log-writer-threads=" + expected], flags)
+                    self.assertFalse(any("flush-log-at-trx-commit" in arg or "doublewrite" in arg for arg in command))
+            with patch.dict(os.environ, {"MYSQL_INNODB_LOG_WRITER_THREADS": ""}):
+                self.assertIn("--innodb-log-writer-threads=OFF", service_manager.mysql_worker_spec(
+                    {"mysqlInnoDbLogWriterThreads": "off"})["command"])
+
     def test_supervisor_start_defers_graph_workers_while_typedb_recovers(self):
         specs = {
             "web": {"label": "web", "role": "web"},

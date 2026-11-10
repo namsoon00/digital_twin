@@ -686,6 +686,13 @@ def mysql_worker_spec(settings: Dict[str, object]) -> Dict[str, object]:
         "--innodb-redo-log-capacity=" + str(redo_log_capacity_mb * 1024 * 1024),
         "--max-connections=100",
     ] if executable and Path(executable).exists() else []
+    log_writer_threads = str(
+        os.environ.get("MYSQL_INNODB_LOG_WRITER_THREADS")
+        or (settings or {}).get("mysqlInnoDbLogWriterThreads") or "auto"
+    ).strip().lower()
+    if command and log_writer_threads in {"0", "false", "off", "no", "disabled", "1", "true", "on", "yes", "enabled"}:
+        enabled = log_writer_threads in {"1", "true", "on", "yes", "enabled"}
+        command.append("--innodb-log-writer-threads=" + ("ON" if enabled else "OFF"))
     return {
         "label": "MySQL operational store",
         "pid": data_dir() / "mysql-service.pid",

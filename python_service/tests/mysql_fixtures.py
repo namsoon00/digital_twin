@@ -4,6 +4,7 @@ import hashlib
 import os
 import tempfile
 from pathlib import Path
+from mysql_test_runtime import ensure_mysql_test_environment
 
 from digital_twin.infrastructure.mysql_monitoring import (
     MySQLMonitorAccountJobStore,
@@ -186,6 +187,7 @@ def test_database_name(seed=None) -> str:
 
 
 def mysql_test_settings(seed=None):
+    ensure_mysql_test_environment()
     settings = {
         "mysqlHost": os.environ.get("MYSQL_HOST", "127.0.0.1"),
         "mysqlPort": os.environ.get("MYSQL_PORT", "3306"),
@@ -195,8 +197,8 @@ def mysql_test_settings(seed=None):
         "mysqlUnixSocket": os.environ.get("MYSQL_UNIX_SOCKET", ""),
         "operationalHistoryRetentionEnabled": "0",
         # Full fixture resets rebuild the shared test schema and its indexes.
-        # Allow bounded DDL headroom while live workers use the same server;
-        # production's operation timeout and all behavioral assertions stay intact.
+        # Keep finite DDL headroom on the separate test server; production's
+        # operation timeout and all behavioral assertions stay intact.
         "mysqlOperationTimeoutSeconds": "30",
         # Unit/integration schemas validate SQL contracts, not production
         # repartitioning. DDL partition probes add minutes and can disconnect

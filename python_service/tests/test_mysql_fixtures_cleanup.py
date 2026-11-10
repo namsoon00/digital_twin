@@ -33,6 +33,29 @@ class MySQLFixturesCleanupTests(unittest.TestCase):
         self.assertEqual("orbit_alpha_test_fixture_cleanup", settings["mysqlDatabase"])
         self.assertIn("orbit_alpha_test_fixture_cleanup", mysql_fixtures._CREATED_TEST_DATABASES)
 
+        import mysql_test_runtime as runtime
+        private = runtime._managed_endpoint()
+        app_env = {"MYSQL_HOST":"127.0.0.1","MYSQL_PORT":"3306","MYSQL_PASSWORD":"private",
+                   "MYSQL_URL":"private-app-url","DATABASE_URL":"private-app-url"}
+        with patch.object(runtime, "_VERIFIED", set()), patch.object(runtime, "_ensure_managed", return_value=private) as start, \
+                patch.object(runtime, "_probe") as probe:
+            self.assertEqual(private, runtime.mysql_test_environment(app_env))
+            start.assert_called_once()
+            probe.assert_not_called()  # No connection to the ordinary app endpoint.
+            self.assertEqual("private", app_env["MYSQL_PASSWORD"])
+        with patch.object(runtime, "_VERIFIED", set()), patch.object(runtime, "_probe", side_effect=OSError("private connection error")), \
+                patch.object(runtime, "_ensure_managed") as fallback:
+            with self.assertRaisesRegex(runtime.TestMySQLSetupError, "no app DB fallback"):
+                runtime.mysql_test_environment({**app_env,"MYSQL_TEST_HOST":"127.0.0.1","MYSQL_TEST_PORT":"43306"})
+            fallback.assert_not_called()
+        from unittest.mock import MagicMock
+        connection = MagicMock()
+        connection.__enter__.return_value.cursor.return_value.__enter__.return_value.fetchone.return_value = (
+            3306, str(runtime.ROOT / "data" / "mysql-runtime"), "fixture-server")
+        with patch("pymysql.connect", return_value=connection), patch.dict(os.environ, {"MYSQL_DATA_DIR":""}):
+            with self.assertRaisesRegex(runtime.TestMySQLSetupError, "project MySQL data directory"):
+                runtime._probe(private)
+
     def test_default_test_database_is_reused_across_temporary_seeds(self):
         with patch.dict(os.environ, {
             "MYSQL_TEST_DATABASE": "",

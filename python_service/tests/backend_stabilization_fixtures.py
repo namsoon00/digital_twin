@@ -36,6 +36,13 @@ CHANGED_METHODS = {
         "repair_completed_reasoning_receipts"
     },
 }
+ADDED_DECLARATIONS = {
+    # Added by committed 82a6cca49. Every addition requires a separate reviewed
+    # body hash in closed_loop_semantic_changes, not a rewritten v1 baseline.
+    "infrastructure/transactions/monitoring.py": {
+        "bounded_monitor_snapshot_state", "monitoring_transaction_settings",
+    },
+}
 ADDED_METHODS = {
     "MySQLReasoningEngineJobStore": {
         "repair_completed_receipts",

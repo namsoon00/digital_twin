@@ -29,6 +29,7 @@ TEXT_SETTING_KEYS = [
     "monitoringMysqlOperationTimeoutSeconds",
     "mysqlInnoDbBufferPoolSizeMb",
     "mysqlInnoDbRedoLogCapacityMb",
+    "mysqlInnoDbLogWriterThreads",
     "operationalHistoryRetentionEnabled",
     "operationalHistoryRetentionHours",
     "operationalHistoryRetentionBatchSize",
@@ -1350,6 +1351,9 @@ def runtime_settings(fast_operational_read: bool = False, *, require_store_read:
             "mysqlInnoDbRedoLogCapacityMb",
             "MYSQL_INNODB_REDO_LOG_CAPACITY_MB",
             "1024",
+        ),
+        "mysqlInnoDbLogWriterThreads": value(
+            "mysqlInnoDbLogWriterThreads", "MYSQL_INNODB_LOG_WRITER_THREADS", "auto",
         ),
         "operationalHistoryRetentionEnabled": value(
             "operationalHistoryRetentionEnabled",

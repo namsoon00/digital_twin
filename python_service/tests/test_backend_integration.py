@@ -19,6 +19,7 @@ from module_migration_fixtures import restore_domain_imports
 from internal_coordinator_parity import decision_history_members
 from unittest.mock import Mock, patch
 from backend_stabilization_fixtures import (
+    ADDED_DECLARATIONS,
     ADDED_METHODS,
     CHANGED_METHODS,
     STAGES,
@@ -232,10 +233,15 @@ class BackendIntegrationTests(unittest.TestCase):
             }
             if entry["path"] == "infrastructure/transactions/decision_history.py":
                 declarations = decision_history_members()
+            expected_declarations = dict(entry["declarations"])
+            for addition in ADDED_DECLARATIONS.get(entry["path"], set()):
+                self.assertNotIn(addition, expected_declarations)
+                self.assertIn(entry["path"] + "::" + addition, changes)
+                expected_declarations[addition] = ""
             self.assertEqual(
-                set(entry["declarations"]), set(declarations), entry["path"]
+                set(expected_declarations), set(declarations), entry["path"]
             )
-            for name, expected in entry["declarations"].items():
+            for name, expected in expected_declarations.items():
                 normalized = WithoutImports().visit(
                     expand_participants(declarations[name])
                 )

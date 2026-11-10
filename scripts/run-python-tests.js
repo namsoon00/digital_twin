@@ -1,6 +1,7 @@
 const childProcess = require("child_process");
 const fs = require("fs");
 const path = require("path");
+const { isolateMysqlTestEnvironment } = require("./mysql-test-runtime.cjs");
 
 const rootDir = path.resolve(__dirname, "..");
 const testDir = path.join(rootDir, "python_service", "tests");
@@ -82,7 +83,7 @@ function run(argv) {
     return;
   }
   console.log("Python " + mode + ": " + files.length + " test modules");
-  const environment = Object.assign({}, process.env, {
+  const environment = isolateMysqlTestEnvironment(Object.assign({}, process.env, {
     PYTHONPATH: pythonPath(process.env),
     ORBIT_RUNTIME_ENV: "test",
     ORBIT_RUNTIME_REVISION: "python-test-suite",
@@ -96,7 +97,7 @@ function run(argv) {
     TYPEDB_HTTP_ADDRESS: "127.0.0.1:8010",
     TYPEDB_DATA_PATH: path.join(rootDir, "data", "test-runtime", "typedb-data"),
     TYPEDB_DATABASE: "orbit_alpha_ontology_test",
-  });
+  }));
   const result = childProcess.spawnSync(
     environment.PYTHON_BIN || "python3",
     [

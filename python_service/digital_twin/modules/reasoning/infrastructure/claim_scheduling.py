@@ -12,25 +12,34 @@ def source_predecessor_filter():
     market scopes back later. An older pending source therefore remains a
     dependency, including a delayed retry. Market scopes are shared across
     accounts, so subject overlap blocks even when account IDs differ. Unknown
-    subject boundaries conservatively overlap. This reads only the pending slice;
-    no historical source payloads or graph reads enter queue scheduling.
+    subject boundaries conservatively overlap. Use the current event's small,
+    indexed lineage keys instead of decoding every pending request body. A
+    legacy job without lineage conservatively overlaps rather than weakening
+    the source-order barrier. No historical payloads or graph reads are needed.
     """
-    overlaps = []
-    for field in ("symbols",):
-        left = "JSON_EXTRACT(predecessor.request_json, '$.request." + field + "')"
-        right = "JSON_EXTRACT(reasoning_engine_jobs.request_json, '$.request." + field + "')"
-        overlaps.append(
-            "(COALESCE(JSON_LENGTH(" + left + "),0)=0 OR "
-            "COALESCE(JSON_LENGTH(" + right + "),0)=0 OR "
-            "JSON_OVERLAPS(" + left + "," + right + "))"
-        )
+    overlaps = (
+        "(NOT EXISTS(SELECT 1 FROM reasoning_engine_job_sources current_source "
+        "WHERE current_source.survivor_job_id=reasoning_engine_jobs.job_id "
+        "AND current_source.source_event_id=reasoning_engine_jobs.source_event_id) "
+        "OR NOT EXISTS(SELECT 1 FROM reasoning_engine_job_sources older_source "
+        "WHERE older_source.survivor_job_id=predecessor.job_id "
+        "AND older_source.source_event_id=predecessor.source_event_id) "
+        "OR EXISTS(SELECT 1 FROM reasoning_engine_job_sources current_source "
+        "JOIN reasoning_engine_job_sources older_source "
+        "ON older_source.survivor_job_id=predecessor.job_id "
+        "AND older_source.source_event_id=predecessor.source_event_id "
+        "AND (older_source.symbol=current_source.symbol "
+        "OR older_source.symbol='' OR current_source.symbol='') "
+        "WHERE current_source.survivor_job_id=reasoning_engine_jobs.job_id "
+        "AND current_source.source_event_id=reasoning_engine_jobs.source_event_id))"
+    )
     return (
         " AND NOT EXISTS (SELECT 1 FROM reasoning_engine_jobs predecessor "
         "WHERE predecessor.deployment_id=reasoning_engine_jobs.deployment_id "
         "AND predecessor.job_status IN ('queued','retry','awaiting_source','awaiting_world_projection','processing') "
         "AND predecessor.source_snapshot_at <> '' "
         "AND predecessor.source_snapshot_at < reasoning_engine_jobs.source_snapshot_at "
-        "AND " + " AND ".join(overlaps) + ") "
+        "AND " + overlaps + ") "
     )
 
 

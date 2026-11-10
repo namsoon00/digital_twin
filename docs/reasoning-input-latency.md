@@ -21,6 +21,14 @@ is inspected; completed source history is not scanned. Durable research and
 unique events retain their normal execution rather than being discarded to
 make a queue-age statistic look better.
 
+The source-order barrier uses the current source event's indexed lineage keys,
+including the empty/global subject, rather than parsing each pending request's
+JSON. Missing legacy lineage conservatively overlaps and cannot permit source
+rollback. A read-only same-snapshot production comparison returned the same
+ordered seven eligible jobs: JSON lookup took 1,761 ms and lineage lookup 740 ms.
+Lane/claim SQL has distinct safe telemetry labels. This is a bounded query
+observation under concurrent load, not an end-to-end speedup ratio.
+
 The raw temporal reader now fetches the exact newest N rows per account/symbol/
 granularity using primary-key tails, at most four source groups per statement,
 instead of ranking each full group with ROW_NUMBER. A read-only consistent
@@ -48,6 +56,61 @@ no SQL parameters, payloads or exception text. The default threshold is 1,000 ms
 transaction, retry, timeout or durability behavior. Production COMMIT durability
 is unchanged. Full source-to-delivery latency still requires a fresh live
 execution and, for actual transport, an eligible customer notification receipt.
+
+### Measured local redo-thread scheduling
+
+Passive receipts after the restart exposed simultaneous 18–30 second COMMIT
+waits across the monitor, quote feed, delivery, web and independent AI workers,
+including driver 2013 failures. A one-second native MySQL sample placed its log
+flusher in fsync and client commits in redo-flush waits. These are storage-path
+observations, not evidence that TypeDB native predicates caused those waits.
+The first changed live job still took 239,531 ms; its temporal context took
+2,783 ms, decision-memory preparation 35,991 ms, ABox persistence 61,069 ms and
+native inference 24,039 ms. Component timings can overlap and are not additive.
+
+A tiny, isolated diagnostic schema on the production server alternated the
+log-writer-thread setting ON/OFF/ON/OFF, four 8 KB row transactions per phase.
+Commit medians across eight samples each were about 128 ms ON and 31 ms OFF;
+maximums were 825 and 80 ms. The probe restored ON and removed its own schema.
+The local owner runtime then selected OFF for continued live observation,
+retaining `innodb_flush_log_at_trx_commit=1` and doublewrite ON throughout.
+This short controlled comparison establishes the small-transaction difference;
+it does not establish that intermittent 30-second stalls or full alert latency
+have been resolved, nor is it a crash-recovery test.
+
+`MYSQL_INNODB_LOG_WRITER_THREADS` / `mysqlInnoDbLogWriterThreads` now carries that
+explicit ON/OFF choice into the next managed MySQL start. `auto` (the repository
+default) leaves the server default unchanged; other hosts need their own
+measurement. The local selection is private environment configuration. Runtime
+worker restarts alone do not reconfigure an already-running MySQL server, so the
+live global variable is checked separately. This changes log work scheduling,
+not durability or native rule/admission semantics. The startup guard regression
+in `test_typedb_service_manager` covers default, explicit environment/settings
+and invalid input. MySQL documents the optional dedicated thread behavior in
+[InnoDB system variables](https://docs.oracle.com/cd/E17952_01/mysql-9.7-en/innodb-parameters.html#sysvar_innodb_log_writer_threads).
+
+### Keep fixture DDL off the production MySQL process
+
+A bounded process-list observation still found fixture DELETE/DDL work in an
+`orbit_alpha_test` schema on the production server during this investigation.
+This session independently verified its fixture connections used port 33306,
+but the repository's default runner previously forced only a different schema
+name. Another ordinary test run could therefore compete with live commits.
+Python/HTTP runners and direct fixtures now select the separate test process by
+default. Only test-specific endpoint settings admit an external CI/test server;
+ordinary app URLs/credentials are ignored, the app data directory is rejected,
+and setup failure never falls back to production. See [Testing](testing.md).
+Tests already started by another session are not interrupted or killed.
+
+The existing research-store semantic-hash failure matched the parent of the
+already committed fresh-news queue change `7a949196c` exactly. Its inactive/
+exhausted-work reconciliation, live-lease exclusion, source recency and terminal
+retry behavior were reviewed against the existing real-MySQL news regressions
+before recording the missing review. This updates the review receipt only.
+The already committed bounded monitor/timeout helpers from `82a6cca49` likewise
+retain explicit added-declaration ownership and reviewed body hashes, with
+canonical source/SQL-byte and timeout regressions in
+`test_reasoning_source_preparation`; the frozen v1 ownership baseline is intact.
 
 ## Source-bound preparation and source-audit retry (2026-11-10)
 

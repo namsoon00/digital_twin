@@ -43,6 +43,12 @@ jobs:
       MYSQL_DATABASE: orbit_alpha
       MYSQL_USER: root
       MYSQL_PASSWORD: ""
+      # This disposable CI container is explicitly test-owned. Local/self-hosted
+      # runs use the separate test runtime rather than the app's MySQL server.
+      MYSQL_TEST_HOST: 127.0.0.1
+      MYSQL_TEST_PORT: 3306
+      MYSQL_TEST_USER: root
+      MYSQL_TEST_PASSWORD: ""
 
     steps:
       - name: Check out repository

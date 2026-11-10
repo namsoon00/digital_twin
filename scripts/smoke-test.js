@@ -6,6 +6,7 @@ const net = require("net");
 const os = require("os");
 const path = require("path");
 const vm = require("vm");
+const { isolateMysqlTestEnvironment } = require("./mysql-test-runtime.cjs");
 const { readFrontendContractSource } = require("./frontend-source-contract.cjs");
 const { publicTargetPayload, validTunnelBaseUrl } = require("./publish-live-target");
 const {
@@ -2948,7 +2949,7 @@ async function withServer(extraEnv, callback) {
   const settingsPath = path.join(os.tmpdir(), "digital-twin-smoke-settings-" + runId + ".json");
   const dataDir = path.join(os.tmpdir(), "digital-twin-smoke-data-" + runId);
   const mysqlDatabase = "orbit_alpha_smoke_" + runId.replace(/[^a-zA-Z0-9_]/g, "_");
-  const serverEnvironment = Object.assign({}, process.env, {
+  const serverEnvironment = isolateMysqlTestEnvironment(Object.assign({}, process.env, {
     HOST: "127.0.0.1",
     PORT: String(randomPort()),
     LOCAL_CODEX_ENABLED: "0",
@@ -2984,7 +2985,7 @@ async function withServer(extraEnv, callback) {
     EXTERNAL_CRYPTO_IDS: "",
     SETTINGS_PATH: settingsPath,
     DIGITAL_TWIN_DATA_DIR: dataDir
-  }, extraEnv || {});
+  }, extraEnv || {}));
   const serverProcess = childProcess.spawn(process.env.PYTHON_BIN || "python3", ["python_service/service.py", "web"], {
     cwd: rootDir,
     stdio: ["ignore", "pipe", "pipe"],

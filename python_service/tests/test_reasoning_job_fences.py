@@ -83,6 +83,8 @@ class ReasoningJobFenceTests(StabilizationDatabaseCase):
                 replacement.claim(self.deployment, "failed-worker", 1, 60)
         self.assertEqual(pending, self.sql("SELECT * FROM reasoning_engine_jobs WHERE job_id=%s", (pending["job_id"],)))
         self.assertEqual(before, self.sql("SELECT * FROM reasoning_engine_claim_turns WHERE deployment_id=%s", (self.deployment,)))
+        for claimed, owner in ((first, "first-worker"), (second, "replacement-worker"), (third, "replacement-worker")):
+            replacement.complete(claimed["jobId"], {}, worker_id=owner, claimed_at=claimed["claimedAt"])
 
         # Mixed/durable and latest-state slots for a shared market subject
         # cannot run in reverse source order, even across different accounts.
@@ -97,6 +99,9 @@ class ReasoningJobFenceTests(StabilizationDatabaseCase):
         self.assertEqual(older.event_id, oldest["sourceEventId"])
         self.assertEqual("queued", self.sql("SELECT job_status FROM reasoning_engine_jobs WHERE deployment_id=%s AND source_event_id=%s",
                                           (self.deployment, newer.event_id))["job_status"])
+        # Legacy missing lineage cannot grant permission to run a newer
+        # overlapping source while the older source is unfinished.
+        self.sql("DELETE FROM reasoning_engine_job_sources WHERE survivor_job_id=%s", (oldest["jobId"],))
         other = replacement.claim(self.deployment, "second-worker", 1, 60)
         self.assertTrue(all(row["sourceEventId"] != newer.event_id for row in other))
         replacement.retry(oldest["jobId"], "retry after source check", 60,

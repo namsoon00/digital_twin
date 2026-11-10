@@ -895,6 +895,16 @@ class DecisionOutcomeTargetTests(unittest.TestCase):
             "observed_at": "2026-08-25T01:00:00Z",
             "outcome_json": '{"outcomeId":"outcome:1","observedAt":"2026-08-25T01:00:00Z","payload":{}}',
         }])
+        execute = connection.execute
+
+        def read(sql, params=()):
+            cursor = execute(sql, params)
+            # This fixture owns a decision outcome, with no shadow episodes.
+            if "operation:shadow-history-selection" in sql:
+                return SimpleNamespace(fetchall=lambda: [])
+            return cursor
+
+        connection.execute = read
 
         @contextmanager
         def connect():

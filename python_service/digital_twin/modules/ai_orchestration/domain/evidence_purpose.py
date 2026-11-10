@@ -220,6 +220,8 @@ def authored_status(result):
     # A refresh receipt is a side effect, not a judgment's readiness gate.
     if result.get("conditionValidation", {}).get("reasonCode") == "condition-baseline-unusable":
         return "data-wait"
+    if result.get("quality", {}).get("status") == "not-published":
+        return "data-wait"
     return "output-invalid" if result["quality"]["status"] == "rejected" else "ready"
 
 

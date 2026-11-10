@@ -15,7 +15,7 @@ from digital_twin.modules.ai_orchestration.domain.observation_wording import OBS
 
 
 INSIGHT_VERSION = "observation-insight-v1"
-CAUSAL_GUARD_VERSION = "observation-causality-v6"
+CAUSAL_GUARD_VERSION = "observation-causality-v7"
 SECTIONS = ("summary", "comparison", "hypothesis", "portfolioImpact", "counterEvidence", "notificationReason")
 METRICS = {
     "change24h": ("24시간 변동률", "%"), "change7d": ("7일 변동률", "%"),
@@ -203,7 +203,7 @@ def unsupported_cause_v5(sentence, section):
     return unsupported_cause_v4(denied, section)
 
 
-def unsupported_cause(sentence, section):
+def unsupported_cause_v6(sentence, section):
     # Negation must terminate this exact attribution predicate. Do not erase
     # affirmative clauses, double negation or a quoted disclaimer followed by
     # an actual cause assertion. Historical guards remain replayable.
@@ -214,8 +214,22 @@ def unsupported_cause(sentence, section):
     return unsupported_cause_v5(denied, section)
 
 
+def unsupported_cause(sentence, section):
+    # An unresolved choice ("A 때문인지 B 때문인지 판별하지 못했습니다")
+    # asserts neither cause. Every causal token must be interrogative and the
+    # final predicate must deny discrimination, not negate that denial again.
+    tokens = list(re.finditer(r"때문|원인으로|원인입니다|원인은", sentence))
+    if (tokens and all(sentence[m.start():].startswith("때문인지") for m in tokens)
+            and not re.search(r"[\"'“”‘’]", sentence)
+            and re.search(r"(?:판별|구분|분리|특정)(?:하지\s*(?:못했습니다|못합니다|않았습니다|않습니다)|"
+                          r"할\s*수\s*없(?:습니다|었습니다)|하기\s*어렵습니다)[.!?。]?\s*$", sentence)):
+        return False
+    return unsupported_cause_v6(sentence, section)
+
+
 def insight_errors(result, packet, *, causal_guard_version=CAUSAL_GUARD_VERSION):
-    guards = {CAUSAL_GUARD_VERSION: unsupported_cause, "observation-causality-v5": unsupported_cause_v5,
+    guards = {CAUSAL_GUARD_VERSION: unsupported_cause, "observation-causality-v6": unsupported_cause_v6,
+              "observation-causality-v5": unsupported_cause_v5,
               "observation-causality-v4": unsupported_cause_v4,
               "observation-causality-v3": unsupported_cause_v3,
               "observation-causality-v2": unsupported_cause_v2,
@@ -272,7 +286,8 @@ def insight_errors(result, packet, *, causal_guard_version=CAUSAL_GUARD_VERSION)
     business = result.get("businessResearch") or {}
     from .company_value import explains_value
     from .judgment_policy import documentary_review
-    minimum = 0 if business.get("theses") or business.get("reviews") or explains_value(result, packet) or documentary_review(result, packet) else 1
+    from .purpose_quality import decline_reason
+    minimum = 0 if decline_reason(result, packet) or business.get("theses") or business.get("reviews") or explains_value(result, packet) or documentary_review(result, packet) else 1
     if not isinstance(comparisons, list) or not minimum <= len(comparisons) <= 6:
         errors.append("확인 가능한 관측 비교가 필요합니다.")
     else:

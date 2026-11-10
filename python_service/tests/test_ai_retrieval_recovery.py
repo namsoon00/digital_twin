@@ -289,6 +289,48 @@ class RetrievalAuditStorageTests(unittest.TestCase):
             c.execute("UPDATE ai_control_inputs SET input_hash='different' WHERE input_id=%s", (r['executionInputId'],))
         self.assertEqual([], self.store.review_feedback(*scope, cutoff))
 
+    def test_internal_decline_persists_once_without_an_approved_market_opinion(self):
+        from test_notification_contribution import added_value, receipt, context, contribution
+        from test_business_insight_progress import source_packet, retrieve
+        from ai_insight_fixtures import plan, ref
+        from digital_twin.modules.ai_orchestration.domain import purpose_quality, evidence_purpose
+        from digital_twin.modules.ai_orchestration.domain.planning import validate_plan
+        from digital_twin.modules.ai_orchestration.domain.insight_quality import local_quality, quality_block
+        from digital_twin.modules.ai_orchestration.domain.observation_wait import disposition, unchanged_wait
+        with self.store.transaction() as c:
+            c.execute("UPDATE ai_control_tasks SET capability='market-observe' WHERE task_id=%s", (self.job['taskId'],))
+        self.job['capability'] = 'market-observe'
+        p, _, output = retrieve(source_packet())
+        trace = output[3]
+        p['notificationContributionPolicy'] = contribution.POLICY
+        p['deliveredNotificationContext'] = context([receipt(p)], p['accountId'], p['symbol'], p['capturedAt'])
+        p.update(taskId=self.job['taskId'], analysisPurpose='source-dated')
+        p[purpose_quality.FIELD] = purpose_quality.VERSION
+        raw = plan(); raw['notification']['send'] = False
+        raw['judgmentChange'] = {'kind': 'market', 'impact': 'unchanged', 'reason': '같은 원천에 추가할 해석이 없어 기록만 남깁니다.', 'evidence': [ref('currentPrice')]}
+        raw.update(observations=[], followUpConditions=[], notificationContribution=added_value(p, 'no-added-value'))
+        r = {**validate_plan(raw, p), 'input': p}
+        r['quality'] = local_quality(r)
+        self.assertEqual('not-published', r['quality']['status'])
+        env = freeze_execution_input(p, [], [], retrieval_trace=trace)
+        r['executionInputId'] = self.store.save_execution_input(self.job, env)
+        call = self.store.begin_call('independent-observation', env['promptHash'], self.job['taskId'], r['executionInputId'])
+        self.store.finish_call(call)
+        r['processingOutcome'] = disposition(p, 'unchanged-source', evidence_purpose.authored_status(r), [])
+        r['processingOutcome'].update(purpose_quality.wait_metadata(r))
+        r['researchQuality'] = {'status': 'accepted', 'reviewInputId': 'research-only', 'admissions': {'assessment': True}}
+        child = {**SUBJECT, 'capability': 'market-observe', 'taskId': 'decline-next', 'availableAt': '2099-01-01T00:00:00Z'}
+        self.assertTrue(self.store.complete(self.job, r, [child]))
+        self.assertFalse(self.store.complete(self.job, r, [child]))
+        with self.store.connect() as c:
+            stored = json.loads(c.execute('SELECT result_json FROM ai_control_tasks WHERE task_id=%s', (self.job['taskId'],)).fetchone()['result_json'])
+            self.assertEqual(0, c.execute('SELECT COUNT(*) AS n FROM ai_opinion_records WHERE task_id=%s', (self.job['taskId'],)).fetchone()['n'])
+            self.assertEqual(1, c.execute('SELECT COUNT(*) AS n FROM ai_control_tasks WHERE task_id=%s', ('decline-next',)).fetchone()['n'])
+        self.assertTrue(unchanged_wait(stored['processingOutcome'], 'unchanged-source'))
+        self.assertEqual('no-material-change', stored['processingOutcome']['reasonCode'])
+        self.assertEqual([], self.store.reviewed_memory(p['accountId'], p['symbol'], p['worldId'], 'market-observe'))
+        self.assertTrue(quality_block(stored))
+
     def test_feedback_check_audit_persists_with_its_own_input_without_rewriting_prior_rejection(self):
         from ai_insight_fixtures import observation
         from digital_twin.modules.ai_orchestration.domain import execution_lanes, argument_quality
@@ -541,6 +583,8 @@ class RetrievalAuditStorageTests(unittest.TestCase):
         value = {**packet(), 'taskId': self.job['taskId']}
         from digital_twin.modules.ai_orchestration.domain import argument_quality
         value[argument_quality.FIELD] = argument_quality.VERSION
+        from digital_twin.modules.ai_orchestration.domain import purpose_quality
+        value[purpose_quality.FIELD] = purpose_quality.VERSION
         def save(env):
             key = self.store.save_execution_input(self.job, env)
             call = self.store.begin_call('independent-observation', env['promptHash'], self.job['taskId'], key)

@@ -116,7 +116,7 @@ class AIControlResearchKnowledge:
                     or envelope["current"].get("researchKnowledge") != packet.get("researchKnowledge")
                     or envelope["current"].get("analystMemoryPolicy") != packet.get("analystMemoryPolicy")
                     or any(envelope["current"].get(key) != packet.get(key)
-                           for key in ("companyValuePolicy", "companyValueEvidence", "previousCompanyValue", "businessInsightPolicy", "companyResearchPolicy", "questionGapPolicy", "questionPurposePolicy", "opinionMemoryPolicy", "retrievalReliabilityPolicy", "externalInfluencePolicy", "marketExplanationPolicy", "priceInvestigationPolicy", "priceMoveAnchor", "priceInvestigationScope", "historicalContextPolicy", "investmentMeaningPolicy", "argumentQualityPolicy"))
+                           for key in ("companyValuePolicy", "companyValueEvidence", "previousCompanyValue", "businessInsightPolicy", "companyResearchPolicy", "questionGapPolicy", "questionPurposePolicy", "opinionMemoryPolicy", "retrievalReliabilityPolicy", "externalInfluencePolicy", "marketExplanationPolicy", "priceInvestigationPolicy", "priceMoveAnchor", "priceInvestigationScope", "historicalContextPolicy", "investmentMeaningPolicy", "argumentQualityPolicy", "observationQualityPolicy"))
                     or envelope["retrievalContext"].get("questionEvidencePolicy") != packet.get("questionEvidencePolicy")
                     or (packet.get("questionEvidencePolicy") and captured_index(envelope["retrievalContext"].get("questionIndex", []), preserve_sources=question_purpose.enabled(packet)) != packet.get("questionEvidenceIndex"))
                     or step.get("authorScopePolicy") != envelope["retrievalContext"].get("authorScopePolicy")):

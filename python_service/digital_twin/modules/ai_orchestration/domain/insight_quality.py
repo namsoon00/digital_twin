@@ -80,12 +80,20 @@ def local_quality(result, *, causal_guard_version=CAUSAL_GUARD_VERSION):
                  for ref in result.get("claimEvidence", {}).get(section, []) if ref.get("period") == "current"}
         if available and not available.intersection(cited):
             errors.append("확인 가능한 사업 자료를 설명·가설·한계에 연결하지 않았습니다.")
-    if not result.get("followUpConditions") and not (business.get("theses") or business.get("reviews") or explains_value(result) or documentary):
+    from .purpose_quality import decline_reason, VERSION as quality_policy
+    declined = decline_reason(result)
+    if declined and result.get("conditionValidation"):
+        errors.append("제시한 확인 조건이 등록된 근거·기간과 일치하지 않습니다.")
+    if not declined and not result.get("followUpConditions") and not (business.get("theses") or business.get("reviews") or explains_value(result) or documentary):
         errors.append("관찰 가능한 확인 조건과 기간이 없습니다.")
     from .company_value import quality_errors
     errors.extend(quality_errors(result))
     if errors:
         return {**version, "status": "rejected", "errors": errors, "diagnostics": quality_diagnostics(result, errors)}
+    if declined:
+        return {**version, "status": "not-published", "errors": [], "reasonCode": declined,
+                "validationPolicy": quality_policy, "authority": "internal-decline-only",
+                "qualification": "not-approved-opinion-or-delivery"}
     fingerprint = insight_fingerprint(result, result["input"])
     baseline = result["input"].get("lastDeliveredNotification") or {}
     if baseline.get("insightFingerprint") == fingerprint:
@@ -97,7 +105,7 @@ def local_quality(result, *, causal_guard_version=CAUSAL_GUARD_VERSION):
 
 def accept_review(result, review, input_id):
     quality = local_quality(result)
-    if quality["errors"] or quality["status"] == "not-applicable":
+    if quality["errors"] or quality["status"] in {"not-applicable", "not-published"}:
         return quality
     from .business_progress import review_errors
     errors = review_errors(result, review)

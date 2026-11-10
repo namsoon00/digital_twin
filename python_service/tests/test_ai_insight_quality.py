@@ -115,7 +115,7 @@ class InsightGroundingTests(unittest.TestCase):
         new = local_quality(result)
         self.assertTrue(any('원인으로 단정' in error for error in old['errors']))
         self.assertFalse(new['errors'])
-        self.assertEqual('observation-causality-v6', new['causalGuardVersion'])
+        self.assertEqual('observation-causality-v7', new['causalGuardVersion'])
         from judgment_quality_checks import check_causality
         check_causality(self)
         result['counterEvidence'] = '이는 보고기간 참고 자료이며 이번 하락의 원인은 증명하지 않습니다.'
@@ -154,6 +154,58 @@ class InsightGroundingTests(unittest.TestCase):
         result = observation(); result['counterEvidence'] = denial
         self.assertTrue(any('원인으로 단정' in e for e in local_quality(result, causal_guard_version='observation-causality-v4')['errors']))
         self.assertFalse(any('원인으로 단정' in e for e in local_quality(result)['errors']))
+
+    def test_unresolved_competing_causes_keep_the_denial_attached_to_the_exact_predicate(self):
+        from digital_twin.modules.ai_orchestration.domain.insight_contract import unsupported_cause, unsupported_cause_v6
+        text = '영업현금 감소가 수익성 변화 때문인지 회수·납세 시점 차이 때문인지는 이번 선택 자료로 판별하지 못했습니다.'
+        self.assertTrue(unsupported_cause_v6(text, 'hypothesis'))
+        self.assertFalse(unsupported_cause(text, 'hypothesis'))
+        r = observation(); r['hypothesis'] = text
+        self.assertTrue(any('원인으로 단정' in e for e in local_quality(r, causal_guard_version='observation-causality-v6')['errors']))
+        self.assertFalse(any('원인으로 단정' in e for e in local_quality(r)['errors']))
+        for unsafe in ('기관 매도 때문에 하락했고 수익성 때문인지는 판별하지 못했습니다.',
+                       '수익성 때문인지는 판별하지 못했다는 뜻은 아닙니다.',
+                       '수익성 때문인지는 판별하지 못했습니다. 기관 매도 때문에 하락했습니다.',
+                       '수익성 때문인지는 구분하지 못했지만 기관 매도 때문에 하락했습니다.',
+                       '수익성 때문인지는 판별했습니다.'):
+            changed = copy.deepcopy(r); changed['hypothesis'] = unsafe
+            self.assertTrue(any('원인으로 단정' in e for e in local_quality(changed)['errors']), unsafe)
+
+    def test_typed_internal_decline_keeps_grounding_but_never_approves_a_customer_draft(self):
+        from digital_twin.modules.ai_orchestration.domain import purpose_quality, opinion_memory
+        from digital_twin.modules.ai_orchestration.domain.publication import publication_block
+        from digital_twin.modules.ai_orchestration.domain.evidence_purpose import authored_status
+        from test_notification_contribution import contextual_packet, added_value
+        p = contextual_packet(); p['analysisPurpose'] = 'source-dated'
+        raw = plan(); raw['notification']['send'] = False
+        raw['judgmentChange'] = {'kind': 'market', 'impact': 'unchanged', 'reason': '같은 원천에 추가할 해석이 없어 기록만 남깁니다.', 'evidence': [ref('currentPrice')]}
+        raw.update(observations=[], followUpConditions=[], notificationContribution=added_value(p, 'repetition'))
+        old = {**validate_plan(raw, p), 'input': p}
+        self.assertEqual('rejected', local_quality(old)['status'])
+        p[purpose_quality.FIELD] = purpose_quality.VERSION
+        r = {**validate_plan(raw, p), 'input': p}
+        self.assertNotIn('conditionValidation', r)
+        r['quality'] = local_quality(r)
+        self.assertEqual(('not-published', 'repetition'), (r['quality']['status'], r['quality']['reasonCode']))
+        self.assertEqual('data-wait', authored_status(r))
+        self.assertEqual('repetition', purpose_quality.wait_metadata(r)['reasonCode'])
+        self.assertEqual('', purpose_quality.decline_reason({**r, 'notification': None}))
+        self.assertEqual('', purpose_quality.decline_reason({**r, 'notificationContribution': None}))
+        self.assertFalse(opinion_memory.approved_result(r))
+        self.assertEqual('not-published', accept_review(r, review(), 'cannot-promote')['status'])
+        self.assertTrue(quality_block(r)); self.assertTrue(publication_block(r))
+        for case in ('cause', 'reference', 'comparison', 'condition', 'send'):
+            value = copy.deepcopy(raw)
+            if case == 'cause': value['hypothesis'] = '기관 매도 때문에 가격이 하락했습니다.'
+            elif case == 'reference': value['claimEvidence']['summary'][0]['field'] = 'invented'
+            elif case == 'comparison': value['observations'] = [{'left': ref('currentPrice'), 'operator': '<', 'right': ref('currentPrice')}]
+            elif case == 'condition': value['followUpConditions'] = [{'invented': True}]
+            else: value['notification']['send'] = True
+            bad = {**validate_plan(value, p), 'input': p}
+            self.assertEqual('rejected', local_quality(bad)['status'], case)
+        from digital_twin.modules.ai_orchestration.domain.execution_lanes import material_key
+        marked = copy.deepcopy(p); marked.pop(purpose_quality.FIELD)
+        self.assertEqual(material_key(marked, []), material_key(p, []))
 
     def test_repair_rebudgets_memory_but_preserves_required_facts_and_parent(self):
         from digital_twin.modules.ai_orchestration.domain.execution_input import freeze_review_input, prompt_budget

@@ -137,7 +137,8 @@ def validate_plan(value, packet, research=(), require_research=False, require_re
             documentary = documentary_review(value, packet)
             if documentary:
                 result["documentaryReview"] = documentary
-            internal = research_only(packet) and notification["send"] is False
+            from .purpose_quality import decline_reason
+            internal = (research_only(packet) and notification["send"] is False) or bool(decline_reason(value, packet))
             result["followUpConditions"] = [] if value.get("followUpConditions") == [] and (internal or business.get("theses") or business.get("reviews") or explains_value(value, packet) or documentary) else prepare_observation_conditions(value.get("followUpConditions"), packet)
         except (ValueError, KeyError, TypeError) as error:
             result["followUpConditions"] = []

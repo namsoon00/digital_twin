@@ -112,6 +112,9 @@ class AIControlService:
                         packet = lanes.annotate(packet, job)
                     if self.settings.get("aiEvidenceReadPolicy") == evidence_readiness.VERSION:
                         packet = evidence_purpose.annotate(evidence_readiness.annotate(packet))
+                        if evidence_purpose.enabled(packet):
+                            from ..domain import purpose_quality
+                            packet[purpose_quality.FIELD] = purpose_quality.VERSION
                         recovery = self.source_refresher(job, packet)
                         if recovery.get("status") == "lease-lost":
                             return {"status": "lease-lost", "taskId": job["taskId"]}
@@ -468,6 +471,8 @@ class AIControlService:
                     result["processingOutcome"] = disposition(packet, retry_identity,
                         research_disposition(result) or (evidence_purpose.authored_status(result) if evidence_purpose.enabled(packet) else "data-wait" if result.get("dataRecovery") else "output-invalid" if result["quality"]["status"] == "rejected" else "ready"),
                         result["quality"].get("errors", []))
+                    from ..domain.purpose_quality import wait_metadata
+                    result["processingOutcome"].update(wait_metadata(result))
                     if observation_abstention.enabled(packet):
                         result["abstention"] = observation_abstention.assessment(result)
                     children = []

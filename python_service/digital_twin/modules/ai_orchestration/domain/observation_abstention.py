@@ -81,6 +81,9 @@ def assessment(result):
         code = "execution-failed"
     elif result.get("quality", {}).get("status") == "rejected":
         code = "output-invalid"
+    elif result.get("quality", {}).get("status") == "not-published":
+        from .purpose_quality import wait_metadata
+        code = wait_metadata(result).get("reasonCode", "not-requested")
     elif "not-delivered" in statuses:
         code = "source-not-delivered"
     elif "metadata-only" in statuses:

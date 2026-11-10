@@ -78,6 +78,31 @@ def authored_company(save=lambda env: "frozen", task_id=""):
 
 
 class InvestmentMeaningTests(unittest.TestCase):
+    def test_insufficient_company_analysis_is_a_data_wait_without_customer_conditions(self):
+        from digital_twin.modules.ai_orchestration.domain import purpose_quality
+        from digital_twin.modules.ai_orchestration.domain.planning import validate_plan
+        from digital_twin.modules.ai_orchestration.domain.observation_wait import disposition, unchanged_wait
+        from digital_twin.modules.ai_orchestration.domain.evidence_purpose import authored_status
+        r, author = authored_company()
+        p = deepcopy(r['input']); p[purpose_quality.FIELD] = purpose_quality.VERSION
+        raw = {k: deepcopy(r[k]) for k in author['outputSchema']['properties'] if k in r}
+        raw['questions'] = deepcopy(r['workQuestions'])
+        raw['notification']['send'] = False
+        raw['investmentMeaning']['status'] = 'insufficient'
+        raw.update(observations=[], followUpConditions=[])
+        new = {**validate_plan(raw, p), 'input': p}
+        new['quality'] = local_quality(new)
+        self.assertEqual('not-published', new['quality']['status'])
+        metadata = purpose_quality.wait_metadata(new)
+        self.assertEqual('evidence-insufficient', metadata['reasonCode'])
+        self.assertEqual(raw['investmentMeaning']['nextCheck']['source'], metadata['requiredEvidence'][0]['source'])
+        wait = disposition(p, 'same-source', authored_status(new), [])
+        wait.update(metadata)
+        self.assertTrue(unchanged_wait(wait, 'same-source'))
+        self.assertFalse(unchanged_wait(wait, 'new-source'))
+        bad = deepcopy(new); bad['investmentMeaning']['evidence'][0]['field'] = 'invented'
+        self.assertEqual('rejected', local_quality(bad)['status'])
+
     def test_argument_revision_preserves_sources_legacy_inputs_and_repeat_identity(self):
         from digital_twin.modules.ai_orchestration.domain import argument_quality as argument, execution_lanes
         r, legacy = authored_company()

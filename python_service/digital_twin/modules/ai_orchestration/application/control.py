@@ -242,8 +242,7 @@ class AIControlService:
                         parked_key = retry_key({**packet, "questionWorkPending": previous_outcome["questionWorkPending"]}, research)
                         if unchanged_wait(previous_outcome, parked_key):
                             retry_identity = parked_key
-                    same_quote_wait = (bool(packet.get("priceInvestigationPolicy"))
-                        and previous_outcome.get("reasonCode") == "current-quote"
+                    same_quote_wait = (previous_outcome.get("reasonCode") == "current-quote"
                         and bool(previous_outcome.get("quoteWaitKey"))
                         and previous_outcome["quoteWaitKey"] == evidence_purpose.quote_wait_key(packet, research))
                     due_thesis_review = (previous_outcome.get("reasonCode") == "insight-source-gaps"

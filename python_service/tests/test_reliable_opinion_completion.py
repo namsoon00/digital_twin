@@ -98,6 +98,35 @@ class ReliableOpinionCompletionTests(unittest.TestCase):
             self.assertEqual(expected, retrieval_budget.blockage({'retrieval': {'status': status, 'steps': [{'action': action}]}})['reasonCode'])
         self.assertEqual({}, retrieval_budget.blockage({'retrieval': {'status': 'deferred', 'steps': []}}))
 
+    def test_pending_gaps_survive_a_read_without_a_paid_correction_or_false_completion(self):
+        from test_efficient_retrieval import decision
+        value, saved = packet(), []
+        gap = '연간 매출 원문의 비교 기준을 확인해야 합니다.'
+        def save(env):
+            validate_execution_input(env); saved.append(deepcopy(env)); return 'read-' + str(len(saved))
+        def choose(env, _):
+            raw = decision('read', [{'tool': 'read_report', 'factId': 'report-2025-12-31', 'metrics': ['revenue']}]) if len(saved) == 1 else decision('finish')
+            if raw['action'] == 'read': raw['missingEvidence'] = [gap]
+            return raw
+        model = Mock(side_effect=choose)
+        final, history, memories, trace = retrieve_working_evidence(ObservationEvidenceSession(value, value['facts']),
+            value, [], [], model, save, 262144)
+        self.assertEqual('ready', final['retrieval']['status'])
+        self.assertEqual(2, model.call_count)
+        self.assertEqual([gap], trace[0]['decision']['missingEvidence'])
+        self.assertEqual('none', trace[0]['decision']['blocker'])
+        self.assertFalse(any(row['correction'] for row in trace))
+        self.assertEqual([], trace[1]['decision']['missingEvidence'])
+        self.assertNotIn('summary', final)  # A successful read still needs authoring and review.
+        validate_execution_input(freeze_execution_input(final, history, memories, retrieval_trace=trace))
+        read = {**decision('read', [{'tool': 'read_report', 'factId': 'report-2025-12-31', 'metrics': ['revenue']}]),
+                'missingEvidence': [gap]}
+        self.assertEqual([gap], reliable.validate_decision(read)['missingEvidence'])
+        with self.assertRaises(ReadRequestError): reliable.validate_decision({**read, 'blocker': 'required-source'})
+        with self.assertRaises(ReadRequestError): reliable.validate_decision({**read, 'action': 'defer', 'requests': []})
+        parked = reliable.validate_decision({**read, 'action': 'finish', 'requests': []})
+        self.assertEqual(('defer', 'required-source'), (parked['action'], parked['blocker']))
+
     def test_retry_reopens_current_report_and_finishes_without_repeating_the_read_plan(self):
         from digital_twin.modules.ai_orchestration.domain import read_continuation, focused_retrieval
         from digital_twin.modules.reasoning.contracts import HISTORICAL_CONTEXT_BUDGET_POLICY

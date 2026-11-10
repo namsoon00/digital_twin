@@ -45,7 +45,7 @@ def validate_decision(raw):
         blocker = "required-source"  # Keep V8's unpaid, conservative canonicalization.
     if (blocker == "current-quote" and (raw["purpose"] != "current-state" or value["action"] != "defer")
             or value["action"] in {"read", "finish"} and blocker != "none"
-            or value["missingEvidence"] and blocker == "none"):
+            or value["action"] != "read" and value["missingEvidence"] and blocker == "none"):
         raise ReadRequestError([issue("blocker", "현재 시세 대기는 current-state/defer, 필수 부족 항목은 required-source")])
     return {**value, "purpose": raw["purpose"], "blocker": blocker}
 

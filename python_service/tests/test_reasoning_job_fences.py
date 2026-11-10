@@ -28,7 +28,7 @@ class ReasoningJobFenceTests(StabilizationDatabaseCase):
         self.assertTrue(all(row["sourceSnapshotAt"] == boundary for row in selected))
         self.assertEqual(untouched, self.sql("SELECT * FROM reasoning_engine_jobs WHERE job_id=%s", (untouched["job_id"],)))
 
-    def test_claim_honors_aged_job_before_new_high_priority_work(self):
+    def test_claim_keeps_explicit_critical_priority_ahead_of_an_aged_job(self):
         from datetime import datetime, timezone, timedelta
         for symbol in ("AAPL", "NVDA"):
             self.events.handle(self.source(symbol))
@@ -38,7 +38,74 @@ class ReasoningJobFenceTests(StabilizationDatabaseCase):
         self.sql("UPDATE reasoning_engine_jobs SET created_at=%s, priority=1 WHERE job_id=%s", (old, rows[0]["job_id"]))
         self.sql("UPDATE reasoning_engine_jobs SET priority=100 WHERE job_id=%s", (rows[1]["job_id"],))
         selected = self.jobs.claim(self.deployment, "fair-worker", 1, 60)
-        self.assertEqual(rows[0]["job_id"], selected[0]["jobId"])
+        self.assertEqual(rows[1]["job_id"], selected[0]["jobId"])
+
+    def test_latest_state_turns_keep_durable_history_fairness_sources_and_atomic_claims(self):
+        from datetime import datetime, timezone, timedelta
+        from digital_twin.modules.reasoning.infrastructure.mysql_engine_runtime import MySQLReasoningEngineJobStore
+        from digital_twin.modules.reasoning.infrastructure import mysql_engine_runtime as runtime
+        now = datetime.now(timezone.utc)
+        stamp = lambda seconds: (now - timedelta(seconds=seconds)).isoformat().replace("+00:00", "Z")
+        events = [self.source(symbol, stamp=stamp(age)) for symbol, age in (("AAPL",600),("NVDA",2),("MSFT",1))]
+        for event in events:
+            self.events.handle(event)
+        self.sql("UPDATE reasoning_engine_jobs SET created_at=%s WHERE deployment_id=%s AND source_event_id=%s",
+                 (stamp(300), self.deployment, events[0].event_id))
+        original = self.sql("SELECT job_id,request_json,source_snapshot_at,source_snapshot_id,source_boundary_json,source_payload_hash,created_at "
+                            "FROM reasoning_engine_jobs WHERE deployment_id=%s ORDER BY job_id", (self.deployment,), all_rows=True)
+        foreign = self.deployment + ":other"
+        self.sql("INSERT INTO reasoning_engine_claim_turns VALUES (%s,2,%s)", (foreign, stamp(0)))
+        first = self.jobs.claim(self.deployment, "first-worker", 1, 60)[0]
+        self.assertEqual(["MSFT"], first["request"]["symbols"])
+        # A worker restart must not reset the fairness debt.
+        replacement = MySQLReasoningEngineJobStore(self.settings)
+        second = replacement.claim(self.deployment, "replacement-worker", 1, 60)[0]
+        self.assertEqual(["NVDA"], second["request"]["symbols"])
+        third = replacement.claim(self.deployment, "replacement-worker", 1, 60)[0]
+        self.assertEqual(["AAPL"], third["request"]["symbols"])
+        self.assertEqual(original, self.sql(
+            "SELECT job_id,request_json,source_snapshot_at,source_snapshot_id,source_boundary_json,source_payload_hash,created_at "
+            "FROM reasoning_engine_jobs WHERE deployment_id=%s ORDER BY job_id", (self.deployment,), all_rows=True))
+        self.assertEqual(2, self.sql("SELECT live_streak FROM reasoning_engine_claim_turns WHERE deployment_id=%s", (foreign,))["live_streak"])
+        before = self.sql("SELECT * FROM reasoning_engine_claim_turns WHERE deployment_id=%s", (self.deployment,))
+        self.assertEqual([], replacement.claim(self.deployment, "idle-worker", 1, 60))
+        self.assertEqual(before, self.sql("SELECT * FROM reasoning_engine_claim_turns WHERE deployment_id=%s", (self.deployment,)))
+        self.events.handle(self.source("GOOG", stamp=stamp(0)))
+        pending = self.sql("SELECT * FROM reasoning_engine_jobs WHERE deployment_id=%s AND job_status='queued'", (self.deployment,))
+        finish = runtime.finish_claim_turn
+
+        def fail_after_cursor(*args):
+            finish(*args)
+            raise RuntimeError("claim cursor rollback")
+
+        with patch.object(runtime, "finish_claim_turn", side_effect=fail_after_cursor):
+            with self.assertRaisesRegex(RuntimeError, "claim cursor rollback"):
+                replacement.claim(self.deployment, "failed-worker", 1, 60)
+        self.assertEqual(pending, self.sql("SELECT * FROM reasoning_engine_jobs WHERE job_id=%s", (pending["job_id"],)))
+        self.assertEqual(before, self.sql("SELECT * FROM reasoning_engine_claim_turns WHERE deployment_id=%s", (self.deployment,)))
+
+        # Mixed/durable and latest-state slots for a shared market subject
+        # cannot run in reverse source order, even across different accounts.
+        older = self.source("AMZN", stamp=stamp(10))
+        older.payload.update(workClass="GOVERNANCE", importanceGate="non-fungible")
+        newer = self.source("AMZN", account="another-account", stamp=stamp(1))
+        for event in (older, newer):
+            self.events.handle(event)
+            self.sql("UPDATE reasoning_engine_jobs SET priority=101 WHERE deployment_id=%s AND source_event_id=%s",
+                     (self.deployment, event.event_id))
+        oldest = replacement.claim(self.deployment, "ordered-worker", 1, 60)[0]
+        self.assertEqual(older.event_id, oldest["sourceEventId"])
+        self.assertEqual("queued", self.sql("SELECT job_status FROM reasoning_engine_jobs WHERE deployment_id=%s AND source_event_id=%s",
+                                          (self.deployment, newer.event_id))["job_status"])
+        other = replacement.claim(self.deployment, "second-worker", 1, 60)
+        self.assertTrue(all(row["sourceEventId"] != newer.event_id for row in other))
+        replacement.retry(oldest["jobId"], "retry after source check", 60,
+                          worker_id="ordered-worker", claimed_at=oldest["claimedAt"])
+        self.assertEqual([], replacement.claim(self.deployment, "waiting-worker", 1, 60))
+        self.sql("UPDATE reasoning_engine_jobs SET available_at='' WHERE job_id=%s", (oldest["jobId"],))
+        retried = replacement.claim(self.deployment, "ordered-worker", 1, 60)[0]
+        replacement.complete(retried["jobId"], {}, worker_id="ordered-worker", claimed_at=retried["claimedAt"])
+        self.assertEqual(newer.event_id, replacement.claim(self.deployment, "latest-worker", 1, 60)[0]["sourceEventId"])
 
     def test_fenced_job_rejects_every_late_transition_without_changing_new_owner(self):
         job = self.claimed_job("old-worker")
@@ -183,6 +250,7 @@ class ReasoningJobFenceTests(StabilizationDatabaseCase):
         )
         self.assertEqual({"stabilization"}, {r["account_id"] for r in lineage})
         self.assertEqual({"AAPL"}, {r["symbol"] for r in lineage})
+        self.jobs.complete(job["jobId"], {}, worker_id="fixture-worker", claimed_at=job["claimedAt"])
         other = self.claimed_job("other-worker", account="another-account")
         self.assertNotEqual(other["scopeKey"], job["scopeKey"])
 

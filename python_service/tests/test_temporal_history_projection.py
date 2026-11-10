@@ -121,6 +121,70 @@ class TemporalHistoryStorageTests(StabilizationDatabaseCase):
             return connection.execute("SELECT * FROM monitor_snapshot_history WHERE account_id=%s AND generated_at=%s",
                                       (self.account, stamp)).fetchone()
 
+    def test_indexed_group_tails_preserve_windows_cutoff_accounts_rows_and_exact_watermark(self):
+        from datetime import datetime, timezone, timedelta
+        from digital_twin.modules.market_data.infrastructure import mysql_market_time_series as module
+        from digital_twin.modules.market_data.infrastructure.mysql_market_time_series import MySQLMarketTimeSeriesStore
+        from digital_twin.modules.market_data.infrastructure.mysql_temporal_reads import latest_group_rows
+        import uuid
+        account = "temporal-tail:" + uuid.uuid4().hex
+        symbols = ["TAIL" + uuid.uuid4().hex[:8].upper() for _ in range(3)]
+        base = datetime(2026,9,10,tzinfo=timezone.utc)
+        stamp = lambda at: at.isoformat().replace("+00:00", "Z")
+        cutoff = stamp(base + timedelta(minutes=90))
+        store = MySQLMarketTimeSeriesStore({**self.settings, "marketTimeSeriesMaxPointsPerWindow": "20"})
+        with store.transaction() as connection:
+            for owner in [account, "__market_data__", account + ":foreign"]:
+                for symbol in symbols:
+                    for granularity, count in [("3m",40),("1d",25)]:
+                        for index in range(count):
+                            bucket = base + timedelta(minutes=index*3) if granularity == "3m" else base - timedelta(days=25-index)
+                            observed = bucket + timedelta(minutes=1)
+                            if index == 27:
+                                observed = base + timedelta(days=1)
+                            connection.execute(
+                                "INSERT INTO market_time_series_observations "
+                                "(account_id,symbol,granularity,bucket_at,observed_at,source_as_of,provider,source_role,market,currency,current_price,data_quality,investor_coverage_json) "
+                                "VALUES (%s,%s,%s,%s,%s,%s,'fixture','market-history','KR','KRW',%s,'actual',%s)",
+                                (owner,symbol,granularity,stamp(bucket),stamp(observed),stamp(bucket),100+index,json.dumps({"fixture":index})))
+        definitions = temporal.parse_temporal_windows("1D=1d:2;20D=20d:2;30M=30m:2")
+
+        def legacy(connection, accounts, subjects, granularity, boundary, limit):
+            placeholders = ",".join(["%s"] * len(subjects))
+            return connection.execute(
+                "SELECT * FROM (SELECT observations.*, ROW_NUMBER() OVER (PARTITION BY account_id,symbol ORDER BY bucket_at DESC) AS row_number_value "
+                "FROM market_time_series_observations observations WHERE account_id IN (%s,%s) AND granularity=%s "
+                "AND symbol IN (" + placeholders + ")" + (" AND observations.observed_at <= %s" if boundary else "")
+                + ") ranked WHERE ranked.row_number_value<=%s ORDER BY bucket_at DESC",
+                (*accounts,granularity,*subjects,*((boundary,) if boundary else ()),limit)).fetchall()
+
+        with store.connect() as connection:
+            before = connection.execute("SELECT * FROM market_time_series_observations WHERE symbol IN (" + ",".join(["%s"]*len(symbols)) + ") ORDER BY account_id,symbol,granularity,bucket_at",symbols).fetchall()
+            expected_watermark = connection.execute("SELECT MAX(observed_at) AS latest FROM market_time_series_observations").fetchone()["latest"]
+        for boundary in [cutoff, "", stamp(base-timedelta(days=30))]:
+            with patch.object(module, "latest_group_rows", side_effect=legacy):
+                expected = store.load_temporal_windows(account,symbols,definitions,as_of=boundary)
+            actual = store.load_temporal_windows(account,symbols,definitions,as_of=boundary)
+            self.assertEqual(expected, actual)
+        self.assertEqual(expected_watermark, store.watermark().observed_through)
+        with store.connect() as connection:
+            after = connection.execute("SELECT * FROM market_time_series_observations WHERE symbol IN (" + ",".join(["%s"]*len(symbols)) + ") ORDER BY account_id,symbol,granularity,bucket_at",symbols).fetchall()
+            self.assertEqual(before,after)
+            connection.execute("DELETE FROM market_time_series_observations WHERE symbol IN (" + ",".join(["%s"]*len(symbols)) + ") AND observed_at>%s", (*symbols,cutoff))
+            current = connection.execute("SELECT MAX(observed_at) AS latest FROM market_time_series_observations").fetchone()["latest"]
+        self.assertEqual(current,store.watermark().observed_through)
+        # A failed later group never becomes an apparently complete history.
+        calls = []
+        def fail_later(sql, params):
+            calls.append((sql,params))
+            if len(calls) == 2:
+                raise TimeoutError("later temporal group failed")
+            return SimpleNamespace(fetchall=lambda: [{"retained":True}])
+        with self.assertRaisesRegex(TimeoutError,"later temporal group failed"):
+            latest_group_rows(SimpleNamespace(execute=fail_later),[account,"__market_data__"],symbols,"3m",cutoff,20)
+        self.assertEqual(2,len(calls))
+        self.assertTrue(all(sql.count("LIMIT %s")<=4 and "ROW_NUMBER" not in sql for sql,_ in calls))
+
     def test_prepared_reads_preserve_replay_order_limit_account_and_source(self):
         for minute in [1, 2, 3]:
             self.save(history_state("2026-07-29T00:0%d:00Z" % minute))

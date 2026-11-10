@@ -9,6 +9,7 @@ from digital_twin.modules.portfolio.contracts import AccountSnapshot, utc_now_is
 from digital_twin.modules.reasoning.contracts import trim_to_recent_sessions, window_rows
 from digital_twin.modules.market_data.domain.time_series_storage import TIME_SERIES_CONTRACT_VERSION, TimeSeriesBackendDescriptor, TimeSeriesCapabilities, TimeSeriesWatermark
 from digital_twin.infrastructure.mysql_operational_connection import MySQLOperationalConnection
+from .mysql_temporal_reads import latest_group_rows, temporal_read_snapshot
 
 
 GLOBAL_MARKET_ACCOUNT_ID = "__market_data__"
@@ -122,7 +123,10 @@ class MySQLMarketTimeSeriesStore(MySQLOperationalConnection):
         try:
             with self.connect() as connection:
                 row = connection.execute(
-                    "SELECT MAX(observed_at) AS observed_through FROM market_time_series_observations"
+                    "SELECT /* operation:temporal-watermark */ MAX(observed_through) AS observed_through "
+                    "FROM (SELECT MAX(observed_at) AS observed_through FROM market_time_series_observations "
+                    "FORCE INDEX (idx_market_time_series_snapshot_cutoff) "
+                    "GROUP BY account_id,symbol,granularity) source_groups"
                 ).fetchone() or {}
             return TimeSeriesWatermark(
                 backend_id=self.backend_id,
@@ -827,32 +831,12 @@ class MySQLMarketTimeSeriesStore(MySQLOperationalConnection):
         })
         grouped: Dict[tuple, List[Dict[str, object]]] = defaultdict(list)
         per_group = self.max_points_per_window()
-        placeholders = ",".join(["%s"] * len(clean_symbols))
-        with self.connect() as connection:
+        with self.connect() as connection, temporal_read_snapshot(connection):
             for granularity in granularities:
-                cutoff_clause = " AND observations.observed_at <= %s" if observation_cutoff else ""
-                query_params = [str(account_id or ""), GLOBAL_MARKET_ACCOUNT_ID, granularity, *clean_symbols]
-                if observation_cutoff:
-                    query_params.append(observation_cutoff)
-                query_params.append(per_group)
-                rows = connection.execute(
-                    """
-                    SELECT * FROM (
-                        SELECT observations.*,
-                               ROW_NUMBER() OVER (
-                                   PARTITION BY account_id, symbol
-                                   ORDER BY bucket_at DESC
-                               ) AS row_number_value
-                        FROM market_time_series_observations observations
-                        WHERE account_id IN (%s, %s)
-                          AND granularity = %s
-                          AND symbol IN (""" + placeholders + ")" + cutoff_clause + """
-                    ) ranked
-                    WHERE ranked.row_number_value <= %s
-                    ORDER BY bucket_at DESC
-                    """,
-                    query_params,
-                ).fetchall()
+                rows = latest_group_rows(
+                    connection, [str(account_id or ""), GLOBAL_MARKET_ACCOUNT_ID],
+                    clean_symbols, granularity, observation_cutoff, per_group,
+                )
                 for row in rows:
                     key = (str(row.get("account_id") or ""), str(row.get("symbol") or "").upper(), granularity)
                     if len(grouped[key]) < per_group:

@@ -522,7 +522,9 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # and lossless coverage index installation.
         # One shadow-history regression preserves scope, limit/order, a
         # consistent read snapshot and fail-closed bounded payload batches.
-        self.assertLessEqual(total, 3090)
+        # Two latency contracts cover durable latest/fair source-ordered
+        # claims and exact indexed temporal reads/watermarks on real MySQL.
+        self.assertLessEqual(total, 3092)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

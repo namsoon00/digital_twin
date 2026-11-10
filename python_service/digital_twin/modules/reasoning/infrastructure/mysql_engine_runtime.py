@@ -1,6 +1,7 @@
 from .job_ownership import lock_job_claim
 from digital_twin.modules.reasoning.domain.reasoning_batch import reasoning_batch_key, reasoning_batch_fits
 from .job_receipts import publish_job_receipts
+from .claim_scheduling import claim_turn, claim_order, finish_claim_turn, source_predecessor_filter
 import os
 import socket
 import uuid
@@ -1972,15 +1973,13 @@ class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
             else ""
         )
         with self.connect() as connection:
+            order, order_params = claim_order(claim_turn(connection, deployment_id), aged_cutoff)
             row = connection.execute(
                 "SELECT reasoning_lane FROM reasoning_engine_jobs WHERE deployment_id = %s "
                 "AND job_status IN ('queued', 'retry', 'awaiting_world_projection') AND (available_at = '' OR available_at <= %s) "
-                + boundary_filter +
-                "ORDER BY CASE WHEN created_at <= %s THEN 0 ELSE 1 END, "
-                "CASE WHEN created_at <= %s THEN created_at ELSE '' END, "
-                "priority DESC, CASE reasoning_lane WHEN 'REALTIME' THEN 0 "
-                "WHEN 'CONTEXT' THEN 1 ELSE 2 END, created_at, job_id LIMIT 1",
-                (str(deployment_id or ""), stamp, aged_cutoff, aged_cutoff),
+                + boundary_filter + source_predecessor_filter() +
+                "ORDER BY " + order + " LIMIT 1",
+                (str(deployment_id or ""), stamp, *order_params),
             ).fetchone()
         return str((row or {}).get("reasoning_lane") or "")
 
@@ -2023,6 +2022,8 @@ class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
             )
             lane_filter = " AND reasoning_lane = %s" if str(reasoning_lane or "") else ""
             lane_params = (str(reasoning_lane or ""),) if lane_filter else ()
+            streak = claim_turn(connection, str(deployment_id or ""), lock=True, stamp=stamp)
+            order, order_params = claim_order(streak, aged_cutoff)
             columns = "job_id, request_json" if bounded > 1 else "*"
             rows = connection.execute(
                 "SELECT " + columns + """ FROM reasoning_engine_jobs
@@ -2030,14 +2031,9 @@ class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
                   AND job_status IN ('queued', 'retry', 'awaiting_world_projection')
                   AND (available_at = '' OR available_at <= %s)
                   AND (lease_expires_at = '' OR lease_expires_at < %s)
-                """ + boundary_filter + lane_filter + """
-                ORDER BY CASE WHEN created_at <= %s THEN 0 ELSE 1 END,
-                    CASE WHEN created_at <= %s THEN created_at ELSE '' END,
-                    priority DESC, CASE reasoning_lane WHEN 'REALTIME' THEN 0
-                    WHEN 'CONTEXT' THEN 1 ELSE 2 END, created_at, job_id
-                LIMIT %s FOR UPDATE SKIP LOCKED
-                """,
-                (str(deployment_id or ""), stamp, stamp, *lane_params, aged_cutoff, aged_cutoff, lookahead),
+                """ + boundary_filter + lane_filter + source_predecessor_filter() + " ORDER BY " + order
+                + " LIMIT %s FOR UPDATE SKIP LOCKED",
+                (str(deployment_id or ""), stamp, stamp, *lane_params, *order_params, lookahead),
             ).fetchall()
             if rows and bounded > 1:
                 def compatible_key(row):
@@ -2096,6 +2092,7 @@ class MySQLReasoningEngineJobStore(MySQLOperationalConnection):
                     stamp, stamp, stamp, *job_ids,
                 ),
             )
+            finish_claim_turn(connection, str(deployment_id or ""), streak, rows[0], stamp)
         return [
             self.row_payload(
                 {

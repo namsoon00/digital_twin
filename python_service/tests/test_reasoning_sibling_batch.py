@@ -154,7 +154,7 @@ class SiblingExecutionBatchTests(unittest.TestCase):
 class SiblingExecutionClaimTests(StabilizationDatabaseCase):
     def test_claim_groups_only_same_source_siblings_and_leaves_overflow_untouched(self):
         events = sibling_events(("AAA", "BBB", "CCC"), parent=self.deployment)
-        other = sibling_events(("OTHER",), parent=self.deployment + ":other")[0]
+        other = sibling_events(("OTHER",), at=events[0].occurred_at, parent=self.deployment + ":other")[0]
         old_limit = self.jobs.runtime_settings.get("typedbNativeRuleTargetSymbolLimit")
         self.addCleanup(self.jobs.runtime_settings.__setitem__, "typedbNativeRuleTargetSymbolLimit", old_limit)
         self.jobs.runtime_settings["typedbNativeRuleTargetSymbolLimit"] = 2

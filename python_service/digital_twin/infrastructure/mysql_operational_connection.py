@@ -16,6 +16,7 @@ from .mysql_retention import (
 )
 from .mysql_schema_tuning import ensure_mysql_operational_schema_tuning, mysql_partitioning_mode
 from .mysql_connection_pool import MySQLPoolTimeout, MySQLPoolUnavailable, mysql_operation_timeout_seconds, pooled_mysql_connection
+from .mysql_operation_telemetry import slow_mysql_operation
 
 
 _FALSEY_VALUES = {"", "0", "false", "no", "off", "disabled"}
@@ -280,34 +281,50 @@ class MySQLConnectionProxy:
         self.connection = connection
         self.release = release
         self.closed = False
+        self._previous_statement = ""
 
     def execute(self, sql: str, params=None):
         started_at = time.monotonic()
         cursor = self.connection.cursor()
+        failure = None
         try:
             cursor.execute(sql, params or ())
         except Exception as error:
+            failure = error
             attach_mysql_error_context(error, sql, started_at)
             raise
+        finally:
+            self._previous_statement = sql
+            slow_mysql_operation(self.connection, sql, started_at, failure)
         return cursor
 
     def executemany(self, sql: str, rows):
         started_at = time.monotonic()
         cursor = self.connection.cursor()
+        failure = None
         try:
             cursor.executemany(sql, list(rows or []))
         except Exception as error:
+            failure = error
             attach_mysql_error_context(error, sql, started_at)
             raise
+        finally:
+            self._previous_statement = sql
+            slow_mysql_operation(self.connection, sql, started_at, failure)
         return cursor
 
     def commit(self) -> None:
         started_at = time.monotonic()
+        failure = None
         try:
             self.connection.commit()
         except Exception as error:
+            failure = error
             attach_mysql_error_context(error, "COMMIT", started_at)
             raise
+        finally:
+            slow_mysql_operation(self.connection, "COMMIT", started_at, failure,
+                                 previous_statement=self._previous_statement)
 
     def rollback(self) -> None:
         self.connection.rollback()
@@ -399,12 +416,30 @@ class MySQLOperationalConnection:
         )
 
     def connect(self):
-        connection, release = self.pooled_connection(autocommit=True)
+        started_at = time.monotonic()
+        connection = None
+        failure = None
+        try:
+            connection, release = self.pooled_connection(autocommit=True)
+        except Exception as error:
+            failure = error
+            raise
+        finally:
+            slow_mysql_operation(connection, "POOL ACQUIRE", started_at, failure)
         return MySQLConnectionProxy(connection, release=release)
 
     @contextmanager
     def transaction(self):
-        connection, release = self.pooled_connection(autocommit=False)
+        started_at = time.monotonic()
+        connection = None
+        failure = None
+        try:
+            connection, release = self.pooled_connection(autocommit=False)
+        except Exception as error:
+            failure = error
+            raise
+        finally:
+            slow_mysql_operation(connection, "POOL ACQUIRE", started_at, failure)
         proxy = MySQLConnectionProxy(connection, release=release)
         try:
             yield proxy
@@ -1944,6 +1979,13 @@ MYSQL_SCHEMA = [
         delivery_deployment_id VARCHAR(191) NOT NULL DEFAULT '',
         candidate_deployment_id VARCHAR(191) NOT NULL DEFAULT '',
         version BIGINT NOT NULL DEFAULT 0,
+        updated_at VARCHAR(40) NOT NULL
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS reasoning_engine_claim_turns (
+        deployment_id VARCHAR(191) PRIMARY KEY,
+        live_streak INT NOT NULL DEFAULT 0,
         updated_at VARCHAR(40) NOT NULL
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     """,

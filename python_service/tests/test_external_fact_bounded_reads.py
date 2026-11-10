@@ -233,6 +233,34 @@ class ExternalFactBoundedReadsTests(unittest.TestCase):
         self.assertEqual(label, error.orbit_mysql_statement)
         self.assertNotIn("subject_key", error.orbit_mysql_statement)
         self.assertEqual("SELECT external_fact_revision", mysql_statement_label("SELECT * FROM external_fact_revision"))
+        from io import StringIO
+        from unittest.mock import Mock
+        from digital_twin.infrastructure import mysql_operation_telemetry as telemetry
+        connection = Mock()
+        connection.thread_id.return_value = 72
+        output = StringIO()
+        failure = RuntimeError(2013, "private-token and raw source contents")
+        with patch.object(telemetry, "time", SimpleNamespace(monotonic=lambda: 12)), \
+             patch.object(telemetry.sys, "stderr", output), \
+             patch.dict(telemetry.os.environ, {"ORBIT_MYSQL_SLOW_OPERATION_MS": "1000"}):
+            telemetry.slow_mysql_operation(connection, sql + " AND api_key='private-token'", 10)
+            telemetry.slow_mysql_operation(connection, "COMMIT", 10, failure,
+                                           previous_statement=sql + " AND api_key='private-token'")
+            telemetry.slow_mysql_operation(connection, "POOL ACQUIRE", 10)
+            telemetry.slow_mysql_operation(connection, sql, 11.9)
+        records = [json.loads(line) for line in output.getvalue().splitlines()]
+        self.assertEqual([label, "COMMIT", "POOL ACQUIRE"], [row["operation"] for row in records])
+        self.assertTrue(all(row["elapsedMs"] == 2000 and row["connectionId"] == 72 for row in records))
+        self.assertEqual(2013, records[1]["errorCode"])
+        self.assertEqual(label, records[1]["previousOperation"])
+        self.assertNotIn("private-token", output.getvalue())
+        self.assertNotIn("raw source", output.getvalue())
+        connection.cursor.assert_not_called()
+        with patch.object(telemetry, "time", SimpleNamespace(monotonic=lambda: 12)), \
+             patch.dict(telemetry.os.environ, {"ORBIT_MYSQL_SLOW_OPERATION_MS": "0"}), \
+             patch("builtins.print") as disabled:
+            telemetry.slow_mysql_operation(connection, "COMMIT", 0)
+            disabled.assert_not_called()
 
 
 class ExternalCollectorResilienceTests(unittest.TestCase):

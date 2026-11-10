@@ -1821,6 +1821,8 @@ class IndependentReasoningEngineTests(unittest.TestCase):
     def test_mysql_queue_claim_retries_deadlock_without_repeating_inference(self):
         class Connection:
             def execute(self, sql, _params=()):
+                if sql.startswith("SELECT live_streak"):
+                    return SimpleNamespace(fetchone=lambda: {"live_streak": 0})
                 if sql.lstrip().startswith("SELECT *"):
                     return SimpleNamespace(fetchall=lambda: [{
                         "job_id": "job:retry-once",

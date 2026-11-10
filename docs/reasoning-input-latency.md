@@ -1,5 +1,54 @@
 # Reasoning Input Latency
 
+## Source-aware queue turns and indexed temporal reads (2026-11-10)
+
+An entry that waited two minutes previously preempted fresh live work on every
+turn. Queue creation time intentionally survives mailbox coalescing, so a slot
+could contain fresh quotes yet keep an old scheduling debt. Normal turns now
+prefer the newest supersedable realtime source within its existing priority.
+After two live micro-batches, the oldest eligible pending work gets a turn;
+explicit critical/paired-validation priority remains first. The turn cursor is
+per deployment and commits atomically with the claims. Empty/failed claims and
+worker restarts cannot erase or consume fairness debt. No source, request,
+queue-entry time, priority, evidence or delivery contract is rewritten.
+
+Different mixed-fact and current-state slots can exist for one subject. An
+older unfinished source for that subject is a dependency even across accounts
+and during a delayed retry. Both lane selection and claiming enforce it, so
+newer work cannot run first and then be rolled back by the older frozen source.
+Unknown subject boundaries conservatively overlap. The indexed pending slice
+is inspected; completed source history is not scanned. Durable research and
+unique events retain their normal execution rather than being discarded to
+make a queue-age statistic look better.
+
+The raw temporal reader now fetches the exact newest N rows per account/symbol/
+granularity using primary-key tails, at most four source groups per statement,
+instead of ranking each full group with ROW_NUMBER. A read-only consistent
+snapshot covers all batches and granularities. Cutoffs, per-group limits,
+global/account preference, daily selection, flow enrichment and row contents
+remain unchanged; a later batch failure fails the entire read. Very old replay
+cutoffs can still require walking rejected tail rows. This is not a newly
+bounded historical replay guarantee.
+
+The global source watermark was a hot, unindexed MAX(observed_at) over every
+observation. It is now the exact maximum of indexed group maxima, using the
+existing account/symbol/granularity/observed_at index and no history mutation or
+DDL on the large table. In one read-only production comparison the old query
+exceeded its 1.5-second server deadline (1,684 ms elapsed); grouped maxima
+completed in 165 ms. This is a component measurement, not total alert latency.
+The real-MySQL temporal contract compares complete windows against the original
+ranked query, foreign/future/empty cases, unchanged raw rows, exact watermark
+after deletion, and a failing later batch.
+
+Passive MySQL receipts now distinguish slow statement, COMMIT and pool-acquire
+time without issuing diagnostic queries. They contain only safe operation
+labels, numeric connection/process/error IDs, timestamps and elapsed time;
+no SQL parameters, payloads or exception text. The default threshold is 1,000 ms
+(`ORBIT_MYSQL_SLOW_OPERATION_MS=0` disables it). Telemetry failure cannot change
+transaction, retry, timeout or durability behavior. Production COMMIT durability
+is unchanged. Full source-to-delivery latency still requires a fresh live
+execution and, for actual transport, an eligible customer notification receipt.
+
 ## Source-bound preparation and source-audit retry (2026-11-10)
 
 Context reuse must retain the exact source observation clock. Material-value

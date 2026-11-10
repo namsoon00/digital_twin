@@ -28,5 +28,6 @@
     "bodyHash": "33ea6afe9fa480ff94d4fd068b4f11fe2d55b5365340d710313e1f2e3dda2c84",
     "reason": "Bind raw model evidence conditions to the immutable deployment feature version. V2 retains zero-stale path conditions; V3 requires a filtered valid price path and usable latest observation. Active world rule IDs still bound the model inventory.",
     "regressionTest": "test_ontology_rulebox.OntologyRuleBoxTests.test_temporal_path_excludes_bad_samples_but_retains_quality_and_source_clock"
+  },
+    "build_projection_graph": {"baselineHash": "443878d4413a3322831f3851276b7c222c70a78e382f1bd9542a01943c3cb09e", "bodyHash": "1ac438c9fc8028e424a59767cf5c770f8b04b31d30399c94b0e7c12e46f7dd9c", "reason": "After factual/model assembly and scoped identity, bind target quality-source completeness to the actual selected symbols, original account/source snapshot, world and exact scope-plan fingerprint. A partial portfolio stays partial; full/legacy images gain no omission authority. Cached assembly is re-attested after identity. This removes only unnecessary complete-source reconstruction for verified target quality assertions.", "regressionTest": "test_projection_input_ownership.ProjectionInputOwnershipTests.test_target_quality_coverage_is_bound_to_actual_factual_assembly"}
   }
-}

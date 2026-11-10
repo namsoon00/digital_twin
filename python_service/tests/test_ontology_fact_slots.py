@@ -26,6 +26,11 @@ from digital_twin.modules.reasoning.domain.ontology_scopes import (
     plan_target_scoped_manifest_patch,
     select_target_scoped_manifest_patch,
 )
+from digital_twin.modules.reasoning.domain.target_source_coverage import (
+    TARGET_QUALITY_COVERAGE_KEY,
+    attach_target_quality_coverage,
+    complete_target_quality_scope_ids,
+)
 
 
 class OntologyFactSlotTests(unittest.TestCase):
@@ -1783,6 +1788,78 @@ class OntologyFactSlotTests(unittest.TestCase):
             "partial",
             partial["manifestPatchContract"]["changeSet"]["sourceCompleteness"],
         )
+
+        # A producer-certified *complete target* is still a partial portfolio.
+        # It must produce the exact derived assertion replacements of the
+        # complete-source reference without borrowing ownership of other facts.
+        certified = deepcopy(graph)
+        certified.worldview["worldId"] = "portfolio:fixture:main"
+        attach_target_quality_coverage(certified, "main", "2026-11-10T06:34:38Z", ["005380"])
+        bounded = plan_target_scoped_manifest_patch(
+            certified, active, ["005380"],
+            fact_slot_plan=fact_slot_plan, source_graph_complete=False,
+        )
+        self.assertEqual("ready", bounded["status"], bounded)
+        for key in ("selectedIncomingScopeIds", "retiredScopeIds", "scopePlan"):
+            self.assertEqual(complete.get(key), bounded.get(key), key)
+        self.assertEqual(
+            complete["manifestPatchContract"]["relationDirectives"],
+            bounded["manifestPatchContract"]["relationDirectives"],
+        )
+        self.assertEqual("partial", bounded["manifestPatchContract"]["changeSet"]["sourceCompleteness"])
+        self.assertEqual(
+            [quality_link_scope],
+            bounded["manifestPatchContract"]["changeSet"]["completeSourceScopeIds"],
+        )
+        self.assertEqual(bounded, plan_target_scoped_manifest_patch(
+            certified, active, iter(["005380"]),
+            fact_slot_plan=fact_slot_plan, source_graph_complete=False,
+        ))
+
+        # A missing assertion can be retired only if its source producer
+        # certified this target before planning. An already truncated or
+        # subsequently edited packet is never an absence proof.
+        absent = deepcopy(compact_partial_graph)
+        absent.worldview["worldId"] = "portfolio:fixture:main"
+        attach_target_quality_coverage(absent, "main", "2026-11-10T06:34:38Z", ["005380"])
+        bounded_absent = plan_target_scoped_manifest_patch(
+            absent, active, ["005380"], fact_slot_plan=fact_slot_plan, source_graph_complete=False,
+        )
+        full_absent = plan_target_scoped_manifest_patch(
+            absent, active, ["005380"], fact_slot_plan=fact_slot_plan, source_graph_complete=True,
+        )
+        self.assertEqual("ready", bounded_absent["status"], bounded_absent)
+        self.assertIn(quality_link_scope, bounded_absent["retiredScopeIds"])
+        for key in ("selectedIncomingScopeIds", "retiredScopeIds", "scopePlan"):
+            self.assertEqual(full_absent.get(key), bounded_absent.get(key), key)
+
+        for field, value in (
+            ("accountId", "other-account"), ("worldId", "other-world"),
+            ("sourceSnapshotId", "newer-source"), ("symbols", ["OTHER"]),
+            ("symbols", "005380"), ("version", "unknown"),
+            ("scopePlanFingerprint", "altered"),
+        ):
+            invalid = deepcopy(certified)
+            invalid.worldview[TARGET_QUALITY_COVERAGE_KEY][field] = value
+            with self.subTest(invalidCoverage=field, value=value):
+                self.assertEqual(set(), complete_target_quality_scope_ids(invalid, active, ["005380"]))
+        edited = deepcopy(certified)
+        edited.worldview["scopePlan"].pop()
+        self.assertEqual(set(), complete_target_quality_scope_ids(edited, active, ["005380"]))
+        self.assertEqual(set(), complete_target_quality_scope_ids(certified, active, ["OTHER"]))
+        self.assertEqual(set(), complete_target_quality_scope_ids(certified, {**active, "worldId": "other-world"}, ["005380"]))
+        stale = deepcopy(certified)
+        stale.worldview["sourceObservedAt"] = "2026-11-10T06:40:00Z"
+        self.assertEqual(set(), complete_target_quality_scope_ids(stale, active, ["005380"]))
+        expanded = deepcopy(certified)
+        expanded.worldview[TARGET_QUALITY_COVERAGE_KEY]["symbols"].append("OTHER")
+        self.assertEqual(set(), complete_target_quality_scope_ids(expanded, active, ["OTHER"]))
+        foreign = {"scopePlan": [
+            {"scopeId": "link:symbol:OTHER:quality:bucket:06", "scopeFamily": "quality"},
+            {"scopeId": "link:episode:main:quality", "scopeFamily": "quality"},
+            {"scopeId": "link:symbol:005380:evidence:bucket:06", "scopeFamily": "evidence"},
+        ]}
+        self.assertEqual({quality_link_scope}, complete_target_quality_scope_ids(certified, foreign, ["005380"]))
 
     def test_authoritative_event_reuses_unchanged_relation_with_deferred_endpoint(self):
         state_scope = "symbol:035720:market:bucket:00"

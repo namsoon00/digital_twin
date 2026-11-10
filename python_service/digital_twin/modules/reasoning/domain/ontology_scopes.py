@@ -22,6 +22,7 @@ from digital_twin.modules.reasoning.domain.ontology_contracts import OntologyEnt
 from digital_twin.modules.reasoning.domain.ontology_fact_slots import select_fact_slot_scope_ids
 from digital_twin.modules.reasoning.domain.ontology_projection_fingerprint import VOLATILE_LIFECYCLE_KEYS, stable_value
 from digital_twin.modules.reasoning.domain.ontology_worlds import world_scoped_scope_id
+from digital_twin.modules.reasoning.domain.target_source_coverage import complete_target_quality_scope_ids
 
 
 SCOPED_ABOX_MANIFEST_VERSION = "scoped-manifest-v1"
@@ -2238,8 +2239,9 @@ def select_target_scoped_manifest_patch(
 ) -> Dict[str, object]:
     """Select the incoming scopes that may replace an active manifest.
 
-    The complete source graph stays available in memory, but an incremental
-    worker should only materialize the triggering symbols and shared facts.
+    An incremental worker materializes only triggering symbols and shared facts.
+    Producer-certified target quality inventories own their local assertions;
+    an unverified partial image still needs a complete-source repair.
     A selected link may reuse an unchanged active endpoint. When an endpoint
     scope changed, however, the incoming link can reference a node that did
     not exist in the active generation, so that direct endpoint scope must be
@@ -2259,6 +2261,7 @@ def select_target_scoped_manifest_patch(
         active.get("scopeFingerprints") or {},
     )
     requested_symbols = sorted({_symbol(value) for value in target_symbols or [] if _symbol(value)})
+    complete_quality_scopes = complete_target_quality_scope_ids(graph, active, requested_symbols)
     target_scope_retention_mode = _clean(worldview.get("targetScopeRetentionMode"))
     retain_missing_target_scopes = target_scope_retention_mode in {
         "incremental-target-patch",
@@ -2363,6 +2366,9 @@ def select_target_scoped_manifest_patch(
         """
 
         return bool(source_graph_complete or is_target_owned_scope(scope_id))
+
+    def assertion_source_complete(scope_id: str) -> bool:
+        return bool(source_graph_complete or scope_id in complete_quality_scopes)
 
     def changed_from_active(scope_id: str, item: Mapping[str, object]) -> bool:
         active_item = active_by_scope.get(scope_id)
@@ -2534,7 +2540,7 @@ def select_target_scoped_manifest_patch(
     selected = set(fact_slot_selection.get("selectedScopeIds", selected))
     complete_source_derived_replacements: Set[str] = set()
     if (
-        source_graph_complete
+        (source_graph_complete or complete_quality_scopes)
         and bool((fact_slot_plan or {}).get("eventBoundaryAuthoritative"))
         and selected
     ):
@@ -2559,6 +2565,7 @@ def select_target_scoped_manifest_patch(
             }
             if (
                 _scope_type(scope_id) == "link"
+                and assertion_source_complete(scope_id)
                 and scope_relation_lifecycle(
                     scope_id,
                     {**active_item, **item},
@@ -2605,7 +2612,7 @@ def select_target_scoped_manifest_patch(
     removed_complete_derived_companion_scope_ids = sorted(
         scope_id
         for scope_id, item in active_by_scope.items()
-        if source_graph_complete
+        if assertion_source_complete(scope_id)
         and bool((fact_slot_plan or {}).get("eventBoundaryAuthoritative"))
         and scope_id not in incoming
         and is_target_owned_scope(scope_id)
@@ -2980,6 +2987,8 @@ def select_target_scoped_manifest_patch(
         for scope_id, active_row in active_by_scope.items():
             if _scope_type(scope_id) != "link":
                 continue
+            if assertion_source_complete(scope_id):
+                continue
             if (
                 _clean(active_row.get("scopeFamily"))
                 or scope_family(scope_id)
@@ -3100,7 +3109,7 @@ def select_target_scoped_manifest_patch(
                 )
             ):
                 if (
-                    not source_graph_complete
+                    not assertion_source_complete(scope_id)
                     and (
                         _clean(row.get("scopeFamily"))
                         or scope_family(scope_id)
@@ -3266,7 +3275,7 @@ def select_target_scoped_manifest_patch(
 
                 incoming_relation = incoming.get(relation_scope_id) or {}
                 if not incoming_relation:
-                    if not source_graph_complete:
+                    if not assertion_source_complete(relation_scope_id):
                         # A target slice proves the endpoint generation but
                         # does not own absence of a relation from another fact
                         # mailbox. Ask for the bounded complete-source repair
@@ -3670,6 +3679,7 @@ def plan_target_scoped_manifest_patch(
 ) -> Dict[str, object]:
     """Return a typed and validated plan without mutating the graph."""
 
+    target_symbols = tuple(target_symbols or ())
     selection = select_target_scoped_manifest_patch(
         graph,
         active_metadata,
@@ -3684,6 +3694,7 @@ def plan_target_scoped_manifest_patch(
         fact_slot_plan=fact_slot_plan,
         source_graph_complete=source_graph_complete,
         retention_mode=worldview.get("targetScopeRetentionMode"),
+        complete_source_scope_ids=complete_target_quality_scope_ids(graph, active, target_symbols),
     )
     return finalize_manifest_patch_plan(
         selection,

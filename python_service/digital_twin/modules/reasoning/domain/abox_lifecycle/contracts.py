@@ -96,6 +96,7 @@ class ABoxChangeSet:
     retention_mode: str = ""
     explicit_removed_scope_ids: Tuple[str, ...] = ()
     version: str = ABOX_CHANGE_SET_VERSION
+    complete_source_scope_ids: Tuple[str, ...] = ()
 
     @classmethod
     def from_inputs(
@@ -104,6 +105,7 @@ class ABoxChangeSet:
         fact_slot_plan: Mapping[str, object] = None,
         source_graph_complete: bool = True,
         retention_mode: object = "",
+        complete_source_scope_ids: Iterable[str] = (),
     ) -> "ABoxChangeSet":
         slot = dict(fact_slot_plan or {})
         raw_by_symbol = slot.get("requestedFactFamiliesBySymbol")
@@ -127,6 +129,7 @@ class ABoxChangeSet:
             requested_fact_families=_texts(slot.get("requestedFactFamilies") or []),
             requested_fact_families_by_symbol=by_symbol,
             retention_mode=_text(retention_mode),
+            complete_source_scope_ids=_texts(complete_source_scope_ids),
             explicit_removed_scope_ids=_texts(
                 slot.get("removedScopeIds")
                 or slot.get("explicitRemovedScopeIds")
@@ -152,6 +155,8 @@ class ABoxChangeSet:
             },
             "retentionMode": self.retention_mode,
             "explicitRemovedScopeIds": list(self.explicit_removed_scope_ids),
+            **({"completeSourceScopeIds": list(self.complete_source_scope_ids)}
+               if self.complete_source_scope_ids else {}),
         }
 
 

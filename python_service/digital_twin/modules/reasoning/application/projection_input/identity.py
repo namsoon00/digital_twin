@@ -9,6 +9,7 @@ from digital_twin.modules.reasoning.domain.ontology_projection_fingerprint impor
 from digital_twin.modules.reasoning.domain.ontology_scopes import apply_scoped_abox_identity
 from digital_twin.modules.reasoning.domain.ontology_worlds import market_world
 from digital_twin.modules.reasoning.domain.ontology_worlds import world_metadata
+from digital_twin.modules.reasoning.domain.target_source_coverage import attach_target_quality_coverage
 from digital_twin.modules.portfolio.contracts import AccountSnapshot
 from digital_twin.modules.reasoning.domain.world_partitioned_reasoning import account_overlay_graph
 from typing import Callable
@@ -168,6 +169,13 @@ def build_projection_graph(
     material_snapshot_id = str(
         scoped_identity.get("manifestId") or material_snapshot_id
     )
+    if (_inputs.incremental_current_state_reasoning_enabled()
+            and str(graph_assembly.get("inputMode") or "") == "target-scoped"):
+        attach_target_quality_coverage(
+            persistence_graph, snapshot.account_id, snapshot.generated_at,
+            graph_assembly.get("targetSymbols") or [],
+        )
+        runtime_stages["targetQualitySourceSymbolCount"] = len(graph_assembly.get("targetSymbols") or [])
     runtime_stages["graphBuildMs"] = int(
         (time.perf_counter() - graph_build_started) * 1000
     )

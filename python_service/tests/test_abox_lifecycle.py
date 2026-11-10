@@ -143,6 +143,15 @@ class ABoxLifecycleContractTests(unittest.TestCase):
             ["changed-derived-relation-not-replaced"],
             [item["code"] for item in result["patchPlanViolations"]],
         )
+        from dataclasses import replace
+        partial_change = replace(
+            self.change_set, source_completeness=type(self.change_set.source_completeness).PARTIAL,
+            complete_source_scope_ids=(self.link_scope,),
+        )
+        partial_selection = {**self.selection([self.evidence_scope]), "sourceGraphComplete": False}
+        bounded = finalize_manifest_patch_plan(partial_selection, partial_change, self.incoming, self.active)
+        self.assertFalse(bounded["applied"])
+        self.assertEqual(result["patchPlanViolations"], bounded["patchPlanViolations"])
         # The same endpoint may be staged just as a binding companion, without
         # acquiring semantic ownership of every other symbol's derived facts.
         companion_only = self.selection([self.evidence_scope])

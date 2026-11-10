@@ -173,7 +173,16 @@ def contract_fingerprints(api):
     graph = PortfolioOntology("synthetic-candidate", worldview={"scopePlan": image["physical_scope_plan"], "aboxSnapshotId": NEW,
                              "persistenceMode": CURRENT_STATE_ABOX_PERSISTENCE_MODE, "scopedAboxManifestVersion": SCOPED_ABOX_MANIFEST_VERSION})
     graph.entities = [OntologyEntity("stock:AAA", "AAA", "stock", properties={"ontologyBox": "ABox", "aboxScopeId": STATE, "snapshotId": "logical-old"})]
-    contracts["plan/normalized"] = fingerprint(repo.scoped_abox_plan(graph))
+    normalized = repo.scoped_abox_plan(graph)
+    source_by_scope = {row["scopeId"]: row for row in image["physical_scope_plan"]}
+    for row in normalized:
+        # Keep the original v6 oracle intact. The intentional lineage fix adds
+        # only the explicit source logical ID; independently verify its exact
+        # value before comparing every older normalization field unchanged.
+        if "logicalGenerationId" in row:
+            assert row["logicalGenerationId"] == source_by_scope[row["scopeId"]]["logicalGenerationId"]
+            row.pop("logicalGenerationId")
+    contracts["plan/normalized"] = fingerprint(normalized)
     for current in [True, False]:
         for migration in ["", "full"]:
             for mode in [CURRENT_STATE_ABOX_PERSISTENCE_MODE, LEGACY_CURRENT_STATE_ABOX_PERSISTENCE_MODE]:

@@ -102,6 +102,8 @@ def scoped_abox_plan(graph: PortfolioOntology) -> List[Dict[str, object]]:
                 if str(endpoint_scope_id or "").strip()
             },
             "generationId": generation_id,
+            **({"logicalGenerationId": str(item["logicalGenerationId"]).strip()}
+               if str(item.get("logicalGenerationId") or "").strip() else {}),
             "entityCount": int(number_or_none(item.get("entityCount")) or 0),
             "relationCount": int(number_or_none(item.get("relationCount")) or 0),
             "evidenceCount": int(number_or_none(item.get("evidenceCount")) or 0),

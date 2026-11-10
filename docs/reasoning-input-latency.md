@@ -1594,3 +1594,91 @@ in the successful-save scenario. The oracle remains unchanged: its fixture
 asserts the added preparation duration is zero at the frozen monotonic clock,
 then removes only that operational field before hashing success/failure results.
 The projection-audit regression separately checks nonzero preparation timing.
+
+## 2026-11-10: remove unnecessary complete-source quality reconstruction
+
+A later operational run spent 44,850 ms rebuilding its source graph after a
+target-local quality endpoint disappeared. The missing quality scope and the
+requested subject were the same stock. The bounded producer already assembled
+that subject's factual and model inputs, but the planner treated every partial
+portfolio image as unable to prove removal of a derived quality assertion.
+It therefore rebuilt all account facts before applying the original target
+patch. This was an input reconstruction cost, separate from TypeDB query time.
+
+The producer now issues `target-source-quality-coverage-v1` after factual/model
+assembly and scoped identity. Its checksum binds the actual assembled symbols,
+original account/source snapshot, world and exact incoming scope-plan digest.
+The planner validates that image before granting target-local quality assertion
+replacement/removal authority. The overall input remains partial; the typed
+ABox change set lists its individually complete source scopes. Final endpoint
+inventories and changed-derived-assertion validation still apply before writes.
+Full, legacy, altered, cross-world or cross-account packets gain no new
+authority. Other subjects, shared scopes and episode catalogs retain their
+existing conservative source boundary. Physical scope repairs that invalidate
+the original image still use the complete-source recovery path.
+
+`targetQualitySourceSymbolCount` identifies producer coverage in existing
+runtime stages. Absence of `targetManifestRepairInputMs` shows that a run did
+not enter the reconstruction helper; producer coverage alone is not evidence
+that every possible repair was avoided.
+
+A paired assembly used the exact historical source cutoff
+`2026-11-10T06:34:38.336824Z`, one context recaptured at that cutoff, the same
+frozen rule release and one captured active manifest. Model persistence used
+memory stores; no operational graph, model records or notifications changed.
+
+| Work on the same historical source | Bounded assembly | Complete assembly |
+| --- | ---: | ---: |
+| Graph assembly and scoped identity | 5,300 ms | 17,623 ms |
+| Entities / relations | 347 / 522 | 2,240 / 3,628 |
+| Selected scopes | 92 | 92 |
+| Final scope plan and all written relation directives | Equal | Equal |
+
+There were 189 descriptor differences confined to unselected `reuse-active`
+relations: the full image describes facts outside the target, whereas the
+bounded image retains their active metadata. None are written and the entire
+final scope plan is equal. The captured active manifest had advanced since the
+original run, so the legacy selector did not request a repair in this replay.
+This comparison verifies equivalent target writes and the cost of the avoided
+work; it does not reproduce the original 44.85 seconds or measure end-to-end
+delivery improvement.
+
+Fault regressions separately reproduce a required complete-source quality
+repair, certify only its actually assembled target, and prove that the real
+manifest coordinator no longer calls the complete-source builder. Uncertified
+or truncated packets still request recovery. An isolated native TypeDB smoke
+also writes the old and new images, verifies only one current quality relation
+remains, and preserves the unrelated stock generation and historical manifest.
+The existing source-world native checks cover nine scopes; the immutable and
+current-state quality images each cover four more. Only the smoke's own
+temporary database is deleted.
+
+The current-state extension exposed a separate retained-scope lineage defect:
+`scoped_abox_plan` discarded an explicit `logicalGenerationId`, causing the
+next physical plan to label the old storage generation as its source generation.
+Normalization now preserves that logical ID when present. Fresh/legacy source
+rows without it retain the prior shape. Both logical and physical IDs of an
+untouched subject must survive a later target patch; only the per-operation
+`physicalGenerationChanged` flag legitimately changes from initial insertion
+to reuse. The smoke selects physical mode after logical merging, matching the
+production validate-manifest stage, and checks this boundary on native TypeDB.
+The original v6 normalized-plan oracle remains unchanged: its fixture verifies
+the explicit new logical ID against the source before removing only that field
+for the legacy hash comparison. The round-trip and native regressions require
+the new identity to survive normalization and a later physical reuse plan.
+
+Validation for this change includes the quick gate, focused persistence/source/
+queue/delivery tests and this native smoke. A separately attempted broad domain
+ownership check reports 14 pre-existing semantic-review mismatches in unchanged
+definitions (message constants, shared-world merge and an export list); those
+review records were not rewritten to claim a full-suite pass.
+The quick gate passed 1,044 Python unit tests plus its tooling/frontend and
+isolated HTTP checks. The focused 27-module pass covered 409 tests; final
+source-contract and logical-lineage checks passed 62 and 52 tests respectively
+after their last relevant changes. The final native smoke passed all three
+scenarios (nine shared-world scopes and two four-scope quality images).
+
+Queue source ordering, source-to-claim waiting, stable-anchor relation rewrites
+and native inference remain separate measured work. This change removes one
+proven redundant stage; it does not establish that overall alert latency has
+been resolved.

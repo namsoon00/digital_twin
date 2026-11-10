@@ -174,6 +174,20 @@ class ABoxCandidateTests(unittest.TestCase):
         self.assertEqual("frozen", clone.entities[1].properties["snapshotId"])
         self.assertEqual(by_scope[STATE]["generationId"], clone.entities[0].properties["snapshotId"])
         self.assertEqual(NEW, clone.entities[0].properties["manifestId"])
+        # The repository normalizes the merged source plan before selecting
+        # physical rows. Losing the logical ID here silently replaces source
+        # lineage with a prior copy-on-write storage ID on every later patch.
+        graph.worldview["scopePlan"] = copy.deepcopy(physical)
+        normalized = scope_plan.scoped_abox_plan(graph)
+        rebound = scope_plan.current_state_physical_scope_plan(
+            normalized, {"scopeGenerationIds": {row["scopeId"]: row["generationId"] for row in physical}},
+            [], WORLD, transition_id="two",
+        )
+        for row, previous in zip(rebound, sorted(physical, key=lambda item: item["scopeId"])):
+            self.assertEqual(previous["generationId"], row["generationId"])
+            self.assertEqual(previous["logicalGenerationId"], row["logicalGenerationId"])
+            self.assertFalse(row["physicalGenerationChanged"])
+        self.assertEqual(physical, graph.worldview["scopePlan"])
 
     def test_immutable_storage_reuse_verifies_missing_and_conflicting_readback(self):
         data = image_fixture(api)

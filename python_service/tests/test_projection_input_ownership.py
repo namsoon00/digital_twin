@@ -726,6 +726,41 @@ for name in sys.modules:
                     shared_premise_proof=proof,
                 )
 
+    def test_target_quality_coverage_is_bound_to_actual_factual_assembly(self):
+        from digital_twin.modules.reasoning.domain.target_source_coverage import (
+            TARGET_QUALITY_COVERAGE_KEY, complete_target_quality_scope_ids,
+        )
+        from digital_twin.modules.reasoning.domain.reasoning_source_snapshot import reasoning_source_snapshot_id
+
+        snapshot = source_snapshot()
+        instance = recorder(api, snapshot, cache=True)
+        instance.settings["_reasoningEngineVersion"] = "v2"
+        world = world_from_snapshot(snapshot, instance.settings)
+        original = deepcopy(snapshot)
+        for cache_pass in range(2):
+            built = instance.build_projection_graph(
+                snapshot, RULES, world, target_symbols=["AAA", "UNKNOWN"], target_scoped_input=True,
+            )
+            persisted = built["persistenceGraph"]
+            proof = persisted.worldview[TARGET_QUALITY_COVERAGE_KEY]
+            self.assertEqual(["AAA"], proof["symbols"])
+            self.assertEqual(snapshot.account_id, proof["accountId"])
+            self.assertEqual(world.world_id, proof["worldId"])
+            self.assertEqual(snapshot.generated_at, proof["sourceObservedAt"])
+            self.assertEqual(reasoning_source_snapshot_id(snapshot.account_id, snapshot.generated_at), proof["sourceSnapshotId"])
+            quality = complete_target_quality_scope_ids(persisted, {}, ["AAA"])
+            self.assertTrue(quality, cache_pass)
+            self.assertEqual(1, built["runtimeStages"]["targetQualitySourceSymbolCount"])
+            self.assertTrue(all(":AAA:quality:" in scope for scope in quality))
+            self.assertEqual(set(), complete_target_quality_scope_ids(persisted, {}, ["BBB"]))
+            self.assertEqual(original, snapshot)
+
+        for targets, scoped, version in ((None, False, "v2"), (["AAA", "BBB"], True, "v2"), (["AAA"], True, "v1")):
+            instance.settings["_reasoningEngineVersion"] = version
+            built = instance.build_projection_graph(snapshot, RULES, world, target_symbols=targets, target_scoped_input=scoped)
+            self.assertNotIn(TARGET_QUALITY_COVERAGE_KEY, built["persistenceGraph"].worldview)
+            self.assertNotIn("targetQualitySourceSymbolCount", built["runtimeStages"])
+
     def test_projection_model_failure_is_diagnostic_not_an_investment_action(self):
         result = assembly_scenario(api, "scoring-failure")
         self.assertEqual(1, len(result["scorerCalls"]))

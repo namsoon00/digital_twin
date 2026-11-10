@@ -212,6 +212,51 @@ class ManifestFixture:
 
 
 class InternalManifestTests(unittest.TestCase):
+    def test_certified_quality_repair_uses_actual_partial_merge_without_full_rebuild(self):
+        from digital_twin.modules.reasoning.domain.ontology_scopes import merge_target_scoped_abox_manifest
+        from digital_twin.modules.reasoning.domain.target_source_coverage import attach_target_quality_coverage
+        from target_quality_source_fixture import FACT_SLOT, quality_source_image
+
+        fixture = ManifestFixture()
+        active_image = quality_source_image(fixture.snapshot.account_id, "world:portfolio", old=True)
+        incoming = quality_source_image(fixture.snapshot.account_id, "world:portfolio", old=False)
+        fixture.active.update(deepcopy(active_image.worldview))
+        fixture.active["status"] = "ok"
+        active_before = deepcopy(fixture.active)
+        plan = deepcopy(FACT_SLOT)
+        legacy = merge_target_scoped_abox_manifest(
+            deepcopy(incoming), fixture.active, ["AAPL"], fact_slot_plan=plan, source_graph_complete=False,
+        )
+        self.assertFalse(legacy["applied"], legacy)
+        reference = merge_target_scoped_abox_manifest(
+            deepcopy(incoming), fixture.active, ["AAPL"], fact_slot_plan=plan, source_graph_complete=True,
+        )
+        self.assertTrue(reference["applied"], reference)
+        attach_target_quality_coverage(incoming, fixture.snapshot.account_id, STAMP, ["AAPL"])
+        fixture.kwargs["persistence_graph"] = incoming
+        fixture.kwargs["target_scoped_patch"]["factSlotPlan"] = plan
+        merged = []
+
+        def actual_merge(graph, active, symbols, **kwargs):
+            fixture.step("merge", symbols, kwargs)
+            self.assertFalse(kwargs["source_graph_complete"])
+            result = merge_target_scoped_abox_manifest(graph, active, symbols, **kwargs)
+            merged.append(deepcopy(result))
+            return result
+
+        fixture.merge = actual_merge
+        result = fixture.run()
+        self.assertIsInstance(result, stage_results.PatchManifestResult)
+        self.assertEqual(1, len(merged))
+        self.assertTrue(merged[0]["applied"], merged[0])
+        self.assertEqual(reference["scopePlan"], merged[0]["scopePlan"])
+        self.assertEqual(reference["selectedIncomingScopeIds"], merged[0]["selectedIncomingScopeIds"])
+        self.assertEqual(reference["manifestPatchContract"]["relationDirectives"], merged[0]["manifestPatchContract"]["relationDirectives"])
+        self.assertEqual(active_before, fixture.active)
+        self.assertFalse(any(call[0] == "build" for call in fixture.calls))
+        self.assertNotIn("targetManifestRepairInputMs", fixture.kwargs["runtime_stages"])
+        self.assertTrue(merged[0]["manifestPatchContract"]["validation"]["valid"])
+
     def test_packets_are_frozen_and_contain_no_runtime_capabilities(self):
         for name in (
             "RepairSourceInput",

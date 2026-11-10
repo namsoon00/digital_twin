@@ -1428,33 +1428,68 @@ class TypeDBMeasuredCutoverTests(unittest.TestCase):
         from io import StringIO
         spec = {"dataPath": Path("/tmp/isolated/typedb-data"), "blueGreenRotationEnabled": "1"}
         candidate = {"dataPath": Path("/tmp/isolated/typedb-data-candidate"), "role": "typedb-stage"}
-        measured = {"ready": False, "measured": True, "activePath": str(spec["dataPath"]),
-                    "candidateAllocatedBytes": 7000 * 1024**2}
-        patches = {
-            "worker_specs": {"typedb": spec}, "runtime_settings": {},
-            "typedb_rotation_database_inventory": {"ready": True},
-            "typedb_reset_needed": {"needed": True},
-            "typedb_rotation_resource_preflight": {"ready": True},
-            "acquire_typedb_rotation_lock": {"acquired": True},
-            "supervisor_running": False, "begin_supervisor_maintenance": "owned",
-            "prepare_typedb_blue_green_candidate": {"status": "prepared", "candidate": candidate},
-            "renew_typedb_maintenance_lock": {"renewed": True}, "typedb_maintenance_lock_owned": True,
-            "typedb_candidate_validation_summary": {}, "typedb_cutover_storage_preflight": measured,
-            "record_typedb_rulebox_deployment_event": {}, "record_typedb_auto_rotation_state": {},
-            "cleanup_typedb_candidate": None, "stop": None, "start": 0,
-            "swap_typedb_blue_green_data_paths": {}, "end_supervisor_maintenance": None,
-            "release_typedb_rotation_lock": None, "read_pid": 0,
-        }
-        with ExitStack() as stack, redirect_stdout(StringIO()):
-            mocks = {name: stack.enter_context(patch.object(service_manager, name, return_value=value))
-                     for name, value in patches.items()}
-            self.assertEqual(0, service_manager.typedb_rotate(force=True, supervisor_owned=True))
-        for name in ("stop", "start", "swap_typedb_blue_green_data_paths"):
-            mocks[name].assert_not_called()
-        mocks["cleanup_typedb_candidate"].assert_any_call(candidate, remove_data=True)
-        calls = mocks["record_typedb_auto_rotation_state"].call_args_list
-        self.assertEqual("candidate-preparing", calls[0].kwargs["lastAutoRotationStage"])
-        self.assertEqual("", calls[0].kwargs["lastAutoRotationFinishedAt"])
-        self.assertEqual("cutover-deferred-active-preserved", calls[-1].kwargs["lastAutoRotationStatus"])
-        mocks["release_typedb_rotation_lock"].assert_called_once()
-        mocks["end_supervisor_maintenance"].assert_called_once()
+        for storage_ready, acknowledged in ((False, True), (True, True), (True, False)):
+            with self.subTest(storage_ready=storage_ready, acknowledged=acknowledged):
+                measured = {"ready": storage_ready, "measured": True, "activePath": str(spec["dataPath"]),
+                            "candidateAllocatedBytes": 7000 * 1024**2}
+                patches = {
+                    "worker_specs": {"typedb": spec}, "runtime_settings": {},
+                    "typedb_rotation_database_inventory": {"ready": True},
+                    "typedb_reset_needed": {"needed": True},
+                    "typedb_rotation_resource_preflight": {"ready": True},
+                    "acquire_typedb_rotation_lock": {"acquired": True},
+                    "supervisor_running": True, "begin_supervisor_maintenance": "owned",
+                    "wait_for_supervisor_maintenance_ack": acknowledged,
+                    "prepare_typedb_blue_green_candidate": {"status": "prepared", "candidate": candidate},
+                    "renew_typedb_maintenance_lock": {"renewed": True}, "typedb_maintenance_lock_owned": True,
+                    "typedb_candidate_validation_summary": {}, "typedb_cutover_storage_preflight": measured,
+                    "record_typedb_rulebox_deployment_event": {}, "record_typedb_auto_rotation_state": {},
+                    "cleanup_typedb_candidate": None, "stop": None, "start": 0,
+                    "swap_typedb_blue_green_data_paths": {"status": "swapped"},
+                    "prune_retired_typedb_data_paths": [], "end_supervisor_maintenance": None,
+                    "release_typedb_rotation_lock": None, "read_pid": 0,
+                }
+                with ExitStack() as stack, redirect_stdout(StringIO()):
+                    mocks = {name: stack.enter_context(patch.object(service_manager, name, return_value=value))
+                             for name, value in patches.items()}
+
+                    def prepare(_spec):
+                        mocks["begin_supervisor_maintenance"].assert_not_called()
+                        mocks["stop"].assert_not_called()
+                        return {"status": "prepared", "candidate": candidate}
+
+                    def cutover_preflight(*args, **kwargs):
+                        mocks["begin_supervisor_maintenance"].assert_not_called()
+                        return measured
+
+                    def stop(**kwargs):
+                        mocks["begin_supervisor_maintenance"].assert_called_once()
+                        mocks["wait_for_supervisor_maintenance_ack"].assert_called_once_with("owned")
+
+                    mocks["prepare_typedb_blue_green_candidate"].side_effect = prepare
+                    mocks["typedb_cutover_storage_preflight"].side_effect = cutover_preflight
+                    mocks["stop"].side_effect = stop
+                    expected = 1 if storage_ready and not acknowledged else 0
+                    self.assertEqual(expected, service_manager.typedb_rotate(force=True, supervisor_owned=True))
+                calls = mocks["record_typedb_auto_rotation_state"].call_args_list
+                self.assertEqual("candidate-preparing", calls[0].kwargs["lastAutoRotationStage"])
+                self.assertEqual("", calls[0].kwargs["lastAutoRotationFinishedAt"])
+                mocks["release_typedb_rotation_lock"].assert_called_once()
+                if storage_ready:
+                    mocks["end_supervisor_maintenance"].assert_called_once()
+                else:
+                    mocks["begin_supervisor_maintenance"].assert_not_called()
+                    mocks["end_supervisor_maintenance"].assert_not_called()
+                    mocks["cleanup_typedb_candidate"].assert_any_call(candidate, remove_data=True)
+                if storage_ready and acknowledged:
+                    mocks["stop"].assert_called_once_with(include_supervisor=False)
+                    mocks["start"].assert_called_once()
+                    mocks["swap_typedb_blue_green_data_paths"].assert_called_once()
+                    cutover_spec, cutover_candidate = mocks["swap_typedb_blue_green_data_paths"].call_args.args
+                    self.assertEqual(spec["dataPath"], cutover_spec["dataPath"])
+                    self.assertEqual(candidate, cutover_candidate)
+                    self.assertEqual("ok", calls[-1].kwargs["lastAutoRotationStatus"])
+                else:
+                    for name in ("stop", "start", "swap_typedb_blue_green_data_paths"):
+                        mocks[name].assert_not_called()
+                    self.assertEqual("cutover-deferred-active-preserved", calls[-1].kwargs["lastAutoRotationStatus"])

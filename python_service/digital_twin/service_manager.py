@@ -6160,7 +6160,11 @@ def typedb_rotate(
 
     pause_supervisor = supervisor_running() and not supervisor_owned
     maintenance_token = ""
-    if supervisor_owned:
+    # A blue-green candidate owns a separate server and the rotation lock.
+    # Keep operational recovery available during its potentially long build;
+    # only the validated cutover needs the active runtime in maintenance.
+    defer_auto_maintenance = supervisor_owned and truthy(spec.get("blueGreenRotationEnabled"))
+    if supervisor_owned and not defer_auto_maintenance:
         maintenance_token = begin_supervisor_maintenance(
             "typedb-auto-rotate",
             max_age_seconds=typedb_restart_maintenance_window_seconds(spec),
@@ -6315,6 +6319,24 @@ def typedb_rotate(
                 lastAutoRotationStatus="running",
                 lastAutoRotationStage="cutover-starting",
             )
+            if defer_auto_maintenance:
+                maintenance_token = begin_supervisor_maintenance(
+                    "typedb-auto-rotate",
+                    max_age_seconds=typedb_restart_maintenance_window_seconds(spec),
+                )
+                if supervisor_running() and not wait_for_supervisor_maintenance_ack(maintenance_token):
+                    result = {
+                        "status": "cutover-deferred-active-preserved",
+                        "operationId": operation_id,
+                        "reason": "The supervisor did not acknowledge cutover maintenance.",
+                        "activeStorePreserved": True,
+                    }
+                    record_typedb_auto_rotation_state(
+                        lastAutoRotationFinishedAt=iso_now(),
+                        lastAutoRotationStatus=result["status"], lastAutoRotationResult=result,
+                    )
+                    print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))
+                    return 1
             services_stopped = True
             stop(include_supervisor=False)
             renew_typedb_maintenance_lock(rotation_lock)
@@ -6424,7 +6446,7 @@ def typedb_rotate(
                     supervisor_log_path(),
                     "typedb rotation emergency restart failed. " + str(error)[:180],
                 )
-        if pause_supervisor or supervisor_owned:
+        if maintenance_token:
             end_supervisor_maintenance()
         if candidate and read_pid(candidate.get("pid")):
             cleanup_typedb_candidate(candidate, remove_data=False)

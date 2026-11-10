@@ -40,6 +40,14 @@ and uses the existing durable retry path with a ten-second backoff. Permanent
 storage failures remain blocked. No failed source audit authorizes native
 publication or customer delivery.
 
+The same classification also applies to storage errors after native inference,
+including a lost COMMIT response while finalizing the current-state transition.
+An unconfirmed write remains an error with no aligned publication authority;
+the existing recovery journal and exact-source queue own the retry. Safe SQL
+labels and phase survive job compaction. Permanent credentials/schema failures
+are not retried. `test_projection_stages` exercises late transient/permanent
+failures, pool exhaustion, suppressed follow-ups and the compact retry receipt.
+
 Keep operational diagnostics bounded too. Two Codex-owned whole-history
 `OCTET_LENGTH(payload_json)` aggregate probes were canceled after 975 and 916
 seconds while production commits were waiting. Administrative read probes need
@@ -48,6 +56,27 @@ socket timeout alone does not cancel server work. Test validation used a
 temporary separate MySQL server so fixture DDL did not compete with production
 or another development session. Its test-only durability setting is not a
 production configuration change or a database crash-durability test.
+
+## Keep recovery available during automatic rotation preparation (2026-11-10)
+
+A supervisor-owned blue-green rotation previously entered maintenance before
+building its isolated candidate. A slow candidate build therefore blocked
+operational recovery and code restarts for its entire duration, although the
+active TypeDB server and workers were still serving. It now retains the
+exclusive rotation lease during preparation and validation, and enters
+supervisor maintenance only after a useful candidate passes storage preflight.
+Cutover requires supervisor acknowledgement before stopping active workers.
+A rejected candidate or missing acknowledgement preserves the active runtime.
+Manual rotation and non-blue-green reset retain their existing maintenance
+boundary. Cleanup ends only maintenance acquired by this operation.
+
+During this incident, an automatic candidate still carried a 4 GB WAL trigger,
+while the current owner settings required 12 GB. Its measured WAL was about
+6.5 GB with about 119 GB free, and cutover had not started. The obsolete
+candidate operation was interrupted through its process group and manager
+cleanup; the active server PID, database binding and control version 222 were
+preserved. This removes an unnecessary maintenance wait. It is not evidence
+that source preparation, native execution or queue debt has disappeared.
 
 ## Owner-requested single-engine operation and retired-data deletion
 

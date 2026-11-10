@@ -26,7 +26,7 @@ PACKAGE = "digital_twin.modules.reasoning.infrastructure.projection_write."
 
 
 class ProjectionStageTests(unittest.TestCase):
-    def execute(self, stop="", fail=""):
+    def execute(self, stop="", fail="", error=None):
         calls = []
         snapshot = SimpleNamespace(
             account_id="fixture", generated_at="2026-09-10T01:00:00Z"
@@ -44,6 +44,9 @@ class ProjectionStageTests(unittest.TestCase):
                 if "snapshot" in kwargs:
                     self.assertIs(snapshot, kwargs["snapshot"])
                 if name == fail:
+                    if error is not None:
+                        kwargs["emit_progress"]("native_inference.done")
+                        raise error
                     raise RuntimeError("fixture-stage-failure")
                 if name == stop:
                     return stage_results.CompletedProjection(terminal)
@@ -111,6 +114,32 @@ class ProjectionStageTests(unittest.TestCase):
                     None if name == "assemble_source" else audit,
                     store.store_projection_result.call_args.args[2],
                 )
+        from digital_twin.modules.reasoning.application.independent_reasoning_engine import compact_projection_result
+        from digital_twin.infrastructure.mysql_connection_pool import MySQLPoolTimeout
+        for code, statement, retryable in ((2013, "COMMIT", True), (1205, "UPDATE ontology_current_state_transitions", True), (1045, "UPDATE ontology_current_state_transitions", False)):
+            with self.subTest(code=code, statement=statement):
+                error = RuntimeError(code, "private credentials and source payload")
+                error.orbit_mysql_statement = statement
+                error.orbit_mysql_elapsed_ms = 30001
+                result, calls, store, audit, _ = self.execute(fail="publish_candidate", error=error)
+                self.assertEqual("error", result["status"])
+                self.assertFalse(result["saved"])
+                self.assertEqual("native_inference.done", result["failureStage"])
+                self.assertNotIn("schedule_followups", calls)
+                self.assertIs(audit, store.store_projection_result.call_args.args[2])
+                self.assertEqual(retryable, result["retryable"])
+                self.assertNotIn("private credentials", str(result))
+                self.assertNotIn("errorTrace", result)
+                persisted = compact_projection_result(result)
+                self.assertEqual(retryable, persisted["retryable"])
+                self.assertEqual(10 if retryable else 0, persisted["retryAfterSeconds"])
+                self.assertEqual(result["storageDiagnostic"], persisted["storageDiagnostic"])
+                self.assertFalse(persisted["generationAligned"])
+                if statement == "COMMIT":
+                    self.assertEqual("mysql-commit-unconfirmed", persisted["failureReasonCode"])
+        result, calls, _store, _audit, _ = self.execute(fail="publish_candidate", error=MySQLPoolTimeout(2, 2, 30))
+        self.assertTrue(result["retryable"])
+        self.assertNotIn("schedule_followups", calls)
 
     def test_projection_stage_signatures_and_result_envelopes_are_explicit(self):
         for name, entry in STAGES.items():

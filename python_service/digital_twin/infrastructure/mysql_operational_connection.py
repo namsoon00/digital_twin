@@ -15,7 +15,7 @@ from .mysql_retention import (
     operational_history_retention_enabled,
 )
 from .mysql_schema_tuning import ensure_mysql_operational_schema_tuning, mysql_partitioning_mode
-from .mysql_connection_pool import mysql_operation_timeout_seconds, pooled_mysql_connection
+from .mysql_connection_pool import MySQLPoolTimeout, MySQLPoolUnavailable, mysql_operation_timeout_seconds, pooled_mysql_connection
 
 
 _FALSEY_VALUES = {"", "0", "false", "no", "off", "disabled"}
@@ -85,6 +85,13 @@ def mysql_is_connection_lost(error: Exception) -> bool:
 
 def mysql_failure_diagnostic(error: Exception) -> Dict[str, object]:
     """Bounded operational context; never SQL, parameters or exception text."""
+    if isinstance(error, (MySQLPoolTimeout, MySQLPoolUnavailable)):
+        return {
+            "category": "storage",
+            "reasonCode": "mysql-pool-exhausted" if isinstance(error, MySQLPoolTimeout) else "mysql-pool-unavailable",
+            "retryable": True,
+            "rawErrorRetained": False,
+        }
     if not (type(error).__module__.startswith("pymysql.")
             or getattr(error, "orbit_mysql_statement", None)):
         return {}

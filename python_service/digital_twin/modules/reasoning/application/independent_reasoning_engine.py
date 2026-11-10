@@ -318,6 +318,7 @@ def compact_projection_result(projection: object) -> Dict[str, object]:
     slo = values.get("slo") if isinstance(values.get("slo"), Mapping) else {}
     audit = values.get("projectionAudit") if isinstance(values.get("projectionAudit"), Mapping) else {}
     source_audit = values.get("sourceAuditDiagnostic") if isinstance(values.get("sourceAuditDiagnostic"), Mapping) else {}
+    storage_failure = values.get("storageDiagnostic") if isinstance(values.get("storageDiagnostic"), Mapping) else {}
     shared = (
         values.get("sharedInstrumentInference")
         if isinstance(values.get("sharedInstrumentInference"), Mapping)
@@ -443,6 +444,11 @@ def compact_projection_result(projection: object) -> Dict[str, object]:
             for key, value in source_audit.items()
             if key in {"category", "reasonCode", "retryable", "mysql", "rawErrorRetained"}
         }} if source_audit else {}),
+        **({"storageDiagnostic": {
+            key: deepcopy(value)
+            for key, value in storage_failure.items()
+            if key in {"category", "reasonCode", "retryable", "mysql", "rawErrorRetained"}
+        }} if storage_failure else {}),
         "blockingRuleId": retry["blockingRuleId"],
         # Keep only bounded proofs, never the full InferenceBox graph. These
         # records feed hypothesis coverage repair and later outcome audits.

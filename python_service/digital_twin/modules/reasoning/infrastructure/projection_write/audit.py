@@ -9,7 +9,6 @@ from digital_twin.modules.reasoning.domain.ontology_runtime_operations import bu
 from digital_twin.modules.portfolio.contracts import AccountSnapshot
 from digital_twin.infrastructure.runtime_identity import runtime_identity
 from digital_twin.infrastructure.mysql_operational_connection import mysql_failure_diagnostic
-from digital_twin.infrastructure.mysql_connection_pool import MySQLPoolTimeout, MySQLPoolUnavailable
 from typing import Dict, List
 
 
@@ -67,13 +66,6 @@ def begin_projection_audit_run(
         # Converting the exception to text here discarded the only evidence
         # distinguishing recovery, source INSERT and a lost COMMIT reply.
         diagnostic = mysql_failure_diagnostic(error)
-        if isinstance(error, (MySQLPoolTimeout, MySQLPoolUnavailable)):
-            diagnostic = {
-                "category": "storage",
-                "reasonCode": "mysql-pool-exhausted" if isinstance(error, MySQLPoolTimeout) else "mysql-pool-unavailable",
-                "retryable": True,
-                "rawErrorRetained": False,
-            }
         return None, {
             "reason": "Source audit persistence failed.",
             "errorType": type(error).__name__,

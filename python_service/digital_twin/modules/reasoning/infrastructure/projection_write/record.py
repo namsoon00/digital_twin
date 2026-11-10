@@ -5,6 +5,7 @@ from .record_ports import RecordPort, RecordSnapshotBindings
 from digital_twin.modules.reasoning.domain.ontology_performance_contract import ontology_performance_assessment
 from digital_twin.modules.reasoning.domain.hypothesis_change_observations import attach_model_observations
 from digital_twin.modules.portfolio.contracts import AccountSnapshot
+from digital_twin.infrastructure.mysql_operational_connection import mysql_failure_diagnostic
 from typing import Callable, Dict, List
 import time
 import traceback
@@ -336,15 +337,22 @@ def record_snapshot(
     except (
         Exception
     ) as error:  # noqa: BLE001 - ontology projection must not block realtime monitoring.
+        storage_failure = mysql_failure_diagnostic(error)
+        reason = "Projection storage operation failed." if storage_failure else str(error)[:180]
         result = {
             "saved": False,
             "status": "error",
-            "reason": str(error)[:180],
+            "reason": reason,
             "errorType": type(error).__name__,
             "failureStage": current_stage,
-            "errorTrace": traceback.format_exc()[-2000:],
+            **({
+                "storageDiagnostic": storage_failure,
+                "retryable": bool(storage_failure.get("retryable")),
+                "reasonCode": storage_failure["reasonCode"],
+                "recommendedRetryAfterSeconds": 10 if storage_failure.get("retryable") else 0,
+            } if storage_failure else {"errorTrace": traceback.format_exc()[-2000:]}),
         }
-        emit_progress("error", status="error", reason=str(error)[:180])
+        emit_progress("error", status="error", reason=reason)
     runtime_stages["totalMs"] = int((time.perf_counter() - projection_started) * 1000)
     result.setdefault("runtimeStages", runtime_stages)
     result.setdefault(

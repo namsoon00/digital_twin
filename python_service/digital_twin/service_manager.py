@@ -6446,11 +6446,13 @@ def main(argv: List[str] = None) -> int:
             restart_mysql="--restart-mysql" in args[1:],
             restart_share="--restart-share" in args[1:],
         )
+        if result != 0:
+            return result
         # A long-lived supervisor imports worker definitions only once. Reload
         # it after a code deployment so it cannot recreate workers using an
         # older routing policy after the managed workers have restarted.
         supervisor_result = reload_configured_supervisor()
-        return result if result != 0 else supervisor_result
+        return supervisor_result
     if command == "status":
         return status()
     if command == "typedb-maintenance":

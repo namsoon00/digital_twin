@@ -30,15 +30,27 @@ class TypeDBServiceManagerTests(unittest.TestCase):
                     service_manager.begin_supervisor_maintenance("restart")
                 service_manager.end_supervisor_maintenance()
                 with patch.object(service_manager, "worker_specs") as specs, \
-                        patch.object(service_manager, "stop") as stop:
+                        patch.object(service_manager, "stop") as stop, \
+                        patch.object(service_manager, "reload_configured_supervisor") as reload:
                     self.assertEqual(1, service_manager.restart())
                     self.assertEqual(1, service_manager.start())
+                    self.assertEqual(1, service_manager.main(['restart']))
+                    reload.assert_not_called()
                 specs.assert_not_called()
                 stop.assert_not_called()
             self.assertEqual(original, service_manager.read_supervisor_maintenance_payload())
             self.assertEqual(token, original["token"])
             service_manager.end_supervisor_maintenance()
             self.assertEqual({}, service_manager.read_supervisor_maintenance_payload())
+
+    def test_restart_cli_reloads_supervisor_only_after_success(self):
+        for code in (0, 1, 2):
+            with self.subTest(code=code), patch.object(service_manager, 'restart', return_value=code) as restart, \
+                    patch.object(service_manager, 'reload_configured_supervisor', return_value=7) as reload:
+                self.assertEqual(7 if code == 0 else code,
+                    service_manager.main(['restart', '--restart-typedb', '--restart-mysql', '--restart-share']))
+                restart.assert_called_once_with(restart_typedb=True, restart_mysql=True, restart_share=True)
+                self.assertEqual(1 if code == 0 else 0, reload.call_count)
 
     def test_replacement_supervisor_waits_for_maintenance_before_starting_writers(self):
         handlers = {}

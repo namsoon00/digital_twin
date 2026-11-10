@@ -517,7 +517,10 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # Six already committed lost-acknowledgement contracts (284c4b108) cover
         # exact artifact readback and lease fencing; the committed terminal-news
         # revision contract (ed97f9ca4) preserves retry admission after corrections.
-        self.assertLessEqual(total, 3085)
+        # Four latency regressions cover safe audit retry diagnostics,
+        # post-observation/exact-clock cache reuse, follow-up preselection,
+        # and lossless coverage index installation.
+        self.assertLessEqual(total, 3089)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

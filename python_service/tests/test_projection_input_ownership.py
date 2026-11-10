@@ -483,6 +483,54 @@ for name in sys.modules:
         instance.runtime_context(snapshot)
         self.assertEqual("disabled", instance.last_runtime_context_cache_status[snapshot.account_id]["status"])
 
+    def test_context_cache_uses_post_observation_revision_and_rejects_mid_read_changes(self):
+        class History:
+            revision = "observation-cache:before"
+            reads = 0
+            change_during_read = False
+            def outcome_input_revision(self):
+                return self.revision
+            def list_for_symbols(self, *args, **kwargs):
+                self.reads += 1
+                return []
+            def performance(self, *args, **kwargs):
+                value = {"fixtureRevision": self.revision}
+                if self.change_during_read:
+                    self.revision += ":concurrent-repair"
+                return value
+        snapshot = source_snapshot()
+        instance = recorder(api, snapshot, cache=True, overrides=False)
+        history = History()
+        instance.decision_episode_store = history
+        instance.market_time_series_store = SimpleNamespace(load_temporal_windows=lambda *a, **kw: {})
+        def observe(_snapshot):
+            if history.revision == "observation-cache:before":
+                history.revision = "observation-cache:committed"
+            return {"status": "observed"}
+        observer = Mock(side_effect=observe)
+        instance.outcome_observation_service = SimpleNamespace(observe_snapshot=observer)
+        first = instance.runtime_context(snapshot)
+        second = instance.runtime_context(snapshot)
+        self.assertEqual(first, second)
+        self.assertEqual("hit", instance.last_runtime_context_cache_status[snapshot.account_id]["status"])
+        self.assertEqual(1, history.reads)
+        observer.assert_called_once()
+        self.assertNotIn("outcomeInputRevision", str(first))
+
+        history.revision = "observation-cache:external-repair"
+        history.change_during_read = True
+        instance.runtime_context(snapshot)
+        self.assertEqual("unverified-outcome-revision",
+                         instance.last_runtime_context_cache_status[snapshot.account_id]["writeStatus"])
+        history.change_during_read = False
+        instance.runtime_context(snapshot)
+        self.assertEqual(3, history.reads)
+        instance.runtime_context(snapshot)
+        self.assertEqual(3, history.reads)
+        newer = source_snapshot(as_of="2026-07-20T00:02:00Z")
+        instance.runtime_context(newer)
+        self.assertEqual(4, history.reads)
+
     def test_projection_cache_identity_includes_source_release_clock_account_and_scope(
         self,
     ):

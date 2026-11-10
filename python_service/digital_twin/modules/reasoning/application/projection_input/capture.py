@@ -94,13 +94,27 @@ def capture_graph_input(
 
     def context_progress(stage, **details):
         metric = {
+            "cache_key.done": "runtimeContextCacheKeyMs",
+            "outcome_revision.done": "runtimeContextOutcomeRevisionMs",
+            "cache_read.done": "runtimeContextCacheReadMs",
+            "cache_revision_verify.done": "runtimeContextCacheRevisionVerifyMs",
+            "decision_episodes.done": "runtimeContextDecisionEpisodesMs",
+            "metadata.done": "runtimeContextMetadataMs",
+            "decision_performance.done": "runtimeContextDecisionPerformanceMs",
+            "hypothesis_proposals.done": "runtimeContextHypothesisProposalsMs",
+            "hypothesis_lifecycles.done": "runtimeContextHypothesisLifecyclesMs",
+            "pipeline_health.done": "runtimeContextPipelineHealthMs",
+            "temporal_windows.done": "runtimeContextTemporalWindowsMs",
+            "portfolio_lifecycle.done": "runtimeContextPortfolioLifecycleMs",
             "freeze.done": "runtimeContextFreezeMs",
             "cache_write.done": "runtimeContextCacheWriteMs",
             "copy.done": "runtimeContextCopyMs",
         }.get(stage)
         if metric:
             stage_timings[metric] = int(details.get("runtimeMs") or 0)
-            return
+            if stage in {"freeze.done", "cache_write.done", "copy.done", "cache_key.done",
+                         "outcome_revision.done", "cache_read.done", "cache_revision_verify.done"}:
+                return
         emit("runtime_context." + str(stage or "unknown"), **details)
 
     validation_packets = (reasoning_context or {}).get("validationRuntimeContexts")

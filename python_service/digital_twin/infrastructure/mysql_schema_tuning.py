@@ -139,9 +139,11 @@ MYSQL_OPERATIONAL_INDEXES: Dict[str, Sequence[MySQLIndexDefinition]] = {
     ),
     "investment_decision_outcome_targets": (
         MySQLIndexDefinition("investment_decision_outcome_targets", "idx_outcome_target_recovery", "`outcome_id`, `account_id`, `status`"),
+        MySQLIndexDefinition("investment_decision_outcome_targets", "idx_outcome_target_coverage", "`account_id`, `status`, `observed_at`, `episode_id`"),
     ),
     "investment_hypothesis_observation_targets": (
         MySQLIndexDefinition("investment_hypothesis_observation_targets", "idx_outcome_target_recovery", "`outcome_id`, `account_id`, `status`"),
+        MySQLIndexDefinition("investment_hypothesis_observation_targets", "idx_outcome_target_coverage", "`account_id`, `status`, `observed_at`, `observation_episode_id`"),
     ),
     "external_collection_runs": (
         MySQLIndexDefinition("external_collection_runs", "idx_external_collection_retention", "`completed_at`"),

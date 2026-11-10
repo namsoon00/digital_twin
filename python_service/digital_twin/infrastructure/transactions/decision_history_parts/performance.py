@@ -103,10 +103,15 @@ def outcome_coverage_population(
             scope.append("targets.symbol = %s")
             params.append(str(symbol).upper())
         scope_sql = (" AND " + " AND ".join(scope)) if scope else ""
+        # The live context asks for account-wide coverage. The due-work
+        # index cannot cover observed_at and the episode identity, so counting
+        # observed rows through it fetches wide historical table pages. Keep
+        # symbol/unscoped reads on their existing optimizer-selected plans.
+        observed_index = " FORCE INDEX (idx_outcome_target_coverage)" if account_id and not symbol else ""
         observed = (
             connection.execute(
                 "SELECT COUNT(DISTINCT targets." + episode_column + ") AS count "
-                "FROM " + target_table + " AS targets "
+                "FROM " + target_table + " AS targets" + observed_index + " "
                 "WHERE targets.status = 'observed' AND targets.observed_at <= %s" + scope_sql,
                 tuple([cutoff] + params),
             ).fetchone()

@@ -39,11 +39,21 @@ def create_audit(
         (time.perf_counter() - projection_audit_started) * 1000
     )
     if audit_error:
+        failure = audit_error if isinstance(audit_error, dict) else {"reason": str(audit_error)}
+        diagnostic = dict(failure.get("diagnostic") or {})
+        retryable = diagnostic.get("retryable") is True
         result = {
             "saved": False,
             "status": "source-audit-failed",
             "reason": "MySQL source audit must succeed before the active ABox can change: "
-            + audit_error,
+            + str(failure.get("reason") or "Source audit persistence failed."),
+            "failureStage": "source_audit.begin",
+            "errorType": str(failure.get("errorType") or ""),
+            "sourceAuditDiagnostic": diagnostic,
+            "retryable": retryable,
+            "reasonCode": str(diagnostic.get("reasonCode") or "source-audit-failed"),
+            "recommendedRetryAfterSeconds": 10 if retryable else 0,
+            "runtimeStages": dict(runtime_stages),
             "graphStore": _store.active_graph_store_key(),
             "materialFingerprint": material_fingerprint,
             "aboxSnapshotId": material_snapshot_id,

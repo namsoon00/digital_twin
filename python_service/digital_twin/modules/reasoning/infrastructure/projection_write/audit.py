@@ -8,6 +8,8 @@ from digital_twin.modules.reasoning.domain.ontology_projection_audit import Onto
 from digital_twin.modules.reasoning.domain.ontology_runtime_operations import build_projection_runtime_observation
 from digital_twin.modules.portfolio.contracts import AccountSnapshot
 from digital_twin.infrastructure.runtime_identity import runtime_identity
+from digital_twin.infrastructure.mysql_operational_connection import mysql_failure_diagnostic
+from digital_twin.infrastructure.mysql_connection_pool import MySQLPoolTimeout, MySQLPoolUnavailable
 from typing import Dict, List
 
 
@@ -61,7 +63,22 @@ def begin_projection_audit_run(
     except (
         Exception
     ) as error:  # noqa: BLE001 - an un-audited generation must not replace the active ABox.
-        return None, str(error)[:180]
+        # The driver already attaches a safe verb/table and elapsed time.
+        # Converting the exception to text here discarded the only evidence
+        # distinguishing recovery, source INSERT and a lost COMMIT reply.
+        diagnostic = mysql_failure_diagnostic(error)
+        if isinstance(error, (MySQLPoolTimeout, MySQLPoolUnavailable)):
+            diagnostic = {
+                "category": "storage",
+                "reasonCode": "mysql-pool-exhausted" if isinstance(error, MySQLPoolTimeout) else "mysql-pool-unavailable",
+                "retryable": True,
+                "rawErrorRetained": False,
+            }
+        return None, {
+            "reason": "Source audit persistence failed.",
+            "errorType": type(error).__name__,
+            "diagnostic": diagnostic,
+        }
     apply_projection_run_identity(graph, run.run_id)
     return run, ""
 

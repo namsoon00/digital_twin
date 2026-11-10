@@ -19,7 +19,7 @@ PORTFOLIO_GRAPH_ASSEMBLY_CACHE_CONTRACT_VERSION = (
 )
 
 PROJECTION_RUNTIME_CONTEXT_CACHE_CONTRACT_VERSION = (
-    "projection-runtime-context-cache-v1"
+    "projection-runtime-context-cache-v2-exact-source-clock"
 )
 
 
@@ -49,7 +49,10 @@ class ProjectionCacheKeys:
         payload = {
             "version": PROJECTION_RUNTIME_CONTEXT_CACHE_CONTRACT_VERSION,
             "namespace": self.graph_assembly_cache_namespace(),
-            "sourceSnapshot": stable_value(source_snapshot),
+            # stable_value deliberately removes polling clocks for material
+            # generation reuse. A context contains asOf and freshness facts:
+            # it can be reused only for this exact observed source clock.
+            "sourceSnapshot": source_snapshot,
             "settings": stable_value(self.settings),
             "activeTBox": stable_value(active_tbox),
             "targetSymbols": sorted(

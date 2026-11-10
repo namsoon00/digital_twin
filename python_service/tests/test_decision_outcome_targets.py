@@ -171,6 +171,35 @@ class DecisionOutcomeTargetTests(unittest.TestCase):
         store.runtime_settings = {}
         return store
 
+    def test_follow_up_preselection_skips_empty_subjects_and_falls_back_on_read_failure(self):
+        class Store:
+            selected = ["AAA"]
+            fail = False
+            def follow_up_observation_symbols(self, account, symbols):
+                self.request = (account, list(symbols))
+                if self.fail:
+                    raise TimeoutError("selection unavailable")
+                return self.selected
+            def evaluate_follow_up_observation(self, account, symbol, facts, observed_at):
+                self.calls.append((account, symbol, facts, observed_at))
+                return [{"transitionId": "transition:" + symbol}]
+        store = Store()
+        store.calls = []
+        service = InvestmentOutcomeObservationService(decision_episode_store=store)
+        facts = {"AAA": {"currentPrice": 12}, "BBB": {"currentPrice": 34}}
+        result = service.observe_follow_ups("account:1", facts, "source-clock")
+        self.assertEqual(("account:1", ["AAA", "BBB"]), store.request)
+        self.assertEqual([("account:1", "AAA", facts["AAA"], "source-clock")], store.calls)
+        self.assertEqual(2, result["observedSymbolCount"])
+        self.assertEqual(1, result["transitionCount"])
+        store.calls.clear()
+        store.selected = []
+        self.assertEqual(0, service.observe_follow_ups("account:1", facts, "source-clock")["transitionCount"])
+        self.assertEqual([], store.calls)
+        store.fail = True
+        self.assertEqual(2, service.observe_follow_ups("account:1", facts, "source-clock")["transitionCount"])
+        self.assertEqual(["AAA", "BBB"], [call[1] for call in store.calls])
+
     def test_continuity_schedule_reads_only_one_scoped_episode_without_side_effects(self):
         connection = QueryRowsConnection([
             {"status": "excluded", "count": 2, "next_target_at": "2026-09-14T00:00:00Z"},

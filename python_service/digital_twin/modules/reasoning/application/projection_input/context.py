@@ -44,6 +44,7 @@ def runtime_context(
     if active_tbox is None:
         active_tbox = _inputs.active_tbox_context()
     cache_enabled = _inputs.runtime_context_cache_enabled()
+    cache_key_started = time.perf_counter()
     cache_key = (
         _inputs.runtime_context_cache_key(
             snapshot,
@@ -53,10 +54,13 @@ def runtime_context(
         if cache_enabled
         else ""
     )
+    emit("cache_key.done", runtimeMs=round((time.perf_counter() - cache_key_started) * 1000))
+    source_cache_key = cache_key
     # Same-source repairs/qualification changes must also invalidate the outer
     # context cache, before it can bypass the outcomes owner's prepared inputs.
     revision_reader = getattr(type(_inputs.decision_episode_store), "outcome_input_revision", None)
     if cache_enabled and callable(revision_reader):
+        revision_started = time.perf_counter()
         try:
             revision = _inputs.decision_episode_store.outcome_input_revision()
         except Exception:
@@ -66,6 +70,8 @@ def runtime_context(
         else:
             cache_enabled = False
             cache_key = ""
+        emit("outcome_revision.done", runtimeMs=round((time.perf_counter() - revision_started) * 1000))
+    cache_read_started = time.perf_counter()
     cache_result = (
         _inputs.runtime_cache.get(
             cache_key,
@@ -74,6 +80,7 @@ def runtime_context(
         if cache_enabled
         else {"status": "disabled"}
     )
+    emit("cache_read.done", runtimeMs=round((time.perf_counter() - cache_read_started) * 1000))
     _inputs.last_runtime_context_cache_status[account_id] = {
         "status": str(cache_result.get("status") or "miss"),
         "ageMs": int(cache_result.get("ageMs") or 0),
@@ -102,6 +109,7 @@ def runtime_context(
     selected_symbols.intersection_update(available_symbols)
     decision_memory_symbols = selected_symbols or available_symbols
     emit("decision_episodes.start", symbolCount=len(decision_memory_symbols))
+    decision_memory_started = time.perf_counter()
     decision_memory = _inputs.decision_episode_projection_context(
         snapshot,
         target_symbols=decision_memory_symbols,
@@ -112,6 +120,7 @@ def runtime_context(
         "decision_episodes.done",
         episodeCount=len(decision_episodes),
         outcomeHistoryEpisodeCount=len(decision_outcome_history),
+        runtimeMs=round((time.perf_counter() - decision_memory_started) * 1000),
     )
     context_symbols = selected_symbols or available_symbols
 
@@ -366,6 +375,23 @@ def runtime_context(
     emit("freeze.done", runtimeMs=round((time.perf_counter() - freeze_started) * 1000))
     _inputs.last_runtime_contexts[account_id] = frozen
     cache_write_started = time.perf_counter()
+    if cache_enabled and callable(revision_reader):
+        # The observer may legitimately create outcomes on this cache miss.
+        # Do not store their resulting context under the obsolete pre-effect
+        # revision. A subsequent Manifest repair used to miss that entry and
+        # repeat the full outcome/performance read for the exact same source.
+        revision_started = time.perf_counter()
+        input_revision = str(decision_memory.get("outcomeInputRevision") or "")
+        try:
+            final_revision = _inputs.decision_episode_store.outcome_input_revision()
+        except Exception:
+            final_revision = ""
+        if input_revision and input_revision == final_revision:
+            cache_key = hashlib.sha256((source_cache_key + ":" + input_revision).encode()).hexdigest()
+        else:
+            cache_enabled = False
+            _inputs.last_runtime_context_cache_status[account_id]["writeStatus"] = "unverified-outcome-revision"
+        emit("cache_revision_verify.done", runtimeMs=round((time.perf_counter() - revision_started) * 1000))
     if cache_enabled:
         _inputs.runtime_cache.put(
             cache_key,

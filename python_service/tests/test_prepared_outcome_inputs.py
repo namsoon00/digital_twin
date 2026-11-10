@@ -30,6 +30,40 @@ class PreparedOutcomeInputTests(StabilizationDatabaseCase):
     def history(self, stamp=NOW):
         return self.decisions.performance_episodes(account_id=self.account, symbol="AAPL", as_of=stamp)
 
+    def test_coverage_indexes_preserve_scoped_distinct_counts_cutoffs_and_all_rows(self):
+        from digital_twin.infrastructure.mysql_schema_tuning import MYSQL_OPERATIONAL_INDEXES, ensure_mysql_indexes
+        tables = {"investment_decision_outcome_targets": "episode_id",
+                  "investment_hypothesis_observation_targets": "observation_episode_id"}
+        with self.decisions.connect() as connection:
+            for table, episode_column in tables.items():
+                for suffix, account, clock in (("first", self.account, NOW),
+                                               ("repeat", self.account, NOW),
+                                               ("future", self.account, "2099-01-01T00:00:00Z"),
+                                               ("foreign", self.account + ":other", NOW)):
+                    connection.execute(
+                        "INSERT INTO " + table + " (target_id," + episode_column + ",account_id,symbol,status,"
+                        "observed_at,payload_json,created_at,updated_at,horizon_minutes,contract_fingerprint) "
+                        "VALUES (%s,%s,%s,'AAPL','observed',%s,%s,%s,%s,%s,%s)",
+                        (table + ":" + suffix + ":" + self.account,
+                         "coverage:" + ("duplicate" if suffix in {"first", "repeat"} else suffix),
+                         account, clock, json.dumps({"audit": suffix}), NOW, NOW,
+                         {"first": 1, "repeat": 2, "future": 3, "foreign": 4}[suffix], self.account),
+                    )
+            before = {table: connection.execute("SELECT * FROM " + table + " ORDER BY target_id").fetchall()
+                      for table in tables}
+            expected = self.decisions.outcome_coverage_population(account_id=self.account, as_of=NOW)
+            self.assertEqual(2, expected["observedEpisodeCount"])
+            definitions = {table: tuple(item for item in MYSQL_OPERATIONAL_INDEXES[table]
+                                       if item.name == "idx_outcome_target_coverage") for table in tables}
+            for table in tables:
+                connection.execute("ALTER TABLE " + table + " DROP INDEX idx_outcome_target_coverage")
+            self.assertEqual(2, len(ensure_mysql_indexes(connection, definitions)))
+            self.assertEqual([], ensure_mysql_indexes(connection, definitions))
+            after = {table: connection.execute("SELECT * FROM " + table + " ORDER BY target_id").fetchall()
+                     for table in tables}
+        self.assertEqual(before, after)
+        self.assertEqual(expected, self.decisions.outcome_coverage_population(account_id=self.account, as_of=NOW))
+
     def report(self, stamp=NOW, **kwargs):
         return self.decisions.performance(account_id=self.account, as_of=stamp, **kwargs)
 

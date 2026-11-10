@@ -176,6 +176,68 @@ class ProjectionStageTests(unittest.TestCase):
         self.assertEqual("source-audit-failed", result.result["status"])
         self.assertTrue(result.result["preservedActiveGeneration"])
         self.assertFalse(result.result["saved"])
+        self.assertEqual("source_audit.begin", result.result["failureStage"])
+        self.assertIn("projectionAuditCreateMs", result.result["runtimeStages"])
+
+    def test_source_audit_retains_safe_sql_failure_details_without_source_values(self):
+        audit = importlib.import_module(PACKAGE + "audit")
+        create = importlib.import_module(PACKAGE + "create_audit")
+        for statement in (
+            "UPDATE ontology_projection_runs [projection-audit-stale-recovery]",
+            "INSERT ontology_projection_runs [projection-audit-create]",
+            "COMMIT",
+        ):
+            with self.subTest(statement=statement):
+                error = RuntimeError(2013, "private provider token and source payload")
+                error.orbit_mysql_statement = statement
+                error.orbit_mysql_elapsed_ms = 10001
+                port = SimpleNamespace(
+                    projection_run_store=SimpleNamespace(begin=Mock(side_effect=error)),
+                    active_graph_store_key=lambda: "fixture",
+                    execution_namespace=lambda: {},
+                )
+                with patch.object(audit, "build_ontology_projection_run", return_value=object()):
+                    run, failure = audit.begin_projection_audit_run(
+                        port, object(), object(), "facts", "snapshot", [], {},
+                    )
+                self.assertIsNone(run)
+                store = SimpleNamespace(
+                    begin_projection_audit_run=Mock(return_value=(run, failure)),
+                    active_graph_store_key=lambda: "fixture",
+                    store_projection_result=Mock(),
+                )
+                kwargs = {name: {} for name in STAGES["create_audit"]["inputs"]}
+                kwargs.update(_store=store,
+                              runtime_stages={"graphBuildMs": 17},
+                              validation=SimpleNamespace(to_dict=lambda: {}))
+                result = create.create_audit(**kwargs).result
+                self.assertEqual(statement, result["sourceAuditDiagnostic"]["mysql"]["statement"])
+                self.assertEqual(10001, result["sourceAuditDiagnostic"]["mysql"]["elapsedMs"])
+                self.assertEqual(17, result["runtimeStages"]["graphBuildMs"])
+                self.assertTrue(result["preservedActiveGeneration"])
+                self.assertTrue(result["retryable"])
+                from digital_twin.modules.reasoning.application.independent_reasoning_engine import compact_projection_result
+                persisted = compact_projection_result(result)
+                self.assertTrue(persisted["retryable"])
+                self.assertEqual(10, persisted["retryAfterSeconds"])
+                self.assertEqual(result["sourceAuditDiagnostic"], persisted["sourceAuditDiagnostic"])
+                self.assertNotIn("private provider", str(result))
+                if statement == "COMMIT":
+                    self.assertEqual("mysql-commit-unconfirmed", result["sourceAuditDiagnostic"]["reasonCode"])
+        from digital_twin.infrastructure.mysql_connection_pool import MySQLPoolTimeout
+        pool_error = MySQLPoolTimeout(2, 2, 30)
+        port.projection_run_store.begin.side_effect = pool_error
+        with patch.object(audit, "build_ontology_projection_run", return_value=object()):
+            _run, failure = audit.begin_projection_audit_run(port, object(), object(), "facts", "snapshot", [], {})
+        self.assertTrue(failure["diagnostic"]["retryable"])
+        self.assertEqual("mysql-pool-exhausted", failure["diagnostic"]["reasonCode"])
+        denied = RuntimeError(1045, "private credentials")
+        denied.orbit_mysql_statement = "INSERT ontology_projection_runs"
+        port.projection_run_store.begin.side_effect = denied
+        with patch.object(audit, "build_ontology_projection_run", return_value=object()):
+            _run, failure = audit.begin_projection_audit_run(port, object(), object(), "facts", "snapshot", [], {})
+        self.assertFalse(failure["diagnostic"]["retryable"])
+        self.assertNotIn("private credentials", str(failure))
 
     def test_owner_participants_cannot_own_commit_or_open_another_connection(self):
         for path in {entry["path"] for entry in PARTICIPANTS.values()}:

@@ -107,7 +107,7 @@ class MySQLOntologyProjectionRunStore(MySQLOperationalConnection):
             params.append(clean_namespace_id)
         cursor = connection.execute(
             """
-            UPDATE ontology_projection_runs
+            UPDATE ontology_projection_runs /* operation:projection-audit-stale-recovery */
             SET status = 'aborted-stale', completed_at = %s, updated_at = %s,
                 result_payload_json = %s
             WHERE """ + " AND ".join(clauses),
@@ -461,7 +461,7 @@ class MySQLOntologyProjectionRunStore(MySQLOperationalConnection):
             )
             connection.execute(
                 """
-                INSERT INTO ontology_projection_runs (
+                INSERT INTO ontology_projection_runs /* operation:projection-audit-create */ (
                     run_id, portfolio_id, account_id, tenant_id, world_id,
                     world_type, market_world_id, source_snapshot_at,
                     source_snapshot_fingerprint, first_observed_at, last_observed_at,

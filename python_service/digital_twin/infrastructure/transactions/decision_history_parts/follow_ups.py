@@ -2,11 +2,43 @@
 
 from __future__ import annotations
 
-from typing import Callable, Dict, List
+from typing import Callable, Dict, Iterable, List
 from digital_twin.modules.outcomes.domain.decision_follow_up import evaluate_follow_up_conditions
 from digital_twin.infrastructure.mysql_operational_helpers import _json_loads
 from digital_twin.infrastructure.operational_common import json_dumps
 from .ports import ConnectionFactory
+
+
+def follow_up_observation_symbols(
+    account_id: str,
+    symbols: Iterable[str],
+    *,
+    _connect: ConnectionFactory,
+) -> List[str]:
+    """Read subjects that can have work before doing per-subject joins.
+
+    This is a conservative, current DB read, not cached absence. Ownership,
+    the per-subject limit and every compare-and-set remain in the evaluator.
+    Keep transitions waiting for reasoning in this selection too.
+    """
+    requested = sorted({str(value or "").upper().strip() for value in symbols or []
+                        if str(value or "").strip()})
+    selected = set()
+    if not account_id or not requested:
+        return []
+    with _connect() as connection:
+        for offset in range(0, len(requested), 32):
+            batch = requested[offset:offset + 32]
+            rows = connection.execute(
+                "SELECT DISTINCT symbol FROM investment_decision_follow_ups "
+                "WHERE account_id = %s AND symbol IN (" + ",".join(["%s"] * len(batch)) + ") "
+                "AND observable = 1 AND (status = 'pending' "
+                "OR (status IN ('satisfied', 'invalidated') "
+                "AND JSON_UNQUOTE(JSON_EXTRACT(payload_json, '$.reasoningDispatchStatus')) = 'pending'))",
+                (str(account_id), *batch),
+            ).fetchall()
+            selected.update(str(row.get("symbol") or "").upper() for row in rows or [])
+    return sorted(selected.intersection(requested))
 
 
 def evaluate_follow_up_observation(

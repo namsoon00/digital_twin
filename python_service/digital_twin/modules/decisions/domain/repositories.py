@@ -23,6 +23,9 @@ class DecisionEpisodeRepository(Protocol):
     ) -> List[ObservedOutcome]:
         ...
 
+    def follow_up_observation_symbols(self, account_id: str, symbols: Iterable[str]) -> List[str]:
+        ...
+
     def evaluate_follow_up_observation(
         self,
         account_id: str,

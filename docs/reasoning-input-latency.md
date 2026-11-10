@@ -1,5 +1,54 @@
 # Reasoning Input Latency
 
+## Source-bound preparation and source-audit retry (2026-11-10)
+
+Context reuse must retain the exact source observation clock. Material-value
+normalization intentionally omits polling clocks and is therefore unsuitable
+for a cache that contains `asOf`, session and freshness facts. Runtime context
+cache contract v2 hashes the complete causal source snapshot. A new source
+clock rebuilds its context; this is not permission to extend source validity.
+
+Synchronous outcome observation can change its own history revision. On a miss,
+the decision-memory owner now captures the revision after that effect and before
+reading memory. The context verifies it again after preparing all inputs and
+stores under that revision only when it is unchanged. A same-source Manifest
+repair can reuse the prepared input instead of missing an entry written under
+the obsolete pre-observation revision. Concurrent repair, missing revision or
+verification failure prevents cache storage. The operational token and timings
+do not enter ABox facts or the frozen execution/progress contract.
+
+Follow-up observation first reads candidate symbols in bounded groups of 32.
+It includes pending conditions and satisfied/invalidated transitions still
+waiting for reasoning. The existing per-subject evaluator retains ownership,
+its 80-condition limit and compare-and-set writes. An unavailable selector
+falls back to independent subject reads; it never becomes an empty-work result.
+
+Account-wide observed-outcome coverage uses an index containing account, status,
+observation time and episode identity. The query keeps its exact DISTINCT,
+cutoff and account semantics without loading historical table rows through the
+due-work index. Symbol-specific and unscoped reads retain their existing plans.
+One read-only same-snapshot production comparison counted the same 1,865 shadow
+episodes through both indexes: the old index took 1,092 ms; the covering index
+took 475 ms cold and 40 ms after that comparison. These are query measurements,
+not an end-to-end alert-latency claim.
+
+Source-audit errors retain safe statement/operation labels and elapsed time
+through the completed job receipt. Recovery UPDATE, source INSERT and an
+unconfirmed COMMIT are distinguishable without persisting raw SQL, parameters
+or exception text. A transient source-audit failure preserves the active ABox
+and uses the existing durable retry path with a ten-second backoff. Permanent
+storage failures remain blocked. No failed source audit authorizes native
+publication or customer delivery.
+
+Keep operational diagnostics bounded too. Two Codex-owned whole-history
+`OCTET_LENGTH(payload_json)` aggregate probes were canceled after 975 and 916
+seconds while production commits were waiting. Administrative read probes need
+a finite server-side SELECT deadline and indexed, bounded identities; a client
+socket timeout alone does not cancel server work. Test validation used a
+temporary separate MySQL server so fixture DDL did not compete with production
+or another development session. Its test-only durability setting is not a
+production configuration change or a database crash-durability test.
+
 ## Owner-requested single-engine operation and retired-data deletion
 
 The Nov 9 owner request explicitly asks to align the running version and delete

@@ -1,9 +1,9 @@
 {
   "runtime_context": {
     "baselineHash": "c16fcdcb24e9d257e321cd4a1da7e5f4f2b7d06801c67ecf32548404cbf81ae1",
-    "bodyHash": "920ef4d0132466ab2925ccb6da78a7a45e565f65010c8dee3630d0990273d356",
-    "reason": "Read portfolio lifecycle at the exact market source cutoff. Mutable heads updated later are omitted, not relabelled as past facts. Paired validation separately binds the retained portfolio receipt while temporal reads and model execution remain independent. Invalidate the outer source-context cache when the outcomes revision changes. Measure freeze, cache-copy and returned-copy cost through operational callbacks, without adding timings to causal input or changing the frozen execution/progress contract.",
-    "regressionTest": "test_projection_input_ownership.ProjectionInputOwnershipTests.test_same_source_outcome_revision_invalidates_outer_context_cache"
+    "bodyHash": "b4853176b0617d5fc75642635dde62b1945eda7abdf4051b8286e85194367d72",
+    "reason": "Preserve exact source cutoff, portfolio receipt, temporal input and source-scoped context. Record preparation substage costs outside causal facts. After synchronous outcome observation, store the context under its verified post-observation revision; a concurrent history repair or failed verification disables storage. Existing execution/progress and ABox fixtures stay unchanged.",
+    "regressionTest": "test_projection_input_ownership.ProjectionInputOwnershipTests.test_context_cache_uses_post_observation_revision_and_rejects_mid_read_changes"
   },
   "graph_for_graph_store_persistence": {
     "baselineHash": "2f8084db3f19e3575201b269e73f7300b7038f7bad45bba639c887ce0e950a09",
@@ -13,9 +13,15 @@
   },
   "decision_episode_projection_context": {
     "baselineHash": "cfbd8d06748d03e0fa1fab10cdb9582606fc9006aa8c2f5c08a6c7b23c3ecb0f",
-    "bodyHash": "0d5b5a257d94a2b3eaf413cfe5239db399b04c29eca1ef36ab355ddaa8f4c683",
-    "reason": "Use the atomically maintained decision-memory projection with exact source revision and legacy fallback; preserve the same outcomes, source cutoff and ABox fields. Outcome observation remains synchronous and unchanged.",
-    "regressionTest": "test_realtime_decision_inputs.DecisionProjectionStorageTests.test_compact_read_preserves_native_input_outcomes_cutoff_and_subject"
+    "bodyHash": "24443bd1d8bf84326d452074dc0e50b80e11cc0ea6cbd665258f086a9c06ca34",
+    "reason": "Preserve synchronous outcome observation and the atomically maintained decision-memory projection with exact source cutoff and legacy fallback. Capture the outcome revision after the effect and before memory reads as a separate cache receipt; never add that storage token to the frozen ABox context.",
+    "regressionTest": "test_projection_input_ownership.ProjectionInputOwnershipTests.test_context_cache_uses_post_observation_revision_and_rejects_mid_read_changes"
+  },
+  "runtime_context_cache_key": {
+    "baselineHash": "d688124a9a61006d6b6b034bae009823f57190f86d87ff7e021edb3d1f4c730b",
+    "bodyHash": "9491730c0226e0e95cc98d91cabc3bb01bfab100e1c834e068db58e0736ebbf8",
+    "reason": "An input context contains asOf and source-quality facts. Include the exact source snapshot clocks rather than material-generation stable_value, and invalidate previous cache entries with the v2 exact-source-clock contract. Same-source repair may reuse verified inputs; a new clock must run observation and preparation again.",
+    "regressionTest": "test_projection_input_ownership.ProjectionInputOwnershipTests.test_context_cache_uses_post_observation_revision_and_rejects_mid_read_changes"
   },
   "governed_statistical_rules_for_catalog": {
     "baselineHash": "f66c9c90b0acb2affbbf4361b68bb8d3c631510a24dbbcc5ed9733a6d9417f65",

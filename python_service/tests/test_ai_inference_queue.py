@@ -338,7 +338,9 @@ class AIInferenceQueueTests(unittest.TestCase):
         )
 
     def test_ai_watch_registration_is_atomic_durable_and_independent_of_trade_decisions(self):
-        from digital_twin.infrastructure.transactions.decision_history_parts.follow_ups import evaluate_follow_up_observation, acknowledge_follow_up_reasoning
+        from digital_twin.infrastructure.transactions.decision_history_parts.follow_ups import (
+            evaluate_follow_up_observation, acknowledge_follow_up_reasoning, follow_up_observation_symbols,
+        )
         from digital_twin.modules.outcomes.infrastructure import transaction_writes as writes
         from digital_twin.modules.outcomes.domain.follow_up_tracking import follow_up_is_registered
         from test_ai_follow_up_tracking import condition, facts
@@ -370,6 +372,10 @@ class AIInferenceQueueTests(unittest.TestCase):
         self.assertTrue(follow_up_is_registered(watch))
         self.assertEqual("ai-insight", watch["ownerKind"])
         self.assertEqual(watch, self.notifications.get(job.job_id).context["followUpRegistration"]["conditions"][0])
+        def pending_subjects(account="main"):
+            return follow_up_observation_symbols(account, ["005930", "MSTR"], _connect=self.queue.connect)
+        self.assertEqual(["005930"], pending_subjects())
+        self.assertEqual([], pending_subjects("foreign"))
         registered_at = datetime.fromisoformat(watch["registration"]["registeredAt"].replace("Z", "+00:00"))
         def observe(value, minute, account="main", symbol="005930"):
             at = (registered_at + timedelta(minutes=minute)).isoformat().replace("+00:00", "Z")
@@ -383,12 +389,14 @@ class AIInferenceQueueTests(unittest.TestCase):
         transitions = observe(1, 3)
         self.assertEqual(1, len(transitions))
         self.assertEqual("pending", transitions[0]["reasoningDispatchStatus"])
+        self.assertEqual(["005930"], pending_subjects())
         replay = observe(2, 4)
         self.assertEqual(transitions[0]["transitionId"], replay[0]["transitionId"])
         self.assertEqual(transitions[0]["sourceSnapshotObservedAt"], replay[0]["sourceSnapshotObservedAt"])
         self.assertEqual("satisfied", self.queue.latest_insight_episodes("main", "005930", 1)[0]["insight"]["followUpConditions"][0]["status"])
         acknowledge_follow_up_reasoning("main", watch["conditionId"], transitions[0]["transitionId"], _connect=self.queue.connect)
         self.assertEqual([], observe(2, 5))
+        self.assertEqual([], pending_subjects())
         mysql_execute(self.seed, "DELETE FROM notification_jobs WHERE job_id = %s", (job.job_id,))
         mysql_execute(self.seed, "DELETE FROM ai_inference_results WHERE result_id = %s", (result.result_id,))
         self.assertEqual("satisfied", self.queue.latest_insight_episodes("main", "005930", 1)[0]["insight"]["followUpConditions"][0]["status"])

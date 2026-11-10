@@ -674,6 +674,11 @@ class MySQLInvestmentDecisionEpisodeStore(MySQLOperationalConnection):
             utc_now_iso=utc_now_iso,
         )
 
+    def follow_up_observation_symbols(self, account_id: str, symbols: Iterable[str]) -> List[str]:
+        return follow_ups.follow_up_observation_symbols(
+            account_id, symbols, _connect=self.connect,
+        )
+
     def evaluate_follow_up_observation(
         self,
         account_id: str,

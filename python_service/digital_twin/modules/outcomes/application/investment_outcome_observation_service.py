@@ -365,9 +365,22 @@ class InvestmentOutcomeObservationService:
         evaluator = getattr(self.decision_episode_store, "evaluate_follow_up_observation", None)
         if not callable(evaluator):
             return {"status": "unavailable", "observedSymbolCount": 0, "transitionCount": 0, "transitions": []}
+        candidate_symbols = None
+        selector = getattr(type(self.decision_episode_store), "follow_up_observation_symbols", None)
+        if callable(selector):
+            try:
+                candidate_symbols = set(self.decision_episode_store.follow_up_observation_symbols(
+                    account_id, (observations or {}).keys(),
+                ))
+            except Exception:
+                # An unavailable selector is not proof of absence. Retain the
+                # existing independent per-subject reads and retry semantics.
+                candidate_symbols = None
         transitions = []
         error_count = 0
         for symbol, facts in (observations or {}).items():
+            if candidate_symbols is not None and str(symbol).upper() not in candidate_symbols:
+                continue
             try:
                 for item in evaluator(account_id, symbol, dict(facts or {}), observed_at) or []:
                     if isinstance(item, dict):

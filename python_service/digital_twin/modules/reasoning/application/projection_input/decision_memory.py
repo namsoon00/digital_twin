@@ -60,6 +60,16 @@ def decision_episode_projection_context(
             "outcomeObservation"
         ] = observation
         projection["outcomeObservation"] = observation
+    # Outcome observation is an explicit effect before these reads. Its own
+    # committed revision, rather than the revision from before observation,
+    # must fence reuse of the input assembled below. Keep this operational
+    # receipt outside the frozen ABox context/projection fields.
+    outcome_input_revision = ""
+    if callable(getattr(type(_inputs.decision_episode_store), "outcome_input_revision", None)):
+        try:
+            outcome_input_revision = _inputs.decision_episode_store.outcome_input_revision()
+        except Exception:
+            pass
     symbols = sorted(
         {
             str(symbol or "").upper().strip()
@@ -195,4 +205,5 @@ def decision_episode_projection_context(
         "episodes": rows,
         "outcomeHistoryEpisodes": outcome_history_episodes,
         "projection": projection,
+        "outcomeInputRevision": outcome_input_revision,
     }

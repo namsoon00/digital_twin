@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 import inspect
+import json
+import time
 from typing import Dict, Iterable, Mapping
 
 from digital_twin.modules.notifications.contracts import management_observation_assessment, typedb_context_observation_contract, typedb_review_observation_contract
@@ -393,6 +395,16 @@ class V2GraphDecisionCandidateBuilder:
 
     def build(self, request, snapshots, previous_by_account, projection_results, force=False):
         del previous_by_account
+        timings = {}
+        context_count = 0
+
+        def timed(stage, callback, *args, **kwargs):
+            started = time.perf_counter()
+            try:
+                return callback(*args, **kwargs)
+            finally:
+                timings[stage] = timings.get(stage, 0) + round((time.perf_counter() - started) * 1000)
+
         base_events = []
         syntheses = []
         hypothesis_candidates = []
@@ -410,17 +422,19 @@ class V2GraphDecisionCandidateBuilder:
                 )
             ):
                 continue
-            contexts = relation_contexts_from_snapshot(
+            contexts = timed("relationContextMs", relation_contexts_from_snapshot,
                 snapshot,
                 self.settings,
                 include_crypto_market_subjects=True,
+                target_symbols=request.symbols,
             )
+            context_count += len(contexts)
             for symbol, relation in contexts.items():
                 if not self._requested(request, symbol):
                     continue
-                synthesis = decision_synthesis_from_relation_context(account_id, relation)
+                synthesis = timed("synthesisMs", decision_synthesis_from_relation_context, account_id, relation)
                 if self.strategy_scenario_service is not None:
-                    scenarios = self.strategy_scenario_service.observe(
+                    scenarios = timed("scenarioWriteMs", self.strategy_scenario_service.observe,
                         synthesis.rulebox_judgment, getattr(snapshot, "generated_at", ""))
                     if scenarios:
                         synthesis.rulebox_judgment["strategyScenarios"] = scenarios
@@ -439,7 +453,7 @@ class V2GraphDecisionCandidateBuilder:
                         "changedFieldsBySymbol"
                     ),
                 )
-                event = self._base_event(
+                event = timed("eventContextMs", self._base_event,
                     snapshot,
                     relation,
                     synthesis,
@@ -453,9 +467,10 @@ class V2GraphDecisionCandidateBuilder:
                 and (not request.account_ids or account_id in request.account_ids)
             )
             if portfolio_scope:
-                relation = portfolio_relation_context_from_snapshot(snapshot)
+                relation = timed("relationContextMs", portfolio_relation_context_from_snapshot, snapshot)
                 if relation:
-                    synthesis = decision_synthesis_from_relation_context(account_id, relation)
+                    context_count += 1
+                    synthesis = timed("synthesisMs", decision_synthesis_from_relation_context, account_id, relation)
                     syntheses.append(synthesis)
                     failure = _notification_contract_failure(relation, synthesis)
                     if failure:
@@ -463,13 +478,13 @@ class V2GraphDecisionCandidateBuilder:
                     hypothesis_candidates.append({
                         "context": {"ontologyRelationContext": dict(relation)},
                     })
-                    event = self._base_event(snapshot, relation, synthesis)
+                    event = timed("eventContextMs", self._base_event, snapshot, relation, synthesis)
                     if event is not None:
                         event.rule = PORTFOLIO_ONTOLOGY_SIGNAL
                         base_events.append(event)
 
-        detected = build_investment_insight_events_by_snapshot(snapshots, base_events)
-        delivery_ready = self.cadence.ready(detected, force=force)
+        detected = timed("insightPackagingMs", build_investment_insight_events_by_snapshot, snapshots, base_events)
+        delivery_ready = timed("cadenceMs", self.cadence.ready, detected, force=force)
         delivery_ready_keys = {event.key for event in delivery_ready}
         for event in detected:
             metadata = dict(getattr(event, "metadata", {}) or {})
@@ -480,6 +495,11 @@ class V2GraphDecisionCandidateBuilder:
                 "decisionBoundary": "delivery-only",
             }
             event.metadata = metadata
+        if str(self.settings.get("_reasoningEngineVersion") or "").lower() == "v2":
+            print("V2 candidate timings " + json.dumps({
+                "requestId": request.request_id,
+                "requestedSymbolCount": len(request.symbols), "contextCount": context_count, **timings,
+            }, separators=(",", ":")), flush=True)
         return {
             "detected": detected,
             # Every material TypeDB candidate is judgment-ready. Delivery

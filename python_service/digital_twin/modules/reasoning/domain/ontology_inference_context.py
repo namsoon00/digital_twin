@@ -156,6 +156,7 @@ def relation_contexts_from_snapshot(
     snapshot: AccountSnapshot,
     settings: Optional[Dict[str, object]] = None,
     include_crypto_market_subjects: bool = False,
+    target_symbols: Optional[Iterable[str]] = None,
 ) -> Dict[str, Dict[str, object]]:
     inferencebox = inferencebox_from_snapshot(snapshot)
     if not inferencebox:
@@ -185,9 +186,10 @@ def relation_contexts_from_snapshot(
         else {}
     )
     holding_symbols = {str(item.symbol or "").upper() for item in snapshot.positions or [] if getattr(item, "symbol", "") and not item.is_cash()}
+    selected_symbols = {str(item or "").upper().strip() for item in target_symbols or [] if str(item or "").strip()}
     for position in positions:
         symbol = str(position.symbol or "").upper().strip()
-        if not symbol or symbol in result:
+        if not symbol or symbol in result or (selected_symbols and symbol not in selected_symbols):
             continue
         source = "holding" if symbol in holding_symbols else "watchlist"
         context = relation_context_from_inferencebox(

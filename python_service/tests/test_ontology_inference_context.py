@@ -771,6 +771,19 @@ class OntologyInferenceContextTests(unittest.TestCase):
         self.assertFalse(decisions[0].relation_rule_context["fallbackUsed"])
 
     def test_unknown_typedb_stage_is_blocked_instead_of_becoming_hold(self):
+        from copy import deepcopy
+        from datetime import datetime, timezone
+        from digital_twin.modules.reasoning.domain import ontology_inference_context as context_api
+
+        class FrozenDateTime(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                stamp = datetime(2026, 7, 10, tzinfo=timezone.utc)
+                return stamp.astimezone(tz) if tz else stamp.replace(tzinfo=None)
+
+        clock = patch("digital_twin.modules.decisions.domain.investment_brain.datetime", FrozenDateTime)
+        clock.start()
+        self.addCleanup(clock.stop)
         watch = Position(
             symbol="AAPL",
             name="Apple",
@@ -814,7 +827,28 @@ class OntologyInferenceContextTests(unittest.TestCase):
             },
         )
 
-        context = relation_contexts_from_snapshot(snapshot)["AAPL"]
+        other = deepcopy(watch)
+        other.symbol = "MSFT"
+        snapshot.watchlist.append(other)
+        inference = snapshot.metadata["ontology"]["typedb"]["inferenceBox"]
+        inference["inferenceGenerationAt"] = snapshot.generated_at
+        inference["inferenceGenerationId"] = "generation:fixture-target-selection"
+        for key in ("relations", "traces"):
+            inference[key].append(json.loads(json.dumps(inference[key][0]).replace("AAPL", "MSFT")))
+        expected = relation_contexts_from_snapshot(snapshot)
+        self.assertEqual({"AAPL", "MSFT"}, set(expected))
+        before = deepcopy(snapshot)
+        with patch.object(context_api, "relation_context_from_inferencebox", wraps=context_api.relation_context_from_inferencebox) as build:
+            targeted = relation_contexts_from_snapshot(snapshot, target_symbols=["aapl", "AAPL"])
+            self.assertEqual({"AAPL": expected["AAPL"]}, targeted)
+            self.assertEqual(1, build.call_count)
+            self.assertIs(watch, build.call_args.args[0])
+            build.reset_mock()
+            self.assertEqual({}, relation_contexts_from_snapshot(snapshot, target_symbols=["ABSENT"]))
+            build.assert_not_called()
+        self.assertEqual(expected, relation_contexts_from_snapshot(snapshot, target_symbols=[]))
+        self.assertEqual(before, snapshot)
+        context = targeted["AAPL"]
 
         self.assertTrue(context["decision"]["judgementBlocked"])
         self.assertEqual("blocked", context["decision"]["reviewLevel"])

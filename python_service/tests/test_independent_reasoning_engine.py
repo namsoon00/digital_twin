@@ -339,6 +339,7 @@ class IndependentReasoningEngineTests(unittest.TestCase):
         self._assert_live_watch_turn_refreshes_published_writer_state_after_release()
         monitor = SimpleNamespace(sent={})
         builder = V2GraphDecisionCandidateBuilder({}, monitor)
+        builder.settings["_reasoningEngineVersion"] = "v2"
         request = independent_reasoning_request("ontology-v2-shadow", [source_event()])
         snapshot = SimpleNamespace(
             account_id="acct",
@@ -372,7 +373,7 @@ class IndependentReasoningEngineTests(unittest.TestCase):
         with patch(
             "digital_twin.modules.reasoning.application.investment_reasoning.decision_synthesis.relation_contexts_from_snapshot",
             return_value={"NVDA": relation},
-        ), patch(
+        ) as context_reader, patch(
             "digital_twin.modules.reasoning.application.investment_reasoning.decision_synthesis.decision_synthesis_from_relation_context",
             return_value=synthesis,
         ), patch(
@@ -380,6 +381,8 @@ class IndependentReasoningEngineTests(unittest.TestCase):
             side_effect=lambda _snapshots, events: list(events),
         ):
             first = builder.build(request, [snapshot], {}, projection)
+            context_reader.assert_called_once_with(snapshot, builder.settings, include_crypto_market_subjects=True,
+                                                   target_symbols=request.symbols)
             self.assertEqual(1, len(first["judgmentReady"]))
             monitor.sent[first["judgmentReady"][0].cadence_key()] = datetime.now(
                 timezone.utc

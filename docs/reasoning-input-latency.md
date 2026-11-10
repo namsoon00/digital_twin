@@ -1725,3 +1725,30 @@ cache hits, and restore report reads when an explicit setting or frozen rule
 requires them. Report read APIs and their existing prepared-input coverage are
 unchanged. Native writes, inference time, source-to-claim waiting and worker
 lifetime remain separately measured costs.
+
+The first three deployed executions completed native reasoning with matching
+generations and the new exclusion receipt. Account report preparation measured
+0 ms in the input progress trace. Processing still took 115, 75 and 172 seconds;
+these are different turns, not a matched benchmark. The third turn used a source
+collected after restart and took 255 seconds from source to completion, including
+82 seconds before claiming. It also exposed a complete-source repair for
+`macro:market` (29 seconds) and candidate construction (30 seconds). The macro
+repair cannot inherit the target-quality certificate: a target-local inventory
+does not prove completeness of shared market facts.
+
+Candidate construction previously requested all position/watchlist/crypto
+relation explanations before discarding unrequested subjects. V2 now passes its
+immutable request symbols to the context reader, which filters before each
+subject's explanation is built. The reader still receives the complete portfolio,
+external signals, account context, inference evidence and counter-evidence;
+only iteration over unrelated subjects is avoided. Empty selections and existing
+callers retain the full view, including portfolio requests. The selected context
+must exactly equal that subject's original full-view context under the same clock.
+
+`V2 candidate timings` records the request ID, counts and milliseconds for relation
+context, synthesis, scenario writes, event construction, insight packaging and
+delivery cadence. It does not alter candidates, scenario history or cooldowns,
+and avoids attributing an entire slow candidate turn to one unmeasured helper.
+The subject-selection regression proves that the unrelated builder is not called
+and that the input snapshot is unchanged. It does not claim to eliminate the
+entire observed 30 seconds or establish an end-to-end latency bound.

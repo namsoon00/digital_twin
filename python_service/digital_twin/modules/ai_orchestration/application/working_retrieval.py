@@ -16,6 +16,7 @@ from ..domain import bounded_retrieval, purpose_retrieval, compact_retrieval, qu
 from .read_tools import ObservationReadTools
 from .retrieval import RetrievalLeaseLost, RetrievalContractFailure
 from ..domain import business_insight, business_progress, question_purpose, question_source_handoff
+from ..domain import retrieval_budget
 
 
 def byte_size(value):
@@ -250,6 +251,7 @@ def retrieve_working_evidence(session, packet, history, research, decide, save_i
         context["authorScopePolicy"] = contract.AUTHOR_SCOPE_POLICY
     trace, recalled, requests_seen = [], {"analyses": [], "memories": []}, set()
     used, corrections, status = 0, 0, "deferred"
+    budget_failure = None
     if resumed:
         used = resumed["bytes"]
         requests_seen.update(content_hash(r["request"]) for r in resumed["reads"])
@@ -266,7 +268,7 @@ def retrieve_working_evidence(session, packet, history, research, decide, save_i
         if market_explanation.enabled(packet):
             reserve = market_explanation.trace_reserve(contract, trace)
         if reliable_retrieval.enabled(packet):
-            reserve = reliable_retrieval.reserve(trace)
+            reserve = retrieval_budget.reserve(reliable_retrieval, trace, rounds-index)
         candidate = author_packet(session, packet, selected, {**seen, **active}, research, trace, "round-limit", contract=contract)
         source_bytes = source_packet_bytes(candidate)
         context.update(tools.context(), trace=trace, callsRemainingAfterThis=rounds-index-1,
@@ -295,6 +297,7 @@ def retrieve_working_evidence(session, packet, history, research, decide, save_i
         except EvidenceContractError as error:
             if "exceeds-context-budget" not in error.code:
                 raise
+            budget_failure = retrieval_budget.failure(error, "routing-input", 0, prompt_budget(prompt_bytes))
             status = "context-budget"
             break
         input_id = save_input(envelope)
@@ -319,11 +322,8 @@ def retrieve_working_evidence(session, packet, history, research, decide, save_i
                                         "defer": "deferred"}.get(decision["action"], "round-limit")
                 admission_reserve = market_explanation.trace_reserve(contract, admission_trace) if market_explanation.enabled(packet) else reserve
                 if reliable_retrieval.enabled(packet):
-                    admission_reserve = reliable_retrieval.reserve(admission_trace)
-                    if analyst_memory.enabled(packet) and decision["action"] != "read":
-                        # The final decision is already in admission_trace. No
-                        # future read can consume another full trace allowance.
-                        admission_reserve = min(admission_reserve, 2048)
+                    remaining = rounds-index-1 if decision["action"] == "read" else 0
+                    admission_reserve = retrieval_budget.reserve(reliable_retrieval, admission_trace, remaining)
                 proposed = author_packet(session, packet, chosen, seen, research, admission_trace, admission_status, admission_reserve, contract)
                 adjusted = {row["caseId"]: row for row in proposed["businessThesisMemory"]}
                 required_research = [adjusted.get(row.get("caseId"), row) if row.get("kind") == "business-thesis" else row
@@ -338,6 +338,8 @@ def retrieve_working_evidence(session, packet, history, research, decide, save_i
                     # This is an admission limit, not malformed model output.
                     # Save the valid choice and stop without a paid correction.
                     step.update(status="valid", decision=decision)
+                    budget_failure = retrieval_budget.failure(error, "selection-admission", admission_reserve, EVIDENCE_PACKET_MAX_BYTES)
+                    step["admissionFailure"] = budget_failure
                     record(step)
                     status = "context-budget"
                     break
@@ -410,7 +412,7 @@ def retrieve_working_evidence(session, packet, history, research, decide, save_i
                         try:
                             trial_reserve = market_explanation.trace_reserve(contract, trial_trace) if market_explanation.enabled(packet) else reserve
                             if reliable_retrieval.enabled(packet):
-                                trial_reserve = reliable_retrieval.reserve(trial_trace)
+                                trial_reserve = retrieval_budget.reserve(reliable_retrieval, trial_trace, rounds-index-1)
                             trial = author_packet(session, packet, selected, prospective, research, trial_trace,
                                 "round-limit", trial_reserve, contract)
                             trial_memories = merge_recalled(continuity["researchResults"], recalled["memories"])
@@ -424,6 +426,8 @@ def retrieve_working_evidence(session, packet, history, research, decide, save_i
                         except EvidenceContractError as error:
                             if not budget_error(error):
                                 raise
+                            budget_failure = retrieval_budget.failure(error, "read-admission", trial_reserve, EVIDENCE_PACKET_MAX_BYTES)
+                            step["admissionFailure"] = budget_failure
                             tools.cursors.pop(result.get("nextCursor"), None)
                             result = {"status": "context-budget", "facts": [], "reason": "author-packet-budget",
                                       "omittedResultHash": content_hash(result)}
@@ -444,6 +448,9 @@ def retrieve_working_evidence(session, packet, history, research, decide, save_i
             status = "repeated-read"
             break  # Identical requests cannot create a paid third decision.
     final = author_packet(session, packet, selected, {**seen, **active}, research, trace, status, contract=contract)
+    if budget_failure:
+        final["retrieval"]["budgetFailure"] = budget_failure
+        validate_evidence_packet(final)
     memories = merge_recalled(continuity["researchResults"], recalled["memories"])
     if final.get("researchScope", {}).get("assessmentPolicy") == scoped_retrieval.AUTHOR_SCOPE_POLICY:
         final["researchDeferredQuestions"] = [{key: deepcopy(row[key]) for key in

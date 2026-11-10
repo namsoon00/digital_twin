@@ -325,6 +325,17 @@ class InvestmentMeaningTests(unittest.TestCase):
         self.assertEqual('unchanged-wait', service.run_once()['status'])
         self.assertEqual(reads, service.read_planner.call_count)
         self.assertEqual(1, wrapped.feedback_reads)
+        from digital_twin.modules.ai_orchestration.domain import retrieval_budget
+        previous = deepcopy(store.last_processing_outcome.return_value)
+        previous['retrievalAdmission'] = {'status': 'context-budget', 'worldId': p['worldId'], 'policy': None}
+        store.last_processing_outcome.return_value = previous
+        self.assertEqual('awaiting-evidence', service.run_once()['status'])
+        self.assertEqual(reads + 1, service.read_planner.call_count)
+        previous = deepcopy(store.complete.call_args.args[1]['processingOutcome'])
+        previous['retrievalAdmission'] = {'status': 'context-budget', 'worldId': p['worldId'], 'policy': retrieval_budget.VERSION}
+        store.last_processing_outcome.return_value = previous
+        self.assertEqual('unchanged-wait', service.run_once()['status'])
+        self.assertEqual(reads + 1, service.read_planner.call_count)
 
     def test_company_source_can_be_authored_and_independently_reviewed_without_a_price_anchor(self):
         from ai_insight_fixtures import review

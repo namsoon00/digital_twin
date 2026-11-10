@@ -92,7 +92,9 @@ def freeze_execution_input(packet, history, research, max_prompt_bytes=DEFAULT_P
     prompt = builder(current, previous, results)
     limit = prompt_budget(max_prompt_bytes)
     if len(prompt.encode()) > limit:
-        raise EvidenceContractError("observation execution exceeds context budget")
+        error = EvidenceContractError("observation execution exceeds context budget")
+        error.budget_diagnostic = {"scope": "author-prompt", "limitBytes": limit, "usedBytes": len(prompt.encode())}
+        raise error
     # Current facts, due cases and the successful-delivery baseline are immutable. Admit
     # optional memories whole, in recency order, within both per-kind and total
     # budgets. An oversized first row must not block every subsequent attempt.

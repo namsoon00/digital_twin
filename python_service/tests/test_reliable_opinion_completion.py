@@ -1,7 +1,7 @@
 """Observed terminal gaps, bounded completion, immutable compaction and gap receipts."""
 from copy import deepcopy
 import unittest
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 from digital_twin.modules.ai_orchestration.domain import (
     reliable_retrieval as reliable, opinion_retrieval, opinion_memory, question_purpose,
@@ -21,6 +21,83 @@ def packet():
 
 
 class ReliableOpinionCompletionTests(unittest.TestCase):
+    def test_remaining_rounds_leave_room_for_an_already_read_financial_source(self):
+        from digital_twin.modules.ai_orchestration.application import working_retrieval as engine
+        from digital_twin.modules.ai_orchestration.domain import retrieval_budget
+        from digital_twin.modules.reasoning.domain.observation_evidence import select_evidence
+        from digital_twin.modules.reasoning.contracts import source_packet_bytes
+        from test_efficient_retrieval import decision
+        key = 'report-2025-12-31'
+        value = packet(); value['frozenAuditMetadata'] = 'x' * 60000
+        next(f for f in value['facts'] if f['id'] == key)['metricProvenance']['revenue']['sourceNote'] = 'original source note ' * 360
+        candidates = deepcopy(value['facts'])
+        value['facts'], value['coverage'] = select_evidence([f for f in value['facts'] if f['id'] != key])
+        def run(legacy):
+            saved = []
+            def save(env):
+                validate_execution_input(env); saved.append(deepcopy(env)); return 'input-' + str(len(saved))
+            def choose(env, _):
+                context = env['retrievalContext']; known = {r['factId'] for r in context['knownFacts']}
+                if len(saved) == 1:
+                    raw = decision('read', [{'tool': 'read_report', 'factId': key, 'metrics': ['revenue']}])
+                elif len(saved) == 2:
+                    path = next(p for p in context['readableContextPaths'] if p.startswith('/retrieval/trace/') and p.endswith('/metricProvenance'))
+                    raw = decision('read', [{'tool': 'read_context', 'path': path}])
+                else:
+                    raw = decision('finish')
+                raw['selectedFactIds'] = list(dict.fromkeys(context['selectedFactIds'] + ([key] if key in known else [])))
+                return raw
+            source = ObservationEvidenceSession(value, candidates)
+            if legacy:
+                with patch.object(retrieval_budget, 'reserve', side_effect=lambda contract, trace, remaining: contract.reserve(trace)):
+                    result = retrieve_working_evidence(source, value, [], [], choose, save, 262144)
+            else:
+                result = retrieve_working_evidence(source, value, [], [], choose, save, 262144)
+            return result, saved
+        (old, _, _, old_trace), old_inputs = run(True)
+        self.assertEqual('context-budget', old['retrieval']['status'])
+        self.assertEqual(2, len(old_inputs))
+        failed = retrieval_budget.blockage(old)
+        self.assertEqual('retrieval-context-budget', failed['reasonCode'])
+        self.assertGreater(failed['budgetFailure']['usedBytes'], 96000)
+        self.assertEqual(failed['budgetFailure'], old_trace[-1]['admissionFailure'])
+        (final, history, memories, trace), inputs = run(False)
+        self.assertEqual('ready', final['retrieval']['status'])
+        self.assertEqual(3, len(inputs))  # Same three-call ceiling; the writer is still separate.
+        self.assertNotIn('read', inputs[-1]['outputSchema']['properties']['action']['enum'])
+        self.assertLess(source_packet_bytes(final), 96000)
+        annual = next(f for f in final['facts'] if f['id'] == key)
+        original = next(f for f in candidates if f['id'] == key)
+        self.assertEqual(original['reportedValues']['revenue'], annual['reportedValues']['revenue'])
+        self.assertEqual(original['periodEnd'], annual['periodEnd'])
+        self.assertEqual(original['metricProvenance']['revenue'], annual['metricProvenance']['revenue'])
+        self.assertTrue(trace[1]['reads'][0]['result']['content'])
+        validate_execution_input(freeze_execution_input(final, history, memories, retrieval_trace=trace))
+
+    def test_budget_policy_retries_only_a_previous_scoped_capacity_wait_once(self):
+        from digital_twin.modules.ai_orchestration.domain import retrieval_budget, execution_lanes
+        value = packet(); identity = execution_lanes.material_key(value, [])
+        value[retrieval_budget.FIELD] = retrieval_budget.VERSION
+        self.assertEqual(identity, execution_lanes.material_key(value, []))
+        previous = {'retrievalAdmission': {'status': 'context-budget', 'worldId': value['worldId'], 'policy': None}}
+        self.assertTrue(retrieval_budget.retry_allowed(previous, value))
+        for change in ({'policy': retrieval_budget.VERSION}, {'worldId': 'another-world'}, {'status': 'deferred'}, {'status': 'repeated-read'}):
+            self.assertFalse(retrieval_budget.retry_allowed({'retrievalAdmission': {**previous['retrievalAdmission'], **change}}, value))
+        self.assertFalse(retrieval_budget.retry_allowed({}, value))
+        self.assertEqual(2048, retrieval_budget.reserve(reliable, [], 0))
+        self.assertLess(retrieval_budget.reserve(reliable, [], 1), retrieval_budget.reserve(reliable, [], 2))
+        for invalid in (-1, 4, True, 1.5):
+            with self.assertRaises(ValueError): retrieval_budget.reserve(reliable, [], invalid)
+        error = EvidenceContractError('observation evidence exceeds context budget')
+        error.budget_diagnostic = {'scope': 'source-packet', 'usedBytes': 98000, 'limitBytes': 96000, 'snapshotId': 'private-source', 'sourceText': 'secret'}
+        diagnostic = retrieval_budget.failure(error, 'read-admission', 6144, 96000)
+        self.assertNotIn('secret', str(diagnostic)); self.assertNotIn('private', str(diagnostic))
+        for status, action, expected in (('context-budget', 'read', 'retrieval-context-budget'),
+                ('repeated-read', 'read', 'repeated-read'), ('round-limit', 'read', 'retrieval-round-limit'),
+                ('deferred', 'finish', 'selected-evidence-insufficient')):
+            self.assertEqual(expected, retrieval_budget.blockage({'retrieval': {'status': status, 'steps': [{'action': action}]}})['reasonCode'])
+        self.assertEqual({}, retrieval_budget.blockage({'retrieval': {'status': 'deferred', 'steps': []}}))
+
     def test_retry_reopens_current_report_and_finishes_without_repeating_the_read_plan(self):
         from digital_twin.modules.ai_orchestration.domain import read_continuation, focused_retrieval
         from digital_twin.modules.reasoning.contracts import HISTORICAL_CONTEXT_BUDGET_POLICY

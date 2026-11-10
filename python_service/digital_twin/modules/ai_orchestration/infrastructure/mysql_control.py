@@ -377,10 +377,22 @@ class MySQLAIControlStore(RejectionFeedbackPersistence, ReadContinuationPersiste
 
     def last_processing_outcome(self, account_id, symbol, capability="observe"):
         with self.connect() as connection:
-            rows = connection.execute("SELECT JSON_EXTRACT(result_json,'$.processingOutcome') AS outcome_json "
+            rows = connection.execute("SELECT JSON_EXTRACT(result_json,'$.processingOutcome') AS outcome_json, "
+                "JSON_UNQUOTE(JSON_EXTRACT(payload_json,'$.worldId')) AS outcome_world, "
+                "JSON_UNQUOTE(JSON_EXTRACT(result_json,'$.input.retrieval.status')) AS retrieval_status, "
+                "JSON_UNQUOTE(JSON_EXTRACT(result_json,'$.input.retrievalBudgetPolicy')) AS retrieval_policy "
                 "FROM ai_control_tasks WHERE account_id=%s AND symbol=%s AND capability=%s AND status IN ('completed','failed') "
                 "ORDER BY updated_at DESC,task_id DESC LIMIT 8", (account_id, symbol, capability)).fetchall()
-        return next((json.loads(row["outcome_json"]) for row in rows if row["outcome_json"]), {})
+        for row in rows:
+            if row["outcome_json"]:
+                outcome = json.loads(row["outcome_json"])
+                if not isinstance(outcome, dict):
+                    continue
+                if row.get("retrieval_status") == "context-budget":
+                    outcome["retrievalAdmission"] = {"worldId": row["outcome_world"], "status": row["retrieval_status"],
+                                                      "policy": row["retrieval_policy"]}
+                return outcome
+        return {}
 
     def reviewed_memory(self, account_id, symbol, world_id, capability="observe"):
         return self.memory(account_id, symbol, capability, world_id)

@@ -6,7 +6,7 @@ from digital_twin.modules.reasoning.contracts import EvidenceContractError, Evid
 from digital_twin.modules.ai_orchestration.application.retrieval import RetrievalLeaseLost, RetrievalContractFailure
 from .working_retrieval import retrieve_working_evidence
 from ..domain.observation_wait import retry_key, disposition, unchanged_wait
-from ..domain import opinion_memory, insight_progress
+from ..domain import opinion_memory, insight_progress, retrieval_budget
 from ..domain import research_repeat as repeat, execution_lanes as lanes, evidence_readiness, evidence_purpose, company_value
 from digital_twin.modules.ai_orchestration.domain.planning import enabled, identity, stamp, validate_plan, observation_fingerprint
 from digital_twin.modules.ai_orchestration.domain.execution_input import LANE_PROMPT_VERSION, freeze_execution_input, freeze_review_input, freeze_repair_input, PROMPT_VERSION
@@ -196,6 +196,7 @@ class AIControlService:
                         packet["opinionMemoryPolicy"] = opinion_policy
                         from ..domain.reliable_retrieval import MARKER as completion_policy
                         packet["retrievalReliabilityPolicy"] = completion_policy
+                        packet[retrieval_budget.FIELD] = retrieval_budget.VERSION
                         from digital_twin.modules.reasoning.contracts import HISTORICAL_CONTEXT_BUDGET_POLICY
                         packet["historicalContextPolicy"] = HISTORICAL_CONTEXT_BUDGET_POLICY
                         if lanes.market(packet):
@@ -248,6 +249,7 @@ class AIControlService:
                     due_thesis_review = (previous_outcome.get("reasonCode") == "insight-source-gaps"
                         and any(row.get("reviewDue") for row in research if row.get("kind") == "business-thesis"))
                     if ((unchanged_wait(previous_outcome, retry_identity) or same_quote_wait) and not due_thesis_review
+                            and not retrieval_budget.retry_allowed(previous_outcome, packet)
                             and not any(row.get("transitionVerified") for row in packet["followUpEvaluations"])):
                         return self.complete_wait(job, packet, previous_outcome, [], "unchanged-wait")
                     if (lanes.identified(packet) and not lanes.market(packet) and packet.get("questionWorkPolicy")
@@ -314,12 +316,14 @@ class AIControlService:
                                 job["accountId"], job["symbol"], job["worldId"], packet["capturedAt"], query, offset, limit))
                                 if callable(getattr(type(self.store), "search_opinions", None)) else None)
                         if packet["retrieval"]["status"] not in {"ready", "research-ready", "assessment-ready"}:
+                            blocked_by = retrieval_budget.blockage(packet)
                             missing = [item for step in retrieval_trace for item in (step.get("decision") or {}).get("missingEvidence", [])]
                             blocked = (not missing or packet["retrieval"]["status"] == "context-budget" or any(
                                 read["result"].get("status") in {"context-budget", "repeated-read"} for step in retrieval_trace for read in step["reads"]))
                             state = disposition(packet, retry_identity, "retrieval-blocked" if blocked else "data-wait",
-                                missing or ["조회 범위 또는 호출 한도 안에서 필요한 근거를 선택하지 못했습니다."])
+                                missing or [blocked_by.get("reason", "조회 범위 또는 호출 한도 안에서 필요한 근거를 선택하지 못했습니다.")])
                             state.update(evidence_purpose.waiting_metadata(waiting_source_packet, retrieval_trace, waiting_source_research))
+                            state.update({key: value for key, value in blocked_by.items() if key != "reason"})
                             return self.complete_wait(job, packet, state, retrieval_trace)
                     source_progress = insight_progress.assessment(packet, previous, research)
                     if source_progress.get("skipAuthor"):

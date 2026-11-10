@@ -224,6 +224,30 @@ class RetrievalRecoveryTests(unittest.TestCase):
 
 @unittest.skipUnless(os.environ.get("MYSQL_DATABASE") == "orbit_alpha_test", "isolated MySQL required")
 class RetrievalAuditStorageTests(unittest.TestCase):
+    def test_capacity_wait_readback_carries_scope_and_policy_without_rewriting_the_wait(self):
+        from digital_twin.modules.ai_orchestration.domain import retrieval_budget
+        current = {**SUBJECT, retrieval_budget.FIELD: retrieval_budget.VERSION}
+        old = {'status': 'awaiting-evidence', 'input': {**SUBJECT, 'retrieval': {'status': 'context-budget'}},
+               'processingOutcome': {'status': 'retrieval-blocked', 'retryKey': 'source-key'}}
+        self.assertTrue(self.store.complete(self.job, old, []))
+        outcome = self.store.last_processing_outcome(SUBJECT['accountId'], SUBJECT['symbol'])
+        self.assertEqual(SUBJECT['worldId'], outcome['retrievalAdmission']['worldId'])
+        self.assertTrue(retrieval_budget.retry_allowed(outcome, current))
+        self.assertEqual({}, self.store.last_processing_outcome('another-account', SUBJECT['symbol']))
+        self.assertEqual({}, self.store.last_processing_outcome(SUBJECT['accountId'], 'another-symbol'))
+        self.assertEqual({}, self.store.last_processing_outcome(SUBJECT['accountId'], SUBJECT['symbol'], 'market-observe'))
+        with self.store.transaction() as c:
+            self.store.insert(c, {**SUBJECT, 'taskId': 'new-budget-check', 'capability': 'observe'})
+        job = self.store.claim()
+        after = copy.deepcopy(old); after['input'][retrieval_budget.FIELD] = retrieval_budget.VERSION
+        self.assertTrue(self.store.complete(job, after, []))
+        outcome = self.store.last_processing_outcome(SUBJECT['accountId'], SUBJECT['symbol'])
+        self.assertFalse(retrieval_budget.retry_allowed(outcome, current))
+        with self.store.connect() as c:
+            original = c.execute('SELECT result_json FROM ai_control_tasks WHERE task_id=%s', (self.job['taskId'],)).fetchone()
+            self.assertEqual(old, json.loads(original['result_json']))
+            self.assertEqual(0, c.execute('SELECT COUNT(*) n FROM ai_control_calls').fetchone()['n'])
+
     def test_rejection_feedback_is_read_only_scoped_cutoff_bound_and_requires_completed_call(self):
         from ai_insight_fixtures import observation
         from digital_twin.modules.ai_orchestration.domain import execution_lanes, rejection_feedback

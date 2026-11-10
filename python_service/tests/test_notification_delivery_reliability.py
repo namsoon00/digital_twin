@@ -32,6 +32,30 @@ def receipt(message_id="1"):
 
 
 class DeliveryReliabilityTests(unittest.TestCase):
+    def test_one_bot_circuit_does_not_block_another_bot_or_rotated_credential(self):
+        from digital_twin.modules.notifications.infrastructure.notification import transport
+        import json
+        limited = TelegramNotifier('100:limited-fixture', '456')
+        healthy = TelegramNotifier('200:healthy-fixture', '456')
+        rotated = TelegramNotifier('100:rotated-fixture', '456')
+        too_many = HTTPError('https://example.invalid', 429, 'limited', {'Retry-After': '120'},
+                            BytesIO(b'{"error_code":429,"parameters":{"retry_after":120}}'))
+        response = Mock()
+        response.__enter__ = Mock(return_value=SimpleNamespace(read=lambda: json.dumps(
+            {'ok': True, 'result': {'message_id': 1, 'chat': {'id': 456}}}).encode()))
+        response.__exit__ = Mock(return_value=False)
+        with patch.dict(transport.TELEGRAM_API_GUARD_STATE, {}, clear=True), \
+                patch.object(transport, 'runtime_settings', return_value={}), \
+                patch.object(transport.urllib.request, 'urlopen', side_effect=[too_many, response, response]) as send:
+            self.assertFalse(limited.send('limited').delivered)
+            self.assertIn('circuit open', limited.send('still limited').reason)
+            self.assertTrue(healthy.send('customer message').metadata['receiptVerified'])
+            self.assertTrue(rotated.send('rotated credential').metadata['receiptVerified'])
+            self.assertEqual(3, send.call_count)
+            self.assertNotIn('fixture', str(transport.TELEGRAM_API_GUARD_STATE))
+            self.assertEqual(limited.guard_target('sendMessage'), TelegramNotifier(limited.bot_token, '789').guard_target('sendMessage'))
+            self.assertNotEqual(limited.guard_target('sendMessage'), limited.guard_target('sendDocument'))
+
     def test_pool_exhaustion_backs_off_and_recovery_remains_bounded(self):
         from digital_twin.modules.notifications.domain.delivery_recovery import terminal_delivery_recovery_decision
         now = datetime(2026, 10, 11, tzinfo=timezone.utc)

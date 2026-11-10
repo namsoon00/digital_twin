@@ -101,6 +101,12 @@ class TelegramNotifier(TelegramDocuments):
         self.bot_token = bot_token
         self.chat_id = chat_id
 
+    def guard_target(self, method):
+        # Research and customer bots must not share transport circuit state.
+        # Hash the whole credential so rotation starts a new credential scope
+        # without placing a token or a recipient in guard diagnostics.
+        return method + ":" + hashlib.sha256(self.bot_token.encode("utf-8")).hexdigest()
+
     def post_message(self, payload: Dict[str, object]) -> NotificationResult:
         body = json.dumps({"disable_web_page_preview": True, **payload}).encode("utf-8")
         request = urllib.request.Request(
@@ -117,7 +123,7 @@ class TelegramNotifier(TelegramDocuments):
             response_payload = guarded_external_call(
                 runtime_settings(),
                 "Telegram",
-                "sendMessage",
+                self.guard_target("sendMessage"),
                 send_request,
                 state=TELEGRAM_API_GUARD_STATE,
                 rate_limit_seconds=0,

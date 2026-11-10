@@ -36,6 +36,17 @@ def failure(error, stage, reserved, limit):
     return result
 
 
+def progress_summary(contract, trace, status):
+    """Include only capacity diagnostics backed by a frozen retrieval round."""
+    summary = contract.trace_summary(trace, status)
+    if status == "context-budget":
+        diagnostic = next((step["admissionFailure"] for step in reversed(trace)
+                           if step.get("admissionFailure")), None)
+        if diagnostic:
+            summary["budgetFailure"] = diagnostic
+    return summary
+
+
 def blockage(packet):
     status = packet.get("retrieval", {}).get("status")
     reasons = {

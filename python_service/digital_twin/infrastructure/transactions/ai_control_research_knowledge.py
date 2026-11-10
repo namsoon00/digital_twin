@@ -139,7 +139,8 @@ class AIControlResearchKnowledge:
             contract.validate_trace(trace)
             if contract in {compact_retrieval, quality_retrieval, completion_retrieval, business_retrieval, company_retrieval, efficient_retrieval, question_gap_retrieval, external_influence_retrieval, price_investigation_retrieval, market_explanation_retrieval, opinion_retrieval, reliable_retrieval}:
                 (focused_retrieval.context_view if envelope["promptVersion"] in focused_retrieval.VERSIONS else getattr(contract, "context_view", retrieval_view)).paths(envelope["current"], {**envelope["retrievalContext"], "trace": trace})
-        if (packet["retrieval"] != contract.trace_summary(trace, packet["retrieval"]["status"])
+        from digital_twin.modules.ai_orchestration.domain.retrieval_budget import progress_summary
+        if (packet["retrieval"] != progress_summary(contract, trace, packet["retrieval"]["status"])
                 or any(digest(fact) not in captured_versions.get(fact["id"], set()) for fact in packet["facts"])):
             raise ValueError("research progress evidence changed after capture")
         if contract in {scoped_retrieval, indexed_retrieval, question_retrieval, lane_retrieval, bounded_retrieval, purpose_retrieval, compact_retrieval, quality_retrieval, completion_retrieval, business_retrieval, company_retrieval, efficient_retrieval, question_gap_retrieval, external_influence_retrieval, price_investigation_retrieval, market_explanation_retrieval, opinion_retrieval, reliable_retrieval} and packet.get("researchScope") != contract.research_scope(trace, packet["retrieval"]["status"]):

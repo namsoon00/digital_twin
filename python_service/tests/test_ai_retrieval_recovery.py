@@ -490,6 +490,45 @@ class RetrievalAuditStorageTests(unittest.TestCase):
         with patch.object(MySQLConnectionProxy, "commit", changed_after_commit), self.assertRaises(OperationalError):
             self.store.save_retrieval_round(self.job, rounds[0])
 
+    def test_capacity_wait_proves_diagnostics_without_weakening_frozen_fact_or_call_checks(self):
+        from test_reliable_opinion_completion import packet
+        from test_efficient_retrieval import decision
+        from digital_twin.modules.reasoning.contracts import ObservationEvidenceSession
+        from digital_twin.modules.ai_orchestration.application import working_retrieval as engine
+        from digital_twin.infrastructure.transactions.ai_control_research_knowledge import AIControlResearchKnowledge
+        with self.store.transaction() as c:
+            c.execute("UPDATE ai_control_tasks SET capability='market-observe',payload_json=JSON_SET(payload_json,'$.capability','market-observe') WHERE task_id=%s", (self.job['taskId'],))
+        self.job['capability'] = 'market-observe'
+        value = {**packet(), 'taskId': self.job['taskId']}
+        def save(env):
+            key = self.store.save_execution_input(self.job, env)
+            call = self.store.begin_call('independent-observation', env['promptHash'], self.job['taskId'], key)
+            self.store.finish_call(call)
+            return key
+        error = EvidenceContractError('observation evidence exceeds context budget')
+        error.budget_diagnostic = {'scope': 'source-packet', 'usedBytes': 97000, 'limitBytes': 96000}
+        with patch.object(engine, 'freeze_execution_input', side_effect=error):
+            final, _, _, trace = engine.retrieve_working_evidence(ObservationEvidenceSession(value, value['facts']),
+                value, [], [], Mock(return_value=decision('finish')), save, 262144,
+                record_round=lambda step: self.store.save_retrieval_round(self.job, step))
+        self.assertEqual('context-budget', final['retrieval']['status'])
+        self.assertEqual(trace[-1]['admissionFailure'], final['retrieval']['budgetFailure'])
+        result = {'input': final, 'retrievalInputIds': [step['inputId'] for step in trace]}
+        with self.store.connect() as c:
+            self.assertEqual(trace, AIControlResearchKnowledge.read_proof(c, self.job, result))
+            for change in ('diagnostic', 'fact', 'scope'):
+                forged = copy.deepcopy(result)
+                if change == 'diagnostic': forged['input']['retrieval']['budgetFailure']['usedBytes'] += 1
+                elif change == 'fact': forged['input']['facts'][0]['unobserved'] = True
+                else: forged['input']['symbol'] = 'foreign'
+                with self.subTest(change=change), self.assertRaises(ValueError):
+                    AIControlResearchKnowledge.read_proof(c, self.job, forged)
+        with self.store.transaction() as c:
+            c.execute("UPDATE ai_control_calls SET status='failed' WHERE task_id=%s", (self.job['taskId'],))
+        with self.store.connect() as c, self.assertRaisesRegex(ValueError, 'completed frozen read proof'):
+            AIControlResearchKnowledge.read_proof(c, self.job, result)
+        self.assertNotIn('summary', result)
+
     def test_read_plans_resume_through_current_source_and_persisted_lineage_without_old_answers(self):
         from test_reliable_opinion_completion import packet
         from test_efficient_retrieval import decision

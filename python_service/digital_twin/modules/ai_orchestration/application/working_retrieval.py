@@ -448,8 +448,10 @@ def retrieve_working_evidence(session, packet, history, research, decide, save_i
             status = "repeated-read"
             break  # Identical requests cannot create a paid third decision.
     final = author_packet(session, packet, selected, {**seen, **active}, research, trace, status, contract=contract)
-    if budget_failure:
-        final["retrieval"]["budgetFailure"] = budget_failure
+    if budget_failure and budget_failure["stage"] != "routing-input":
+        # A routing freeze failure has no saved round. Retain the capacity
+        # disposition, but only attach diagnostics proven by the round hash.
+        final["retrieval"] = retrieval_budget.progress_summary(contract, trace, status)
         validate_evidence_packet(final)
     memories = merge_recalled(continuity["researchResults"], recalled["memories"])
     if final.get("researchScope", {}).get("assessmentPolicy") == scoped_retrieval.AUTHOR_SCOPE_POLICY:

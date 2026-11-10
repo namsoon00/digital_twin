@@ -27,7 +27,7 @@ class TelegramDocuments:
             def upload():
                 with urllib.request.urlopen(request, timeout=30) as response:
                     return json.loads(response.read())
-            payload = guarded_external_call(runtime_settings(), "Telegram", "sendDocument", upload,
+            payload = guarded_external_call(runtime_settings(), "Telegram", self.guard_target("sendDocument"), upload,
                 state=TELEGRAM_API_GUARD_STATE, rate_limit_seconds=0, attempts=1)
             if not isinstance(payload, dict) or payload.get("ok") is not True:
                 return self.api_failure(payload if isinstance(payload, dict) else {}, "파일 전송 실패")

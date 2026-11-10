@@ -1570,6 +1570,24 @@ stage, not a tenfold improvement of source-to-delivery latency. Existing queue
 debt, changed-scope persistence, native inference and transport remain separate
 costs and must be measured on newly claimed work after runtime restart.
 
+The first new operational completion exposed an additional boundary: context
+preparation was reused (`inputContextPreparationMs=20,869`, context cache hit,
+2,742 ms under the writer), but active-scope reuse still took 26,767 ms across
+14 queries. The earlier native comparison shared an outer READ snapshot;
+production was opening a new READ transaction for each query. The active-scope
+reader now owns one bounded 60-second native READ snapshot for all its queries.
+It closes before candidate writes. An interrupted/expired capture fails closed
+and the original durable request retries without substituting a newer source.
+
+A second comparison called both readers directly, without an outer snapshot,
+on 141 exact immutable scopes. It retained all 293 nodes, 544 relations and
+349 endpoints: the original reader took 34,032.5 ms and the final reader took
+2,116.7 ms. This includes the operational transaction lifetime rather than
+only the query shape. The first post-restart execution before this final fix
+completed with native/alignment proofs in 247 seconds, 943.6 seconds after its
+source; it produced zero customer notification candidates. These are explicit
+remaining latency measurements, not a claim that alert delivery is solved.
+
 The pre-existing frozen v6 save oracle was also replayed from its original
 `fb9db4df8a24` source. Committed preparation telemetry was its only difference
 in the successful-save scenario. The oracle remains unchanged: its fixture

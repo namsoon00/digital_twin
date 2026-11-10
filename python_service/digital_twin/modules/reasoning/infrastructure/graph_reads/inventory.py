@@ -694,275 +694,279 @@ def read_active_scoped_abox_rows(
         else ""
     )
 
-    for offset in range(0, len(requested_generations), batch_size):
-        batch = requested_generations[offset : offset + batch_size]
-        generation_filter = typedb_value_match(
-            "$n",
-            "ontology-snapshot-id",
-            batch,
-            "==",
-            "activeScopeGenerationFilter",
-        )
-        node_query = (
-            "match $n isa ontology-node, "
-            "has ontology-id $id, "
-            "has ontology-storage-id $storageId, "
-            "has ontology-label $label, "
-            "has ontology-kind $kind, "
-            'has ontology-box "ABox", ' + world_clause + "has ontology-scope-id $scopeId, "
-            "has ontology-snapshot-id $generationId, "
-            "has ontology-updated-at $updatedAt, "
-            "has ontology-json $json; " + generation_filter
-        )
-        raw_nodes = _store.read_rows(
-            node_query,
-            [
-                "id",
-                "storageId",
-                "label",
-                "kind",
-                "scopeId",
-                "generationId",
-                "updatedAt",
-                "json",
-            ],
-            label="typedb.scoped-abox.active-node-rows",
-        )
-        read_plan["queryCount"] += 1
-        for raw in raw_nodes:
-            scope_id = str(raw.get("scopeId") or "").strip()
-            generation_id = str(raw.get("generationId") or "").strip()
-            if (
-                expected_generation_by_scope.get(scope_id) != generation_id
-                or generation_scope.get(generation_id) != scope_id
-            ):
-                return {
-                    "status": "scope-generation-mismatch",
-                    "reason": "An active node row did not match the requested scope generation.",
-                    "scopeId": scope_id,
-                    "generationId": generation_id,
-                    "nodeRows": [],
-                    "relationRows": [],
-                    "endpointNodeRows": [],
-                }
-            properties = json_object(raw.get("json"))
-            mapped = _store.entity_row_from_typeql(raw, "ABox")
-            mapped.update(
-                {
-                    "storageId": str(raw.get("storageId") or ""),
-                    "scopeId": scope_id,
-                    "scopeType": str(
-                        properties.get("aboxScopeType")
-                        or (active_plan.get(scope_id) or {}).get("scopeType")
-                        or ""
-                    ),
-                    "snapshotId": generation_id,
-                    "aboxSnapshotId": generation_id,
-                    "scopeGenerationId": generation_id,
-                    "manifestId": str(
-                        properties.get("worldviewManifestId") or properties.get("manifestId") or ""
-                    ),
-                    "worldId": str(properties.get("worldId") or world_id or ""),
-                }
+    # Capture all immutable generations and shared endpoints through one bounded
+    # native READ transaction. Opening a transaction per query dominated the
+    # operational path even after the wide endpoint joins were removed.
+    with _store.read_snapshot_scope(timeout_seconds=60):
+        for offset in range(0, len(requested_generations), batch_size):
+            batch = requested_generations[offset : offset + batch_size]
+            generation_filter = typedb_value_match(
+                "$n",
+                "ontology-snapshot-id",
+                batch,
+                "==",
+                "activeScopeGenerationFilter",
             )
-            node_rows.append(mapped)
-            raw_nodes_by_storage_id[str(raw.get("storageId") or "")] = dict(raw)
-
-        relation_generation_filter = typedb_value_match(
-            "$r",
-            "ontology-snapshot-id",
-            batch,
-            "==",
-            "activeRelationGenerationFilter",
-        )
-        relation_query = (
-            "match "
-            "$source isa ontology-node, has ontology-id $sourceId, "
-            "has ontology-storage-id $sourceStorageId; "
-            "$target isa ontology-node, has ontology-id $targetId, "
-            "has ontology-storage-id $targetStorageId; "
-            "$r isa ontology-assertion, links (source: $source, target: $target), "
-            "has ontology-id $id, has ontology-storage-id $storageId, "
-            "has ontology-relation-type $type, "
-            'has ontology-box "ABox", ' + world_clause + "has ontology-scope-id $scopeId, "
-            "has ontology-snapshot-id $generationId, "
-            "has ontology-updated-at $updatedAt, has ontology-json $json, "
-            "has ontology-weight $weight; " + relation_generation_filter
-        )
-        raw_relations = _store.read_rows(
-            relation_query,
-            [
-                "id",
-                "storageId",
-                "sourceId",
-                "sourceStorageId",
-                "targetId",
-                "targetStorageId",
-                "type",
-                "scopeId",
-                "generationId",
-                "updatedAt",
-                "json",
-                "weight",
-            ],
-            label="typedb.scoped-abox.active-relation-rows",
-        )
-        read_plan["queryCount"] += 1
-        for raw in raw_relations:
-            scope_id = str(raw.get("scopeId") or "").strip()
-            generation_id = str(raw.get("generationId") or "").strip()
-            if (
-                expected_generation_by_scope.get(scope_id) != generation_id
-                or generation_scope.get(generation_id) != scope_id
-            ):
-                return {
-                    "status": "scope-generation-mismatch",
-                    "reason": "An active relation row did not match the requested scope generation.",
-                    "scopeId": scope_id,
-                    "generationId": generation_id,
-                    "nodeRows": [],
-                    "relationRows": [],
-                    "endpointNodeRows": [],
-                }
-            properties = json_object(raw.get("json"))
-            mapped = _store.relation_row_from_typeql(raw, "ABox")
-            mapped.update(
-                {
-                    "storageId": str(raw.get("storageId") or ""),
-                    "sourceStorageId": str(raw.get("sourceStorageId") or ""),
-                    "targetStorageId": str(raw.get("targetStorageId") or ""),
-                    "scopeId": scope_id,
-                    "scopeType": str(
-                        properties.get("aboxScopeType")
-                        or (active_plan.get(scope_id) or {}).get("scopeType")
-                        or ""
-                    ),
-                    "snapshotId": generation_id,
-                    "aboxSnapshotId": generation_id,
-                    "scopeGenerationId": generation_id,
-                    "manifestId": str(
-                        properties.get("worldviewManifestId") or properties.get("manifestId") or ""
-                    ),
-                    "worldId": str(properties.get("worldId") or world_id or ""),
-                }
+            node_query = (
+                "match $n isa ontology-node, "
+                "has ontology-id $id, "
+                "has ontology-storage-id $storageId, "
+                "has ontology-label $label, "
+                "has ontology-kind $kind, "
+                'has ontology-box "ABox", ' + world_clause + "has ontology-scope-id $scopeId, "
+                "has ontology-snapshot-id $generationId, "
+                "has ontology-updated-at $updatedAt, "
+                "has ontology-json $json; " + generation_filter
             )
-            for prefix in ("source", "target"):
-                storage_id = str(raw.get(prefix + "StorageId") or "").strip()
-                node_id = str(raw.get(prefix + "Id") or "").strip()
-                if not storage_id or not node_id or (
-                    storage_id in endpoint_references
-                    and endpoint_references[storage_id] != node_id
+            raw_nodes = _store.read_rows(
+                node_query,
+                [
+                    "id",
+                    "storageId",
+                    "label",
+                    "kind",
+                    "scopeId",
+                    "generationId",
+                    "updatedAt",
+                    "json",
+                ],
+                label="typedb.scoped-abox.active-node-rows",
+            )
+            read_plan["queryCount"] += 1
+            for raw in raw_nodes:
+                scope_id = str(raw.get("scopeId") or "").strip()
+                generation_id = str(raw.get("generationId") or "").strip()
+                if (
+                    expected_generation_by_scope.get(scope_id) != generation_id
+                    or generation_scope.get(generation_id) != scope_id
                 ):
-                    raise ValueError("An active relation has inconsistent endpoint storage identity.")
-                endpoint_references[storage_id] = node_id
-                read_plan["endpointReferenceCount"] += 1
-            relation_rows.append(mapped)
+                    return {
+                        "status": "scope-generation-mismatch",
+                        "reason": "An active node row did not match the requested scope generation.",
+                        "scopeId": scope_id,
+                        "generationId": generation_id,
+                        "nodeRows": [],
+                        "relationRows": [],
+                        "endpointNodeRows": [],
+                    }
+                properties = json_object(raw.get("json"))
+                mapped = _store.entity_row_from_typeql(raw, "ABox")
+                mapped.update(
+                    {
+                        "storageId": str(raw.get("storageId") or ""),
+                        "scopeId": scope_id,
+                        "scopeType": str(
+                            properties.get("aboxScopeType")
+                            or (active_plan.get(scope_id) or {}).get("scopeType")
+                            or ""
+                        ),
+                        "snapshotId": generation_id,
+                        "aboxSnapshotId": generation_id,
+                        "scopeGenerationId": generation_id,
+                        "manifestId": str(
+                            properties.get("worldviewManifestId") or properties.get("manifestId") or ""
+                        ),
+                        "worldId": str(properties.get("worldId") or world_id or ""),
+                    }
+                )
+                node_rows.append(mapped)
+                raw_nodes_by_storage_id[str(raw.get("storageId") or "")] = dict(raw)
 
-    # A stock can participate in hundreds of relations. Fetching its label,
-    # scope, generation and JSON for both endpoints in every relation made the
-    # TypeDB join wide and repeatedly transported the same factual payload.
-    # Keep the relation read to physical identities. Most endpoints were already
-    # read above; fetch only distinct missing identities, never whole scopes or
-    # a current logical-ID substitute. All generations remain immutable under
-    # the caller's scoped write lease until candidate closure is validated.
-    missing_storage_ids = sorted(set(endpoint_references) - set(raw_nodes_by_storage_id))
-    read_plan["endpointRowsReusedCount"] = len(endpoint_references) - len(missing_storage_ids)
-    for offset in range(0, len(missing_storage_ids), batch_size):
-        batch = missing_storage_ids[offset : offset + batch_size]
-        endpoint_query = (
-            "match $n isa ontology-node, has ontology-id $id, "
-            "has ontology-storage-id $storageId, has ontology-label $label, "
-            "has ontology-kind $kind, has ontology-scope-id $scopeId, "
-            "has ontology-snapshot-id $generationId, "
-            "has ontology-updated-at $updatedAt, has ontology-json $json; "
-            + typedb_value_match(
-                "$n", "ontology-storage-id", batch, "==", "activeEndpointStorageFilter",
+            relation_generation_filter = typedb_value_match(
+                "$r",
+                "ontology-snapshot-id",
+                batch,
+                "==",
+                "activeRelationGenerationFilter",
             )
-        )
-        endpoints = _store.read_rows(
-            endpoint_query,
-            ["id", "storageId", "label", "kind", "scopeId", "generationId", "updatedAt", "json"],
-            label="typedb.scoped-abox.active-endpoint-rows",
-        )
-        read_plan["queryCount"] += 1
-        read_plan["endpointRowsReadCount"] += len(endpoints)
-        for raw in endpoints:
-            storage_id = str(raw.get("storageId") or "").strip()
-            if storage_id not in batch or storage_id in raw_nodes_by_storage_id:
-                raise ValueError("An active endpoint read returned an unexpected or duplicate storage identity.")
-            raw_nodes_by_storage_id[storage_id] = dict(raw)
+            relation_query = (
+                "match "
+                "$source isa ontology-node, has ontology-id $sourceId, "
+                "has ontology-storage-id $sourceStorageId; "
+                "$target isa ontology-node, has ontology-id $targetId, "
+                "has ontology-storage-id $targetStorageId; "
+                "$r isa ontology-assertion, links (source: $source, target: $target), "
+                "has ontology-id $id, has ontology-storage-id $storageId, "
+                "has ontology-relation-type $type, "
+                'has ontology-box "ABox", ' + world_clause + "has ontology-scope-id $scopeId, "
+                "has ontology-snapshot-id $generationId, "
+                "has ontology-updated-at $updatedAt, has ontology-json $json, "
+                "has ontology-weight $weight; " + relation_generation_filter
+            )
+            raw_relations = _store.read_rows(
+                relation_query,
+                [
+                    "id",
+                    "storageId",
+                    "sourceId",
+                    "sourceStorageId",
+                    "targetId",
+                    "targetStorageId",
+                    "type",
+                    "scopeId",
+                    "generationId",
+                    "updatedAt",
+                    "json",
+                    "weight",
+                ],
+                label="typedb.scoped-abox.active-relation-rows",
+            )
+            read_plan["queryCount"] += 1
+            for raw in raw_relations:
+                scope_id = str(raw.get("scopeId") or "").strip()
+                generation_id = str(raw.get("generationId") or "").strip()
+                if (
+                    expected_generation_by_scope.get(scope_id) != generation_id
+                    or generation_scope.get(generation_id) != scope_id
+                ):
+                    return {
+                        "status": "scope-generation-mismatch",
+                        "reason": "An active relation row did not match the requested scope generation.",
+                        "scopeId": scope_id,
+                        "generationId": generation_id,
+                        "nodeRows": [],
+                        "relationRows": [],
+                        "endpointNodeRows": [],
+                    }
+                properties = json_object(raw.get("json"))
+                mapped = _store.relation_row_from_typeql(raw, "ABox")
+                mapped.update(
+                    {
+                        "storageId": str(raw.get("storageId") or ""),
+                        "sourceStorageId": str(raw.get("sourceStorageId") or ""),
+                        "targetStorageId": str(raw.get("targetStorageId") or ""),
+                        "scopeId": scope_id,
+                        "scopeType": str(
+                            properties.get("aboxScopeType")
+                            or (active_plan.get(scope_id) or {}).get("scopeType")
+                            or ""
+                        ),
+                        "snapshotId": generation_id,
+                        "aboxSnapshotId": generation_id,
+                        "scopeGenerationId": generation_id,
+                        "manifestId": str(
+                            properties.get("worldviewManifestId") or properties.get("manifestId") or ""
+                        ),
+                        "worldId": str(properties.get("worldId") or world_id or ""),
+                    }
+                )
+                for prefix in ("source", "target"):
+                    storage_id = str(raw.get(prefix + "StorageId") or "").strip()
+                    node_id = str(raw.get(prefix + "Id") or "").strip()
+                    if not storage_id or not node_id or (
+                        storage_id in endpoint_references
+                        and endpoint_references[storage_id] != node_id
+                    ):
+                        raise ValueError("An active relation has inconsistent endpoint storage identity.")
+                    endpoint_references[storage_id] = node_id
+                    read_plan["endpointReferenceCount"] += 1
+                relation_rows.append(mapped)
 
-    for storage_id, node_id in endpoint_references.items():
-        raw = raw_nodes_by_storage_id.get(storage_id) or {}
-        if str(raw.get("id") or "") != node_id:
-            return {
-                "status": "active-relation-endpoint-missing",
-                "reason": "An exact active relation endpoint could not be read by physical storage identity.",
-                "nodeRows": [], "relationRows": [], "endpointNodeRows": [],
-                "readPlan": read_plan,
-            }
-        endpoint = _bindings.endpoint_node_row({"endpoint" + name[0].upper() + name[1:]: value
-            for name, value in raw.items()}, "endpoint", "ABox")
-        properties = json_object(raw.get("json"))
-        generation_id = str(raw.get("generationId") or "")
-        endpoint.update({
-            "storageId": storage_id,
-            "scopeId": str(raw.get("scopeId") or ""),
-            "scopeType": str(properties.get("aboxScopeType") or ""),
-            "snapshotId": generation_id,
-            "aboxSnapshotId": generation_id,
-            "scopeGenerationId": generation_id,
-            "manifestId": str(properties.get("worldviewManifestId") or properties.get("manifestId") or ""),
-            "worldId": str(properties.get("worldId") or world_id or ""),
-        })
-        endpoint_rows_by_storage_id[storage_id] = endpoint
+        # A stock can participate in hundreds of relations. Fetching its label,
+        # scope, generation and JSON for both endpoints in every relation made the
+        # TypeDB join wide and repeatedly transported the same factual payload.
+        # Keep the relation read to physical identities. Most endpoints were already
+        # read above; fetch only distinct missing identities, never whole scopes or
+        # a current logical-ID substitute. All generations remain immutable under
+        # the caller's scoped write lease until candidate closure is validated.
+        missing_storage_ids = sorted(set(endpoint_references) - set(raw_nodes_by_storage_id))
+        read_plan["endpointRowsReusedCount"] = len(endpoint_references) - len(missing_storage_ids)
+        for offset in range(0, len(missing_storage_ids), batch_size):
+            batch = missing_storage_ids[offset : offset + batch_size]
+            endpoint_query = (
+                "match $n isa ontology-node, has ontology-id $id, "
+                "has ontology-storage-id $storageId, has ontology-label $label, "
+                "has ontology-kind $kind, has ontology-scope-id $scopeId, "
+                "has ontology-snapshot-id $generationId, "
+                "has ontology-updated-at $updatedAt, has ontology-json $json; "
+                + typedb_value_match(
+                    "$n", "ontology-storage-id", batch, "==", "activeEndpointStorageFilter",
+                )
+            )
+            endpoints = _store.read_rows(
+                endpoint_query,
+                ["id", "storageId", "label", "kind", "scopeId", "generationId", "updatedAt", "json"],
+                label="typedb.scoped-abox.active-endpoint-rows",
+            )
+            read_plan["queryCount"] += 1
+            read_plan["endpointRowsReadCount"] += len(endpoints)
+            for raw in endpoints:
+                storage_id = str(raw.get("storageId") or "").strip()
+                if storage_id not in batch or storage_id in raw_nodes_by_storage_id:
+                    raise ValueError("An active endpoint read returned an unexpected or duplicate storage identity.")
+                raw_nodes_by_storage_id[storage_id] = dict(raw)
 
-    for relation in relation_rows:
-        for prefix in ("source", "target"):
-            endpoint = endpoint_rows_by_storage_id[str(relation.get(prefix + "StorageId") or "")]
-            relation[prefix + "Label"] = str(endpoint.get("label") or "")
-
-    counts_by_scope = _store.scoped_abox_counts_by_scope(node_rows, relation_rows)
-    failed_scopes = []
-    for scope_id in requested:
-        plan = active_plan.get(scope_id) or {}
-        actual = counts_by_scope.get(scope_id) or {}
-        # OntologyEvidence is persisted as an ontology-node. The scoped
-        # Manifest keeps logical entities and evidence separate, while a
-        # physical TypeDB read returns both as node rows.
-        expected_entity_count = int(number_or_none(plan.get("entityCount")) or 0) + int(
-            number_or_none(plan.get("evidenceCount")) or 0
-        )
-        expected_relation_count = int(number_or_none(plan.get("relationCount")) or 0)
-        if (
-            int(actual.get("entityCount") or 0) != expected_entity_count
-            or int(actual.get("relationCount") or 0) != expected_relation_count
-        ):
-            failed_scopes.append(
-                {
-                    "scopeId": scope_id,
-                    "generationId": expected_generation_by_scope.get(scope_id, ""),
-                    "expectedEntityCount": expected_entity_count,
-                    "actualEntityCount": int(actual.get("entityCount") or 0),
-                    "expectedRelationCount": expected_relation_count,
-                    "actualRelationCount": int(actual.get("relationCount") or 0),
+        for storage_id, node_id in endpoint_references.items():
+            raw = raw_nodes_by_storage_id.get(storage_id) or {}
+            if str(raw.get("id") or "") != node_id:
+                return {
+                    "status": "active-relation-endpoint-missing",
+                    "reason": "An exact active relation endpoint could not be read by physical storage identity.",
+                    "nodeRows": [], "relationRows": [], "endpointNodeRows": [],
+                    "readPlan": read_plan,
                 }
+            endpoint = _bindings.endpoint_node_row({"endpoint" + name[0].upper() + name[1:]: value
+                for name, value in raw.items()}, "endpoint", "ABox")
+            properties = json_object(raw.get("json"))
+            generation_id = str(raw.get("generationId") or "")
+            endpoint.update({
+                "storageId": storage_id,
+                "scopeId": str(raw.get("scopeId") or ""),
+                "scopeType": str(properties.get("aboxScopeType") or ""),
+                "snapshotId": generation_id,
+                "aboxSnapshotId": generation_id,
+                "scopeGenerationId": generation_id,
+                "manifestId": str(properties.get("worldviewManifestId") or properties.get("manifestId") or ""),
+                "worldId": str(properties.get("worldId") or world_id or ""),
+            })
+            endpoint_rows_by_storage_id[storage_id] = endpoint
+
+        for relation in relation_rows:
+            for prefix in ("source", "target"):
+                endpoint = endpoint_rows_by_storage_id[str(relation.get(prefix + "StorageId") or "")]
+                relation[prefix + "Label"] = str(endpoint.get("label") or "")
+
+        counts_by_scope = _store.scoped_abox_counts_by_scope(node_rows, relation_rows)
+        failed_scopes = []
+        for scope_id in requested:
+            plan = active_plan.get(scope_id) or {}
+            actual = counts_by_scope.get(scope_id) or {}
+            # OntologyEvidence is persisted as an ontology-node. The scoped
+            # Manifest keeps logical entities and evidence separate, while a
+            # physical TypeDB read returns both as node rows.
+            expected_entity_count = int(number_or_none(plan.get("entityCount")) or 0) + int(
+                number_or_none(plan.get("evidenceCount")) or 0
             )
-    return {
-        "status": "ok" if not failed_scopes else "active-scope-row-count-mismatch",
-        "reason": (
-            ""
-            if not failed_scopes
-            else "The active Manifest did not return every row required for semantic reuse."
-        ),
-        "scopeIds": requested,
-        "nodeRows": node_rows,
-        "relationRows": relation_rows,
-        "endpointNodeRows": list(endpoint_rows_by_storage_id.values()),
-        "countsByScope": counts_by_scope,
-        "failedScopes": failed_scopes,
-        "readPlan": read_plan,
-    }
+            expected_relation_count = int(number_or_none(plan.get("relationCount")) or 0)
+            if (
+                int(actual.get("entityCount") or 0) != expected_entity_count
+                or int(actual.get("relationCount") or 0) != expected_relation_count
+            ):
+                failed_scopes.append(
+                    {
+                        "scopeId": scope_id,
+                        "generationId": expected_generation_by_scope.get(scope_id, ""),
+                        "expectedEntityCount": expected_entity_count,
+                        "actualEntityCount": int(actual.get("entityCount") or 0),
+                        "expectedRelationCount": expected_relation_count,
+                        "actualRelationCount": int(actual.get("relationCount") or 0),
+                    }
+                )
+        return {
+            "status": "ok" if not failed_scopes else "active-scope-row-count-mismatch",
+            "reason": (
+                ""
+                if not failed_scopes
+                else "The active Manifest did not return every row required for semantic reuse."
+            ),
+            "scopeIds": requested,
+            "nodeRows": node_rows,
+            "relationRows": relation_rows,
+            "endpointNodeRows": list(endpoint_rows_by_storage_id.values()),
+            "countsByScope": counts_by_scope,
+            "failedScopes": failed_scopes,
+            "readPlan": read_plan,
+        }
 
 
 def scoped_abox_manifest_generation_references(

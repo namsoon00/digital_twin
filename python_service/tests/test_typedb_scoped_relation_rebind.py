@@ -1,5 +1,6 @@
 import json
 import unittest
+from contextlib import nullcontext
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
@@ -213,6 +214,7 @@ class TypeDBScopedRelationRebindTest(unittest.TestCase):
             return nodes[:1] if missing_endpoint else nodes
 
         repository.read_rows = MagicMock(side_effect=read)
+        repository.read_snapshot_scope = MagicMock(side_effect=lambda **kw: nullcontext())
         scopes = [self.link_scope] if link_only else list(active["scopeGenerationIds"])
         return repository, active, scopes
 
@@ -223,6 +225,7 @@ class TypeDBScopedRelationRebindTest(unittest.TestCase):
         self.assertEqual(64, len(result["relationRows"]))
         self.assertEqual(2, len(result["endpointNodeRows"]))
         self.assertEqual(2, repository.read_rows.call_count)
+        repository.read_snapshot_scope.assert_called_once_with(timeout_seconds=60)
         self.assertEqual(128, result["readPlan"]["endpointReferenceCount"])
         self.assertEqual(2, result["readPlan"]["endpointRowsReusedCount"])
         self.assertEqual(0, result["readPlan"]["endpointRowsReadCount"])
@@ -247,6 +250,29 @@ class TypeDBScopedRelationRebindTest(unittest.TestCase):
         self.assertEqual([], result["nodeRows"])
         self.assertEqual([], result["relationRows"])
         self.assertEqual([], result["endpointNodeRows"])
+        self._assert_read_capture_failure_preserves_active_and_only_retries_transport()
+
+    def _assert_read_capture_failure_preserves_active_and_only_retries_transport(self):
+        from backend_ownership_fixture import save_scenario
+        from digital_twin.infrastructure import typedb_ontology as api
+        from digital_twin.modules.reasoning.application.independent_reasoning_engine import projection_retry_policy
+        cls = api.TypeDBOntologyGraphRepository
+        for error, expected in [(TimeoutError("capture deadline"), True),
+                                (ValueError("invalid physical endpoint"), False)]:
+            with self.subTest(error=type(error).__name__), \
+                    patch.object(cls, "is_current_state_scoped_abox_graph", return_value=True), \
+                    patch.object(cls, "current_state_physical_scope_plan", side_effect=lambda plan, *a, **kw: plan), \
+                    patch.object(cls, "current_state_physical_graph", side_effect=lambda graph, *a, **kw: graph), \
+                    patch.object(cls, "scoped_abox_active_reuse_scope_ids", return_value={"scopeIds": ["symbol:AAA"]}), \
+                    patch.object(cls, "read_active_scoped_abox_rows", side_effect=error):
+                value = save_scenario(api, "ok")
+            result = value["result"]
+            self.assertEqual("active-scope-semantic-reuse-read-failed", result["status"])
+            self.assertFalse(result["saved"])
+            self.assertTrue(result["preservedActiveGeneration"])
+            self.assertEqual(expected, projection_retry_policy(result)["retryable"])
+            self.assertNotIn(["open"], value["events"])
+            self.assertEqual(["release", "fixture-owner"], value["events"][-1])
 
     def test_incremental_save_rejects_unvalidated_manifest_patch_contract(self):
         repository = TypeDBOntologyGraphRepository("127.0.0.1:1729")

@@ -1,7 +1,7 @@
 """Explicit capabilities for graph_reads/inventory; no repository or application imports."""
 
 from dataclasses import dataclass
-from typing import Any, Callable, Protocol, Dict, Iterable, List
+from typing import Any, Callable, ContextManager, Protocol, Dict, Iterable, List
 
 
 class GraphReadsInventoryStore(Protocol):
@@ -47,6 +47,8 @@ class GraphReadsInventoryStore(Protocol):
     ) -> List[Dict[str, object]]: ...
 
     def read_transaction_options(self, timeout_seconds: float = None): ...
+
+    def read_snapshot_scope(self, timeout_seconds: float = None) -> ContextManager[None]: ...
 
     def relation_row_from_typeql(self, row: Dict[str, object], box: str) -> Dict[str, object]: ...
 

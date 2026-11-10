@@ -363,6 +363,8 @@ def save_scoped_abox_graph(
             Exception
         ) as error:  # noqa: BLE001 - preserve the active Manifest on an uncertain semantic rebind.
             release = release_write_lease()
+            reason_code = _bindings.typedb_error_code(error)
+            retryable = reason_code in {"typedbConnectionError", "typedbRequestError", "typedbTimeout"}
             return {
                 "configured": True,
                 "saved": False,
@@ -372,6 +374,9 @@ def save_scoped_abox_graph(
                 "worldviewManifestId": manifest_id,
                 "worldId": world_id,
                 "preservedActiveGeneration": True,
+                "reasonCode": reason_code,
+                "retryable": retryable,
+                "recommendedRetryAfterSeconds": 30 if retryable else 0,
                 "reason": "Active scoped rows required for an exact relation rebind could not be read: "
                 + str(error)[:180],
                 "activeReuseScopeIds": active_reuse_scope_ids,

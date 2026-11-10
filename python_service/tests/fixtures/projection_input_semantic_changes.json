@@ -1,9 +1,9 @@
 {
   "runtime_context": {
     "baselineHash": "c16fcdcb24e9d257e321cd4a1da7e5f4f2b7d06801c67ecf32548404cbf81ae1",
-    "bodyHash": "b4853176b0617d5fc75642635dde62b1945eda7abdf4051b8286e85194367d72",
-    "reason": "Source monitoring already owns durable outcome observation, retry and follow-up transitions. Read committed point-in-time outcomes without repeating the observer or mutating the source snapshot; retain bounded decision/calibration inputs and exact-cutoff reads. Verify a stable committed outcome revision before context reuse and invalidate old contexts with v3 read-only-outcomes. Legacy no-store execution/progress oracles remain unchanged.",
-    "regressionTest": "test_projection_input_ownership.ProjectionInputOwnershipTests.test_context_reads_committed_outcomes_without_mutation_and_rejects_mid_read_changes"
+    "bodyHash": "2cb139c085c14ce8d6ad61c0b2cc6cd49adaacb7b914b9c2ded5aa0b99ef85c3",
+    "reason": "Keep account-wide historical analytics outside incremental V2 input when the complete frozen RuleBox and declared model dependencies prove those facts unused. Retain subject outcome history, qualification/repair revisions, original source clocks and every persisted native fact. Legacy, explicit reports, unknown contracts and releases consuming performance still read the authoritative report. Bind the smaller context cache to the verified dependency fingerprint, including its post-read revision key. Historical replay confirmed the entire persisted ABox and 128 rule preflights identical; raw performance read APIs remain unchanged.",
+    "regressionTest": "test_projection_input_ownership.ProjectionInputOwnershipTests.test_live_context_omits_only_unused_report_and_keeps_exact_subject_calibration_and_cache_fences"
   },
   "graph_for_graph_store_persistence": {
     "baselineHash": "2f8084db3f19e3575201b269e73f7300b7038f7bad45bba639c887ce0e950a09",

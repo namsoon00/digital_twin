@@ -55,6 +55,83 @@ class ProjectionInputOwnershipTests(unittest.TestCase):
         clear_caches(api)
         self.addCleanup(clear_caches, api)
 
+    def test_frozen_rule_dependencies_keep_portfolio_analytics_out_of_unrelated_live_inputs(self):
+        from digital_twin.modules.reasoning.domain.projection_performance import performance_projection_plan
+        settings = {"_reasoningEngineVersion": "v2"}
+        omitted = performance_projection_plan(settings, RULES)
+        self.assertFalse(omitted["required"])
+        self.assertTrue(omitted["subjectCalibrationRequired"])
+        for catalog in (None, {}, {"rules": []}, {"rules": [None]},
+                        {"rules": [{"source_kind": "stock", "conditions": []}]},
+                        {"rules": [{"conditions": [{"kind": "future-path"}]}]}):
+            self.assertTrue(performance_projection_plan(settings, catalog)["required"], catalog)
+        for patch_rule in (
+            {"source_kind": "*"},
+            {"source_kind": "decision-performance"},
+            {"conditions": [{"kind": "relation", "relation_type": "HAS_DECISION_PERFORMANCE"}]},
+            {"conditions": [{"kind": "relation", "relation_type": "HAS_PERFORMANCE_SLICE"}]},
+            {"conditions": [{"kind": "relation", "relation_type": "*"}]},
+            {"model_input_contract": {"conservative": True}},
+            {"modelInputContract": {"conservative": True}},
+            {"model_input_contract": {"conservative": False, "dependencyKeys": ["kind:hypothesis-performance"]}},
+        ):
+            catalog = deepcopy(RULES)
+            catalog["rules"][0].update(patch_rule)
+            self.assertTrue(performance_projection_plan(settings, catalog)["required"], patch_rule)
+        self.assertTrue(performance_projection_plan({}, RULES)["required"])
+        self.assertTrue(performance_projection_plan({"_reasoningEngineVersion": "v1", "ontologyIncrementalCurrentStateReasoningEnabled": "1"}, RULES)["required"])
+        self.assertTrue(performance_projection_plan({**settings, "ontologyDecisionPerformanceAboxProjectionEnabled": "1"}, RULES)["required"])
+        changed = deepcopy(RULES)
+        changed["rules"][0]["version"] = "next"
+        self.assertNotEqual(omitted["dependencyFingerprint"], performance_projection_plan(settings, changed)["dependencyFingerprint"])
+
+    def test_live_context_omits_only_unused_report_and_keeps_exact_subject_calibration_and_cache_fences(self):
+        snapshot = source_snapshot()
+        instance = recorder(api, snapshot, cache=True, overrides=False)
+        instance.settings["_reasoningEngineVersion"] = "v2"
+        revision = ["outcomes:one"]
+
+        class Store:
+            def outcome_input_revision(self):
+                return revision[0]
+
+            def performance(self, **kwargs):
+                raise AssertionError("unused account-wide report entered the live path")
+
+        instance.decision_episode_store = Store()
+        history = [{"episodeId": "historical:AAA", "symbol": "AAA", "outcomes": [{"observedAt": AS_OF, "price": 101}]}]
+        instance.decision_episode_projection_context = Mock(side_effect=lambda *args, **kwargs: {
+            "episodes": [], "outcomeHistoryEpisodes": deepcopy(history), "outcomeInputRevision": revision[0],
+        })
+        for call in range(2):
+            result = instance.runtime_context(snapshot, active_tbox=TBOX, target_symbols=["AAA"])
+            self.assertEqual({}, result["decisionPerformance"])
+            self.assertEqual(history, result["decisionOutcomeHistory"])
+            self.assertEqual(AS_OF, result["asOf"])
+            self.assertEqual("unused-by-frozen-rules", result["decisionPerformanceProjection"]["reason"])
+            self.assertEqual("hit" if call else "miss", instance.last_runtime_context_cache_status[snapshot.account_id]["status"])
+        self.assertEqual(1, instance.decision_episode_projection_context.call_count)
+        revision[0] = "outcomes:repair"
+        instance.runtime_context(snapshot, active_tbox=TBOX, target_symbols=["AAA"])
+        self.assertEqual(2, instance.decision_episode_projection_context.call_count)
+        instance.settings["ontologyDecisionPerformanceAboxProjectionEnabled"] = "1"
+        with patch.object(instance.decision_episode_store, "performance", return_value={"outcomeCount": 4}) as report:
+            included = instance.runtime_context(snapshot, active_tbox=TBOX, target_symbols=["AAA"])
+        self.assertEqual(4, included["decisionPerformance"]["outcomeCount"])
+        report.assert_called_once_with(account_id=snapshot.account_id, limit=2000, as_of=AS_OF)
+        self.assertNotIn("decisionPerformanceProjection", included)
+        self.assertEqual(history, included["decisionOutcomeHistory"])
+        instance.settings.pop("ontologyDecisionPerformanceAboxProjectionEnabled")
+        instance._frozen_rulebox_catalog = deepcopy(RULES)
+        instance._frozen_rulebox_catalog["rules"][0]["conditions"] = [
+            {"kind": "relation", "relation_type": "HAS_DECISION_PERFORMANCE"},
+        ]
+        with patch.object(instance.decision_episode_store, "performance", return_value={"outcomeCount": 5}) as report:
+            required = instance.runtime_context(snapshot, active_tbox=TBOX, target_symbols=["AAA"])
+        report.assert_called_once()
+        self.assertEqual(5, required["decisionPerformance"]["outcomeCount"])
+        self.assertNotIn("decisionPerformanceProjection", required)
+
     def test_historical_facts_skip_derived_payloads_before_copy_and_remain_isolated(self):
         class DiscardedGraph:
             def __deepcopy__(self, memo):

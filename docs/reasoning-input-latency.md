@@ -1682,3 +1682,46 @@ Queue source ordering, source-to-claim waiting, stable-anchor relation rewrites
 and native inference remain separate measured work. This change removes one
 proven redundant stage; it does not establish that overall alert latency has
 been resolved.
+
+## 2026-11-10: exclude unused portfolio analytics from live rule inputs
+
+A subsequent slow execution spent 63,786 ms loading/evaluating the account-wide
+decision performance report. The outcomes owner already has a revision-fenced,
+interval-valid prepared report; adding another TTL cache would neither remove
+its cold aggregation nor preserve stronger semantics. The current frozen
+delivery artifact has 128 enabled rules, none of which reads the report's
+performance entities or relations. Its analytics are built and copied during
+input preparation, then pruned from the persisted target ABox.
+
+Incremental V2 input now uses `rule-bound-performance-context-v1` to exclude
+this report only when the complete frozen RuleBox proves it unused. The plan
+requires a release hash, consistent rule/condition counts, known condition
+forms and nonconservative declared model dependencies. Report source kinds,
+relations or model dependencies retain the authoritative report. Unknown,
+unfrozen, wildcard or legacy inputs also retain it. Explicit report projection
+can force inclusion; it cannot force exclusion of a required dependency.
+No RuleBox thresholds, native queries, investment authority or active release
+bindings change.
+
+Subject-specific decision outcomes and hypothesis calibration remain mandatory
+and follow the same account/symbol scope, original source cutoff and repair/
+qualification revisions. The smaller context has a separate cache namespace
+bound to its dependency fingerprint, including the post-read outcome revision
+check. Paired/replay context overrides remain exact. Runtime stages record
+`runtimeContextUnusedPortfolioPerformanceExcluded=1` when the receipt applies.
+
+A paired historical assembly at `2026-11-10T06:34:38.336824Z` used the same
+captured source/context, frozen RuleBox and memory-only model stores. Removing
+the 3,275,046-byte report reduced serialized context from 10,986,039 to
+7,711,280 bytes. Graph assembly measured 5,150 versus 3,739 ms. The entire
+persisted graph was equal, including all 347 entities, 522 relations, source
+lineage and identities; all 128 rule preflights and target scope contracts were
+equal. This is a component comparison on paired inputs, not an end-to-end
+latency guarantee or proof that worker memory growth is resolved.
+
+Regressions also compare real isolated-MySQL subject outcomes and the complete
+persisted graph, reject unused-report reads, verify correction invalidation and
+cache hits, and restore report reads when an explicit setting or frozen rule
+requires them. Report read APIs and their existing prepared-input coverage are
+unchanged. Native writes, inference time, source-to-claim waiting and worker
+lifetime remain separately measured costs.

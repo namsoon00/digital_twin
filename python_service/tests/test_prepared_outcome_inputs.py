@@ -30,6 +30,41 @@ class PreparedOutcomeInputTests(StabilizationDatabaseCase):
     def history(self, stamp=NOW):
         return self.decisions.performance_episodes(account_id=self.account, symbol="AAPL", as_of=stamp)
 
+    def test_live_projection_keeps_real_subject_outcomes_without_loading_unused_account_report(self):
+        from copy import deepcopy
+        from dataclasses import asdict
+        from digital_twin.infrastructure import ontology_projection as api
+        from projection_input_fixture import recorder, source_snapshot, TBOX, RULES, clear_caches
+
+        self.addCleanup(clear_caches, api)
+        snapshot = source_snapshot(account_id=self.account, as_of=NOW)
+        snapshot.positions[0].symbol = "AAPL"
+        instance = recorder(api, snapshot, overrides=False)
+        instance.decision_episode_store = self.decisions
+        instance.settings.update(_reasoningEngineVersion="v2", ontologyDecisionPerformanceAboxProjectionEnabled="1")
+        source_before = deepcopy(snapshot)
+        full = instance.runtime_context(snapshot, active_tbox=TBOX, target_symbols=["AAPL"])
+        self.assertTrue(full["decisionPerformance"])
+        instance.settings.pop("ontologyDecisionPerformanceAboxProjectionEnabled")
+        with patch.object(self.decisions, "performance", side_effect=AssertionError("account analytics on live path")) as report:
+            live = instance.runtime_context(snapshot, active_tbox=TBOX, target_symbols=["AAPL"])
+        report.assert_not_called()
+        self.assertEqual(full["decisionOutcomeHistory"], live["decisionOutcomeHistory"])
+        self.assertEqual(full["decisionEpisodes"], live["decisionEpisodes"])
+        self.assertEqual(NOW, live["asOf"])
+        self.assertTrue(live["decisionOutcomeHistory"])
+        self.assertTrue(all(item["accountId"] == self.account and item["symbol"] == "AAPL"
+                            for item in live["decisionOutcomeHistory"]))
+        self.assertEqual(source_before, snapshot)
+        images = []
+        for context in (full, live):
+            instance.runtime_context_overrides = {self.account: context}
+            _, persisted, _ = instance.build_graph_assembly(
+                snapshot, RULES, target_symbols=["AAPL"], target_scoped_input=True,
+            )
+            images.append(asdict(persisted))
+        self.assertEqual(images[0], images[1], "unused report changed native facts or their lineage")
+
     def test_coverage_indexes_preserve_scoped_distinct_counts_cutoffs_and_all_rows(self):
         from digital_twin.infrastructure.mysql_schema_tuning import MYSQL_OPERATIONAL_INDEXES, ensure_mysql_indexes
         tables = {"investment_decision_outcome_targets": "episode_id",

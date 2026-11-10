@@ -8,6 +8,7 @@ from digital_twin.modules.outcomes.contracts import evaluate_decision_performanc
 from digital_twin.modules.model_registry.contracts import HYPOTHESIS_LIFECYCLE_KEY_PREFIX
 from digital_twin.modules.portfolio.contracts import AccountSnapshot
 from digital_twin.modules.reasoning.domain.reasoning_shadow import frozen_projection_runtime_context
+from digital_twin.modules.reasoning.domain.projection_performance import performance_projection_plan
 from typing import Callable
 from typing import Dict
 from typing import List
@@ -33,6 +34,9 @@ def runtime_context(
         _inputs.last_runtime_context_cache_status[account_id] = {"status": "override"}
         return deepcopy(frozen)
 
+    performance_projection = performance_projection_plan(_inputs.settings, _inputs.frozen_rule_catalog)
+    exclude_portfolio_performance = not performance_projection["required"]
+
     def emit(stage: str, **details) -> None:
         if not callable(progress_callback):
             return
@@ -55,6 +59,12 @@ def runtime_context(
         else ""
     )
     emit("cache_key.done", runtimeMs=round((time.perf_counter() - cache_key_started) * 1000))
+    if cache_key and exclude_portfolio_performance:
+        # The source/release/clock key remains exact. A distinct projection
+        # identity cannot reuse an old full analytics context, even when the
+        # factual source snapshot is unchanged.
+        cache_key = hashlib.sha256((cache_key + ":" + performance_projection["version"]
+                                    + ":" + performance_projection["dependencyFingerprint"]).encode()).hexdigest()
     source_cache_key = cache_key
     # Same-source repairs/qualification changes must also invalidate the outer
     # context cache, before it can bypass the outcomes owner's prepared inputs.
@@ -137,6 +147,8 @@ def runtime_context(
         return values
 
     def load_decision_performance():
+        if exclude_portfolio_performance:
+            return {}
         values = {}
         if hasattr(_inputs.decision_episode_store, "performance"):
             try:
@@ -354,6 +366,7 @@ def runtime_context(
         "decisionOutcomeHistory": decision_outcome_history,
         "decisionEpisodeProjection": dict(decision_memory.get("projection") or {}),
         "decisionPerformance": decision_performance,
+        **({"decisionPerformanceProjection": performance_projection} if exclude_portfolio_performance else {}),
         "hypothesisProposals": hypothesis_proposals,
         "hypothesisLifecycles": hypothesis_lifecycles,
         "hypothesisLifecycleAboxProjection": lifecycle_projection,

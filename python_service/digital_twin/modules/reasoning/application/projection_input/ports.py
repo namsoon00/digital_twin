@@ -147,6 +147,7 @@ class PrepareContextInputs:
 @dataclass(frozen=True)
 class RuntimeContextInputs:
     active_tbox_context: Callable[[], dict]
+    frozen_rule_catalog: Optional[dict]
     data_pipeline_health_context: Callable[[AccountSnapshot], dict]
     decision_episode_projection_context: Callable[..., dict]
     decision_episode_store: Optional[DecisionMemoryReader]

@@ -2152,6 +2152,7 @@ class PortfolioOntologyProjectionRecorder:
         return projection_context.runtime_context(
             projection_input_ports.RuntimeContextInputs(
                 active_tbox_context=self.active_tbox_context,
+                frozen_rule_catalog=self._frozen_rulebox_catalog,
                 data_pipeline_health_context=self.data_pipeline_health_context,
                 decision_episode_projection_context=self.decision_episode_projection_context,
                 decision_episode_store=self.decision_episode_store,

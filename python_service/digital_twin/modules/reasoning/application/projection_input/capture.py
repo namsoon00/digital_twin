@@ -136,6 +136,9 @@ def capture_graph_input(
             target_symbols=computation_symbols or None,
             progress_callback=context_progress,
         )
+    performance_projection = runtime_context.get("decisionPerformanceProjection") or {}
+    if performance_projection.get("required") is False:
+        stage_timings["runtimeContextUnusedPortfolioPerformanceExcluded"] = 1
     # The release owns feature semantics, including when replaying another
     # release's immutable observations. Never inherit its calculator version.
     feature_version = str(_inputs.settings.get("_reasoningFeatureSetVersion") or "")

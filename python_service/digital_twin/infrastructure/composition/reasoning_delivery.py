@@ -29,8 +29,7 @@ def request_source_recheck(settings, account_id, delivery_authorized):
     store = monitor_account_job_store_from_settings(settings)
     if store is not None:
         return store.request_refresh(account_id, priority=5)
-    return {"requested": True, "scheduleMode": "next-monitor-cycle",
-            "maxDelaySeconds": max(30, int(settings.get("monitorAccountIntervalSeconds") or 30)),
+    return {"requested": False, "scheduleMode": "normal-source-cycle", "status": "awaiting-normal-source",
             "reason": "수집 큐를 사용하지 않는 설정이므로 다음 정기 수집과 TypeDB 추론에서 재확인합니다."}
 
 
@@ -136,6 +135,8 @@ def wire_v2_decision_services(
         legacy_ai_handoff_enabled=not legacy_route_retired(candidate_settings),
         notification_receipt_reader=insight_notification_queue.rule_policy_receipt_baseline,
         source_recheck_requester=lambda account_id: request_source_recheck(store_settings, account_id, delivery_authorized),
+        source_evaluation_recorder=lambda context, outcome: insight_notification_queue.observe_rule_source_evaluation(
+            context, outcome) if delivery_authorized() else 0,
     )
     return ReasoningDelivery(
         delivery_authorized,

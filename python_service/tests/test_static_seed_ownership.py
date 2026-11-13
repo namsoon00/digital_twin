@@ -149,7 +149,7 @@ class StaticSeedOwnershipTests(unittest.TestCase):
 
     def test_original_schema_fingerprints_queries_and_restore_results_match(self):
         golden = json.loads(
-            (ROOT / "tests/fixtures/static_seed_execution_valid_price_path_v1.json").read_text()
+            (ROOT / "tests/fixtures/static_seed_execution_source_clock_v21.json").read_text()
         )
         self.assertEqual(api.TYPEDB_NATIVE_RULE_ENGINE_VERSION, golden["engineVersion"])
         previous_current = json.loads((ROOT / "tests/fixtures/static_seed_execution_current_flow_v1.json").read_text())

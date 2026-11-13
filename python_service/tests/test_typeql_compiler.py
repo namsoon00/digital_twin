@@ -15,7 +15,7 @@ from typeql_contract_fixture import WORLD, contract_fingerprints, enabled_rules,
 ROOT = Path(__file__).resolve().parents[1] / "digital_twin"
 PACKAGE = "digital_twin.modules.reasoning.infrastructure.typeql"
 COMPILER = ROOT / "modules/reasoning/infrastructure/typeql"
-GOLDEN = Path(__file__).parent / "fixtures/typeql_compiler_valid_price_path_v1.json"
+GOLDEN = Path(__file__).parent / "fixtures/typeql_compiler_source_clock_v21.json"
 
 
 class TypeQLCompilerTests(unittest.TestCase):
@@ -54,7 +54,9 @@ class TypeQLCompilerTests(unittest.TestCase):
                 self.assertEqual(fingerprint, actual[group])
         previous_current = json.loads((GOLDEN.parent / 'typeql_compiler_current_flow_v1.json').read_text())
         from research_knowledge_fixture import pre_valid_temporal_catalog
-        with pre_valid_temporal_catalog():
+        from unittest.mock import patch
+        from digital_twin.modules.reasoning.infrastructure.typeql import profiles
+        with pre_valid_temporal_catalog(), patch.object(profiles, 'TYPEDB_NATIVE_RULE_ENGINE_VERSION', 'typedb-direct-typeql-rule-engine-v20'):
             legacy = contract_fingerprints(typeql)
             predecessor = json.loads((GOLDEN.parent / 'typeql_compiler_witness_v20.json').read_text())
             self.assertEqual(predecessor['groups'], legacy)

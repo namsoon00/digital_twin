@@ -243,11 +243,14 @@ class NotificationQueueRunner:
         delivery_guard: Callable = None,
         diagnostic_followup_reconciler: Callable = None,
         ai_research_notifier_factory: Callable = None,
+        source_recheck_reconciler: Callable = None,
     ):
         self.queue = queue
         self.delivery_comparison_refresher = delivery_comparison_refresher
         self.diagnostic_followup_reconciler = diagnostic_followup_reconciler
         self.last_diagnostic_followup_reconciliation = {}
+        self.source_recheck_reconciler = source_recheck_reconciler
+        self.last_source_recheck_reconciliation = {}
         self.delivery_scope = ExitStack()
         self.account_repository = account_repository
         self.notifier_factory = notifier_factory
@@ -326,6 +329,13 @@ class NotificationQueueRunner:
             self.active_job_index = -1
 
     def _run_once(self, limit: int = 10) -> int:
+        if self.source_recheck_reconciler and not self.dry_run:
+            try:
+                self.last_source_recheck_reconciliation = dict(self.source_recheck_reconciler() or {})
+            except Exception as error:
+                self.last_source_recheck_reconciliation = {"status": "error", "errorType": type(error).__name__}
+                self.last_run_details.append("rule-source-recheck:error:" + type(error).__name__)
+                logging.getLogger(__name__).warning("Rule source recheck reconciliation failed: %s", type(error).__name__)
         if self.diagnostic_followup_reconciler and not self.dry_run:
             try:
                 self.last_diagnostic_followup_reconciliation = dict(self.diagnostic_followup_reconciler() or {})

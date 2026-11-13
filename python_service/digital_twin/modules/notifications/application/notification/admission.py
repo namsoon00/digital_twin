@@ -3,6 +3,7 @@
 import hashlib
 from dataclasses import dataclass
 from digital_twin.modules.notifications.domain.rule_delivery_comparison import rule_delivery_comparison
+from digital_twin.modules.notifications.domain.rule_dispatch_validity import rule_dispatch_validity
 from typing import Dict, List, Mapping
 
 from digital_twin.modules.market_data.contracts import evaluate_notification_data_freshness, sanitize_notification_context_for_freshness
@@ -305,6 +306,16 @@ class NotificationAdmissionPolicy:
         if decision.should_send and not str(context.get("deliverySuppressionReason") or "").strip():
             context.pop("deliverySuppressionReason", None)
         job.context = context
+        if decision.should_send and typedb_context_observation_contract(context):
+            packet = context.get("relationChangeEvidence") or {}
+            validity = rule_dispatch_validity(packet, settings)
+            context["ruleDispatchValidity"] = {**validity, "stage": "admission"}
+            if not validity["allowed"]:
+                # Persist the original proof and a recheck ticket; do not put
+                # an already expired premise into the outbound work queue.
+                context["deliverySuppressionReason"] = validity["reasonCode"]
+                job.status, job.last_error = "suppressed", validity["reason"]
+                return NotificationAdmissionOutcome(False, True, job.status, job.last_error)
         if not decision.should_send and self.defer_repeat_delivery_until_after_decision(
             job,
             decision.suppression_reason,

@@ -63,9 +63,10 @@ from .diagnostic_threads import DiagnosticThreadStore
 
 
 from .price_metrics import PriceMetricsStore
+from .rule_source_rechecks import RuleSourceRecheckStore
 
 
-class MySQLNotificationJobStore(PriceMetricsStore, DiagnosticThreadStore, InvestmentConversationStore, ResearchThreadStore, MySQLOperationalConnection):
+class MySQLNotificationJobStore(RuleSourceRecheckStore, PriceMetricsStore, DiagnosticThreadStore, InvestmentConversationStore, ResearchThreadStore, MySQLOperationalConnection):
     _article_delivery_ledger_backfill_lock = Lock()
     _article_delivery_ledger_backfill_ready = set()
 
@@ -2311,6 +2312,7 @@ class MySQLNotificationJobStore(PriceMetricsStore, DiagnosticThreadStore, Invest
             return False
         if job.status == "suppressed":
             job.updated_at = utc_now()
+            self.register_rule_recheck(connection, job)
         try:
             self.upsert_job_with_connection(connection, job)
         except Exception as error:
@@ -2631,6 +2633,7 @@ class MySQLNotificationJobStore(PriceMetricsStore, DiagnosticThreadStore, Invest
         job.last_error = str(reason or "알림 정책으로 발송하지 않았습니다.")
         job.updated_at = utc_now()
         with self.transaction() as connection:
+            self.register_rule_recheck(connection, job)
             self.upsert_job_with_connection(connection, job)
             self.record_lifecycle_with_connection(connection, job, "suppressed", "suppressed", job.last_error)
 

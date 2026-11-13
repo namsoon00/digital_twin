@@ -166,9 +166,9 @@ class RelationFollowUpTests(unittest.TestCase):
             factory.assert_not_called()
             factory.return_value = None
             direct = request_source_recheck({'monitorAccountIntervalSeconds': 45}, 'main', lambda: True)
-            self.assertTrue(direct['requested'])
-            self.assertEqual('next-monitor-cycle', direct['scheduleMode'])
-            self.assertEqual(45, direct['maxDelaySeconds'])
+            self.assertFalse(direct['requested'])
+            self.assertEqual('normal-source-cycle', direct['scheduleMode'])
+            self.assertNotIn('maxDelaySeconds', direct, 'a collector interval does not promise a fresh upstream quote')
             store = factory.return_value = Mock()
             store.request_refresh.return_value = {'requested': True, 'scheduledAt': 'fixture'}
             self.assertEqual('fixture', request_source_recheck({}, 'main', lambda: True)['scheduledAt'])

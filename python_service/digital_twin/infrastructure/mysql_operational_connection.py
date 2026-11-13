@@ -1425,6 +1425,24 @@ MYSQL_SCHEMA = [
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     """,
     """
+    CREATE TABLE IF NOT EXISTS rule_notification_rechecks (
+        source_job_id VARCHAR(191) PRIMARY KEY,
+        account_id VARCHAR(191) NOT NULL,
+        symbol VARCHAR(64) NOT NULL,
+        world_id VARCHAR(191) NOT NULL,
+        status VARCHAR(32) NOT NULL,
+        created_at VARCHAR(40) NOT NULL,
+        updated_at VARCHAR(40) NOT NULL,
+        deadline_at VARCHAR(40) NOT NULL,
+        request_json TEXT NOT NULL,
+        result_json TEXT NOT NULL,
+        successor_job_id VARCHAR(191) NOT NULL DEFAULT '',
+        KEY idx_rule_recheck_scope (account_id,symbol,world_id,status,updated_at,source_job_id),
+        KEY idx_rule_recheck_due (status,deadline_at,source_job_id),
+        KEY idx_rule_recheck_receipt (status,updated_at,source_job_id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
+    """
     CREATE TABLE IF NOT EXISTS decision_notification_receipts (
         job_id VARCHAR(191) PRIMARY KEY,
         decision_episode_id VARCHAR(191) NOT NULL,

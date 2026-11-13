@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 import hashlib
+import logging
 from typing import Dict, Iterable, Mapping
 
 from digital_twin.modules.decisions.domain.events import investment_inference_episode_completed_event
@@ -37,6 +38,7 @@ class InvestmentInsightDispatchService:
         legacy_ai_handoff_enabled=True,
         source_recheck_requester=None,
         notification_receipt_reader=None,
+        source_evaluation_recorder=None,
     ):
         self.notification_ingress = notification_ingress
         self.notification_queue = notification_queue
@@ -46,6 +48,7 @@ class InvestmentInsightDispatchService:
         self.legacy_ai_handoff_enabled = bool(legacy_ai_handoff_enabled)
         self.source_recheck_requester = source_recheck_requester
         self.notification_receipt_reader = notification_receipt_reader
+        self.source_evaluation_recorder = source_evaluation_recorder
 
     def enqueue(self, events: Iterable[AlertEvent]) -> Dict[str, object]:
         """Compatibility entry point used by the versioned reasoning engine."""
@@ -251,6 +254,21 @@ class InvestmentInsightDispatchService:
                 event.metadata["investmentSubjectDecisionCaseId"], outcome,
             )
         outcomes.extend(ai_outcomes)
+
+        if self.source_evaluation_recorder:
+            by_subject = {row.get("subjectCaseId"): row for row in outcomes if row.get("subjectCaseId")}
+            by_subject_event = {_mapping(getattr(e, "metadata", {})).get("investmentSubjectDecisionCaseId"): e
+                                for e in [*candidates, *typedb_queued_events]}
+            for subject_id, event in by_subject_event.items():
+                if subject_id not in by_subject or by_subject[subject_id].get("route") == INVALID:
+                    continue
+                try:
+                    self.source_evaluation_recorder(event.metadata, by_subject[subject_id])
+                except Exception as error:
+                    # A later normal source evaluation retries the durable pending
+                    # ticket. Tracking failure never authorizes or repeats a send.
+                    by_subject[subject_id]["sourceRecheckTrackingError"] = type(error).__name__
+                    logging.getLogger(__name__).warning("Rule source recheck tracking failed: %s", type(error).__name__)
 
         typedb_count = len(typedb_queued_events)
         ai_count = len(ai_queued_events)

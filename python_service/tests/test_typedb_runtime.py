@@ -75,7 +75,7 @@ class TypeDBRuntimeTests(unittest.TestCase):
         return api.TypeDBOntologyGraphRepository("runtime-contract.invalid:1729", database="synthetic", **options)
 
     def test_runtime_matches_versioned_promoted_policy_schema_contract(self):
-        golden = json.loads((ROOT / "tests/fixtures/typedb_runtime_valid_price_path_v1.json").read_text())
+        golden = json.loads((ROOT / "tests/fixtures/typedb_runtime_source_clock_v21.json").read_text())
         self.assertEqual(api.TYPEDB_NATIVE_RULE_ENGINE_VERSION, golden["engineVersion"])
         previous_current = json.loads((ROOT / "tests/fixtures/typedb_runtime_current_flow_v1.json").read_text())
         from research_knowledge_fixture import pre_valid_temporal_catalog

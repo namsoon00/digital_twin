@@ -25,7 +25,7 @@ from digital_twin.modules.notifications.domain.notification_delivery_explanation
 from digital_twin.modules.notifications.application.notification_service import NotificationQueueRunner
 
 
-def independent_fixture(queue=None, material=True, account_id="main", data_change=False, reassessment=False, source_clock=None, qualified=True):
+def independent_fixture(queue=None, material=True, account_id="main", data_change=False, reassessment=False, source_clock=None, qualified=True, source_evaluation_recorder=None):
     case = subject_case("subject:independent", action_authority="originate", eligible=("hypothesis:fixture",), outcome="READY")
     case.account_id = account_id
     case.synthesis = replace(case.synthesis, account_id=account_id)
@@ -47,6 +47,8 @@ def independent_fixture(queue=None, material=True, account_id="main", data_chang
                                  freshnessStatus="fresh", judgementEvidenceUsable=True)
     rule_id = relation['activeRules'][0]['ruleId']
     relation['hypothesisSet']['hypotheses'][0]['claimContract'] = frozen_notification_claim(rule_id)
+    if not qualified:
+        relation['hypothesisSet']['hypotheses'][0]['qualification'] = {'status': 'shadow'}
     relation['actionEnvelope'] = {'inferenceEligibilityAssessments': [{
         'ruleId': rule_id, 'status': 'eligible', 'evidenceUsableForJudgement': True, 'freshnessStatus': 'fresh'}]}
     if not material:
@@ -73,7 +75,8 @@ def independent_fixture(queue=None, material=True, account_id="main", data_chang
     queue = queue if queue is not None else FakeNotificationQueue()
     handoff = FakeAIHandoff()
     orchestrator = FakeOrchestrator([case])
-    service = InvestmentInsightDispatchService(FakeIngress(), queue, handoff, orchestrator, legacy_ai_handoff_enabled=False)
+    service = InvestmentInsightDispatchService(FakeIngress(), queue, handoff, orchestrator, legacy_ai_handoff_enabled=False,
+                                             source_evaluation_recorder=source_evaluation_recorder)
     event = alert(case, context, "independent")
     event.account_id = account_id
     result = service.dispatch([event])

@@ -1,6 +1,8 @@
 from typing import Dict, Iterable, List, Mapping, Tuple
+from datetime import datetime, timezone
+import math
 
-from digital_twin.modules.market_data.contracts import age_minutes, parse_datetime
+from digital_twin.modules.market_data.contracts import parse_datetime
 from digital_twin.modules.market_data.contracts import number
 from digital_twin.modules.reasoning.domain.ontology_contracts import OntologyBelief, OntologyEntity, OntologyEvidence, OntologyRelation, PortfolioOntology, entity_id
 from digital_twin.modules.reasoning.domain.ontology_decision_state import ACTION_LEVEL_RANK, DATA_STATE_LABELS, REVIEW_LEVEL_LABELS, conflict_state_from_roles, review_level_for
@@ -1124,20 +1126,35 @@ def observation_metadata(properties: Dict[str, object], observed_value: object, 
         or properties.get("quoteStatus")
         or properties.get("valuationFreshnessStatus")
     )
-    maximum_age = int(number(properties.get("maxAgeMinutes"))) or default_observation_max_age(properties)
-    freshness_age = properties.get("freshnessAgeMinutes")
-    if freshness_age in (None, "") and source_as_of:
-        freshness_age = age_minutes(source_as_of, now=evaluation_clock)
     source_clock = parse_datetime(source_as_of) if source_as_of else None
-    future_source = bool(evaluation_clock and source_clock and source_clock > evaluation_clock)
+    clock = evaluation_clock or datetime.now(timezone.utc)
+    raw_maximum = properties.get("maxAgeMinutes")
+    try:
+        maximum_age = float(raw_maximum) if raw_maximum not in (None, "") else default_observation_max_age(properties)
+    except (TypeError, ValueError):
+        maximum_age = 0
+    invalid_budget = not math.isfinite(maximum_age) or maximum_age <= 0
+    if invalid_budget:
+        maximum_age = 0
+    # A cached 'fresh' label or a later fetch cannot renew an immutable fact.
+    # Replay uses its frozen cutoff; dispatch independently checks send time.
+    freshness_age = (clock - source_clock).total_seconds() / 60 if source_clock else None
+    valid_until = parse_datetime(properties.get("validUntil")) if properties.get("validUntil") else None
+    invalid_until = bool(properties.get("validUntil") and valid_until is None)
+    future_source = bool(source_clock and source_clock > clock)
     if future_source:
         freshness = "unavailable"
         freshness_age = None
-    if freshness_required and freshness == "unknown" and freshness_age is not None:
-        freshness = "fresh" if number(freshness_age) <= maximum_age else "stale"
+    elif freshness_required:
+        if source_clock is None or invalid_budget or invalid_until:
+            freshness = "unavailable"
+        elif freshness_age > maximum_age or (valid_until and clock > valid_until):
+            freshness = "stale"
+        elif freshness == "unknown":
+            freshness = "fresh"
     if not freshness_required:
         freshness = "not-applicable"
-    source_timestamp_present = bool(source_as_of)
+    source_timestamp_present = source_clock is not None
     explicit_usable = properties.get("judgementEvidenceUsable")
     event_eligible = properties.get("eventDecisionEligible")
     if event_eligible not in (None, ""):
@@ -1164,6 +1181,7 @@ def observation_metadata(properties: Dict[str, object], observed_value: object, 
         gate_reason = str(properties.get("freshnessGateReason") or "원천 시각과 거래 세션 기준을 통과했습니다.")
     result = {
         "observedValue": observed_value,
+        "sourceValidityVersion": "source-clock-validity-v2",
         "source": source,
         "observedAt": observed_at,
         "sourceFetchedAt": source_fetched_at,

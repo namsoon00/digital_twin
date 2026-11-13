@@ -68,11 +68,11 @@ def build_notification_queue_runner(dry_run: bool = False, lane: str = "all") ->
     def request_fresh_data_recheck(account_id: str, symbol: str, source_job_id: str):
         if not refresh_job_store:
             return {
-                "requested": True,
+                "requested": False,
                 "scheduledAt": utc_now(),
-                "scheduleMode": "next-monitor-cycle",
-                "maxDelaySeconds": max(30, int(settings.get("monitorAccountIntervalSeconds") or 30)),
-                "pipeline": "monitor-snapshot-typedb-ai",
+                "scheduleMode": "normal-source-cycle",
+                "status": "awaiting-normal-source",
+                "pipeline": "normal-source-reasoning",
                 "reason": "다음 실시간 모니터 주기에서 새 스냅샷부터 다시 판단합니다.",
             }
         result = dict(refresh_job_store.request_refresh(account_id, priority=5) or {})
@@ -213,8 +213,9 @@ def build_notification_queue_runner(dry_run: bool = False, lane: str = "all") ->
         result = activity.run_once()
         result["diagnostics"] = publication.diagnostic_progress.run_once()
         return result
+    notification_queue = stores.notification_job_store(settings)
     return NotificationQueueRunner(
-        queue=stores.notification_job_store(settings),
+        queue=notification_queue,
         account_repository=stores.account_reader(settings),
         notifier_factory=notifier_for_account,
         operations_notifier_factory=notifier_for_operations,
@@ -242,4 +243,5 @@ def build_notification_queue_runner(dry_run: bool = False, lane: str = "all") ->
         delivery_comparison_refresher=delivery_comparison_refresher,
         delivery_guard=publication.delivery_guard,
         diagnostic_followup_reconciler=reconcile_ai_progress,
+        source_recheck_reconciler=notification_queue.reconcile_rule_source_rechecks,
     )

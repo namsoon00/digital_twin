@@ -1,7 +1,29 @@
 """Delivery value of a proven observation; never choose an investment action."""
 
 
-VERSION = "rule-notice-delivery-value-v1"
+from .rule_dispatch_validity import rule_event_proof
+
+
+VERSION = "rule-notice-delivery-value-v2"
+
+
+def verified_observation(event, current):
+    """Notice authority is separate from permission to execute a trade.
+
+    Only a material event selected by the frozen notification contract qualifies.
+    Price refreshes, drafts, unbound proofs and quarantined claims do not.
+    Freshness and receipt/cadence checks still apply at admission and dispatch.
+    """
+    intent = event.get("intent") or {}
+    return bool(current.get("proofIdentityVerified") and event.get("eligible") is True
+        and event.get("reasonCode") == "verified-customer-evidence-change"
+        and intent.get("claimContractId") and intent.get("claimFingerprint")
+        and event.get("changeKind") in {"observed", "reactivated", "support-added", "counter-removed", "mixed-evidence"}
+        and not premise_correction(event)
+        and (event.get("evidenceUse") or {}).get("qualification") in {"shadow", "observed", "limited-active", "active"}
+        and all(current.get(k) and event.get(k) == current[k]
+                for k in ("accountId", "symbol", "worldId", "inferenceGenerationId", "sourceAboxSnapshotId"))
+        and rule_event_proof(event, current)["allowed"])
 
 
 def eligible_actions(snapshot, event=None):
@@ -50,15 +72,19 @@ def delivery_value(event, current, previous):
     added = eligible_actions(current, event) - before
     removed = eligible_actions(previous, event) - after if received else set()
     changed = bool(added or removed)
-    allowed = changed or (received and correction)
+    observation = verified_observation(event, current)
+    allowed = changed or (received and correction) or observation
     return {"version": VERSION, "allowed": allowed,
             "previousEligibleActions": sorted(before), "currentEligibleActions": sorted(after),
             "addedEligibleActions": sorted(added), "removedEligibleActions": sorted(removed),
             "deliveredPredecessor": received,
+            "observationOnly": bool(observation and not changed), "executionAuthorized": False,
             "reasonCode": "eligible-response-changed" if changed else "delivered-premise-correction" if allowed
+                          and received and correction else "verified-observation-change" if observation
                           else "hypothesis_evidence_history_only",
             "reason": "검증된 대응 후보가 달라졌습니다." if changed else
-                      "앞서 전달한 설명의 반대 근거 또는 해제 조건을 확인했습니다." if allowed else
+                      "앞서 전달한 설명의 반대 근거 또는 해제 조건을 확인했습니다." if received and correction else
+                      "검증 중인 관찰: 규칙의 근거 조건이 새로 확인됐습니다. 매매 대응 자격을 부여하지 않습니다." if observation else
                       "가설 근거는 달라졌지만 새로 사용할 대응이나 앞선 판단의 철회가 없어 상세 이력에 남깁니다."}
 
 

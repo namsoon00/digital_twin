@@ -1,4 +1,4 @@
-"""Push only changed usable responses or corrections to delivered premises."""
+"""Verified observations are independent of execution eligibility."""
 from copy import deepcopy
 from unittest import TestCase
 from unittest.mock import Mock
@@ -27,28 +27,54 @@ def event(kind='support-added'):
 
 
 class RuleNoticeDeliveryValueTests(TestCase):
-    def test_unqualified_and_actionless_updates_are_history_at_every_delivery_boundary(self):
+    def test_successful_observation_receipt_consumes_meaning_not_polling_clock(self):
+        from digital_twin.modules.notifications.domain.relation_follow_up import delivery_snapshot
+        context = readable_fixture()
+        packet = rule_delivery_comparison(context, {})['relationChangeEvidence']
+        receipt = delivery_snapshot(packet, 'delivered-observation', packet['current']['accountId'])
+        receipt.update(receiptJobId='delivered-observation', deliveredAt='2026-11-14T01:00:00Z')
+        transition = context['ontologyRelationContext']['hypothesisLifecycle']['transitions'][0]
+        transition.update(transitionId='another-poll', occurredAt='2026-11-14T01:05:00Z')
+        for stage in ['publication', 'admission', 'dispatch-receipt-lock']:
+            repeated = rule_delivery_comparison(context, receipt, stage=stage)['relationChangeEvidence']
+            self.assertFalse(repeated['eligible'], stage)
+            self.assertFalse(repeated['customerEvents'])
+
+    def test_verified_observations_can_deliver_without_promoting_execution_qualification(self):
         for qualification in ['shadow', 'observed', 'limited-active', 'quarantined', 'unknown', 'active']:
             context = readable_fixture()
             context['ontologyRelationContext']['hypothesisSet']['hypotheses'][0]['qualification']['status'] = qualification
             frozen = deepcopy(context)
             for stage in ['publication', 'admission', 'dispatch-receipt-lock']:
-                result = rule_delivery_comparison(context, {}, stage=stage)
-                packet = result['relationChangeEvidence']
-                self.assertFalse(packet['eligible'], (qualification, stage))
-                self.assertEqual([], packet['customerEvents'])
-                self.assertEqual([], packet['transitions'])
-                self.assertEqual('hypothesis_evidence_history_only', packet['nonDeliveryReasonCode'])
-                self.assertTrue(packet['historyOnlyEvents'])
-                self.assertTrue(packet['current']['hypotheses'])
-                self.assertEqual({}, packet['previous'])
-            self.assertEqual(frozen, context, 'history-only checks must not consume a delivery receipt or rewrite proof')
+                packet = rule_delivery_comparison(context, {}, stage=stage)['relationChangeEvidence']
+                self.assertEqual(qualification not in {'quarantined', 'unknown'}, packet['eligible'], (qualification, stage))
+                if packet['eligible']:
+                    value = packet['customerEvents'][0]['deliveryValue']
+                    self.assertTrue(value['observationOnly'])
+                    self.assertFalse(value['executionAuthorized'])
+                    self.assertEqual('verified-observation-change', value['reasonCode'])
+                else:
+                    self.assertTrue(packet['historyOnlyEvents'])
+            self.assertEqual(frozen, context, 'policy cannot consume a receipt or rewrite qualification')
         result, queue, handoff, case = independent_fixture(qualified=False)
-        self.assertEqual(0, result['typedbPublishedCount'])
+        self.assertEqual(1, result['typedbPublishedCount'])
         self.assertEqual(0, result['aiQueuedCount'])
-        self.assertFalse(queue.jobs)
+        self.assertTrue(queue.jobs)
         self.assertFalse(handoff.events)
-        self.assertEqual('ARCHIVE', case.inference_dispatch_decision.route)
+        self.assertEqual('PUBLISH_TYPEDB', case.inference_dispatch_decision.route)
+        self.assertFalse(case.synthesis.execution_eligible_hypothesis_ids)
+
+    def test_observation_requires_exact_proof_scope_and_does_not_bypass_receipt_novelty(self):
+        packet = rule_delivery_comparison(readable_fixture(), {})['relationChangeEvidence']
+        original = packet['customerEvents'][0]
+        for key in ['accountId', 'symbol', 'worldId', 'inferenceGenerationId', 'sourceAboxSnapshotId']:
+            changed = {**original, key: 'wrong'}
+            self.assertFalse(delivery_value(changed, packet['current'], {})['allowed'])
+        for change in [{'eligible': False}, {'reasonCode': 'same-customer-meaning'}, {'intent': {}},
+                       {'changeKind': 'counter-added'}, {'evidenceUse': {'qualification': 'quarantined'}}]:
+            self.assertFalse(delivery_value({**original, **change}, packet['current'], {})['allowed'])
+        self.assertFalse(delivery_value(original, {**packet['current'], 'proofIdentityVerified': False}, {})['allowed'])
+        self.assertFalse(delivery_value(original, {**packet['current'], 'rules': []}, {})['allowed'])
 
     def test_only_native_new_eligible_actions_authorize_a_positive_hypothesis_notice(self):
         old, new = subject(), subject(['TRIM'])
@@ -101,12 +127,12 @@ class RuleNoticeDeliveryValueTests(TestCase):
         context['ontologyRelationContext']['matchedRules'][0]['claimContract'] = frozen_notification_claim('rule:policy', 'risk-invariant')
         result = rule_delivery_comparison(context, {})['relationChangeEvidence']
         self.assertTrue(result['eligible'])
-        self.assertTrue(result['historyOnlyEvents'])
-        self.assertTrue(all(e['purpose'] != 'hypothesis-evidence' for e in result['customerEvents']))
+        self.assertTrue(result['customerEvents'])
         self.assertTrue(any(e['purpose'] == 'management-policy' for e in result['customerEvents']))
 
     def test_receipt_locked_transport_rejects_already_queued_observation(self):
         context = readable_fixture()
+        context['ontologyRelationContext']['hypothesisSet']['hypotheses'][0]['qualification']['status'] = 'quarantined'
         job = NotificationJob.create('queued before the policy change', message_type='investmentInsight', context=context)
         store = object.__new__(MySQLNotificationJobStore)
         store.connect = Mock(); store.connect.return_value.__enter__ = Mock(return_value=Mock())
@@ -121,7 +147,9 @@ class RuleNoticeDeliveryValueTests(TestCase):
 
     def test_pretransport_check_does_not_request_new_data_for_a_value_exclusion(self):
         from digital_twin.modules.notifications.application.notification_service import NotificationQueueRunner
-        job = NotificationJob.create('queued', message_type='investmentInsight', context=readable_fixture())
+        context = readable_fixture()
+        context['ontologyRelationContext']['hypothesisSet']['hypotheses'][0]['qualification']['status'] = 'quarantined'
+        job = NotificationJob.create('queued', message_type='investmentInsight', context=context)
         runner = NotificationQueueRunner(Mock(), Mock(), Mock())
         runner.request_fresh_data_recheck = Mock()
         self.assertFalse(runner.apply_dispatch_freshness_gate(job, 'dispatch'))

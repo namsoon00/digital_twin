@@ -53,18 +53,26 @@ def parse_bls_statistics(payload, now=None):
         index = max(points)
         actual = points[index]
         prior = points.get(index - offset) if offset else None
-        if offset and (prior is None or prior <= 0):
-            raise ValueError("BLS comparison period missing")
-        value = (actual - prior) * 1000 if key == "payrolls" else (actual / prior - 1) * 100 if offset else actual
+        if prior is not None and prior <= 0:
+            raise ValueError("Invalid BLS comparison observation")
         inputs = [{"seriesId": identity, "period": _period(index), "value": actual}]
-        if offset:
+        missing_comparison = offset > 0 and prior is None
+        if missing_comparison:
+            value = None
+        elif offset:
             inputs.append({"seriesId": identity, "period": _period(index - offset), "value": prior})
+            value = (actual - prior) * 1000 if key == "payrolls" else (actual / prior - 1) * 100
+        else:
+            value = actual
         group = results.setdefault(indicator, {"referencePeriod": _period(index), "metrics": []})
         if group["referencePeriod"] != _period(index):
             raise ValueError("BLS indicator series reference periods disagree")
-        group["metrics"].append({"key": key, "label": label, "actual": round(value, 4), "unit": unit,
+        metric = {"key": key, "label": label, "actual": round(value, 4) if value is not None else None, "unit": unit,
             "basis": "calculated-from-latest-series" if offset else "latest-reported-series", "formula": formula,
-            "inputs": inputs, "consensus": None})
+            "inputs": inputs, "consensus": None}
+        if missing_comparison:
+            metric.update(basis="comparison-period-unavailable", missingComparisonPeriod=_period(index - offset))
+        group["metrics"].append(metric)
     source_data = {identity: {_period(index): points[index] for index in sorted(points)[-25:]} for identity, points in series.items()}
     digest = hashlib.sha256(json.dumps(source_data, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
     return {"version": "bls-statistical-vintage-v1", "source": "BLS Public Data API", "sourceUrl": BLS_API_URL,

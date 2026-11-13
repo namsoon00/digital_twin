@@ -85,6 +85,27 @@ class KoreanReleaseTests(unittest.TestCase):
 
 
 class BlsStatisticsTests(unittest.TestCase):
+    def test_unpublished_comparison_preserves_other_metrics_and_calendar_readback(self):
+        payload = bls_payload()
+        cpi_points = payload['Results']['series'][1]['data']
+        cpi_points[-1]['value'] = '-'
+        cpi_points.append({'year': '2025', 'period': 'M07', 'value': '99'})
+        result = parse_bls_statistics(payload, NOW)
+        fact = {'datasetId': 'official.bls-statistics', 'subjectKey': 'release:bls-statistics',
+                'fetchedAt': '2026-09-13T00:00:00Z', 'payload': {'officialStatistics': result}}
+        event = {'startsAt': '2026-09-11T12:30:00Z', 'payload': {'officialSource': True,
+                 'country': 'US', 'indicator': 'cpi', 'sourceProvider': 'BLS'}}
+        stats = calendar_release_information(event, {'facts': [fact]}, NOW)['latestStatistics']
+        self.assertEqual(stats['referencePeriod'], '2026-08')
+        mom, yoy = stats['metrics']
+        self.assertEqual(mom['actual'], 10)
+        self.assertIsNone(yoy['actual'])
+        self.assertEqual(yoy['missingComparisonPeriod'], '2025-08')
+        self.assertEqual([point['period'] for point in yoy['inputs']], ['2026-08'])
+        self.assertEqual(result['indicators']['employment']['metrics'][0]['actual'], 10000)
+        result['indicators']['cpi']['metrics'][1]['actual'] = 0
+        self.assertIsNone(verified_bls_statistics(result, NOW))
+
     def test_values_have_inputs_and_formulas_not_consensus(self):
         payload = bls_payload()
         payload['Results']['series'][0]['data'].append({'year':'2026','period':'M09','value':'-'})

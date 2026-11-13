@@ -260,7 +260,7 @@ class TransactionStabilizationTests(StabilizationDatabaseCase):
         before = self.counts(tables)
         with patch.object(
             monitoring.reasoning_writes,
-            "upsert_reasoning_snapshot_inputs",
+            "insert_verified_source_snapshot",
             side_effect=RuntimeError("fixture interruption"),
         ):
             with self.assertRaisesRegex(RuntimeError, "fixture interruption"):

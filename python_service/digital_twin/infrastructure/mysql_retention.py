@@ -1148,7 +1148,9 @@ def apply_mysql_operational_history_retention(
     settings: Mapping[str, object] = None,
     now: Optional[datetime] = None,
     use_lock: bool = True,
+    checkpoint=None,
 ) -> Dict[str, object]:
+    checkpoint = checkpoint or (lambda: None)
     configured = settings or {}
     if not operational_history_retention_enabled(configured):
         return {"enabled": False, "deleted": 0, "tables": {}, "skipped": "disabled"}
@@ -1184,10 +1186,12 @@ def apply_mysql_operational_history_retention(
     deleted_by_policy: Dict[str, int] = {}
     try:
         for target in MYSQL_OPERATIONAL_HISTORY_RETENTION_TARGETS:
+            checkpoint()
             deleted = _delete_stale_rows(connection, target, cutoff_iso, batch_size)
             deleted_by_table[target.table] = deleted
             deleted_by_policy["time:" + target.table] = deleted
 
+        checkpoint()
         source_snapshot_deleted = _delete_stale_reasoning_source_snapshots(
             connection,
             cutoff_iso,
@@ -1196,6 +1200,7 @@ def apply_mysql_operational_history_retention(
         deleted_by_table["verified_reasoning_source_snapshots"] = source_snapshot_deleted
         deleted_by_policy["terminal:verified_reasoning_source_snapshots"] = source_snapshot_deleted
 
+        checkpoint()
         source_fact_deleted = _delete_stale_reasoning_source_facts(
             connection,
             reasoning_source_fact_cutoff_iso,
@@ -1204,6 +1209,7 @@ def apply_mysql_operational_history_retention(
         deleted_by_table["reasoning_source_facts"] = source_fact_deleted
         deleted_by_policy["revision-history:reasoning_source_facts"] = source_fact_deleted
 
+        checkpoint()
         shared_inference_deleted = _delete_stale_shared_inference_rows(
             connection,
             cutoff_iso,
@@ -1214,10 +1220,12 @@ def apply_mysql_operational_history_retention(
         deleted_by_policy["time:shared_instrument_inference_snapshots"] = shared_inference_deleted["snapshots"]
         deleted_by_policy["time:portfolio_inference_overlays"] = shared_inference_deleted["overlays"]
 
+        checkpoint()
         terminal_notification_deleted = _delete_terminal_notification_rows(connection, cutoff_iso, batch_size)
         deleted_by_table["notification_jobs"] = terminal_notification_deleted
         deleted_by_policy["terminal:notification_jobs"] = terminal_notification_deleted
 
+        checkpoint()
         completed_model_review_deleted = _delete_completed_model_review_rows(connection, cutoff_iso, batch_size)
         deleted_by_table["model_review_jobs"] = completed_model_review_deleted
         deleted_by_policy["completed:model_review_jobs"] = completed_model_review_deleted
@@ -1226,6 +1234,7 @@ def apply_mysql_operational_history_retention(
             (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
             - timedelta(hours=ai_inference_queue_retention_hours)
         ).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+        checkpoint()
         ai_inference_deleted = _delete_terminal_ai_inference_rows(connection, ai_inference_cutoff, batch_size)
         deleted_by_table["ai_inference_requests"] = ai_inference_deleted["requests"]
         deleted_by_table["ai_inference_results"] = ai_inference_deleted["results"]
@@ -1235,6 +1244,7 @@ def apply_mysql_operational_history_retention(
             (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
             - timedelta(days=operational_ai_inference_audit_retention_days(configured))
         ).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+        checkpoint()
         ai_audit_deleted = _delete_one_batch(
             connection,
             "DELETE FROM `ai_inference_execution_audits` WHERE `created_at` < %s AND "
@@ -1251,6 +1261,7 @@ def apply_mysql_operational_history_retention(
             - timedelta(days=_int_setting(configured, "notificationRenderedMessageRetentionDays", 7, 1, 30))
         ).replace(microsecond=0).isoformat().replace("+00:00", "Z")
         for delivery_status in ("delivered", "failed"):
+            checkpoint()
             connection.execute(
                 "UPDATE notification_delivery_attempts SET metadata_json = JSON_SET("
                 "JSON_REMOVE(metadata_json, '$.renderedMessage'), '$.renderedMessageStatus', 'expired') "
@@ -1259,6 +1270,7 @@ def apply_mysql_operational_history_retention(
                 "ORDER BY started_at, attempt_id LIMIT %s",
                 (delivery_status, message_cutoff, min(batch_size, 100)),
             )
+        checkpoint()
         news_analysis_deleted = _delete_completed_news_analysis_work_rows(
             connection,
             ai_inference_cutoff,
@@ -1267,6 +1279,7 @@ def apply_mysql_operational_history_retention(
         deleted_by_table["news_analysis_work_items"] = news_analysis_deleted
         deleted_by_policy["terminal:news_analysis_work_items"] = news_analysis_deleted
 
+        checkpoint()
         snapshot_deleted = _delete_snapshot_history_over_keep_count(
             connection,
             operational_snapshot_history_keep_count(configured),
@@ -1275,10 +1288,12 @@ def apply_mysql_operational_history_retention(
         deleted_by_table["monitor_snapshot_history"] = deleted_by_table.get("monitor_snapshot_history", 0) + snapshot_deleted
         deleted_by_policy["count:monitor_snapshot_history"] = snapshot_deleted
 
+        checkpoint()
         suppressed_deleted = _delete_suppressed_notification_rows(connection, suppressed_cutoff_iso, batch_size)
         deleted_by_table["notification_jobs"] = deleted_by_table.get("notification_jobs", 0) + suppressed_deleted
         deleted_by_policy["suppressed:notification_jobs"] = suppressed_deleted
 
+        checkpoint()
         delivered_notification_deleted = _delete_delivered_notification_rows_over_keep_count(
             connection,
             delivered_notification_keep_count,
@@ -1287,6 +1302,7 @@ def apply_mysql_operational_history_retention(
         deleted_by_table["notification_jobs"] = deleted_by_table.get("notification_jobs", 0) + delivered_notification_deleted
         deleted_by_policy["count:delivered_notification_jobs"] = delivered_notification_deleted
 
+        checkpoint()
         article_delivery_ledger_deleted = _delete_expired_article_delivery_ledger_rows(
             connection,
             article_delivery_ledger_cutoff,
@@ -1295,6 +1311,7 @@ def apply_mysql_operational_history_retention(
         deleted_by_table["notification_article_delivery_ledger"] = article_delivery_ledger_deleted
         deleted_by_policy["time:notification_article_delivery_ledger"] = article_delivery_ledger_deleted
 
+        checkpoint()
         admission_deleted = _delete_expired_news_notification_admission_rows(
             connection,
             admission_cutoff,
@@ -1303,6 +1320,7 @@ def apply_mysql_operational_history_retention(
         deleted_by_table["news_notification_admissions"] = admission_deleted
         deleted_by_policy["time:news_notification_admissions"] = admission_deleted
 
+        checkpoint()
         domain_event_deleted = _delete_large_domain_events_over_keep_count(
             connection,
             operational_large_domain_event_names(configured),
@@ -1312,7 +1330,9 @@ def apply_mysql_operational_history_retention(
         deleted_by_table["domain_events"] = deleted_by_table.get("domain_events", 0) + domain_event_deleted
         deleted_by_policy["count:domain_events"] = domain_event_deleted
 
+        checkpoint()
         projection_time_deleted = _delete_stale_projection_runs(connection, cutoff_iso, batch_size)
+        checkpoint()
         projection_count_deleted = _delete_projection_runs_over_keep_count(
             connection,
             projection_run_keep_count,
@@ -1326,12 +1346,14 @@ def apply_mysql_operational_history_retention(
             (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
             - timedelta(days=execution_trace_retention_days)
         ).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+        checkpoint()
         stage_trace_deleted = _delete_stale_rows(
             connection,
             MySQLRetentionTarget("ontology_reasoning_run_stages", "updated_at"),
             execution_trace_cutoff,
             batch_size,
         )
+        checkpoint()
         rule_trace_deleted = _delete_stale_rows(
             connection,
             MySQLRetentionTarget("ontology_reasoning_rule_runs", "updated_at"),
@@ -1347,6 +1369,7 @@ def apply_mysql_operational_history_retention(
             (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
             - timedelta(hours=world_projection_outbox_retention_hours)
         ).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+        checkpoint()
         world_projection_deleted = _delete_completed_world_projection_outbox_rows(
             connection,
             world_projection_cutoff,
@@ -1359,6 +1382,7 @@ def apply_mysql_operational_history_retention(
             (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
             - timedelta(hours=inference_detail_outbox_retention_hours)
         ).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+        checkpoint()
         inference_detail_deleted = _delete_completed_inference_detail_outbox_rows(
             connection,
             inference_detail_cutoff,
@@ -1371,6 +1395,7 @@ def apply_mysql_operational_history_retention(
             (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
             - timedelta(days=DEFAULT_INVESTMENT_ALERT_COVERAGE_RETENTION_DAYS)
         ).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+        checkpoint()
         alert_coverage_deleted = _delete_stale_rows(
             connection,
             MySQLRetentionTarget("investment_alert_coverage", "event_at"),
@@ -1382,6 +1407,7 @@ def apply_mysql_operational_history_retention(
 
         time_series_deleted = 0
         for granularity, series_cutoff in time_series_cutoffs.items():
+            checkpoint()
             deleted = _delete_market_time_series_rows(
                 connection,
                 granularity,
@@ -1392,6 +1418,7 @@ def apply_mysql_operational_history_retention(
             deleted_by_policy["tier:market_time_series_observations:" + granularity] = deleted
         deleted_by_table["market_time_series_observations"] = time_series_deleted
 
+        checkpoint()
         lifecycle_event_deleted = _delete_stale_rows(
             connection,
             MySQLRetentionTarget("investment_hypothesis_lifecycle_events", "occurred_at"),

@@ -536,7 +536,10 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # Eight same-machine latency contracts cover atomic compiled evidence
         # rollback/restart/retention, one-pass preparation, deferred diagnostics,
         # live admission, memory recovery and source-compatible batch bounds.
-        self.assertLessEqual(total, 3131 + 33 + 8)
+        # Five storage-admission contracts preserve lossless evidence, corrupt
+        # input rejection, immutable replay, scoped rollback and yielding locks.
+        # One concurrently landed BLS unpublished-comparison-period contract.
+        self.assertLessEqual(total, 3131 + 33 + 8 + 5 + 1)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

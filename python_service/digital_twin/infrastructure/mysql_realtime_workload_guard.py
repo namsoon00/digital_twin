@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 from contextlib import contextmanager, ExitStack
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 import fcntl
 import os
 import time
-from typing import Iterator
+from typing import Callable, Iterator, Optional
 from .realtime_activity import RealtimeActivity
 
 
@@ -17,6 +17,7 @@ class MySQLWorkloadLease:
     acquired: bool
     role: str
     waited_seconds: float = 0.0
+    checkpoint: Optional[Callable[[], None]] = field(default=None, compare=False, repr=False)
 
 
 class MySQLRealtimeWorkloadGuard:
@@ -30,12 +31,13 @@ class MySQLRealtimeWorkloadGuard:
     def __init__(self, path: Path):
         self.path = Path(path)
         self.turnstile = self.path.with_name(self.path.name + ".admission")
+        self.monitor_demand = self.path.with_name(self.path.name + ".monitor-demand")
 
     @contextmanager
     def monitor_cycle(self) -> Iterator[MySQLWorkloadLease]:
         """Give the monitor a durable turn, waiting rather than timing out."""
 
-        with ExitStack() as held:
+        with self._acquire(role="monitor-demand", blocking=True, path=self.monitor_demand), ExitStack() as held:
             with self._acquire(role="admission", blocking=True, path=self.turnstile):
                 lease = held.enter_context(self._acquire(role="monitor", blocking=True))
             with RealtimeActivity(self.path.parent / "realtime-activity.lock").turn():
@@ -46,14 +48,37 @@ class MySQLRealtimeWorkloadGuard:
         """Overdue cleanup reserves the next gap, with a bounded lock wait."""
 
         deadline = time.monotonic() + max(0, min(60, float(wait_seconds)))
-        with self._acquire(role="admission", blocking=False, path=self.turnstile,
-                           wait_seconds=max(0, deadline - time.monotonic())) as gate:
+        with ExitStack() as held:
+            gate = held.enter_context(self._acquire(role="admission", blocking=False, path=self.turnstile,
+                           wait_seconds=max(0, deadline - time.monotonic())))
             if not gate.acquired:
                 yield MySQLWorkloadLease(acquired=False, role="maintenance", waited_seconds=gate.waited_seconds)
                 return
-            with self._acquire(role="maintenance", blocking=False,
-                               wait_seconds=max(0, deadline - time.monotonic())) as lease:
-                yield lease
+            lease = held.enter_context(self._acquire(role="maintenance", blocking=False,
+                               wait_seconds=max(0, deadline - time.monotonic())))
+            first_batch = True
+
+            def checkpoint():
+                nonlocal first_batch
+                # An overdue turn earns one batch even under continuous demand.
+                # Subsequent boundaries yield, preserving both disk cleanup and
+                # monitor progress instead of starving either owner.
+                if first_batch:
+                    first_batch = False
+                    return
+                # Call only between committed batches. A waiting monitor owns
+                # demand before joining admission, so it cannot lose this gap.
+                with self._acquire(role="demand-probe", blocking=False, path=self.monitor_demand) as demand:
+                    waiting = not demand.acquired
+                if not waiting:
+                    return
+                held.close()
+                with self._acquire(role="maintenance-resume", blocking=True, path=self.monitor_demand):
+                    held.enter_context(self._acquire(role="admission", blocking=True, path=self.turnstile))
+                    held.enter_context(self._acquire(role="maintenance", blocking=True))
+
+            yield MySQLWorkloadLease(lease.acquired, lease.role, lease.waited_seconds,
+                                    checkpoint if lease.acquired else None)
 
     @contextmanager
     def _acquire(self, *, role: str, blocking: bool, path=None, wait_seconds=0) -> Iterator[MySQLWorkloadLease]:

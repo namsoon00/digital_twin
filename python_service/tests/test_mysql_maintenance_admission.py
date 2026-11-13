@@ -91,7 +91,9 @@ class MySQLMaintenanceAdmissionTests(unittest.TestCase):
                 factory.assert_called_once()
                 service.run_once.assert_called_once()
                 sleep.assert_not_called()
-                repository.assert_called_once_with(connection, candidate_query_timeout_ms=1500)
+                repository.assert_called_once_with(connection, candidate_query_timeout_ms=1500,
+                                                   checkpoint=repository.call_args.kwargs['checkpoint'])
+                self.assertTrue(callable(repository.call_args.kwargs['checkpoint']))
         self._assert_candidate_read_deadline_obeys_remaining_turn_budget()
 
     def _assert_candidate_read_deadline_obeys_remaining_turn_budget(self):
@@ -223,7 +225,7 @@ class MySQLMaintenanceAdmissionTests(unittest.TestCase):
         from digital_twin.infrastructure import cli
         scheduler, guard = Mock(), Mock()
         guard.maintenance_turn.side_effect = [nullcontext(SimpleNamespace(acquired=False)),
-                                               nullcontext(SimpleNamespace(acquired=True))]
+                                               nullcontext(SimpleNamespace(acquired=True, checkpoint=lambda: None))]
         with patch.object(cli, 'runtime_settings', return_value={}), \
              patch.object(cli, 'build_ontology_reasoning_queue_probe', return_value=lambda: {'effectivePendingCount': 3}), \
              patch.object(cli, 'operational_storage_inventory', return_value={}), \
@@ -234,7 +236,7 @@ class MySQLMaintenanceAdmissionTests(unittest.TestCase):
              patch.object(cli, 'OperationalHistoryRetentionScheduler', return_value=scheduler) as factory:
             scheduler.run_forever.side_effect = lambda: [factory.call_args.args[0]() for _ in range(3)]
             cli.maintenance_command(SimpleNamespace(maintenance_action='watch', interval='60'))
-        cleanup.assert_called_once_with({}, include_legacy=False)
+        cleanup.assert_called_once_with({}, include_legacy=False, checkpoint=cleanup.call_args.kwargs['checkpoint'])
         self.assertEqual([60, 60], [call.kwargs['wait_seconds'] for call in guard.maintenance_turn.call_args_list])
 
     def test_overdue_maintenance_reserves_the_gap_before_another_monitor(self):

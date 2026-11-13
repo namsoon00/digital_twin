@@ -4,6 +4,7 @@ from __future__ import annotations
 from digital_twin.infrastructure.transaction_port import BoundWriteConnection
 from typing import Any, Dict, Iterable
 from digital_twin.infrastructure.operational_common import json_dumps
+from digital_twin.infrastructure.snapshot_payload_codec import snapshot_json_dumps
 from digital_twin.infrastructure.settings import utc_now
 from digital_twin.modules.reasoning.contracts import compact_monitor_history_state, TEMPORAL_HISTORY_PROJECTION_VERSION
 
@@ -91,7 +92,7 @@ def upsert_monitor_snapshot(
             str(state.get("mode") or ""),
             str(state.get("status") or ""),
             generated_at,
-            payload_json if payload_json is not None else json_dumps(state),
+            payload_json if payload_json is not None else snapshot_json_dumps(state),
             updated_at,
         ),
     )
@@ -122,8 +123,8 @@ def upsert_monitor_snapshot_history(
         (
             account_id,
             generated_at,
-            payload_json if payload_json is not None else json_dumps(state),
-            json_dumps(temporal_projection),
+            payload_json if payload_json is not None else snapshot_json_dumps(state),
+            snapshot_json_dumps(temporal_projection),
             updated_at,
             json_dumps(compact_monitor_history_state(temporal_projection)),
             TEMPORAL_HISTORY_PROJECTION_VERSION,

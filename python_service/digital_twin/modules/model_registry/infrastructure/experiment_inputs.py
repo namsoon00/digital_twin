@@ -5,6 +5,7 @@ import hashlib
 import json
 
 from digital_twin.infrastructure.mysql_operational_helpers import _json_loads
+from digital_twin.infrastructure.snapshot_payload_codec import snapshot_json_loads
 from digital_twin.modules.model_registry.domain.experiment_observations import assess_requirement, freeze_dataset
 from digital_twin.modules.model_registry.domain.ontology_evolution import timestamp
 from .experiment_dataset_codec import encode_dataset
@@ -28,7 +29,7 @@ def capabilities(cadence_seconds=180):
 
 
 def source_packet(row):
-    payload = _json_loads(row.get("payload_json"), {})
+    payload = snapshot_json_loads(row.get("payload_json"), {})
     # The existing source contract uses ensure_ascii=True and a full canonical hash.
     actual = hashlib.sha256(json.dumps(payload, ensure_ascii=True, sort_keys=True,
                                       separators=(",", ":"), default=str).encode()).hexdigest()

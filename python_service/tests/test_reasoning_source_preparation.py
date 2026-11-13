@@ -12,6 +12,7 @@ from unittest.mock import Mock, patch
 from digital_twin.infrastructure import reasoning_snapshot_source
 from digital_twin.infrastructure.transactions import monitoring
 from digital_twin.infrastructure.operational_common import json_dumps
+from digital_twin.infrastructure.snapshot_payload_codec import snapshot_json_dumps
 from digital_twin.modules.market_data.infrastructure import transaction_writes as market_writes
 from digital_twin.modules.reasoning.infrastructure import transaction_writes as reasoning_writes
 from digital_twin.modules.reasoning.infrastructure.source_packet_cache import SourcePacketCache
@@ -67,7 +68,10 @@ class ReasoningSourcePreparationTests(TestCase):
             with self.subTest(previous_stamp=(previous or {}).get('generatedAt')):
                 actual, legacy = Mock(), Mock()
                 stamp = current['generatedAt']
-                with patch.object(monitoring, 'json_dumps', wraps=json_dumps) as encode:
+                # Retain the legacy V1 SQL contract. V2 cache retirement and
+                # encoded large evidence are covered by real storage tests.
+                with patch.object(monitoring, 'snapshot_json_dumps', wraps=snapshot_json_dumps) as encode, \
+                     patch.object(monitoring, 'active_reasoning_engine_with_connection', return_value={'engineVersion': 'v1'}):
                     serialized = store.upsert_snapshot_state_with_connection(actual, 'acct', current, stamp, previous)
                     prepared = monitoring.reasoning_snapshot_for_persisted_boundary(
                         account_snapshot_from_monitor_state(current), current, payload_json=serialized,

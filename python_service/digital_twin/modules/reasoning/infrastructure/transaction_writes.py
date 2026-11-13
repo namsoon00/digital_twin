@@ -5,6 +5,7 @@ from digital_twin.infrastructure.transaction_port import BoundWriteConnection
 from typing import Any, Dict
 from digital_twin.modules.reasoning.domain.ontology_projection_input import compact_monitor_state_for_ontology, compact_monitor_state_for_reasoning_base, compact_monitor_state_for_reasoning_symbol, reasoning_snapshot_symbols
 from digital_twin.infrastructure.operational_common import json_dumps
+from digital_twin.infrastructure.snapshot_payload_codec import snapshot_json_dumps
 from digital_twin.infrastructure.settings import utc_now
 
 
@@ -32,7 +33,7 @@ def insert_verified_source_snapshot(
             source_snapshot["contractVersion"],
             source_snapshot["fingerprint"],
             json_dumps(source_snapshot["symbols"]),
-            json_dumps(source_snapshot["payload"]),
+            snapshot_json_dumps(source_snapshot["payload"]),
             updated_at,
             updated_at,
         ),
@@ -112,7 +113,7 @@ def upsert_reasoning_snapshot_inputs(
                 normalized_account_id,
                 source_generated_at,
                 str(symbol or ""),
-                json_dumps(payload),
+                snapshot_json_dumps(payload),
                 updated_at,
             ),
         )

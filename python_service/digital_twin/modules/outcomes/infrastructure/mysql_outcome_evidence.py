@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Mapping
 
 from digital_twin.infrastructure.mysql_operational_connection import MySQLOperationalConnection
+from digital_twin.infrastructure.snapshot_payload_codec import snapshot_json_loads
 
 
 class MySQLOutcomeEvidenceSource(MySQLOperationalConnection):
@@ -46,10 +47,7 @@ class MySQLOutcomeEvidenceSource(MySQLOperationalConnection):
                 ).fetchall()
             for row in rows:
                 raw = row.get("company_json")
-                try:
-                    company = raw if isinstance(raw, Mapping) else json.loads(raw or "{}")
-                except (TypeError, ValueError):
-                    continue
+                company = snapshot_json_loads(json.dumps(raw) if isinstance(raw, Mapping) else raw or "{}")
                 if isinstance(company, Mapping) and company:
                     result[str(row["request_id"])] = {
                         "companyContext": dict(company),

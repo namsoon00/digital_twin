@@ -6,6 +6,7 @@ from unittest import TestCase
 from unittest.mock import Mock, patch
 
 from digital_twin.infrastructure.transactions import monitoring
+from digital_twin.infrastructure.snapshot_payload_codec import snapshot_json_loads
 from digital_twin.modules.market_data.infrastructure.transaction_writes import upsert_monitor_snapshot_history
 from digital_twin.modules.reasoning.application.independent_reasoning_engine import IndependentReasoningInputAssembler
 from digital_twin.modules.reasoning.domain import ontology_projection_input as projection
@@ -193,8 +194,8 @@ class TemporalHistoryStorageTests(StabilizationDatabaseCase):
         self.assertEqual(expected, self.store.load_temporal_history(self.account, 2))
         stamp = expected[0]["generatedAt"]
         stored = self.row(stamp)
-        self.assertEqual(history_state(stamp), json.loads(stored["payload_json"]))
-        self.assertEqual(json.loads(stored["projection_payload_json"]), self.store.reasoning_snapshot_state_at(self.account, stamp))
+        self.assertEqual(history_state(stamp), snapshot_json_loads(stored["payload_json"]))
+        self.assertEqual(snapshot_json_loads(stored["projection_payload_json"]), self.store.reasoning_snapshot_state_at(self.account, stamp))
         # The prepared read must not decode the unrelated broad archive.
         with self.store.transaction() as connection:
             connection.execute("UPDATE monitor_snapshot_history SET projection_payload_json='invalid broad archive' WHERE account_id=%s",

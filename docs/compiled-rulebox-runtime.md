@@ -140,3 +140,27 @@ An in-memory replay of preserved inputs proves result parity and isolates input
 assembly/rule work; it does not include collection, SQL durability, queue wait or
 notification transport. Live source-to-completion and delivery timings must be
 reported separately before claiming an end-to-end latency target.
+# Snapshot storage and maintenance admission (2026-11-13)
+
+The realtime producer retains one immutable source packet per account/source
+clock. While the durable active engine is V2 it no longer refreshes the legacy
+mutable per-symbol input cache; existing entries for that account are removed
+in the same transaction. V1 activation restores ordinary cache writes, and its
+read adapter can recover from the current monitor row during the transition.
+
+Large company/research evidence values use the self-contained
+`__orbit_snapshot_zlib_v1__` storage envelope. Account, position, quote, symbol
+paths and source clocks remain directly queryable. The snapshot readers and
+as-of company evidence reader restore the original values and verify byte count
+and SHA-256 before any domain use or source fingerprint check. Old plain rows
+remain readable. Corrupt encoded evidence fails the read. Archive copies remain
+self-contained, with no external blob retention dependency. This changes storage
+representation only, not RuleBox identity, claim semantics or delivery gates.
+
+An overdue cleanup turn admits one batch to preserve cleanup progress, then
+yields its host workload lease between committed retention
+policies and repair phases when a monitor is waiting. It reacquires the lease
+before resuming. It never releases a live SQL transaction, cancels another
+process, or drops pending work. An individual slow SQL statement can still delay
+the next boundary; this is not a hard deadline guarantee. `guardWaitMs` now
+separates that wait from collection and commit time in monitor timing logs.

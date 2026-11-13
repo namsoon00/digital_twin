@@ -345,7 +345,7 @@ class Rehearsal:
     def snapshot_rollback(self):
         tables = ["monitor_snapshots", "monitor_snapshot_history", "monitor_snapshot_reasoning_inputs", "verified_reasoning_source_snapshots", "domain_events", "reasoning_engine_jobs"]
         before = self.counts(tables)
-        with patch.object(self.monitoring.reasoning_writes, "upsert_reasoning_snapshot_inputs", side_effect=VerificationFailure("injected-source-interruption")):
+        with patch.object(self.monitoring.reasoning_writes, "insert_verified_source_snapshot", side_effect=VerificationFailure("injected-source-interruption")):
             try:
                 self.monitor.save_snapshot(self.fixtures.fixture_snapshot("load-rollback"))
             except VerificationFailure as error:

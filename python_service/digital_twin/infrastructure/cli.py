@@ -1658,9 +1658,11 @@ def run_mysql_operational_cleanup(
     optimize: bool = False,
     drop_ephemeral_databases: bool = False,
     include_legacy: bool = True,
+    checkpoint=None,
 ) -> Dict[str, object]:
     """Run one bounded cleanup pass outside the realtime inference path."""
     settings = dict(settings or {})
+    checkpoint = checkpoint or (lambda: None)
     try:
         storage_health = operational_storage_inventory(settings)
         storage_capacity_health = observe_operational_storage_capacity(
@@ -1703,6 +1705,7 @@ def run_mysql_operational_cleanup(
                         connection,
                         settings,
                         use_lock=True,
+                        checkpoint=checkpoint,
                     )
                     if include_legacy
                     else {
@@ -1715,7 +1718,7 @@ def run_mysql_operational_cleanup(
                 )
                 stage = "minimal-retention"
                 minimal_retention = MySQLMinimalRetentionService(
-                    MySQLMinimalRetentionRepository(connection, candidate_query_timeout_ms=1500),
+                    MySQLMinimalRetentionRepository(connection, candidate_query_timeout_ms=1500, checkpoint=checkpoint),
                     settings,
                 ).run_once()
                 retention_completed = True
@@ -1762,16 +1765,19 @@ def run_mysql_operational_cleanup(
                     )
                 from .mysql_schema_tuning import repair_mysql_legacy_metadata
                 stage = "legacy-metadata-repair"
+                checkpoint()
                 result["legacyMetadata"] = repair_mysql_legacy_metadata(connection)
             from digital_twin.modules.outcomes.infrastructure.mysql_decision_calibration_inputs import MySQLDecisionCalibrationInputStore
 
             stage = "calibration-repair"
+            checkpoint()
             result["decisionCalibrationInputs"] = (
                 MySQLDecisionCalibrationInputStore(settings).repair()
                 if include_legacy else {"status": "deferred", "reason": "bounded-retention-turn"}
             )
             from digital_twin.modules.decisions.infrastructure.mysql_projection_inputs import MySQLDecisionProjectionInputStore
             stage = "decision-memory-repair"
+            checkpoint()
             result["decisionProjectionInputs"] = (
                 MySQLDecisionProjectionInputStore(settings).repair()
                 if include_legacy else {"status": "deferred", "reason": "bounded-retention-turn"}
@@ -1779,8 +1785,10 @@ def run_mysql_operational_cleanup(
             from digital_twin.modules.decisions.infrastructure.legacy_flow_projection import MySQLLegacyDecisionFlowRepairStore
             from digital_twin.modules.notifications.infrastructure.legacy_receipt_repair import MySQLLegacyDecisionReceiptRepairStore
             stage = "legacy-flow-repair"
+            checkpoint()
             result["legacyDecisionFlows"] = MySQLLegacyDecisionFlowRepairStore(settings).repair()
             stage = "legacy-receipt-repair"
+            checkpoint()
             result["legacyDecisionReceipts"] = MySQLLegacyDecisionReceiptRepairStore(settings).repair()
             if connection_retries:
                 result["transientConnectionRetryCount"] = connection_retries
@@ -2272,8 +2280,10 @@ def maintenance_command(args) -> int:
                 result = run_mysql_operational_cleanup(
                     settings,
                     include_legacy=admission.include_legacy,
+                    checkpoint=workload_lease.checkpoint,
                 )
                 if str(settings.get("reasoningRetiredDataPurgeEnabled") or "0") == "1":
+                    workload_lease.checkpoint()
                     from digital_twin.modules.reasoning.infrastructure.mysql_retired_data import run_retired_reasoning_cleanup
                     try:
                         result["retiredReasoningData"] = run_retired_reasoning_cleanup(settings,

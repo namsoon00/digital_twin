@@ -618,9 +618,11 @@ class RealtimeScheduler:
             self.stage_started_at = started
             self.current_stage = "monitor.start"
             self.current_stage_payload = {}
+            guard_wait_ms = 0
             try:
                 if self.cycle_guard:
                     with self.cycle_guard():
+                        guard_wait_ms = round((time.monotonic() - started) * 1000)
                         self.runner.run_once()
                 else:
                     self.runner.run_once()
@@ -630,6 +632,7 @@ class RealtimeScheduler:
                         "completedAt": datetime.now(timezone.utc).isoformat(),
                         "cycleMs": round((time.monotonic() - started) * 1000),
                         "commitMs": getattr(self.runner, "last_cycle_commit_ms", 0),
+                        "guardWaitMs": guard_wait_ms,
                         "collections": collection_timings,
                     }, ensure_ascii=False))
             except Exception as error:  # noqa: BLE001 - long-running scheduler must continue after a cycle failure.

@@ -27,6 +27,7 @@ from digital_twin.modules.portfolio.domain.valuation.service import evaluate_val
 from digital_twin.modules.portfolio.domain.valuation.dcf_inputs import DRIVER_DCF_INPUT_VERSION
 from digital_twin.modules.reasoning.infrastructure.typeql.literals import typedb_value_match
 from digital_twin.modules.reasoning.domain.ontology_projection_input import compact_external_signals_for_ontology
+from digital_twin.infrastructure.snapshot_payload_codec import snapshot_json_loads
 
 
 class ReadOnlyGraph(TypeDBOntologyGraphRepository):
@@ -46,8 +47,8 @@ def frozen_signals(cursor, run):
                 "WHERE account_id=%s AND generated_at=%s", (run["account_id"], run["source_snapshot_at"]))
     if not rows:
         raise LookupError("Exact source snapshot no longer retained")
-    source = json.loads(rows[0]["payload_json"])
-    projection = json.loads(rows[0]["projection_payload_json"] or "{}")
+    source = snapshot_json_loads(rows[0]["payload_json"])
+    projection = snapshot_json_loads(rows[0]["projection_payload_json"] or "{}")
     assert source["generatedAt"] == projection.get("generatedAt") == run["source_snapshot_at"], "Source clock mismatch"
     before, after = source.get("externalSignals") or {}, projection.get("externalSignals") or {}
     contracts = {row.get("contractVersion") for row in before.get("driverDcfReadiness", {}).values()}

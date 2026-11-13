@@ -288,6 +288,7 @@
     {"file": "test_compiled_rulebox.py", "tier": "unit", "core": true},
     {"file": "test_compiled_rulebox_projection.py", "tier": "integration", "core": true},
     {"file": "test_compiled_rulebox_release.py", "tier": "contract", "core": true},
-    {"file": "test_compiled_rulebox_transactions.py", "tier": "integration", "core": true}
+    {"file": "test_compiled_rulebox_transactions.py", "tier": "integration", "core": true},
+    {"file": "test_snapshot_payload_storage.py", "tier": "integration", "core": true}
   ]
 }

@@ -35,11 +35,12 @@ from digital_twin.modules.reasoning.infrastructure.source_packet_cache import So
 from digital_twin.modules.portfolio.contracts import MonitoringCycleRecordResult
 from digital_twin.modules.reasoning.domain.verified_snapshot_reasoning import verified_monitor_snapshot_reasoning_event
 from digital_twin.infrastructure.operational_common import json_dumps
+from digital_twin.infrastructure.snapshot_payload_codec import snapshot_json_dumps, snapshot_json_loads, expanded_snapshot_json
 from digital_twin.infrastructure.settings import utc_now
 from digital_twin.modules.notifications.infrastructure.mysql_notification_jobs import MySQLNotificationJobStore
 from digital_twin.infrastructure.mysql_operational_connection import MySQLOperationalConnection
 from digital_twin.infrastructure.mysql_operational_events import domain_event_from_row, insert_domain_event_with_connection
-from digital_twin.modules.reasoning.infrastructure.mysql_reasoning_ingress import ingress_reasoning_event_with_connection
+from digital_twin.modules.reasoning.infrastructure.mysql_reasoning_ingress import ingress_reasoning_event_with_connection, active_reasoning_engine_with_connection
 from digital_twin.infrastructure.mysql_operational_helpers import _json_loads, _sent_key_hash
 
 
@@ -177,7 +178,7 @@ def reasoning_snapshot_for_persisted_boundary(
     # gate; otherwise a bounded map can select different rows solely because a
     # provider returned the same object in another insertion order.
     canonical_state = (
-        json.loads(payload_json if payload_json is not None else json_dumps(persisted_state))
+        snapshot_json_loads(payload_json if payload_json is not None else json_dumps(persisted_state))
         if isinstance(persisted_state, dict)
         else {}
     )
@@ -632,7 +633,7 @@ class MySQLMonitorStore(MySQLOperationalConnection):
             rows = connection.execute("SELECT account_id, payload_json FROM monitor_snapshots").fetchall()
         previous = {}
         for row in rows:
-            previous[row["account_id"]] = _json_loads(row["payload_json"], {})
+            previous[row["account_id"]] = snapshot_json_loads(row["payload_json"], {})
         return previous
 
     def latest_delivered_company_change_report(
@@ -696,7 +697,7 @@ class MySQLMonitorStore(MySQLOperationalConnection):
             tuple(accounts),
         ).fetchall()
         return {
-            str(row.get("account_id") or ""): dict(_json_loads(row.get("payload_json"), {}) or {})
+            str(row.get("account_id") or ""): dict(snapshot_json_loads(row.get("payload_json"), {}) or {})
             for row in rows or []
             if str(row.get("account_id") or "").strip()
         }
@@ -752,7 +753,7 @@ class MySQLMonitorStore(MySQLOperationalConnection):
                     """,
                     (str(account_id or ""), min(6, max(1, int(limit or 6)))),
                 ).fetchall()
-        history = [_json_loads(row["payload_json"], {}) for row in reversed(rows)]
+        history = [snapshot_json_loads(row["payload_json"], {}) for row in reversed(rows)]
         return [item for item in history if item]
 
     def load_temporal_history(self, account_id: str, limit: int = 6) -> List[Dict[str, object]]:
@@ -799,7 +800,7 @@ class MySQLMonitorStore(MySQLOperationalConnection):
         history = []
         for row in reversed(rows):
             # A corrupt historical input must fail, not look like absent data.
-            value = json.loads(row["payload_json"])
+            value = snapshot_json_loads(row["payload_json"])
             if not isinstance(value, dict):
                 raise ValueError("Temporal history snapshot is not an object")
             if row["prepared"] and (not value or value.get("generatedAt") != row["generated_at"]):
@@ -833,7 +834,7 @@ class MySQLMonitorStore(MySQLOperationalConnection):
             if not row or not row["projection_payload_json"]:
                 counts["racedOrDeleted"] += 1
                 continue
-            value = json.loads(row["projection_payload_json"])
+            value = snapshot_json_loads(row["projection_payload_json"])
             if not isinstance(value, dict):
                 raise ValueError("Temporal history snapshot is not an object")
             prepared = json_dumps(compact_monitor_history_state(value))
@@ -872,7 +873,7 @@ class MySQLMonitorStore(MySQLOperationalConnection):
                 """,
                 (str(account_id or ""), str(generated_at or "")),
             ).fetchone() or {}
-        payload = _json_loads(
+        payload = snapshot_json_loads(
             row.get("payload_json"),
             {},
         )
@@ -936,7 +937,7 @@ class MySQLMonitorStore(MySQLOperationalConnection):
                 from ..mysql_history_archive import read_archived_row
                 row = read_archived_row(connection, "verified_reasoning_source_snapshots",
                                         {"snapshot_id": snapshot_id}) or {}
-        payload_json = row.get("payload_json") or ""
+        payload_json = expanded_snapshot_json(row.get("payload_json") or "")
         self._source_packet_cache.put(snapshot_id, str(row.get("fingerprint") or ""), payload_json)
         return payload_json
 
@@ -1019,7 +1020,7 @@ class MySQLMonitorStore(MySQLOperationalConnection):
         )
         # Reuse only values prepared from this transaction's final state and
         # locked previous state. Never carry these across monitor cycles.
-        payload_json = json_dumps(state)
+        payload_json = snapshot_json_dumps(state)
         previous_projection = (
             (source_snapshot["payload"].get("metadata") or {}).get("previousMonitorState") or {}
             if isinstance(previous_state, dict) and previous_state else {}
@@ -1032,15 +1033,17 @@ class MySQLMonitorStore(MySQLOperationalConnection):
             updated_at=updated_at,
             payload_json=payload_json,
         )
-        self.upsert_reasoning_snapshot_inputs_with_connection(
-            connection,
-            account_id,
-            state,
-            generated_at=generated_at,
-            stamp=updated_at,
-            previous_state=previous_state,
-            previous_projection=previous_projection,
-        )
+        # V2 consumes the immutable source packet below. Do not maintain a
+        # second, mutable per-symbol V1 copy of the same evidence. Read the
+        # durable control pointer in this transaction, never a stale env flag.
+        if active_reasoning_engine_with_connection(connection)["engineVersion"] == "v2":
+            connection.execute("DELETE FROM monitor_snapshot_reasoning_inputs WHERE account_id = %s", (account_id,))
+        else:
+            self.upsert_reasoning_snapshot_inputs_with_connection(
+                connection, account_id, state, generated_at=generated_at,
+                stamp=updated_at, previous_state=previous_state,
+                previous_projection=previous_projection,
+            )
         market_data_writes.upsert_monitor_snapshot_history(
             connection=connection,
             account_id=account_id,
@@ -1118,7 +1121,7 @@ class MySQLMonitorStore(MySQLOperationalConnection):
             count = 0
             stamp = utc_now()
             for row in rows:
-                state = _json_loads(row.get("payload_json"), {})
+                state = snapshot_json_loads(row.get("payload_json"), {})
                 if not isinstance(state, dict):
                     continue
                 self.upsert_reasoning_snapshot_inputs_with_connection(
@@ -1237,7 +1240,7 @@ class MySQLOntologyReasoningMonitorStore(MySQLMonitorStore):
                 ).fetchone() or {}
         except Exception:
             return {}
-        payload = _json_loads(row.get("payload_json"), {})
+        payload = snapshot_json_loads(row.get("payload_json"), {})
         return dict(payload or {}) if isinstance(payload, dict) else {}
 
     def reasoning_snapshot_state(
@@ -1280,7 +1283,7 @@ class MySQLOntologyReasoningMonitorStore(MySQLMonitorStore):
             if fallback:
                 self.payload["previous"][normalized_account_id] = fallback
             return copy.deepcopy(fallback)
-        base = _json_loads(base_row.get("payload_json"), {})
+        base = snapshot_json_loads(base_row.get("payload_json"), {})
         if not isinstance(base, dict):
             return {}
         expected_generated_at = str(base_row.get("generated_at") or base.get("generatedAt") or "")
@@ -1292,7 +1295,7 @@ class MySQLOntologyReasoningMonitorStore(MySQLMonitorStore):
             symbol = str(row.get("symbol") or "").upper().strip()
             if not symbol or str(row.get("generated_at") or "") != expected_generated_at:
                 continue
-            payload = _json_loads(row.get("payload_json"), {})
+            payload = snapshot_json_loads(row.get("payload_json"), {})
             source_signals = payload.get("externalSignals") if isinstance(payload, dict) else {}
             if isinstance(source_signals, dict):
                 signals = self._merge_external_signals(signals, source_signals)

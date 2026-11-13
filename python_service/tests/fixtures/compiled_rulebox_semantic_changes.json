@@ -32,6 +32,21 @@
       "hash": "984ad9586bd806403b1a7e557461466d316219c66b84ecc8d29f13dbd6829e88",
       "previousHash": "670bef0c97f7142c87f98b034e845cf89e1376850dbf78862d96c2450bc570db",
       "reason": "Owner-approved compiled RuleBox execution, immutable release admission and backend-explicit proof. Native proof flags remain false. Verified by test_compiled_rulebox, test_compiled_rulebox_projection, test_compiled_rulebox_release and real MySQL test_compiled_rulebox_transactions."
+    },
+    "infrastructure/transactions/monitoring.py::reasoning_snapshot_for_persisted_boundary": {
+      "hash": "4a9b54c310fc142794aaa861d276c4ce41d2ac646b301728c0ea28e264d7e097",
+      "previousHash": "01e55305b46735ce58142f3a808f146c489a1de69dab0500c9422bf325349b23",
+      "reason": "Owner-approved source storage latency change: lossless self-contained evidence encoding, exact decode before fingerprint/domain use, and removal of unused mutable V1 copies only under durable V2 control. Verified by test_snapshot_payload_storage real MySQL rollback/restart/account/as-of tests, test_stabilization_transactions and paired captured-source equality. No RuleBox or delivery semantics changed."
+    },
+    "infrastructure/transactions/monitoring.py::MySQLMonitorStore": {
+      "hash": "743b063a682fc678517cc26881ee5842437ffea35e523789c92d976bf09e44e2",
+      "previousHash": "2c39037410500ff7be24566d80854007678495c2a791bc691c27f57ab666e27d",
+      "reason": "Owner-approved source storage latency change: lossless self-contained evidence encoding, exact decode before fingerprint/domain use, and removal of unused mutable V1 copies only under durable V2 control. Verified by test_snapshot_payload_storage real MySQL rollback/restart/account/as-of tests, test_stabilization_transactions and paired captured-source equality. No RuleBox or delivery semantics changed."
+    },
+    "infrastructure/transactions/monitoring.py::MySQLOntologyReasoningMonitorStore": {
+      "hash": "0a4738bc6258939bc0b195e895b28ab8abb236b166dfa05e19fac379103ec985",
+      "previousHash": "8d530d7d5e81f7bbf26d3d7e700ddb35885fd169c9d0593684749a106526cea8",
+      "reason": "Owner-approved source storage latency change: lossless self-contained evidence encoding, exact decode before fingerprint/domain use, and removal of unused mutable V1 copies only under durable V2 control. Verified by test_snapshot_payload_storage real MySQL rollback/restart/account/as-of tests, test_stabilization_transactions and paired captured-source equality. No RuleBox or delivery semantics changed."
     }
   },
   "domain": {

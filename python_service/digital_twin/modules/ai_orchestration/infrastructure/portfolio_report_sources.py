@@ -3,6 +3,7 @@ from copy import deepcopy
 import json
 
 from digital_twin.infrastructure.mysql_operational_connection import MySQLOperationalConnection
+from digital_twin.infrastructure.snapshot_payload_codec import snapshot_json_loads
 from digital_twin.modules.portfolio.contracts import account_snapshot_from_monitor_state
 from digital_twin.modules.reasoning.contracts import world_from_snapshot
 from ..domain.portfolio_report import MAX_SUBJECTS, known, reviewed_question, safe_url
@@ -26,7 +27,7 @@ class PortfolioReportSourceReader(MySQLOperationalConnection):
             raise ValueError("사용 가능한 계정을 선택해 주세요.")
         with self.connect() as connection:
             row = connection.execute("SELECT payload_json FROM monitor_snapshots WHERE account_id=%s", (account_id,)).fetchone()
-        state = json.loads(row["payload_json"]) if row else {}
+        state = snapshot_json_loads(row["payload_json"]) if row else {}
         snapshot = account_snapshot_from_monitor_state(state)
         if (not snapshot or not snapshot.has_live_account_data()
                 or not known(snapshot.generated_at, cutoff)):

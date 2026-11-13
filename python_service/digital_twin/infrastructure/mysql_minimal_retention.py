@@ -99,9 +99,10 @@ def _research_audit_expired_sql() -> str:
 class MySQLMinimalRetentionRepository:
     """Low-priority, idempotent MySQL compaction adapter."""
 
-    def __init__(self, connection, *, candidate_query_timeout_ms: int = 0):
+    def __init__(self, connection, *, candidate_query_timeout_ms: int = 0, checkpoint=None):
         self.connection = connection
         self.candidate_query_timeout_ms = max(0, int(candidate_query_timeout_ms))
+        self.checkpoint = checkpoint or (lambda: None)
 
     def preview(self, policy: MySQLMinimalRetentionPolicy, now: datetime = None) -> Dict[str, object]:
         cutoffs = policy_cutoffs(policy, now=now)
@@ -409,6 +410,7 @@ class MySQLMinimalRetentionRepository:
             ordered = actions[offset:] + actions[:offset]
             next_policy = ordered[0][0]
             for index, (name, action, arguments) in enumerate(ordered):
+                self.checkpoint()
                 if not self._has_budget(budget):
                     break
                 # Advance before expensive SQL so a timeout or worker restart

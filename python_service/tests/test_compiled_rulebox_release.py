@@ -118,5 +118,12 @@ class CompiledReleaseTests(TestCase):
             self.assertEqual('current',compiled_rulebox_runtime_status({}, {'rules':[rule()]})['status'])
             changed=rule();changed['enabled']=False
             self.assertEqual('not-applied',compiled_rulebox_runtime_status({}, {'rules':[changed]})['status'])
+            authored=rule();authored['action_group']='lossControl';authored['action_level']='review'
+            registry.release_artifact.return_value={'valid':True,'artifact':{'rules':[authored]}}
+            restored=deepcopy(authored)
+            restored['derivations'][0].update(action_group='lossControl',action_level='review')
+            self.assertEqual('current',compiled_rulebox_runtime_status({}, {'rules':[restored]})['status'])
+            restored['conditions'][0]['change_trigger']=False
+            self.assertEqual('not-applied',compiled_rulebox_runtime_status({}, {'rules':[restored]})['status'])
             registry.release_artifact.return_value={'valid':False}
             self.assertEqual('unavailable',compiled_rulebox_runtime_status({}, {'rules':[rule()]})['status'])

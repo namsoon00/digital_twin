@@ -428,6 +428,8 @@ def condition_payload_from_row(row: Dict[str, object]) -> Dict[str, object]:
         "relation_property_filters": relation_filters,
         "hypothesis_scope": str(condition.get("hypothesis_scope") or condition.get("hypothesisScope") or ""),
         "evidence_group_key": str(condition.get("evidence_group_key") or condition.get("evidenceGroupKey") or ""),
+        "change_trigger": condition.get("change_trigger", condition.get("changeTrigger")),
+        "invalidation_trigger": condition.get("invalidation_trigger", condition.get("invalidationTrigger")),
     }
 
 def derivation_payload_from_row(row: Dict[str, object]) -> Dict[str, object]:

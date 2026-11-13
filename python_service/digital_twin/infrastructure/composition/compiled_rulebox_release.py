@@ -18,7 +18,14 @@ def compiled_rulebox_runtime_status(settings, authoring_snapshot):
     if not stored.get('valid'):
         return {'status':'unavailable', 'backend':COMPILED_RULEBOX_VERSION, 'reason':'운영 규칙 원본을 확인하지 못했습니다.'}
     def digest(rows):
-        return rulebox_rules_hash([GraphInferenceRule.from_dict(row).to_dict() for row in rows])
+        normalized = [GraphInferenceRule.from_dict(row).to_dict() for row in rows]
+        # TypeDB templates resolve empty action fields from their parent rule.
+        # Compare effective authored semantics without hiding trigger changes.
+        for rule in normalized:
+            for derivation in rule['derivations']:
+                for field in ('action_group', 'action_level'):
+                    derivation[field] = derivation.get(field) or rule.get(field) or ''
+        return rulebox_rules_hash([GraphInferenceRule.from_dict(row).to_dict() for row in normalized])
     same = digest(authoring_snapshot.get('rules') or []) == digest(stored['artifact'].get('rules') or [])
     return {'status':'current' if same else 'not-applied', 'backend':COMPILED_RULEBOX_VERSION,
             'deploymentId':control.active_deployment_id, 'candidateDeploymentId':control.candidate_deployment_id,

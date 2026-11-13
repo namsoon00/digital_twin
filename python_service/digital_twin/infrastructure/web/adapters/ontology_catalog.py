@@ -70,7 +70,7 @@ def ontology_rulebox_summary_payload() -> Dict[str, object]:
         for key in [
             "configured", "saved", "status", "source", "graphStore", "reason", "engineVersion",
             "ruleCount", "conditionCount", "derivationCount", "relationTypes", "versionCount",
-            "ruleboxSnapshotId", "ruleboxRulesHash", "ruleboxShortHash", "readCache",
+            "ruleboxSnapshotId", "ruleboxRulesHash", "ruleboxShortHash", "readCache", "runtimeRelease",
         ]
         if key in payload
     } | {

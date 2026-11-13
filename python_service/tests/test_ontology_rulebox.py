@@ -1798,6 +1798,35 @@ class OntologyRuleBoxTests(unittest.TestCase):
         self.assertEqual([], snapshot["rules"])
         self.assertIn("decision_effect", snapshot["reason"])
 
+    def test_rulebox_storage_roundtrip_preserves_triggers_and_inherited_actions(self):
+        from digital_twin.infrastructure.graph_store_rulebox import condition_payload_from_row
+        from digital_twin.modules.model_registry.contracts import GraphInferenceRule
+        rules = default_graph_inference_rules()
+        rows = TypeDBOntologyGraphRepository("http://typedb.example.test").rows_for_entities(ontology_seed_graph(rules))
+        snapshot = rulebox_snapshot_from_rows({
+            "rules": [r for r in rows if r["kind"] == "rule" and r["ontologyBox"] == "RuleBox"],
+            "conditions": [r for r in rows if r["kind"] == "rule-condition" and r["ontologyBox"] == "RuleBox"],
+            "derivations": [r for r in rows if r["kind"] == "relation-template" and r["ontologyBox"] == "RuleBox"],
+        }, source="roundtrip-test")
+        def normalized(values):
+            result = {}
+            for raw in values:
+                rule = GraphInferenceRule.from_dict(raw).to_dict()
+                for derivation in rule["derivations"]:
+                    for field in ("action_group", "action_level"):
+                        derivation[field] = derivation.get(field) or rule.get(field) or ""
+                result[rule["rule_id"]] = GraphInferenceRule.from_dict(rule).to_dict()
+            return result
+        before, after = normalized(rulebox_rules_to_payload(rules)), normalized(snapshot["rules"])
+        self.assertEqual(set(before), set(after))
+        for rule_id in before:
+            self.assertEqual(before[rule_id], after[rule_id], rule_id)
+        for value in (True, False, None):
+            condition = condition_payload_from_row({"propertiesJson": json.dumps({"condition": {
+                "change_trigger": value, "invalidation_trigger": value}})})
+            self.assertIs(value, condition["change_trigger"])
+            self.assertIs(value, condition["invalidation_trigger"])
+
     def test_inference_trace_ledger_reconstructs_rulebox_audit_path(self):
         rulebox = {
             "status": "ok",

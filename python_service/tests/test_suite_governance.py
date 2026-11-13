@@ -531,7 +531,9 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # isolation, governed saves and real atomic release rollback/races.
         # Two managed-runtime regressions protect compiled candidate ownership
         # and preserve the authoring database during physical rotation.
-        self.assertLessEqual(total, 3131 + 32)
+        # One full-catalog roundtrip preserves authored condition triggers and
+        # inherited actions across TypeDB read reconstruction.
+        self.assertLessEqual(total, 3131 + 33)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

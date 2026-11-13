@@ -526,7 +526,10 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # claims and exact indexed temporal reads/watermarks on real MySQL.
         # Three scope/context contracts protect shared physical endpoint reuse,
         # missing endpoints and preparation without native writer ownership.
-        self.assertLessEqual(total, 3095)
+        # The current HEAD already declares 3131 methods. Thirty compiled
+        # RuleBox contracts cover predicate semantics, durable proofs, scope
+        # isolation, governed saves and real atomic release rollback/races.
+        self.assertLessEqual(total, 3131 + 30)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

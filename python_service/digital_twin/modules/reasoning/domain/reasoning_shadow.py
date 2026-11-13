@@ -8,6 +8,8 @@ TypeDB InferenceBox generation.
 
 from __future__ import annotations
 
+from .rule_execution_proof import rule_execution_completed
+
 import hashlib
 import json
 import base64
@@ -526,6 +528,12 @@ def projection_receipt_packet(account_id: str, projection: Mapping[str, object])
             inference.get("nativeTypeDbReasoningCompleted")
             or inference.get("typedbNativeRuleEvaluationCompleted")
         ),
+        "ruleExecutionCompleted": rule_execution_completed(inference),
+        "ruleExecutionBackend": inference.get("ruleExecutionBackend", "typedb-direct-typeql"),
+        "compiledRuleboxFingerprint": inference.get("compiledRuleboxFingerprint", ""),
+        "compiledExecutionProof": dict(inference.get("compiledExecutionProof") or {}),
+        "graphStore": inference.get("graphStore", "typedb"),
+        "worldId": inference.get("worldId", ""),
         "targetSymbols": list(_strings(inference.get("targetSymbols") or [])),
         "durationMs": int(_rounded(runtime.get("totalMs"))),
         "runtimeStages": runtime_stages,
@@ -606,6 +614,7 @@ def engine_outcome_packet(
                     "accountId", "status", "materialFingerprint", "inferenceStatus",
                     "nativeInferenceOutcome", "generationAligned",
                     "nativeTypeDbReasoningCompleted", "targetSymbols",
+                    "compiledExecutionProof", "compiledRuleboxFingerprint", "graphStore", "worldId", "ruleExecutionCompleted", "ruleExecutionBackend",
                     "comparisonScopeFingerprint", "comparisonScopeCount",
                     "comparisonScopeManifest",
                     "persistedComparisonScopeFingerprint",
@@ -766,6 +775,7 @@ def independent_reasoning_outcome_packet(job: Mapping[str, object]) -> Dict[str,
                     "accountId", "status", "materialFingerprint", "inferenceStatus",
                     "nativeInferenceOutcome", "generationAligned",
                     "nativeTypeDbReasoningCompleted", "targetSymbols",
+                    "compiledExecutionProof", "compiledRuleboxFingerprint", "graphStore", "worldId", "ruleExecutionCompleted", "ruleExecutionBackend",
                     "comparisonScopeFingerprint", "comparisonScopeCount",
                     "comparisonScopeManifest",
                 ]
@@ -1199,7 +1209,7 @@ def compare_engine_outcomes(
     )
     shadow_delivery_count = int(_mapping(candidate).get("deliveryCount") or 0)
     candidate_projection_ready = bool(candidate_projections) and all(
-        bool(item.get("nativeTypeDbReasoningCompleted")) and bool(item.get("generationAligned"))
+        rule_execution_completed(item) and bool(item.get("generationAligned"))
         for item in candidate_projections.values()
     )
     if not candidate_projection_ready:

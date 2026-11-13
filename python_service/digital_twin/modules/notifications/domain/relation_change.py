@@ -1,5 +1,7 @@
 """Frozen explanations of graph-authored relation transitions, never new rules."""
 
+from digital_twin.modules.reasoning.contracts import compiled_rule_execution_completed
+
 from copy import deepcopy
 from typing import Mapping
 
@@ -120,6 +122,7 @@ def relation_change_snapshot(context):
                                    "claim": "", "ruleIds": [], "evidenceIds": [], "counterEvidenceIds": [], "invalidationConditions": []})
                 known.add(identity)
     rules = {}
+    compiled_proven = compiled_rule_execution_completed(graph)
     native_rule_ids = {str(row.get("ruleId") or row.get("rule_id") or row.get("sourceRuleId") or "")
                        for row in [*rows(graph.get("traces")), *rows(graph.get("relations"))]}
     for item in [*rows(relation.get("referenceRules")), *rows(relation.get("activeRules")), *rows(relation.get("matchedRules")), *rows(graph.get("relations")), *rows(graph.get("traces"))]:
@@ -132,9 +135,9 @@ def relation_change_snapshot(context):
             captured = {key: deepcopy(condition.get(key)) for key in (
                 "conditionId", "kind", "role", "minimumCount", "detailDeferred", "matchedConditionIds",
                 "label", "field", "operator", "observedValue", "matched", "evidenceIds", "ruleConditionShape",
-                "matchedByTypeDB", "observedAt", "source", "freshnessStatus", "judgementEvidenceUsable",
+                "matchedByTypeDB", "matchedByRuleEngine", "ruleEngineBackend", "observedAt", "source", "freshnessStatus", "judgementEvidenceUsable",
                 "sourceFetchedAt", "freshnessRequired", "maxAgeMinutes", "validUntil", "marketSessionStatus", "freshnessGateReason",
-                "resolutionMatchedByTypeDB", "resolutionOperator", "premiseLineage",
+                "resolutionMatchedByTypeDB", "resolutionMatchedByRuleEngine", "resolutionOperator", "premiseLineage",
             ) if isinstance(condition.get(key), (str, int, float, bool, list, dict))}
             captured["expectedValue"] = deepcopy(condition.get("expectedValue", condition.get("value")))
             captured["resolvedThreshold"] = resolved_rule_threshold(captured, facts)
@@ -145,7 +148,8 @@ def relation_change_snapshot(context):
             captured.update(capture_model_proof(measured, symbol))
             captured["modelSignalMatched"] = bool(measured.get("contractMatched") or condition.get("matchedByModelSignalInterpretationPolicy"))
             conditions[str(condition.get("conditionId") or len(conditions))] = captured
-        rules[identity] = {"id": identity, "nativeProof": identity in native_rule_ids,
+        rules[identity] = {"id": identity, "nativeProof": identity in native_rule_ids and graph.get("graphStore") != "compiled-rulebox",
+                           **({"compiledProof": identity in native_rule_ids, "ruleExecutionBackend": "compiled-rulebox-v1"} if compiled_proven else {}),
                            "label": existing.get("label") or str(item.get("label") or item.get("ruleLabel") or identity),
                            "matched": item.get("matched") if isinstance(item.get("matched"), bool) else existing.get("matched"),
                            "referenceOnly": bool(existing.get("referenceOnly") or item.get("referenceOnly") or item.get("reference_only")) or mapping(item.get("knowledgeBasis")).get("decisionEligibility") == "reference-only",

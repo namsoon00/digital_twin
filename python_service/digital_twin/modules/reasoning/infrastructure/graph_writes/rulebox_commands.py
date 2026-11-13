@@ -32,6 +32,14 @@ def save_rulebox(
             "reason": str(error),
         }
     source = dict(payload or {}) if isinstance(payload, dict) else {}
+    release_handler = getattr(_store, "rulebox_release_change_handler", None)
+    release_context = {}
+    if callable(release_handler):
+        try:
+            release_context = release_handler("preflight", source.get("rules") or rules) or {}
+        except Exception as error:
+            return {"configured": True, "saved": False, "status": "invalid-runtime-rulebox",
+                    "graphStore": "typedb", "reason": str(error)[:500]}
     version = rulebox_version_payload(
         rules,
         _bindings.utc_now(),
@@ -131,6 +139,14 @@ def save_rulebox(
             "preSaveBaselineAudit": baseline_result,
         }
     )
+    if bool(save_result.get("saved")) and callable(release_handler) and release_context.get("status") == "ready":
+        try:
+            snapshot["runtimeRelease"] = release_handler("saved", rules, release_context)
+        except Exception as error:
+            snapshot["runtimeRelease"] = {"status": "not-applied", "reason": str(error)[:500]}
+        if snapshot["runtimeRelease"].get("status") not in {"applied", "unchanged"}:
+            snapshot["status"] = "saved-runtime-not-applied"
+            snapshot["reason"] = "룰박스는 저장됐지만 실행 버전으로 전환되지 않았습니다. 기존 실행 버전을 유지합니다."
     return snapshot
 
 

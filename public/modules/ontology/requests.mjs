@@ -695,8 +695,8 @@ function saveOntologyRulebox(seedDefaults) {
     }
   }
   if (!window.confirm(seedDefaults
-    ? "기본 RuleBox를 TypeDB에 다시 시드하고 현재 추론 결과를 초기화합니다. 계속할까요?"
-    : "RuleBox 규칙을 TypeDB 운영 저장소에 반영하고 현재 추론 결과를 초기화합니다. 계속할까요?")) return;
+    ? "기본 룰박스를 저장합니다. 경량 실행 모드에서는 검증 후 새 규칙 버전으로 전환합니다. 계속할까요?"
+    : "룰박스를 저장합니다. 경량 실행 모드에서는 검증 후 새 규칙 버전으로 전환합니다. 계속할까요?")) return;
   ontologyState.ontologyRuleboxSaving = true;
   ontologyState.ontologyRuleboxError = "";
   render();
@@ -710,11 +710,18 @@ function saveOntologyRulebox(seedDefaults) {
     changeReason: ontologyState.ontologyRuleboxChangeReason || "RuleBox 관리 화면 저장"
   })
     .then(function (payload) {
+      if (!payload.saved) throw new Error(payload.reason || "룰박스를 저장하지 못했습니다.");
       applyOntologyRuleboxPayload(payload);
       ontologyState.ontologyInferenceLedgerLoaded = false;
       ontologyState.ontologyInferenceLedger = null;
       ontologyState.ontologyRuleboxChangeReason = "";
-      showSnackbar(seedDefaults ? "기본 RuleBox를 TypeDB에 시드했습니다." : "TypeDB RuleBox를 저장했습니다.");
+      var release = payload.runtimeRelease || {};
+      if (release.status && !["applied", "unchanged"].includes(release.status)) {
+        ontologyState.ontologyRuleboxError = "룰박스는 저장됐지만 운영 반영은 완료되지 않았습니다. " + (release.reason || payload.reason || "기존 실행 버전을 유지합니다.");
+        showSnackbar(ontologyState.ontologyRuleboxError, "caution");
+      } else {
+        showSnackbar(release.status === "applied" ? "룰박스 검증을 마치고 새 실행 버전으로 전환했습니다." : "룰박스를 저장했습니다.");
+      }
     })
     .catch(function (error) {
       ontologyState.ontologyRuleboxError = error.message || "TypeDB RuleBox를 저장하지 못했습니다.";

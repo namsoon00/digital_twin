@@ -403,6 +403,54 @@ class MySQLReasoningEngineRegistryStore(MySQLOperationalConnection):
         return EngineControlState(active_deployment_id=target, delivery_deployment_id=target,
                                   candidate_deployment_id=previous, version=expected_version + 1)
 
+    def switch_compiled_release(self, previous, target, receipt, *, expected_version):
+        """Select a complete compiled artifact and retire the old runtime atomically."""
+        from digital_twin.modules.reasoning.domain.compiled_rulebox import COMPILED_RULEBOX_VERSION, fingerprint
+        validation = receipt.get("validation") or {}
+        if (receipt.get("version") != COMPILED_RULEBOX_VERSION or validation.get("status") != "passed"
+                or validation.get("completeRuleCoverage") is not True or validation.get("deliveryCount") != 0
+                or validation.get("programFingerprint") != receipt.get("programFingerprint")):
+            raise ValueError("A complete zero-delivery compiled release validation is required")
+        stamp = iso_utc()
+        with self.transaction() as connection:
+            control = connection.execute("SELECT * FROM reasoning_engine_control WHERE control_id = 'global' FOR UPDATE").fetchone() or {}
+            if (int(control.get("version") or 0) != expected_version or control.get("active_deployment_id") != previous
+                    or control.get("delivery_deployment_id") != previous or control.get("candidate_deployment_id") != target):
+                raise RuntimeError("Compiled release ownership changed concurrently")
+            row = connection.execute("SELECT deployment_status, last_health_json FROM reasoning_engine_deployments WHERE deployment_id = %s FOR UPDATE", (target,)).fetchone() or {}
+            if row.get("deployment_status") not in {"provisioning", "shadow", "candidate"}:
+                raise RuntimeError("Compiled release target is not an unpublished candidate")
+            artifact = connection.execute("SELECT rulebox_fingerprint, artifact_fingerprint, artifact_json FROM reasoning_engine_release_artifacts WHERE deployment_id = %s", (target,)).fetchone() or {}
+            payload = json_value(artifact.get("artifact_json"), {})
+            program_fingerprint = fingerprint({"version": COMPILED_RULEBOX_VERSION,
+                "rules": payload.get("rules") or [], "tboxFingerprint": payload.get("tboxFingerprint", "")})
+            if (not payload or artifact.get("artifact_fingerprint") != payload_fingerprint(payload)
+                    or artifact.get("rulebox_fingerprint") != receipt.get("sourceRuleboxFingerprint")
+                    or program_fingerprint != receipt.get("programFingerprint")
+                    or COMPILED_RULEBOX_VERSION not in (payload.get("releaseBundle") or {}).get("source_contract_versions", [])):
+                raise RuntimeError("Compiled release artifact differs from the validation")
+            health = {**json_value(row.get("last_health_json"), {}), "status": "ready", "compiledRuleboxRelease": receipt}
+            connection.execute("UPDATE reasoning_engine_deployments SET deployment_status = 'active', last_health_json = %s, updated_at = %s WHERE deployment_id = %s", (canonical_json(health), stamp, target))
+            connection.execute("UPDATE reasoning_engine_deployments SET deployment_status = 'retired', updated_at = %s WHERE deployment_id = %s", (stamp, previous))
+            connection.execute("UPDATE reasoning_engine_control SET active_deployment_id = %s, delivery_deployment_id = %s, candidate_deployment_id = '', version = %s, updated_at = %s WHERE control_id = 'global'", (target, target, expected_version + 1, stamp))
+        return EngineControlState(active_deployment_id=target, delivery_deployment_id=target, candidate_deployment_id="", version=expected_version + 1)
+
+    def abandon_compiled_candidate(self, baseline, target, failure):
+        """Release only our candidate slot; never change another session's owner."""
+        stamp = iso_utc()
+        with self.transaction() as connection:
+            control = connection.execute("SELECT * FROM reasoning_engine_control WHERE control_id = 'global' FOR UPDATE").fetchone() or {}
+            if target in {control.get("active_deployment_id"), control.get("delivery_deployment_id")}:
+                return False
+            if (control.get("active_deployment_id") != baseline
+                    or control.get("candidate_deployment_id") != target):
+                return False
+            row = connection.execute("SELECT last_health_json FROM reasoning_engine_deployments WHERE deployment_id = %s FOR UPDATE", (target,)).fetchone() or {}
+            health = {**json_value(row.get("last_health_json"), {}), "status":"blocked", "compiledRuleboxRelease":failure}
+            connection.execute("UPDATE reasoning_engine_deployments SET deployment_status = 'retired', last_health_json = %s, updated_at = %s WHERE deployment_id = %s", (canonical_json(health), stamp, target))
+            connection.execute("UPDATE reasoning_engine_control SET candidate_deployment_id = '', version = version + 1, updated_at = %s WHERE control_id = 'global'", (stamp,))
+        return True
+
     def update_health(self, deployment_id: str, health: Mapping[str, object]) -> None:
         clean_deployment_id = str(deployment_id or "")
         with self.transaction() as connection:

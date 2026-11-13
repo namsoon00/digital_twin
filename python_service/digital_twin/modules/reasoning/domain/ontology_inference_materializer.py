@@ -763,7 +763,9 @@ def grounded_inference_context(
             continue
         ids = set(group.get('matchedConditionIds') or [])
         minimum = group.get('minimumCount')
-        group['groupProofComplete'] = bool(group.get('matchedByTypeDB') is True and group.get('detailDeferred') is False
+        group['groupProofComplete'] = bool((group.get('matchedByTypeDB') is True or
+            (group.get('matchedByRuleEngine') is True and group.get('ruleEngineBackend') == 'compiled-rulebox-v1'))
+            and group.get('detailDeferred') is False
             and type(minimum) is int and minimum >= 1 and len(ids) >= minimum
             and all(cid in members and condition_is_grounded(members[cid]) for cid in ids))
         if not group['groupProofComplete']:

@@ -14,10 +14,14 @@ def management_resolutions(relation):
         objective = response.get('objective') or {}
         conditions = trace.get('matchedConditions') or []
         predicate = next((c for c in conditions if c.get('conditionId') == response.get('conditionId')), {})
-        if (proof.get('version') != 'typedb-policy-resolution-v1' or proof.get('matched') is not True
-                or trace.get('matched') is not False or trace.get('nativeTypeDbReasoned') is not True
+        compiled = (proof.get('version') == 'compiled-policy-resolution-v1'
+                    and trace.get('ruleExecutionBackend') == 'compiled-rulebox-v1'
+                    and trace.get('compiledRuleboxReasoned') is True
+                    and predicate.get('resolutionMatchedByRuleEngine') is True)
+        if (not (compiled or proof.get('version') == 'typedb-policy-resolution-v1') or proof.get('matched') is not True
+                or trace.get('matched') is not False or not (compiled or trace.get('nativeTypeDbReasoned') is True)
                 or trace.get('evidenceUsableForJudgement') is not True or trace.get('freshnessStatus') != 'fresh'
-                or predicate.get('matched') is not False or predicate.get('resolutionMatchedByTypeDB') is not True
+                or predicate.get('matched') is not False or not (compiled or predicate.get('resolutionMatchedByTypeDB') is True)
                 or objective.get('operator') != predicate.get('resolutionOperator')
                 or objective.get('operator') != {'>': '<=', '<': '>=', '>=': '<', '<=': '>'}.get(predicate.get('operator'))
                 or objective.get('field') != predicate.get('field')

@@ -216,6 +216,12 @@ def typedb_native_match_query(
             evidence_columns.append(str(column))
         if pattern.get("relationIdColumn"):
             condition_evidence_columns[condition_id] = str(pattern.get("relationIdColumn"))
+    if (include_any_conditions and not any_conditions
+            and any(normalized_condition_role(c) in {"any", "optional"} for c in conditions)):
+        return {
+            "ruleId": rule_id, "query": "", "columns": columns,
+            "reason": "Active Manifest evidence index has no relation alternatives for the required any-condition group.",
+        }
     query = "match " + " ".join(clauses)
     result_rows_compacted = False
     if any_conditions and include_any_conditions:

@@ -1,5 +1,7 @@
 import math
 import re
+from digital_twin.modules.reasoning.contracts import compiled_rule_execution_completed
+
 from dataclasses import asdict, dataclass, field
 from typing import Dict, List
 
@@ -274,6 +276,7 @@ def _validation_checks(
         and news_impact.get("decisionInlineEligible") is True
         and news_impact.get("decisionDriverConfirmed") is True
     )
+    compiled = compiled_rule_execution_completed(relation.get("graphStoreInference") or {})
     checks = [
         {
             "name": "그래프 저장소 추론 사용",
@@ -286,8 +289,8 @@ def _validation_checks(
             "detail": "fallbackUsed=" + str(bool(relation.get("fallbackUsed"))).lower(),
         },
         {
-            "name": "TypeDB InferenceBox 실행",
-            "status": "정상" if relation.get("nativeTypeDbReasoningUsed") else "오류",
+            "name": "RuleBox 실행 결과 검증" if compiled else "TypeDB InferenceBox 실행",
+            "status": "정상" if compiled or relation.get("nativeTypeDbReasoningUsed") else "오류",
             "detail": "nativeTypeDbReasoningUsed=" + str(bool(relation.get("nativeTypeDbReasoningUsed"))).lower(),
         },
         {

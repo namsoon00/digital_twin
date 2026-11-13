@@ -1428,7 +1428,7 @@ def reasoning_engine_platform_command(args) -> int:
     configured = runtime_settings()
     platform = build_reasoning_engine_platform(configured)
     state = platform.initialize(include_diagnostics=args.reasoning_engine_action not in {
-        "v2-watch", "v2-once", "shadow-watch", "shadow-once", "consolidate",
+        "v2-watch", "v2-once", "shadow-watch", "shadow-once", "consolidate", "compiled-cutover",
     })
     if args.reasoning_engine_action == "status":
         print(json.dumps(
@@ -1439,6 +1439,20 @@ def reasoning_engine_platform_command(args) -> int:
             ensure_ascii=False,
         ))
         return 0
+    if args.reasoning_engine_action == "compiled-cutover":
+        from .composition.compiled_rulebox_release import build_compiled_release_service
+        baseline_id = platform.registry.control().active_deployment_id
+        artifact_record = platform.registry.release_artifact(baseline_id)
+        if not artifact_record.get("valid"):
+            raise RuntimeError("The active immutable RuleBox artifact is unavailable")
+        artifact = dict(artifact_record["artifact"])
+        artifact["ruleboxAuthoringDatabase"] = artifact.get("ruleboxAuthoringDatabase") or configured.get("typedbDatabase")
+        with open(args.native_parity_file, encoding="utf-8") as stream:
+            parity = json.load(stream)
+        result = build_compiled_release_service(configured, parity).apply(artifact,
+            expected_baseline=baseline_id, deployment_id=args.deployment_id, initial_cutover=True)
+        print(json.dumps(result, ensure_ascii=False))
+        return 0 if result.get("status") == "applied" else 2
     if args.reasoning_engine_action == "validate-current":
         from .reasoning_validation_factory import build_paired_reasoning_validation_service
         result = build_paired_reasoning_validation_service(configured).request(
@@ -2978,6 +2992,9 @@ def build_parser() -> argparse.ArgumentParser:
     reasoning_consolidate.add_argument("--deployment-id", required=True)
     reasoning_consolidate.add_argument("--owner-request", required=True)
     reasoning_consolidate.add_argument("--purge-retired", action="store_true")
+    compiled_cutover = reasoning_engine_actions.add_parser("compiled-cutover")
+    compiled_cutover.add_argument("--deployment-id", required=True)
+    compiled_cutover.add_argument("--native-parity-file", required=True)
     reasoning_engine_actions.add_parser("rollback")
     reasoning_engine.set_defaults(func=reasoning_engine_platform_command)
 

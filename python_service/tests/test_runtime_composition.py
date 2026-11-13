@@ -34,6 +34,7 @@ class RuntimeCompositionTests(unittest.TestCase):
                 ast.dump(ast.Module(body=body, type_ignores=[]), include_attributes=False).encode()
             ).hexdigest()
             reviewed = json.loads((ROOT.parent / "tests/fixtures/closed_loop_semantic_changes.json").read_text()).get("composition", {}).get(entry["file"] + "::" + entry["function"])
+            reviewed = json.loads((ROOT.parent / "tests/fixtures/compiled_rulebox_semantic_changes.json").read_text())["composition"].get(entry["file"] + "::" + entry["function"], reviewed)
             if reviewed:
                 self.assertTrue(reviewed["reason"])
                 self.assertNotEqual(entry["bodyHash"], reviewed["hash"])

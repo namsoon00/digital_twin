@@ -36,6 +36,19 @@ def bind_v2_release(
     from digital_twin.infrastructure.composition.reasoning_release import prepare_v2_rulebox_release
     from digital_twin.infrastructure.graph_store_lifecycle import ontology_release_seed_artifact
 
+    if candidate_settings.get("_ruleExecutionBackend") == "compiled-rulebox-v1":
+        artifact = candidate_settings["_compiledRuleboxReleaseArtifact"]
+        catalog = repository.rulebox_snapshot()
+        digest = artifact["ruleboxFingerprint"]
+        identity = reasoning_release_identity(descriptor, digest)
+        candidate_settings["_reasoningEngineReleaseFingerprint"] = identity["releaseFingerprint"]
+        candidate_settings["_reasoningEngineValidationCohortId"] = identity["validationCohortId"]
+        return ReasoningBinding(catalog, {"status": "ready", "ruleCount": len(catalog["rules"]),
+            "ruleboxRulesHash": digest, "tboxReleasePreflight": repository.active_tbox_metadata()},
+            digest, identity, {"status": "unchanged", "ruleboxFingerprint": digest,
+                "runtimeRuleboxFingerprint": digest, "tboxFingerprint": artifact["tboxFingerprint"],
+                "artifactFingerprint": (platform.registry.release_artifact(descriptor.deployment_id) or {}).get("artifactFingerprint", "")})
+
     engine_control = platform.registry.control()
     protected_deployment_ids = {
         str(engine_control.active_deployment_id or "").strip(),

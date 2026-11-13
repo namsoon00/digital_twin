@@ -39,7 +39,14 @@ ONTOLOGY_CATALOG_PAGE_READ_MODEL = StaleReadModelCache(
 
 
 def _ontology_rulebox_source_payload() -> Dict[str, object]:
-    return ontology_repository_from_settings(runtime_settings()).rulebox_snapshot()
+    settings = runtime_settings()
+    snapshot = ontology_repository_from_settings(settings).rulebox_snapshot()
+    from digital_twin.infrastructure.composition.compiled_rulebox_release import compiled_rulebox_runtime_status
+    try:
+        snapshot['runtimeRelease'] = compiled_rulebox_runtime_status(settings, snapshot)
+    except Exception:
+        snapshot['runtimeRelease'] = {'status':'unavailable', 'reason':'운영 규칙 적용 상태를 확인하지 못했습니다.'}
+    return snapshot
 
 
 def ontology_rulebox_payload(force: bool = False, blocking_first_load: bool = False) -> Dict[str, object]:

@@ -12,6 +12,7 @@ from digital_twin.modules.notifications.contracts import management_observation_
 from digital_twin.modules.market_data.contracts import freshness_from_snapshot_subject
 from digital_twin.modules.model_registry.contracts import relation_lifecycle_transition_contract
 from digital_twin.modules.reasoning.domain.independent_reasoning import IndependentReasoningRequest
+from digital_twin.modules.reasoning.domain.rule_execution_proof import rule_execution_completed
 from digital_twin.modules.reasoning.domain.investment_alert_coverage import reasoning_delivery_trigger
 from digital_twin.modules.decisions.contracts import decision_synthesis_from_relation_context
 from digital_twin.modules.decisions.contracts import reasoning_disposition_delivery, reasoning_disposition_requires_ai
@@ -416,10 +417,7 @@ class V2GraphDecisionCandidateBuilder:
             if not (
                 inference.get("generationAligned")
                 and inference.get("sourceAboxSnapshotId")
-                and (
-                    inference.get("nativeTypeDbReasoningCompleted")
-                    or inference.get("typedbNativeRuleEvaluationCompleted")
-                )
+                and rule_execution_completed(inference)
             ):
                 continue
             contexts = timed("relationContextMs", relation_contexts_from_snapshot,

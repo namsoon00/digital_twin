@@ -107,4 +107,8 @@ def record_v2_release_health(
             },
         }
     )
+    if "compiled-rulebox-v1" in getattr(descriptor.release_bundle, "source_contract_versions", ()):
+        existing_health["ruleExecutionReadiness"] = {"status": "ready", "mode": "compiled-rulebox-v1",
+            "realtimeProjectionMode": "immutable-source-in-memory", "aboxPersistenceMode": "durable-source-audit",
+            "sharedPremiseCriticalPath": False, "typeDbRuntimeRequired": False}
     registry_store.update_health(descriptor.deployment_id, existing_health)

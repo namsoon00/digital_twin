@@ -1,4 +1,6 @@
 """Production strategy notices from exact native phase proofs and receipts."""
+from digital_twin.modules.reasoning.contracts import rule_notice_execution_proven, condition_execution_proven
+
 from copy import deepcopy
 
 from digital_twin.modules.model_registry.contracts import rule_notification_intent
@@ -16,7 +18,7 @@ def strategy_phase_events(current, previous):
     successors = {(r.get("claimContract") or {}).get("strategyContract", {}).get("predecessorContractFingerprint")
                   for r in rows(current.get("rules"))
                   if (r.get("claimContract") or {}).get("strategyContract", {}).get("version") == "rule-strategy-contract-v3"}
-    native_rules = {r.get("id"): r for r in rows(current.get("rules")) if r.get("nativeProof")}
+    native_rules = {r.get("id"): r for r in rows(current.get("rules")) if rule_notice_execution_proven(r)}
     for rule in rows(current.get("rules")):
         claim = rule.get("claimContract") or {}
         contract = claim.get("strategyContract") or {}
@@ -25,7 +27,7 @@ def strategy_phase_events(current, previous):
         if (contract.get("version") not in {"rule-strategy-contract-v2", "rule-strategy-contract-v3"}
                 or contract.get("contractFingerprint") in successors or contract.get("mode") != "live-observation"
                 or contract.get("market") != current.get("market") or phase not in PHASE_LABELS
-                or not rule.get("nativeProof") or rule.get("matched") is not True
+                or not rule_notice_execution_proven(rule) or rule.get("matched") is not True
                 or not intent or intent.get("ruleId") != rule.get("id") or intent.get("purpose") != "context-evidence"):
             continue
         conditions = rows(rule.get("conditions"))

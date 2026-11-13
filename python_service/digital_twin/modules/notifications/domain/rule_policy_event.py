@@ -1,5 +1,7 @@
 """Notify changes to materialized personal constraints, never select trades."""
 
+from digital_twin.modules.reasoning.contracts import rule_notice_execution_proven, condition_execution_proven
+
 from copy import deepcopy
 from digital_twin.modules.model_registry.contracts import rule_notification_intent
 from .rule_notification_event import VERSION, decision_state, fingerprint, rows
@@ -37,7 +39,7 @@ def policy_events(current, previous):
     for rule_id in rule_ids:
         rule, old_rule = current_rules.get(rule_id) or {}, prior_rules.get(rule_id) or {}
         intent = rule_notification_intent(rule.get("claimContract"))
-        if (not rule.get("nativeProof") or not intent or intent["purpose"] not in {"management-policy", "execution-constraint"}
+        if (not rule_notice_execution_proven(rule) or not intent or intent["purpose"] not in {"management-policy", "execution-constraint"}
                 or "policy-changed" not in intent["notifyOn"] or intent["ruleId"] != rule_id):
             continue
         actions = sorted({r.get("action") for r in rows(brief.get("restrictions")) if r.get("ruleId") == rule_id})
@@ -51,7 +53,7 @@ def policy_events(current, previous):
                     r.get('ruleId') == rule_id for r in (brief.get('managementDecision') or {}).get('resolutions') or []):
                 continue
             # Absence, stale data or a missing rule is never a policy release.
-            if not (rule.get("nativeProof") and rule.get("matched") is False and any(
+            if not (rule_notice_execution_proven(rule) and rule.get("matched") is False and any(
                 c.get("matched") is False and c.get("judgementEvidenceUsable") is True
                 and c.get("freshnessStatus") == "fresh" for c in conditions)):
                 continue

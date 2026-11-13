@@ -1,4 +1,6 @@
 import inspect
+from digital_twin.modules.reasoning.contracts import rule_execution_completed
+
 import hashlib
 import uuid
 import time
@@ -614,7 +616,7 @@ class MonitorRunner:
         generation_aligned = bool(inference.get("generationAligned"))
         no_match = (
             inference_status == "empty"
-            and native_completed
+            and rule_execution_completed(inference)
             and generation_aligned
             and bool(str(inference.get("sourceAboxSnapshotId") or ""))
         )
@@ -744,10 +746,7 @@ class MonitorRunner:
         inference = values.get("inferenceBox") if isinstance(values.get("inferenceBox"), dict) else {}
         return bool(
             inference
-            and (
-                inference.get("nativeTypeDbReasoningCompleted")
-                or inference.get("typedbNativeRuleEvaluationCompleted")
-            )
+            and rule_execution_completed(inference)
             and inference.get("generationAligned")
             and str(inference.get("sourceAboxSnapshotId") or "").strip()
         )

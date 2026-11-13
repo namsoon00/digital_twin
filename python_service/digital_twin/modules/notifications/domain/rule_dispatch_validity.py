@@ -1,5 +1,7 @@
 """Recheck the frozen evidence used by a rule notice, without changing its judgment."""
 
+from digital_twin.modules.reasoning.contracts import rule_notice_execution_proven, condition_execution_proven
+
 from datetime import datetime, timezone
 import math
 
@@ -21,7 +23,7 @@ def rule_event_proof(event, current):
     for rid in ids:
         rule = rules.get(rid) or {}
         conditions = rule.get("conditions") or []
-        if not rule.get("nativeProof") or not conditions:
+        if not rule_notice_execution_proven(rule) or not conditions:
             failed.append({"ruleId": rid, "status": "missing-proof", "reasonCode": "rule_dispatch_proof_missing"})
             continue
         by_id = {c.get("conditionId"): c for c in conditions}
@@ -30,9 +32,9 @@ def rule_event_proof(event, current):
                 continue
             members = set(group.get("matchedConditionIds") or [])
             minimum = group.get("minimumCount")
-            if (group.get("matchedByTypeDB") is not True or group.get("detailDeferred") is not False
+            if (not condition_execution_proven(group) or group.get("detailDeferred") is not False
                     or type(minimum) is not int or minimum < 1 or len(members) < minimum
-                    or any(by_id.get(cid, {}).get("matchedByTypeDB") is not True
+                    or any(not condition_execution_proven(by_id.get(cid, {}))
                            or by_id[cid].get("role") not in {"any", "optional"} for cid in members)):
                 failed.append({"ruleId": rid, "conditionId": group.get("conditionId"),
                     "status": "missing-group-proof", "reasonCode": "rule_dispatch_group_proof_missing"})
@@ -102,7 +104,7 @@ def rule_dispatch_validity(packet, settings=None, now=None):
     for rid in rule_ids:
         rule = rules.get(rid) or {}
         conditions = rule.get("conditions") or []
-        if not rule.get("nativeProof") or not conditions:
+        if not rule_notice_execution_proven(rule) or not conditions:
             continue
         for condition in conditions:
             if condition.get("kind") == "any-condition-group":

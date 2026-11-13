@@ -284,6 +284,10 @@
     {"file": "test_web_server_port_fallback.py", "tier": "system", "core": false},
     {"file": "test_api_performance.py", "tier": "system", "core": false},
     {"file": "test_worker_lifetime.py", "tier": "unit", "core": true},
-    {"file": "test_temporal_history_projection.py", "tier": "integration", "core": true}
+    {"file": "test_temporal_history_projection.py", "tier": "integration", "core": true},
+    {"file": "test_compiled_rulebox.py", "tier": "unit", "core": true},
+    {"file": "test_compiled_rulebox_projection.py", "tier": "integration", "core": true},
+    {"file": "test_compiled_rulebox_release.py", "tier": "contract", "core": true},
+    {"file": "test_compiled_rulebox_transactions.py", "tier": "integration", "core": true}
   ]
 }

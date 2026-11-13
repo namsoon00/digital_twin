@@ -4,6 +4,8 @@ This is a projection of frozen native decisions, never a policy evaluator.
 Numbers, operators and release proof come from the same rule and condition.
 """
 
+from digital_twin.modules.reasoning.contracts import rule_notice_execution_proven, condition_execution_proven
+
 from copy import deepcopy
 
 from .observation_market_snapshot import decimal, numeric, snapshot_facts
@@ -73,7 +75,7 @@ def policy_notice_evidence(packet):
         for rid in event.get("sourceRuleIds") or []:
             rows = []
             rule = rules.get(rid) or {}
-            if not rule.get("nativeProof"):
+            if not rule_notice_execution_proven(rule):
                 issues.append("policy-native-proof-missing")
                 continue
             for condition in _rows(event.get("conditions")):

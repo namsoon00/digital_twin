@@ -1,0 +1,99 @@
+{
+  "backend": {},
+  "composition": {
+    "reasoning_launch.py::prepare_v2_launch": {
+      "hash": "c611f398309ec8f50daf06cf9dfad0d56895dbdaebaec88576712835ce3c96ef",
+      "previousHash": "2d2f39baff4cf387e640f4ab50cca47e54d929e89befe13b25a4bfaf760f0850",
+      "reason": "Owner-approved compiled RuleBox execution, immutable release admission and backend-explicit proof. Native proof flags remain false. Verified by test_compiled_rulebox, test_compiled_rulebox_projection, test_compiled_rulebox_release and real MySQL test_compiled_rulebox_transactions."
+    },
+    "reasoning_binding.py::bind_v2_release": {
+      "hash": "ae4a9149f3793cb1843357946997f552a6aac604d9f9a995693f6ccffe5e8304",
+      "previousHash": "7a2da98fddab274189c7c326f4a876b2ba8d940069454e72cee3df85e968d82f",
+      "reason": "Owner-approved compiled RuleBox execution, immutable release admission and backend-explicit proof. Native proof flags remain false. Verified by test_compiled_rulebox, test_compiled_rulebox_projection, test_compiled_rulebox_release and real MySQL test_compiled_rulebox_transactions."
+    },
+    "reasoning_release_health.py::record_v2_release_health": {
+      "hash": "61f266192d75bd26c55687a62e6e3f3f840c7cfaede4e5fc4f1a83f11c33fc09",
+      "previousHash": "8b515d2533d9e7aaf3490c89c4a230026ac84bce289d6a38ae34deb343bbdfb5",
+      "reason": "Owner-approved compiled RuleBox execution, immutable release admission and backend-explicit proof. Native proof flags remain false. Verified by test_compiled_rulebox, test_compiled_rulebox_projection, test_compiled_rulebox_release and real MySQL test_compiled_rulebox_transactions."
+    }
+  },
+  "storage": {
+    "modules/reasoning/infrastructure/mysql_engine_runtime.py::MySQLReasoningEngineRegistryStore": {
+      "hash": "984ad9586bd806403b1a7e557461466d316219c66b84ecc8d29f13dbd6829e88",
+      "previousHash": "670bef0c97f7142c87f98b034e845cf89e1376850dbf78862d96c2450bc570db",
+      "reason": "Owner-approved compiled RuleBox execution, immutable release admission and backend-explicit proof. Native proof flags remain false. Verified by test_compiled_rulebox, test_compiled_rulebox_projection, test_compiled_rulebox_release and real MySQL test_compiled_rulebox_transactions."
+    }
+  },
+  "domain": {
+    "modules/market_data/domain/monitoring.py::RealtimeMonitor": {
+      "hash": "9004b27a0757b9c68afcaede0c1f2ab1eabaeb898fa214af376b2b41296089f9",
+      "previousHash": "c75f6ea9aaa8d5382c688fbc214460829ff4c045835b5f83ebd7c529d1c78103",
+      "reason": "Owner-approved compiled RuleBox execution, immutable release admission and backend-explicit proof. Native proof flags remain false. Verified by test_compiled_rulebox, test_compiled_rulebox_projection, test_compiled_rulebox_release and real MySQL test_compiled_rulebox_transactions."
+    },
+    "modules/notifications/domain/notification_reasoning_report.py::_validation_checks": {
+      "hash": "b0d363be09175ffb46b80b539700fa64085f7590ffb8d829fc6e192a9c63bf95",
+      "previousHash": "666a6512c7af34b5481a45a5c45fdfe3b39ca91916b6b8c7fe4198dd337beab4",
+      "reason": "Owner-approved compiled RuleBox execution, immutable release admission and backend-explicit proof. Native proof flags remain false. Verified by test_compiled_rulebox, test_compiled_rulebox_projection, test_compiled_rulebox_release and real MySQL test_compiled_rulebox_transactions."
+    },
+    "modules/notifications/domain/notification_reverse_reasoning.py::_traceability_rows": {
+      "hash": "5cfc1ff4dc7cc1aaefb7cc2086ebf9c84fa987d36d7cc0b0b61093c10c22b19c",
+      "previousHash": "3cbabcf52e276948febb6dbdc6ff4a25d0d7d8d80eaece1eba59603d8a05dab9",
+      "reason": "Owner-approved compiled RuleBox execution, immutable release admission and backend-explicit proof. Native proof flags remain false. Verified by test_compiled_rulebox, test_compiled_rulebox_projection, test_compiled_rulebox_release and real MySQL test_compiled_rulebox_transactions."
+    },
+    "modules/notifications/domain/notification_reverse_reasoning.py::build_notification_reverse_reasoning_trace": {
+      "hash": "e6bfbac37c95a71fade0d1c46e3b6df41f1a1f15edf795bee9e36e71a307d3ac",
+      "previousHash": "2350b70395b414b70928a5dd367c75240d44e01ef3b7e5aeddd22357ce5375d9",
+      "reason": "Owner-approved compiled RuleBox execution, immutable release admission and backend-explicit proof. Native proof flags remain false. Verified by test_compiled_rulebox, test_compiled_rulebox_projection, test_compiled_rulebox_release and real MySQL test_compiled_rulebox_transactions."
+    },
+    "modules/reasoning/domain/ontology_inference_context.py::relation_lifecycle_context_from_inferencebox": {
+      "hash": "6e9829aa3b3abf00dfed0823513181087de6fb0621b2db1d1cfb1d87d6c5afe4",
+      "previousHash": "b73b2d8a8684665d5db82946ad0e1268ee0923dc7db26fec4ee227caf65bdfec",
+      "reason": "Owner-approved compiled RuleBox execution, immutable release admission and backend-explicit proof. Native proof flags remain false. Verified by test_compiled_rulebox, test_compiled_rulebox_projection, test_compiled_rulebox_release and real MySQL test_compiled_rulebox_transactions."
+    },
+    "modules/reasoning/domain/ontology_inference_context.py::portfolio_relation_context_from_snapshot": {
+      "hash": "0f87d7a50d4880dc51c93d6b331c0cb70586c6bcb625488287945f05f37e0677",
+      "previousHash": "42f2a0d03e706928c9fce93e544e9339c291c3420faf7e415bc56830ff1538da",
+      "reason": "Owner-approved compiled RuleBox execution, immutable release admission and backend-explicit proof. Native proof flags remain false. Verified by test_compiled_rulebox, test_compiled_rulebox_projection, test_compiled_rulebox_release and real MySQL test_compiled_rulebox_transactions."
+    },
+    "modules/reasoning/domain/ontology_inference_context.py::relation_context_from_inferencebox": {
+      "hash": "fd5b654e56aaa84f7d2a0c08d4907cb06c265956b1edbb6012eb7e7bd744c1c0",
+      "previousHash": "d93c3fdf0767d45b57dfe9ca327d25c3c7805a8852768e53f10eeb92e4e472d4",
+      "reason": "Owner-approved compiled RuleBox execution, immutable release admission and backend-explicit proof. Native proof flags remain false. Verified by test_compiled_rulebox, test_compiled_rulebox_projection, test_compiled_rulebox_release and real MySQL test_compiled_rulebox_transactions."
+    },
+    "modules/reasoning/domain/ontology_inference_materializer.py::grounded_inference_context": {
+      "hash": "aebdd556bb58b3cf07f3b3905c57eacfb52092b722b1c2d636a59ca2e037be48",
+      "previousHash": "7bc897e1ad93508858ca4d6b546c5b39eac58d8a58b29c9f370a65bca0ce0b5d",
+      "reason": "Owner-approved compiled RuleBox execution, immutable release admission and backend-explicit proof. Native proof flags remain false. Verified by test_compiled_rulebox, test_compiled_rulebox_projection, test_compiled_rulebox_release and real MySQL test_compiled_rulebox_transactions."
+    },
+    "modules/reasoning/domain/ontology_projection_audit.py::projection_result_summary": {
+      "hash": "e53f0fe1a06550f39a09517ea279f8fd29519d9755256a7ff12893b4ee88fd6b",
+      "previousHash": "b5d4d3f0b4313659537f96d694669ea0f39dfa2a03949ba8851827f3979e06eb",
+      "reason": "Owner-approved compiled RuleBox execution, immutable release admission and backend-explicit proof. Native proof flags remain false. Verified by test_compiled_rulebox, test_compiled_rulebox_projection, test_compiled_rulebox_release and real MySQL test_compiled_rulebox_transactions."
+    },
+    "modules/reasoning/domain/ontology_projection_audit.py::complete_ontology_projection_run": {
+      "hash": "acbd901670bbfce8a6507d28a0e562899317242ec2b89607aec8d8fa105ff42d",
+      "previousHash": "acaf8bcdcfbf5b0b98b4bab44fadda720443d722320cb931f15b1fe4b439bd5e",
+      "reason": "Owner-approved compiled RuleBox execution, immutable release admission and backend-explicit proof. Native proof flags remain false. Verified by test_compiled_rulebox, test_compiled_rulebox_projection, test_compiled_rulebox_release and real MySQL test_compiled_rulebox_transactions."
+    },
+    "modules/reasoning/domain/reasoning_shadow.py::projection_receipt_packet": {
+      "hash": "63c98852fc6ee552dbfa2801d9d2251f67b2e065687bdb60e04a47d00b13366f",
+      "previousHash": "d99aca66c42049b865e7bc01db8cc5401d3ffa2193cfaffc819fa4c74e11c48c",
+      "reason": "Owner-approved compiled RuleBox execution, immutable release admission and backend-explicit proof. Native proof flags remain false. Verified by test_compiled_rulebox, test_compiled_rulebox_projection, test_compiled_rulebox_release and real MySQL test_compiled_rulebox_transactions."
+    },
+    "modules/reasoning/domain/reasoning_shadow.py::engine_outcome_packet": {
+      "hash": "e314f2c9c52b2e364ca491ba09be44d2faedf4370cd13935bcfc51b170f27b3c",
+      "previousHash": "12bcadd58e260f9d6793cee292922c8a9d8e5ed70d9f50fb9b35d4017934641d",
+      "reason": "Owner-approved compiled RuleBox execution, immutable release admission and backend-explicit proof. Native proof flags remain false. Verified by test_compiled_rulebox, test_compiled_rulebox_projection, test_compiled_rulebox_release and real MySQL test_compiled_rulebox_transactions."
+    },
+    "modules/reasoning/domain/reasoning_shadow.py::independent_reasoning_outcome_packet": {
+      "hash": "f714532ab4b9313ae9d2d442ea72d2e7f3220331edfa7bab45bad62ac59e0600",
+      "previousHash": "1793c4cdf3c9e770abde2f5c3d33eb3033397a8e60f5671a99ee24307aea16f7",
+      "reason": "Owner-approved compiled RuleBox execution, immutable release admission and backend-explicit proof. Native proof flags remain false. Verified by test_compiled_rulebox, test_compiled_rulebox_projection, test_compiled_rulebox_release and real MySQL test_compiled_rulebox_transactions."
+    },
+    "modules/reasoning/domain/reasoning_shadow.py::compare_engine_outcomes": {
+      "hash": "4a3643ed52af6fc5d82a51127e9680143a14fbe4fa3cf0e90bd3cc9781163c2b",
+      "previousHash": "82259a65dcd86d2a5e24f2db6b04888b83f2ca8666443a4b12085ce0860618a1",
+      "reason": "Owner-approved compiled RuleBox execution, immutable release admission and backend-explicit proof. Native proof flags remain false. Verified by test_compiled_rulebox, test_compiled_rulebox_projection, test_compiled_rulebox_release and real MySQL test_compiled_rulebox_transactions."
+    }
+  }
+}

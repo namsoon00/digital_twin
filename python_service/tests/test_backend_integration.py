@@ -223,6 +223,7 @@ class BackendIntegrationTests(unittest.TestCase):
 
     def test_integrated_storage_retains_original_sql_and_transaction_bodies(self):
         changes = json.loads((FIXTURES / "closed_loop_semantic_changes.json").read_text())["storage"]
+        changes.update(json.loads((FIXTURES / "compiled_rulebox_semantic_changes.json").read_text())["storage"])
         checked_changes = set()
         for entry in STORAGE["adapters"].values():
             tree = ast.parse((ROOT / entry["path"]).read_text())

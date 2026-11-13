@@ -10,6 +10,8 @@ RuleBox or ABox refresh.
 import json
 import math
 import re
+from digital_twin.modules.reasoning.contracts import compiled_rule_execution_completed
+
 from typing import Dict, Iterable, List
 
 from digital_twin.modules.decisions.contracts import relation_context_value
@@ -404,6 +406,7 @@ def _traceability_rows(
     generation = _text(relation.get("inferenceGenerationId"), 180)
     graph_used = bool(relation.get("graphStoreUsed"))
     native = bool(relation.get("nativeTypeDbReasoningUsed"))
+    compiled = compiled_rule_execution_completed(relation.get("graphStoreInference") or {})
     comparison_state = _text(ai.get("hypothesisComparisonState"), 80)
     decision_readiness = _text(ai.get("decisionReadiness"), 80)
     causal_chain = [item for item in ai.get("causalChain") or [] if isinstance(item, dict)]
@@ -414,8 +417,8 @@ def _traceability_rows(
             "detail": "현재 그래프가 아니라 이 알림 작업에 저장된 사실과 추론 결과를 사용합니다.",
         },
         {
-            "label": "TypeDB InferenceBox",
-            "state": "verified" if graph_used and native else "partial",
+            "label": "RuleBox 실행 결과" if compiled else "TypeDB InferenceBox",
+            "state": "verified" if graph_used and (native or compiled) else "partial",
             "detail": "그래프 저장소=" + (_text(relation.get("graphStore"), 80) or "미기록") + ", 네이티브 추론=" + ("예" if native else "아니오"),
         },
         {
@@ -573,7 +576,7 @@ def build_notification_reverse_reasoning_trace(
     delivery_reason = _text(values.get("deliveryGateReason"), 240)
     if delivery_reason and delivery_reason not in delivery_reasons:
         delivery_reasons.insert(0, delivery_reason)
-    status = "ready" if relation.get("graphStoreUsed") and relation.get("nativeTypeDbReasoningUsed") else "partial"
+    status = "ready" if relation.get("graphStoreUsed") and (relation.get("nativeTypeDbReasoningUsed") or compiled_rule_execution_completed(relation.get("graphStoreInference") or {})) else "partial"
     narrative_only = str(writer.get("writerRole") or "") == "narrative-only"
     if not ai or (not hypotheses and not narrative_only):
         status = "partial"

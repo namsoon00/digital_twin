@@ -1,4 +1,6 @@
 from copy import deepcopy
+from digital_twin.modules.reasoning.contracts import rule_execution_completed
+
 from dataclasses import replace
 from datetime import datetime, timezone
 from typing import Dict, List
@@ -1377,6 +1379,7 @@ class RealtimeMonitor(MonitoringSampleDataMixin, MonitoringPositionContextMixin,
             "ruleboxRelationTypes": list(rulebox_execution.get("relationTypes") or [])[:20] if isinstance(rulebox_execution.get("relationTypes"), list) else [],
             "clearInferenceStatus": str(clear_result.get("status") or ""),
             "clearInferenceReason": str(clear_result.get("reason") or ""),
+            "ruleExecutionCompleted": rule_execution_completed(inference),
             "nativeTypeDbReasoningUsed": bool((inference or {}).get("nativeTypeDbReasoningUsed")) if isinstance(inference, dict) else False,
             "nativeTypeDbReasoningCompleted": bool(
                 (inference or {}).get("nativeTypeDbReasoningCompleted")
@@ -1432,7 +1435,7 @@ class RealtimeMonitor(MonitoringSampleDataMixin, MonitoringPositionContextMixin,
             return "missingInferenceBox", reason, common
         verified_no_match = (
             str(status or "").lower() == "empty"
-            and bool(common.get("nativeTypeDbReasoningCompleted"))
+            and bool(common.get("ruleExecutionCompleted"))
             and bool(common.get("generationAligned"))
             and bool(common.get("sourceAboxSnapshotId"))
         )

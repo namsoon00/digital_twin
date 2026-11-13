@@ -8,6 +8,7 @@ from digital_twin.modules.reasoning.domain.ontology_contracts import PortfolioOn
 from digital_twin.modules.reasoning.domain.ontology_runtime_operations import compact_abox_relation_persistence, native_replay_validation, native_rule_timing_profile
 from digital_twin.modules.portfolio.contracts import AccountSnapshot, utc_now_iso
 from digital_twin.modules.reasoning.domain.reasoning_comparison_identity import PAIRED_VALIDATION_INPUT_VERSION
+from digital_twin.modules.reasoning.domain.rule_execution_proof import rule_execution_completed
 
 
 def _json_payload(value: object) -> str:
@@ -937,6 +938,8 @@ def projection_result_summary(result: Dict[str, object]) -> Dict[str, object]:
             "traceCount": len(inference.get("traces") or []),
             "generationAligned": bool(inference.get("generationAligned")),
             "nativeTypeDbReasoningUsed": bool(inference.get("nativeTypeDbReasoningUsed")),
+            "ruleExecutionCompleted": rule_execution_completed(inference),
+            "ruleExecutionBackend": inference.get("ruleExecutionBackend", "typedb-direct-typeql"),
             "nativeTypeDbReasoningCompleted": bool(
                 inference.get("nativeTypeDbReasoningCompleted")
                 or inference.get("typedbNativeRuleEvaluationCompleted")
@@ -1347,7 +1350,9 @@ def complete_ontology_projection_run(
     resolved_status = str(values.get("status") or ("ok" if values.get("saved") else run.status))
     activated = bool(values.get("saved")) and resolved_status == "ok"
     inference_source_abox = str(inference.get("sourceAboxSnapshotId") or "").strip()
-    inference_is_aligned = bool(inference.get("generationAligned")) and bool(inference.get("nativeTypeDbReasoningUsed"))
+    inference_is_aligned = bool(inference.get("generationAligned")) and (
+        rule_execution_completed(inference) if inference.get("graphStore") == "compiled-rulebox"
+        else bool(inference.get("nativeTypeDbReasoningUsed")))
     verified_active_abox_snapshot_id = str(active_pointer.get("aboxSnapshotId") or "").strip()
     # ``save_graph`` reports the predecessor pointer while a candidate ABox
     # waits for native inference. Once TypeDB returns an aligned InferenceBox

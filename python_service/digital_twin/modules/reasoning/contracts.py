@@ -4,6 +4,9 @@ from digital_twin.modules._exports import resolve_export
 
 
 _EXPORTS = {}
+for _proof_name in ("rule_execution_completed", "rule_execution_used", "compiled_rule_execution_completed",
+                    "condition_execution_proven", "rule_notice_execution_proven"):
+    _EXPORTS[_proof_name] = ('digital_twin.modules.reasoning.domain.rule_execution_proof', _proof_name)
 _EXPORTS['OBSERVATION_CHECKPOINT_VERSION'] = ('digital_twin.modules.reasoning.domain.observation_checkpoint', 'VERSION')
 _EXPORTS['OBSERVATION_CHECKPOINT_READY'] = ('digital_twin.modules.reasoning.domain.observation_checkpoint', 'READY_EVENT')
 _EXPORTS["price_move_anchor"] = ("digital_twin.modules.reasoning.domain.price_investigation_sources", "price_move_anchor")

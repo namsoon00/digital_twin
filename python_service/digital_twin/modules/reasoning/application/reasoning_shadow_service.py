@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from digital_twin.modules.reasoning.domain.rule_execution_proof import rule_execution_completed
+
 import os
 import socket
 import time
@@ -133,7 +135,7 @@ class ReasoningShadowScheduler:
         baseline_projections = list(baseline_outcome.get("projections") or [])
         baseline_verifiable = bool(baseline_projections) and all(
             isinstance(item, Mapping)
-            and bool(item.get("nativeTypeDbReasoningCompleted"))
+            and rule_execution_completed(item)
             and bool(item.get("generationAligned"))
             and bool(item.get("comparisonScopeFingerprint"))
             for item in baseline_projections
@@ -432,7 +434,7 @@ class ReasoningEngineShadowRunner:
         )
         baseline_verifiable = bool(baseline_projections) and all(
             isinstance(item, Mapping)
-            and bool(item.get("nativeTypeDbReasoningCompleted"))
+            and rule_execution_completed(item)
             and bool(item.get("generationAligned"))
             and bool(item.get("comparisonScopeFingerprint"))
             for item in baseline_projections

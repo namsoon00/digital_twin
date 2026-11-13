@@ -5757,7 +5757,7 @@ def typedb_repository_from_settings(settings: Dict[str, str] = None):
     native_execution_value = settings.get("ontologyReasoningTypeDbNativeRuleExecutionEnabled")
     if native_execution_value in (None, ""):
         native_execution_value = settings.get("typedbNativeRuleExecutionEnabled")
-    return TypeDBOntologyGraphRepository(
+    repository = TypeDBOntologyGraphRepository(
         address=address,
         http_address=str(settings.get("typedbHttpAddress") or ""),
         user=str(settings.get("typedbUser") or "admin"),
@@ -5826,3 +5826,8 @@ def typedb_repository_from_settings(settings: Dict[str, str] = None):
             settings.get("typedbFreshSchemaBootstrapTimeoutSeconds")
         ) or DEFAULT_TYPEDB_FRESH_SCHEMA_BOOTSTRAP_TIMEOUT_SECONDS,
     )
+    def rulebox_change(phase, rules, context=None):
+        from digital_twin.infrastructure.composition.compiled_rulebox_release import compiled_rulebox_authoring_change
+        return compiled_rulebox_authoring_change(settings, repository, phase, rules, context)
+    repository.rulebox_release_change_handler = rulebox_change
+    return repository

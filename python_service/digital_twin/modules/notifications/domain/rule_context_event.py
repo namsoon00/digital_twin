@@ -1,5 +1,7 @@
 """Native causal-context notices, independent of predictive hypotheses."""
 
+from digital_twin.modules.reasoning.contracts import rule_notice_execution_proven, condition_execution_proven
+
 from copy import deepcopy
 from collections.abc import Mapping
 
@@ -57,7 +59,7 @@ def context_rule_events(current, previous):
         return []
     if current.get('hypotheses') or any(
         _mapping(rule.get('claimContract')).get('claimType') != 'causal-context'
-        for rule in rows(current.get('rules')) if rule.get('nativeProof') and rule.get('matched') is not False
+        for rule in rows(current.get('rules')) if rule_notice_execution_proven(rule) and rule.get('matched') is not False
     ):
         return []
     history = (previous.get('notificationIntentContinuity') or {}) if (
@@ -67,7 +69,7 @@ def context_rule_events(current, previous):
         claim = _mapping(rule.get('claimContract'))
         intent = rule_notification_intent(claim)
         conditions = rows(rule.get('conditions'))
-        if (claim.get('claimType') != 'causal-context' or not rule.get('nativeProof')
+        if (claim.get('claimType') != 'causal-context' or not rule_notice_execution_proven(rule)
                 or not rule.get('referenceOnly') or rule.get('matched') is False or not conditions
                 or not intent or intent['purpose'] != 'context-evidence' or intent['ruleId'] != rule['id']
                 or 'observed' not in intent['notifyOn']):

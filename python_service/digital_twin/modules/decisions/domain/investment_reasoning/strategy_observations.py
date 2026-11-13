@@ -1,4 +1,6 @@
 """Read native strategy phase proofs; absence is unknown, not an exit signal."""
+from digital_twin.modules.reasoning.contracts import condition_execution_proven
+
 from copy import deepcopy
 
 
@@ -26,7 +28,7 @@ def native_strategy_observations(identity, relation):
                 lineage = condition.get("premiseLineage") or {}
                 shared = traces.get("shared.premise." + str(rid)) or {}
                 if (condition.get("conditionId") == "shared-market-premise:" + str(rid)
-                        and condition.get("matchedByTypeDB") is True and condition.get("judgementEvidenceUsable") is True
+                        and condition_execution_proven(condition) and condition.get("judgementEvidenceUsable") is True
                         and condition.get("freshnessStatus") not in {"stale", "expired", "missing", "unknown"}
                         and lineage.get("originalRuleId") == rid and lineage.get("status") == "available"
                         and lineage.get("premiseProofId")
@@ -34,7 +36,7 @@ def native_strategy_observations(identity, relation):
                         and shared.get("matched") is not False):
                     conditions.extend(shared.get("matchedConditions") or [])
         proved = {c.get("conditionId") for c in conditions
-                  if c.get("matchedByTypeDB") is True and c.get("judgementEvidenceUsable") is True
+                  if condition_execution_proven(c) and c.get("judgementEvidenceUsable") is True
                   and c.get("freshnessStatus") not in {"stale", "expired", "missing", "unknown"}}
         phase = response.get("phase")
         # Materialized positive traces omit 'matched'; only policy resolution

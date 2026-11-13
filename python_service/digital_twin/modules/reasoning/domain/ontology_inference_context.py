@@ -1,4 +1,5 @@
 from typing import Dict, Iterable, List, Optional
+from .rule_execution_proof import rule_execution_completed, rule_execution_used, compiled_execution_identity
 
 from digital_twin.modules.outcomes.contracts import attach_abox_hypothesis_calibrations
 from digital_twin.modules.model_registry.contracts import relation_lifecycle_transition_contract
@@ -257,7 +258,7 @@ def relation_lifecycle_context_from_inferencebox(
         return {}
     if str(inferencebox.get("status") or "").lower() != "ok":
         return {}
-    if not bool(inferencebox.get("nativeTypeDbReasoningUsed")):
+    if not rule_execution_used(inferencebox):
         return {}
     if not bool(inferencebox.get("generationAligned")):
         return {}
@@ -367,6 +368,7 @@ def relation_lifecycle_context_from_inferencebox(
         "allowedActions": [],
         "blockedActions": [],
         "graphStoreInference": {
+            **compiled_execution_identity(inferencebox),
             "graphStore": str(inferencebox.get("graphStore") or "typedb"),
             "sourceAboxSnapshotId": source_abox_snapshot_id,
             "inferenceGenerationId": generation_id,
@@ -398,6 +400,8 @@ def portfolio_relation_context_from_snapshot(
     if str(inferencebox.get("graphStore") or "").lower() == "typedb" and not bool(
         inferencebox.get("nativeTypeDbReasoningUsed")
     ):
+        return {}
+    if inferencebox.get("graphStore") == "compiled-rulebox" and not rule_execution_completed(inferencebox):
         return {}
     relations = [
         dict(item)
@@ -515,6 +519,7 @@ def portfolio_relation_context_from_snapshot(
         "worldId": str(inferencebox.get("worldId") or ""),
         "accountId": snapshot.account_id,
         "graphStoreInference": {
+            **compiled_execution_identity(inferencebox),
             "source": source_name,
             "graphStore": str(inferencebox.get("graphStore") or "typedb"),
             "relations": relations,
@@ -544,6 +549,8 @@ def relation_context_from_inferencebox(
     if str(inferencebox.get("status") or "").lower() not in {"ok", "partial", ""}:
         return {}
     graph_store = str(inferencebox.get("graphStore") or "").strip() or "graph-store"
+    if graph_store == "compiled-rulebox" and not rule_execution_completed(inferencebox):
+        return {}
     if graph_store.lower() == "typedb" and not bool(inferencebox.get("nativeTypeDbReasoningUsed")):
         return {}
     if not bool(inferencebox.get("nativeTypeDbReasoningUsed")) and not inferencebox.get("relations") and not inferencebox.get("traces"):
@@ -643,6 +650,7 @@ def relation_context_from_inferencebox(
         "marketWorldId": resolved_market_world_id,
         "marketId": facts.get("market") or position.market or "",
         "graphStoreInference": {
+            **compiled_execution_identity(inferencebox),
             "relations": relations,
             "traces": traces,
         },
@@ -749,6 +757,7 @@ def relation_context_from_inferencebox(
         "evidenceSubgraph": evidence_subgraph,
         "promptContext": prompt_context,
         "graphStoreInference": {
+            **compiled_execution_identity(inferencebox),
             "source": source_name,
             "graphStore": graph_store,
             "relations": relations,

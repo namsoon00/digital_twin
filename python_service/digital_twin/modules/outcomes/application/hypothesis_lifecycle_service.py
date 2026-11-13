@@ -182,9 +182,11 @@ class HypothesisLifecycleService:
     def inference_is_reconcilable(self, inferencebox: Dict[str, object]) -> bool:
         if not isinstance(inferencebox, dict):
             return False
-        if str(inferencebox.get("status") or "").lower() != "ok":
+        compiled = inferencebox.get("graphStore") == "compiled-rulebox"
+        if str(inferencebox.get("status") or "").lower() not in ({"ok", "empty"} if compiled else {"ok"}):
             return False
-        if not self.enabled_value(inferencebox.get("nativeTypeDbReasoningUsed")):
+        from digital_twin.modules.reasoning.contracts import rule_execution_completed
+        if not (rule_execution_completed(inferencebox) if compiled else self.enabled_value(inferencebox.get("nativeTypeDbReasoningUsed"))):
             return False
         if not self.enabled_value(inferencebox.get("generationAligned")):
             return False

@@ -3,6 +3,8 @@
 No price predicate, score, action selection or delivery receipt belongs here.
 Missing observations never negate a condition. Source clocks order history.
 """
+from digital_twin.modules.reasoning.contracts import condition_execution_proven
+
 from copy import deepcopy
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
@@ -53,7 +55,7 @@ def observation_input(contract, identity, native, assessed_at):
             # feature snapshot's calculation / ingestion timestamp.
             source = timestamp(condition.get("observedAt"))
             if (not cutoff or not source or not 0 <= (cutoff - source).total_seconds() <= contract["signalValiditySeconds"]
-                    or condition.get("matchedByTypeDB") is not True
+                    or not condition_execution_proven(condition)
                     or condition.get("judgementEvidenceUsable") is not True
                     or condition.get("freshnessStatus") not in {"fresh", "live", "current", "available"}):
                 return None

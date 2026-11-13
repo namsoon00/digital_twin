@@ -58,7 +58,14 @@ def build_v2_reasoning_engine(
         monitor_store,
         settings=candidate_settings,
     )
-    repository = ontology_repository_from_settings(candidate_settings)
+    compiled_backend = candidate_settings.get("_ruleExecutionBackend") == "compiled-rulebox-v1"
+    if compiled_backend:
+        from digital_twin.infrastructure.compiled_rulebox_projection import (
+            FrozenRuleboxRepository, CompiledPortfolioProjectionRecorder,
+        )
+        repository = FrozenRuleboxRepository(candidate_settings["_compiledRuleboxReleaseArtifact"])
+    else:
+        repository = ontology_repository_from_settings(candidate_settings)
     from .reasoning_binding import bind_v2_release
 
     reasoning_binding = bind_v2_release(
@@ -89,7 +96,8 @@ def build_v2_reasoning_engine(
         registry_store,
         descriptor.deployment_id,
     )
-    projection_recorder = PortfolioOntologyProjectionRecorder(
+    recorder_class = CompiledPortfolioProjectionRecorder if compiled_backend else PortfolioOntologyProjectionRecorder
+    projection_recorder = recorder_class(
         repository,
         quality_store=stores.ontology_quality_sample_store(store_settings),
         projection_run_store=stores.ontology_projection_run_store(store_settings),
@@ -184,7 +192,7 @@ def build_v2_reasoning_engine(
         ),
         inference_executor=ScopedTypeDBInferenceExecutor(
             projection_recorder,
-            shared_inference_service=shared_inference_service,
+            shared_inference_service=None if compiled_backend else shared_inference_service,
             post_inference_observer=build_hypothesis_lifecycle_service(
                 store_settings,
                 event_publisher=default_event_bus(),
@@ -206,7 +214,7 @@ def build_v2_reasoning_engine(
         settings=candidate_settings,
         release_identity=release_identity,
         reasoning_orchestrator=subject_decision_orchestrator,
-        shared_inference_service=shared_inference_service,
+        shared_inference_service=None if compiled_backend else shared_inference_service,
         ai_insight_handoff_service=ai_insight_handoff_service,
         insight_dispatch_service=insight_dispatch_service,
     )
@@ -325,7 +333,9 @@ def build_v2_reasoning_job_runner(
                 + graph_database
             )
 
-    single_writer = ontology_graph_single_writer_enabled(configured)
+    selected_bundle = dict(selected_deployment.get("releaseBundle") or {})
+    compiled_backend = "compiled-rulebox-v1" in (selected_bundle.get("source_contract_versions") or selected_bundle.get("sourceContractVersions") or [])
+    single_writer = ontology_graph_single_writer_enabled(configured) and not compiled_backend
     graph_writer_guard = (
         LocalGraphWriterGuard(
             graph_database,
@@ -383,7 +393,7 @@ def build_v2_reasoning_job_runner(
         settings=configured,
         worker_id=worker_id,
         event_reader=stores.event_log(configured),
-        execution_guard=typedb_capacity_guard(
+        execution_guard=None if compiled_backend else typedb_capacity_guard(
             configured,
             "reasoning-v2",
             stores.operational_storage_capacity_state_store(store_settings),

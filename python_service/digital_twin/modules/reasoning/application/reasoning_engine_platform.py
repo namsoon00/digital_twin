@@ -1141,9 +1141,22 @@ class ReasoningEnginePlatformService:
         expected_baseline_deployment_id: str = "",
         time_series_backend_id: str = "",
         feature_set_version: str = "",
+        rule_execution_backend: str = "typedb-direct-typeql",
     ) -> Dict[str, object]:
         """Register a new V2 candidate without disturbing active delivery."""
 
+        from digital_twin.modules.reasoning.domain.compiled_rulebox import COMPILED_RULEBOX_VERSION, compile_rulebox
+        if rule_execution_backend not in {"typedb-direct-typeql", COMPILED_RULEBOX_VERSION}:
+            return {"status": "blocked", "blockers": ["unsupported-rule-execution-backend"]}
+        compiled_backend = rule_execution_backend == COMPILED_RULEBOX_VERSION
+        if compiled_backend:
+            if not release_seed_artifact:
+                return {"status": "blocked", "blockers": ["compiled-release-requires-frozen-rulebox-artifact"]}
+            try:
+                compile_rulebox(release_seed_artifact.get("rules") or [],
+                                tbox_fingerprint=release_seed_artifact.get("tboxFingerprint", ""))
+            except ValueError as error:
+                return {"status": "blocked", "blockers": ["unsupported-compiled-rulebox"], "reason": str(error)}
         clean_deployment_id = str(deployment_id or "").strip()
         clean_release_id = str(release_id or "").strip()
         if not clean_deployment_id or not clean_release_id:
@@ -1272,8 +1285,8 @@ class ReasoningEnginePlatformService:
         # after a v20 proof fix would mislabel the immutable validation cohort.
         source_contract_versions = {
             version for version in bundle.source_contract_versions
-            if not version.startswith("typedb-direct-typeql-rule-engine-")
-        } | {TYPEDB_NATIVE_RULE_ENGINE_VERSION}
+            if not version.startswith(("typedb-direct-typeql-rule-engine-", "compiled-rulebox-"))
+        } | {COMPILED_RULEBOX_VERSION if compiled_backend else TYPEDB_NATIVE_RULE_ENGINE_VERSION}
         registration_runtime = dict(self.settings.get("_runtimeIdentity") or {})
         authored_artifact = dict(release_seed_artifact or {})
         selected_feature_version = str(feature_set_version or bundle.feature_set_version)
@@ -1330,7 +1343,8 @@ class ReasoningEnginePlatformService:
                 runtime_revision=str(registration_runtime.get("revision") or bundle.runtime_revision),
                 comparison_contract_version=REASONING_SHADOW_CONTRACT_VERSION,
             ),
-            capabilities=dict(base.capabilities),
+            capabilities={**dict(base.capabilities), **({"typedbNativeInference": False,
+                "compiledRuleboxInference": True} if compiled_backend else {})},
         )
         self.registry.upsert(descriptor)
         update_health = getattr(self.registry, "update_health", None)

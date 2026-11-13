@@ -20,10 +20,14 @@ def materialize_management_resolution(graph, rule, subject, match, evidence_inde
     for condition in positive.get('matchedConditions') or []:
         if condition.get('resolutionMatchedByTypeDB') is True:
             condition.update(matched=True, matchedByTypeDB=True)
+        elif condition.get('resolutionMatchedByRuleEngine') is True:
+            condition.update(matched=True, matchedByRuleEngine=True)
     context = grounded_inference_context(graph, rule, subject, positive, evidence_index=evidence_index)
     for condition in context['matchedConditions']:
         if condition.get('resolutionMatchedByTypeDB') is True:
             condition.update(matched=False, matchedByTypeDB=False)
+        elif condition.get('resolutionMatchedByRuleEngine') is True:
+            condition.update(matched=False, matchedByRuleEngine=False)
     symbol = subject.properties.get('symbol')
     if not symbol or not context.get('evidenceUsableForJudgement'):
         return

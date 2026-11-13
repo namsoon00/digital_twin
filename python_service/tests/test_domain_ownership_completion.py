@@ -79,6 +79,7 @@ class DomainOwnershipCompletionTests(unittest.TestCase):
         temporal = json.loads((ROOT / "python_service/tests/fixtures/temporal_feature_semantic_changes.json").read_text())
         prior_changes = dict(changes)
         changes.update(temporal["domain"])
+        changes.update(json.loads((ROOT / "python_service/tests/fixtures/compiled_rulebox_semantic_changes.json").read_text())["domain"])
         checked_changes = set()
         checked_removals = set()
         self.assertEqual("637b49023", fixture["baseline"])

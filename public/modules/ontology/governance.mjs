@@ -129,6 +129,7 @@ function renderTypeDBDiagnosticsPanel() {
 
 function renderTypeDBRuleboxPanel() {
   var payload = ontologyState.ontologyRulebox || {};
+  var runtimeRelease = payload.runtimeRelease || {};
   var rules = latestChangedFirst(Array.isArray(payload.rules) ? payload.rules : []);
   var relationTypes = Array.isArray(payload.relationTypes) ? payload.relationTypes : [];
   var versions = latestChangedFirst(Array.isArray(payload.versions) ? payload.versions : []);
@@ -140,8 +141,8 @@ function renderTypeDBRuleboxPanel() {
     '<article class="panel model-panel typedb-rulebox-panel">',
     '<div class="panel-head">',
     '<div>',
-    '<p class="label">TypeDB Native Rules</p>',
-    '<h2>네이티브 규칙 실행 콘솔</h2>',
+    '<p class="label">RuleBox</p>',
+    '<h2>규칙 관리와 운영 반영</h2>',
     '</div>',
     '<span class="tone-chip ' + escapeHtml(payload.status === "ok" ? "watch" : payload.configured ? "caution" : "hold") + '">' + escapeHtml(ruleboxStatusLabel(payload)) + '</span>',
     '</div>',
@@ -154,8 +155,12 @@ function renderTypeDBRuleboxPanel() {
     renderLabStat("버전", payload.versionCount || versions.length || 0, "개"),
     '</div>',
     '<div class="settings-note model-settings-note">',
-    '<strong>TypeDB를 네이티브 규칙 원본으로 사용합니다.</strong>',
-    '<p>저장 시 관계 규칙 구조를 TypeDB에 적재하고 버전 해시를 남깁니다. 실행 버튼은 TypeDB ABox와 네이티브 규칙을 읽어 새 InferenceBox 세대를 먼저 만든 뒤 최신 세대로 전환합니다.</p>',
+    '<strong>TypeDB에서 규칙을 관리합니다.</strong>',
+    runtimeRelease.backend === "compiled-rulebox-v1"
+      ? '<p>실시간 알림은 검증된 규칙을 경량 엔진에서 실행합니다. 규칙을 저장하면 조건·수치·추가·삭제를 검증한 뒤 새 운영 버전으로 전환합니다. 검증 실패 시 기존 버전을 유지합니다.</p>'
+      : '<p>규칙 저장과 실행 이력을 관리합니다. TypeDB 연구용 실행은 저장된 사실과 규칙으로 연구 결과를 만듭니다.</p>',
+    runtimeRelease.status === "current" ? '<p>저장된 규칙이 현재 운영에 반영되어 있습니다.</p>' : '',
+    runtimeRelease.reason ? '<p class="lab-message caution">' + escapeHtml(runtimeRelease.reason) + '</p>' : '',
     '</div>',
     '<div class="rulebox-console-strip">',
     '<span><strong>source</strong>' + escapeHtml(payload.source || "-") + '</span>',
@@ -172,8 +177,8 @@ function renderTypeDBRuleboxPanel() {
     '<button class="text-button" type="button" data-action="refresh-ontology-diagnostics"' + (ontologyState.ontologyDiagnosticsLoading ? ' disabled' : '') + '>TypeDB 진단</button>',
     '<button class="text-button" type="button" data-action="seed-ontology-graph"' + (ontologyState.ontologySeedRunning || settingsState.serverSettingsLocked ? ' disabled' : '') + '>' + escapeHtml(ontologyState.ontologySeedRunning ? "시드 중" : "온톨로지 시드") + '</button>',
     '<button class="text-button" type="button" data-action="seed-rulebox"' + (disabled ? ' disabled' : '') + '>기본값 시드</button>',
-    '<button class="text-button primary" type="button" data-action="save-rulebox"' + (disabled ? ' disabled' : '') + '>' + escapeHtml(ontologyState.ontologyRuleboxSaving ? "저장 중" : "네이티브 규칙 저장") + '</button>',
-    '<button class="text-button primary" type="button" data-action="run-rulebox"' + (disabled ? ' disabled' : '') + '>' + escapeHtml(ontologyState.ontologyRuleboxRunning ? "실행 중" : "TypeDB 추론 실행") + '</button>',
+    '<button class="text-button primary" type="button" data-action="save-rulebox"' + (disabled ? ' disabled' : '') + '>' + escapeHtml(ontologyState.ontologyRuleboxSaving ? "저장·검증 중" : "규칙 저장·반영") + '</button>',
+    '<button class="text-button primary" type="button" data-action="run-rulebox"' + (disabled ? ' disabled' : '') + '>' + escapeHtml(ontologyState.ontologyRuleboxRunning ? "실행 중" : "TypeDB 연구용 실행") + '</button>',
     '<button class="text-button primary" type="button" data-action="propose-rulebox-candidates"' + (disabled ? ' disabled' : '') + '>' + escapeHtml(ontologyState.ontologyRuleboxProposing ? "생성 중" : "AI 후보 생성") + '</button>',
     '</div>',
     renderTypeDBDiagnosticsPanel(),

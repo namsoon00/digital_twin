@@ -40,10 +40,19 @@ def prepare_v2_launch(settings, deployment_id) -> ReasoningLaunch:
     deployment_row = dict(platform.registry.get(descriptor.deployment_id) or {})
     deployment_health = dict(deployment_row.get("health") or {})
     candidate_settings = dict(configured)
+    from digital_twin.modules.reasoning.domain.compiled_rulebox import COMPILED_RULEBOX_VERSION
+    compiled_backend = COMPILED_RULEBOX_VERSION in getattr(descriptor.release_bundle, "source_contract_versions", ())
+    if compiled_backend:
+        artifact_record = platform.registry.release_artifact(descriptor.deployment_id)
+        artifact = dict(artifact_record.get("artifact") or {})
+        if not artifact_record.get("valid") or artifact.get("releaseBundle") != descriptor.release_bundle.to_dict():
+            raise RuntimeError("Compiled reasoning requires its exact valid immutable release artifact")
+        candidate_settings["_ruleExecutionBackend"] = COMPILED_RULEBOX_VERSION
+        candidate_settings["_compiledRuleboxReleaseArtifact"] = artifact
     candidate_settings["typedbDatabase"] = platform.graph_database_for(descriptor.deployment_id)
     candidate_settings["timeSeriesActiveBackendId"] = descriptor.time_series_backend_id
-    candidate_settings["typedbNativeRuleExecutionEnabled"] = "1"
-    candidate_settings["ontologyReasoningTypeDbNativeRuleExecutionEnabled"] = "1"
+    candidate_settings["typedbNativeRuleExecutionEnabled"] = "0" if compiled_backend else "1"
+    candidate_settings["ontologyReasoningTypeDbNativeRuleExecutionEnabled"] = "0" if compiled_backend else "1"
     candidate_settings["ontologySharedMarketWorldAsyncProjectionEnabled"] = "0"
     candidate_settings["ontologyIncrementalCurrentStateReasoningEnabled"] = "1"
     candidate_settings["ontologyCurrentStateAboxStorageEnabled"] = "1"

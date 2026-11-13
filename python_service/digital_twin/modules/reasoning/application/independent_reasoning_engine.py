@@ -10,6 +10,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Dict, Iterable, Mapping
 
 from .job_transitions import ClaimedJobTransitions
+from digital_twin.modules.reasoning.domain.rule_execution_proof import rule_execution_completed
 from digital_twin.modules.reasoning.domain.reasoning_batch import reasoning_batch_key, reasoning_batch_fits, SIBLING_EXECUTION_BATCH_VERSION
 
 from digital_twin.modules.notifications.contracts import is_typedb_context_observation_notification, typedb_review_observation_contract
@@ -93,7 +94,7 @@ def projection_inference_identity(projection: object) -> Dict[str, object]:
     )
     verified = bool(
         str(values.get("status") or "").lower() in VERIFIED_PROJECTION_STATUSES
-        and native_completed
+        and rule_execution_completed(inference)
         and inference.get("generationAligned")
         and str(inference.get("sourceAboxSnapshotId") or "").strip()
     )
@@ -103,6 +104,10 @@ def projection_inference_identity(projection: object) -> Dict[str, object]:
         "sourceAboxSnapshotId": str(inference.get("sourceAboxSnapshotId") or ""),
         "inferenceGenerationId": str(inference.get("inferenceGenerationId") or ""),
         "nativeTypeDbReasoningCompleted": native_completed,
+        "ruleExecutionCompleted": rule_execution_completed(inference),
+        "ruleExecutionBackend": inference.get("ruleExecutionBackend", "typedb-direct-typeql"),
+        "compiledRuleboxFingerprint": inference.get("compiledRuleboxFingerprint", ""),
+        "compiledExecutionProof": deepcopy(inference.get("compiledExecutionProof") or {}),
         "generationAligned": bool(inference.get("generationAligned")),
         "relationCount": int(inference.get("relationCount") or len(inference.get("relations") or [])),
         "traceCount": int(inference.get("traceCount") or len(inference.get("traces") or [])),
@@ -416,6 +421,10 @@ def compact_projection_result(projection: object) -> Dict[str, object]:
         "inferenceGenerationId": identity["inferenceGenerationId"],
         "evidenceEvaluationAsOf": str(rulebox_execution.get("evidenceEvaluationAsOf") or ""),
         "nativeTypeDbReasoningCompleted": identity["nativeTypeDbReasoningCompleted"],
+        "ruleExecutionCompleted": identity["ruleExecutionCompleted"],
+        "ruleExecutionBackend": identity["ruleExecutionBackend"],
+        "compiledRuleboxFingerprint": identity["compiledRuleboxFingerprint"],
+        "compiledExecutionProof": identity["compiledExecutionProof"],
         "generationAligned": identity["generationAligned"],
         "inferenceRelationCount": identity["relationCount"],
         "inferenceTraceCount": identity["traceCount"],
@@ -1180,10 +1189,12 @@ class ScopedTypeDBInferenceExecutor:
                     result = dict(evidence_composer(result, reuse_proof) or result)
             result["hypothesisLifecycle"] = self.observe_projection_result(snapshot, result)
             if current_state_mode:
+                compiled_execution = result.get("graphStore") == "compiled-rulebox"
                 result["reasoningExecution"] = {
-                    "mode": "incremental-current-state-one-pass-v1",
+                    "mode": "compiled-rulebox-one-pass-v1" if compiled_execution else "incremental-current-state-one-pass-v1",
                     "sharedPremiseCriticalPath": False,
-                    "typedbProjectionCount": 1,
+                    "typedbProjectionCount": 0 if compiled_execution else 1,
+                    **({"compiledProjectionCount": 1} if compiled_execution else {}),
                     "factSliceProjection": True,
                     "sharedResultReuseEligible": bool(
                         reuse_proof.get("reuseEligible")

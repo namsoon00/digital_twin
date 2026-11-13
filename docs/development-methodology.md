@@ -2,6 +2,17 @@
 
 This project uses a local-first, DDD-oriented, event-driven architecture. Future development sessions should use this file as the operating guide before changing code.
 
+## Owner-approved realtime execution change (2026-11-13)
+
+The approved `compiled-rulebox-v1` backend executes the frozen TypeDB-authored
+RuleBox over immutable source facts without realtime TypeDB I/O. This supersedes
+the native-only execution requirement below for explicitly compiled releases.
+Investment meanings, conditions and actions still come exclusively from the
+approved RuleBox. Do not add hand-coded investment thresholds or use the compiled
+backend as an automatic fallback for a failed native release. Preserve explicit
+backend proof, durable evidence, zero-delivery validation and atomic release
+ownership. See [Compiled RuleBox runtime](compiled-rulebox-runtime.md).
+
 ## Core Rules
 
 - Keep business concepts in `domain/`.

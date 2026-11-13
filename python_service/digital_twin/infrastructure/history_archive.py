@@ -126,6 +126,20 @@ class LocalHistoryArchive:
             os.unlink(temporary)
         return digest, (path.stat().st_blocks * 512 if created else 0)
 
+    def put_blob(self, raw):
+        """Durably store exact bytes before a transaction publishes a reference."""
+        if not isinstance(raw, bytes) or len(raw) > ARCHIVE_MAX_RECORD_BYTES:
+            raise ValueError("Invalid bounded archive blob")
+        result = self._put(raw)
+        if self._read(result[0], len(raw)) != raw:
+            raise ValueError("Archive blob restore verification failed")
+        return result
+
+    def read_blob(self, digest, size):
+        if not isinstance(size, int) or not 0 < size <= ARCHIVE_MAX_RECORD_BYTES:
+            raise ValueError("Invalid bounded archive blob size")
+        return self._read(digest, size)
+
     def put(self, row):
         raw = canonical_bytes(row)
         if len(raw) > ARCHIVE_MAX_RECORD_BYTES:

@@ -383,6 +383,11 @@ def build_v2_reasoning_job_runner(
         registry=registry,
     )
     from digital_twin.infrastructure.realtime_activity import RealtimeActivity
+    source_refresher = None
+    if (compiled_backend and role in {"delivery", "active"} and selected_deployment_id == delivery_id
+            and str(configured.get("marketSourceRefreshEnabled", "0")) == "1"):
+        from digital_twin.infrastructure.composition.market_source import build_market_source_refresh
+        source_refresher = build_market_source_refresh(configured, registry, selected_deployment_id).run_once
     return IndependentReasoningJobRunner(
         queue=reasoning_job_store,
         engine=build_v2_reasoning_engine(
@@ -414,4 +419,5 @@ def build_v2_reasoning_job_runner(
         comparison_reconciler=comparison_service.reconcile,
         realtime_activity=(RealtimeActivity(data_dir() / "realtime-activity.lock").turn
                            if role in {"delivery", "active"} else None),
+        source_refresher=source_refresher,
     )

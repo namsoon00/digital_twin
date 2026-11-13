@@ -636,6 +636,20 @@ class MySQLMonitorStore(MySQLOperationalConnection):
             previous[row["account_id"]] = snapshot_json_loads(row["payload_json"], {})
         return previous
 
+    def latest_account_state(self, account_id):
+        """Cheap revision probe; expand only a changed account's durable row."""
+        with self.connect() as connection:
+            row = connection.execute("SELECT generated_at FROM monitor_snapshots WHERE account_id=%s", (account_id,)).fetchone()
+            cached = self.previous.get(account_id) or {}
+            if not row:
+                return {}
+            if cached.get("generatedAt") == row["generated_at"]:
+                return cached
+            row = connection.execute("SELECT payload_json FROM monitor_snapshots WHERE account_id=%s", (account_id,)).fetchone()
+        state = snapshot_json_loads(row["payload_json"]) if row else {}
+        self.previous[account_id] = state
+        return state
+
     def latest_delivered_company_change_report(
         self,
         account_id: str,
@@ -1020,7 +1034,8 @@ class MySQLMonitorStore(MySQLOperationalConnection):
         )
         # Reuse only values prepared from this transaction's final state and
         # locked previous state. Never carry these across monitor cycles.
-        payload_json = snapshot_json_dumps(state)
+        references = str(self.runtime_settings.get("snapshotEvidenceReferencesEnabled", "0")) == "1"
+        payload_json = snapshot_json_dumps(state, references=references)
         previous_projection = (
             (source_snapshot["payload"].get("metadata") or {}).get("previousMonitorState") or {}
             if isinstance(previous_state, dict) and previous_state else {}
@@ -1052,11 +1067,13 @@ class MySQLMonitorStore(MySQLOperationalConnection):
             temporal_projection=temporal_projection,
             updated_at=updated_at,
             payload_json=payload_json,
+            references=references,
         )
         reasoning_writes.insert_verified_source_snapshot(
             connection=connection,
             source_snapshot=source_snapshot,
             updated_at=updated_at,
+            references=references,
         )
         return payload_json
 
@@ -1169,6 +1186,8 @@ class MySQLMonitorStore(MySQLOperationalConnection):
         dry_run: bool = False,
         delivery_guard=None,
         source_snapshot_replay: bool = False,
+        expected_previous=None,
+        required_deployment_id="",
     ):
         from digital_twin.infrastructure.time_series_factory import build_versioned_time_series_store
 
@@ -1183,6 +1202,8 @@ class MySQLMonitorStore(MySQLOperationalConnection):
             dry_run=dry_run,
             delivery_guard=delivery_guard,
             source_snapshot_replay=source_snapshot_replay,
+            expected_previous=expected_previous,
+            required_deployment_id=required_deployment_id,
         )
 
     def write(self) -> None:
@@ -1457,6 +1478,8 @@ class MySQLMonitoringCycleRecorder(MySQLOperationalConnection):
         dry_run: bool = False,
         delivery_guard=None,
         source_snapshot_replay: bool = False,
+        expected_previous=None,
+        required_deployment_id="",
     ):
         if dry_run:
             return MonitoringCycleRecordResult(False, 0, "dry-run")
@@ -1488,16 +1511,41 @@ class MySQLMonitoringCycleRecorder(MySQLOperationalConnection):
         delivery_guard_result: Dict[str, object] = {"status": "not-applied"}
         market_observation_guard_result: Dict[str, object] = {"status": "not-applied"}
         with self.transaction() as connection:
-            if live_snapshots:
-                self.market_time_series_store.record_snapshots_with_connection(connection, live_snapshots)
-            for snapshot in live_snapshots:
-                insert_domain_event_with_connection(connection, snapshot_collected_event(snapshot))
+            if required_deployment_id:
+                control = connection.execute(
+                    "SELECT active_deployment_id, delivery_deployment_id FROM reasoning_engine_control WHERE control_id='global' FOR SHARE"
+                ).fetchone() or {}
+                if (control.get("active_deployment_id") != required_deployment_id
+                        or control.get("delivery_deployment_id") != required_deployment_id):
+                    raise RuntimeError("Market source delivery ownership changed; retry from current control")
             if not source_snapshot_replay:
                 authoritative_states = self.monitor_store.lock_previous_states_with_connection(
                     connection,
                     account_ids,
                 )
                 previous_states.update(authoritative_states)
+                for account_id, generation in (expected_previous or {}).items():
+                    if (authoritative_states.get(account_id) or {}).get("generatedAt") != generation:
+                        raise RuntimeError("Market source account basis changed; retry from current state")
+                for snapshot in live_snapshots:
+                    if expected_previous is not None:
+                        continue
+                    if str(self.runtime_settings.get("marketSourceRefreshEnabled", "0")) != "1":
+                        continue
+                    snapshot.metadata["accountBasisGeneratedAt"] = snapshot.generated_at
+                    snapshot.metadata.pop("marketSourceRefresh", None)
+                    from digital_twin.modules.market_data.domain.market_source_refresh import preserve_newer_market_observations
+                    prior = account_snapshot_from_monitor_state(authoritative_states.get(snapshot.account_id) or {})
+                    if prior and preserve_newer_market_observations(snapshot, prior, stamp):
+                        # Rebuild candidates against the final observed prices;
+                        # never publish the stale pre-lock comparison.
+                        from digital_twin.modules.market_data.contracts import RealtimeMonitor
+                        monitor = RealtimeMonitor(self.runtime_settings)
+                        fresh_events = monitor.apply_cadence(
+                            monitor.events_for_snapshot(snapshot, authoritative_states[snapshot.account_id]), self.monitor_store,
+                        )
+                        guarded_events = [event for event in guarded_events if event.account_id != snapshot.account_id] + fresh_events
+                        observation_candidates_by_account[snapshot.account_id] = market_observation_reasoning_candidates(snapshot.metadata)
                 for snapshot in live_snapshots:
                     prepare_market_signal_transition_metadata(
                         snapshot,
@@ -1519,6 +1567,10 @@ class MySQLMonitoringCycleRecorder(MySQLOperationalConnection):
                         previous_states,
                     )
                 )
+            if live_snapshots:
+                self.market_time_series_store.record_snapshots_with_connection(connection, live_snapshots)
+            for snapshot in live_snapshots:
+                insert_domain_event_with_connection(connection, snapshot_collected_event(snapshot))
             if callable(delivery_guard) and guarded_events:
                 try:
                     guard_value = delivery_guard(connection, list(guarded_events))

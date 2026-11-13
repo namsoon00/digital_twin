@@ -39,14 +39,19 @@
       "reason": "Owner-approved source storage latency change: lossless self-contained evidence encoding, exact decode before fingerprint/domain use, and removal of unused mutable V1 copies only under durable V2 control. Verified by test_snapshot_payload_storage real MySQL rollback/restart/account/as-of tests, test_stabilization_transactions and paired captured-source equality. No RuleBox or delivery semantics changed."
     },
     "infrastructure/transactions/monitoring.py::MySQLMonitorStore": {
-      "hash": "743b063a682fc678517cc26881ee5842437ffea35e523789c92d976bf09e44e2",
-      "previousHash": "2c39037410500ff7be24566d80854007678495c2a791bc691c27f57ab666e27d",
-      "reason": "Owner-approved source storage latency change: lossless self-contained evidence encoding, exact decode before fingerprint/domain use, and removal of unused mutable V1 copies only under durable V2 control. Verified by test_snapshot_payload_storage real MySQL rollback/restart/account/as-of tests, test_stabilization_transactions and paired captured-source equality. No RuleBox or delivery semantics changed."
+      "hash": "682a821588bfd0774aae4eec302062367c40fc6482327591a0dde8d68a18d7b5",
+      "previousHash": "743b063a682fc678517cc26881ee5842437ffea35e523789c92d976bf09e44e2",
+      "reason": "Owner-approved quote-driven verified source boundary: preserve account/source clocks and frozen RuleBox authority, compare-and-set the account generation, retain newer quotes during reconciliation, and fsync content-addressed evidence before SQL publication. Verified by test_market_source_refresh, test_snapshot_payload_storage, test_reasoning_source_preparation and preserved-input 128-rule replay; docs/compiled-rulebox-runtime.md."
     },
     "infrastructure/transactions/monitoring.py::MySQLOntologyReasoningMonitorStore": {
       "hash": "0a4738bc6258939bc0b195e895b28ab8abb236b166dfa05e19fac379103ec985",
       "previousHash": "8d530d7d5e81f7bbf26d3d7e700ddb35885fd169c9d0593684749a106526cea8",
       "reason": "Owner-approved source storage latency change: lossless self-contained evidence encoding, exact decode before fingerprint/domain use, and removal of unused mutable V1 copies only under durable V2 control. Verified by test_snapshot_payload_storage real MySQL rollback/restart/account/as-of tests, test_stabilization_transactions and paired captured-source equality. No RuleBox or delivery semantics changed."
+    },
+    "infrastructure/transactions/monitoring.py::MySQLMonitoringCycleRecorder": {
+      "hash": "e1cf8f32792aa36d54db6aea22380985df833ec0308b20763cc1a67568b67404",
+      "previousHash": "e56d3552c686c0e0c2735776e7bd0e3ed61c54b69f17849b9b8c3f6951040413",
+      "reason": "Owner-approved quote-driven verified source boundary: preserve account/source clocks and frozen RuleBox authority, compare-and-set the account generation, retain newer quotes during reconciliation, and fsync content-addressed evidence before SQL publication. Verified by test_market_source_refresh, test_snapshot_payload_storage, test_reasoning_source_preparation and preserved-input 128-rule replay; docs/compiled-rulebox-runtime.md."
     }
   },
   "domain": {
@@ -119,6 +124,12 @@
       "hash": "4a3643ed52af6fc5d82a51127e9680143a14fbe4fa3cf0e90bd3cc9781163c2b",
       "previousHash": "82259a65dcd86d2a5e24f2db6b04888b83f2ca8666443a4b12085ce0860618a1",
       "reason": "Owner-approved compiled RuleBox execution, immutable release admission and backend-explicit proof. Native proof flags remain false. Verified by test_compiled_rulebox, test_compiled_rulebox_projection, test_compiled_rulebox_release and real MySQL test_compiled_rulebox_transactions."
+    }
+  },
+  "ports": {
+    "modules/portfolio/domain/repositories.py::MonitoringCycleRecorder": {
+      "hash": "ab192279d14a1104a476a7657bc5b68c9e29149803e08e7eb162e57fbe35c7f8",
+      "reason": "Owner-approved quote-driven source publication extends the existing atomic cycle contract with explicit expected account generation and required delivery deployment. Fences are optional for existing collectors and mandatory for independent market refresh; tested by test_market_source_refresh."
     }
   }
 }

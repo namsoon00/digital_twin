@@ -184,3 +184,58 @@ space and existing MySQL/TypeDB capacity checks remain; archive size is explicit
 unmeasured in this fast observation, never reported as zero. The independent
 filesystem observer retains detailed archive measurements, and explicit
 diagnostics can request `include_archive_size=True` outside the live guard.
+
+# Independent quote source boundary (2026-11-14)
+
+`marketSourceRefreshEnabled=1` connects the compiled delivery worker to the
+existing durable Toss account quote cache and validated KIS market cache. Before
+each reasoning turn it can prepare one account from the latest collected quotes,
+without calling the account provider or external enrichment. Checks are spaced
+by at least two seconds and accounts rotate fairly. Intermediate ticks may be
+coalesced into the latest observation; this is not a tick-by-tick trading feed.
+
+The source producer preserves holdings, cost, cash, broker valuations and their
+original account clock. Quotes, indicators, execution, orderbook and investor
+flow retain separate source clocks. Missing, older or future clocks cannot
+replace a retained observation. Fresh market prices update marked valuations
+without changing the configured portfolio valuation basis. Complete holdings and
+cash must have been reconciled within twice the existing account interval
+(bounded to 60–3600 seconds); repeated quote updates never renew that clock.
+Fundamental and research evidence retain their original validity and provenance.
+
+The existing atomic monitoring transaction writes the immutable source packet,
+time series, domain event and V2 ingress. It locks and compares the prepared
+account generation and checks delivery ownership again. A concurrent account or
+release change rolls the source transaction back for a fresh read. No duplicate
+raw-market inference queue or AI invocation is introduced. The original RuleBox
+material-change, freshness, publication and receipt gates still apply. Quote
+updates do not guarantee a customer notification.
+
+The account monitor still reconciles holdings and long-lived context. A late
+account collection merges newer committed quotes before its source write and
+rebuilds affected price candidates. Collection and source preparation may overlap
+under shared host workload leases; SQL account locks serialize their commits.
+Cleanup retains an exclusive lease and admission priority. A busy cleanup turn
+defers source preparation without blocking already committed reasoning jobs.
+
+`snapshotEvidenceReferencesEnabled=1` stores unchanged evidence values of at
+least 4 KiB once by SHA-256 in `data/snapshot-evidence`. Atomic file publication,
+file/directory fsync, length and checksum verification precede the referencing
+SQL write. Current state, historical state and immutable reasoning inputs share
+these exact values. Every reader expands them before hashing or domain use;
+quote/account SQL paths stay directly queryable. Old plain and inline-compressed
+rows remain readable. Missing/corrupt evidence fails closed. A rolled-back SQL
+write may leave a harmless unreferenced blob; automatic blob deletion is disabled.
+
+**Backup and restore must include `data/snapshot-evidence`, MySQL and the history
+archive together.** Referenced rows are no longer self-contained. Do not delete
+this directory when disabling new reference writes; retained rows and archived
+source packets still depend on it. This directory is private durable data, never
+a disposable cache or git artifact.
+
+On a preserved input, decoding and all 128 RuleBox evaluations (4 matched rules)
+were identical with inline and referenced evidence. The serialized source fell
+from 3,302,479 to 601,518 bytes; this is a transfer/storage representation measure,
+not an end-to-end latency claim. `market-source-refresh` logs report independent
+source commit duration and the retained account basis. Live quote-to-inference
+and notification transport times must be checked separately.

@@ -92,6 +92,9 @@ def position_payload(position: Position, base: Dict[str, object], collection_pur
         "quoteStatus": position.quote_status,
         "quoteMessage": position.quote_message,
         "dataQuality": position.data_quality or "actual",
+        "marketSignalCoverage": dict(position.market_signal_coverage or {}),
+        "indicatorAsOf": position.indicator_as_of,
+        "indicatorFetchedAt": position.indicator_fetched_at,
         "updatedAt": position.updated_at or utc_now_iso(),
         # ``updatedAt`` is our collection clock.  These fields retain the
         # vendor observation clock and its validity state for ABox/AI use.
@@ -887,6 +890,9 @@ class MarketDataCollectionRunner:
         result["factRevisionReasoningSymbols"] = ontology_symbols
         result["investmentReasoningScheduling"] = "verified-monitor-snapshot-barrier"
         result["reasoningDispatch"] = "next-verified-monitor-snapshot"
+        if str(self.settings.get("marketSourceRefreshEnabled", "0")) == "1":
+            result["investmentReasoningScheduling"] = "durable-quote-source"
+            result["reasoningDispatch"] = "independent-verified-source-refresh"
         result["backgroundMaterialSymbolCount"] = len([symbol for symbol in material_symbols if symbol not in focus_symbols])
         result["backgroundBootstrapSymbolCount"] = len([symbol for symbol in bootstrap_symbols if symbol not in focus_symbols])
         result["backgroundFactRevisionSymbolCount"] = len([

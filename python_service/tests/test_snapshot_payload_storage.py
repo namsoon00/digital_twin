@@ -8,7 +8,7 @@ from unittest import TestCase
 from unittest.mock import patch
 
 from digital_twin.infrastructure.snapshot_payload_codec import (
-    MARKER, snapshot_json_dumps, snapshot_json_loads,
+    MARKER, REFERENCE_MARKER, snapshot_json_dumps, snapshot_json_loads, expanded_snapshot_json,
 )
 from digital_twin.infrastructure.mysql_realtime_workload_guard import MySQLRealtimeWorkloadGuard
 from digital_twin.infrastructure.transactions.monitoring import MySQLMonitorStore
@@ -30,6 +30,28 @@ def evidence_state(stamp="2026-07-29T00:02:00Z"):
 
 
 class SnapshotPayloadCodecTests(TestCase):
+    def test_content_references_deduplicate_and_missing_or_corrupt_objects_fail_closed(self):
+        from digital_twin.infrastructure.history_archive import LocalHistoryArchive
+        with tempfile.TemporaryDirectory() as root:
+            archive = LocalHistoryArchive(Path(root))
+            with patch("digital_twin.infrastructure.snapshot_payload_codec.evidence_store", return_value=archive):
+                state = evidence_state()
+                payload = snapshot_json_dumps(state, references=True)
+                paths = sorted(Path(root).rglob("*.z"))
+                mtimes = [p.stat().st_mtime_ns for p in paths]
+                self.assertEqual(payload, snapshot_json_dumps(state, references=True))
+                self.assertEqual(mtimes, [p.stat().st_mtime_ns for p in paths])
+                self.assertIn(REFERENCE_MARKER, payload)
+                self.assertEqual(state, json.loads(expanded_snapshot_json(payload)))
+                leaf = json.loads(payload)["externalSignals"]["companyKnowledge"]["AAPL"]
+                self.assertEqual(state["externalSignals"]["companyKnowledge"]["AAPL"], snapshot_json_loads(json.dumps(leaf)))
+                paths[0].write_bytes(b"corrupt")
+                with self.assertRaisesRegex(ValueError, "integrity"):
+                    snapshot_json_loads(payload)
+                paths[0].unlink()
+                with self.assertRaisesRegex(ValueError, "integrity"):
+                    snapshot_json_loads(payload)
+
     def test_old_new_nested_evidence_roundtrip_and_sql_leaf_preserve_all_facts(self):
         state = evidence_state()
         state["metadata"]["previousMonitorState"] = evidence_state("2026-07-29T00:01:00Z")
@@ -96,6 +118,39 @@ class SnapshotPayloadCodecTests(TestCase):
 
 
 class SnapshotPayloadStorageTests(StabilizationDatabaseCase):
+    def test_referenced_evidence_survives_db_rollback_restart_and_archived_source(self):
+        from digital_twin.infrastructure.history_archive import LocalHistoryArchive
+        from digital_twin.infrastructure.mysql_history_archive import archive_delete_row
+        state = evidence_state()
+        state["accountId"] = self.deployment
+        state["externalSignals"]["researchEvidence"]["AAPL"] = [
+            {"evidenceId": "evidence-" + str(index), "summary": "근거 원문 " * 500,
+             "observedAt": "2026-07-28T01:00:00Z"} for index in range(20)
+        ]
+        for table in ("monitor_snapshots", "monitor_snapshot_history", "verified_reasoning_source_snapshots"):
+            self.addCleanup(self.sql, "DELETE FROM " + table + " WHERE account_id=%s", (self.deployment,))
+        config = dict(self.settings, snapshotEvidenceReferencesEnabled="1")
+        with tempfile.TemporaryDirectory() as root:
+            blobs = LocalHistoryArchive(Path(root) / "evidence")
+            archive = LocalHistoryArchive(Path(root) / "history")
+            with patch("digital_twin.infrastructure.snapshot_payload_codec.evidence_store", return_value=blobs):
+                store = MySQLMonitorStore(config)
+                with self.assertRaisesRegex(RuntimeError, "rollback"):
+                    with store.transaction() as connection:
+                        store.upsert_snapshot_state_with_connection(connection, self.deployment, state)
+                        raise RuntimeError("rollback")
+                expected = build_reasoning_source_snapshot(self.deployment, state, settings=config)
+                self.assertEqual({}, store.reasoning_source_snapshot_state(expected["snapshotId"]))
+                store.upsert_snapshot_state(self.deployment, state)
+                row = self.sql("SELECT payload_json FROM verified_reasoning_source_snapshots WHERE snapshot_id=%s", (expected["snapshotId"],))
+                self.assertIn(REFERENCE_MARKER, row["payload_json"])
+                with store.connect() as connection:
+                    self.assertEqual(1, archive_delete_row(connection, "verified_reasoning_source_snapshots", {"snapshot_id": expected["snapshotId"]}, "1=1", archive=archive))
+                restarted = MySQLMonitorStore(config)
+                with patch("digital_twin.infrastructure.mysql_history_archive.archive_for_connection", return_value=archive):
+                    self.assertEqual(expected["payload"], restarted.reasoning_source_snapshot_state(expected["snapshotId"]))
+                self.assertEqual(state, restarted.previous[self.deployment])
+
     def test_selected_revision_fields_match_full_history_and_survive_restart_without_archive_reads(self):
         from digital_twin.infrastructure.external_api.mysql_stores import MySQLExternalDataStore
         from digital_twin.infrastructure.external_api.revision_field_cache import RevisionFieldCache

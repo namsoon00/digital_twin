@@ -540,7 +540,9 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # input rejection, immutable replay, scoped rollback and yielding locks.
         # One concurrently landed BLS unpublished-comparison-period contract.
         # Two exact field-selection/cache-restart contracts retain source authority.
-        self.assertLessEqual(total, 3131 + 33 + 8 + 5 + 1 + 2)
+        # Nine quote-source/data-reference regressions cover concurrent account
+        # changes, exact evidence, restart, rollback, clocks and delivery scope.
+        self.assertLessEqual(total, 3131 + 33 + 8 + 5 + 1 + 2 + 9)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

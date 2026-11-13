@@ -129,6 +129,14 @@ class ExpandParticipants(ast.NodeTransformer):
             return None
         actual = {kw.arg: ast.unparse(kw.value) for kw in call.keywords}
         expected = {**{arg: arg for arg in spec["args"]}, **spec["bindings"]}
+        # The source-storage representation is an explicit new parameter,
+        # audited in compiled_rulebox_semantic_changes and real replay tests.
+        defaults = {}
+        if call.func.attr in {"upsert_monitor_snapshot_history", "insert_verified_source_snapshot"}:
+            if "references" in actual:
+                expected["references"] = "references"
+            else:
+                defaults["references"] = "False"
         assert actual == expected, (call.func.attr, actual, expected)
         method = function(spec["path"], call.func.attr)
         if "docstring" in spec:
@@ -137,9 +145,10 @@ class ExpandParticipants(ast.NodeTransformer):
 
         class Bind(ast.NodeTransformer):
             def visit_Name(self, n):
-                if n.id in spec["bindings"]:
+                bindings = {**defaults, **spec["bindings"]}
+                if n.id in bindings:
                     return ast.copy_location(
-                        ast.parse(spec["bindings"][n.id], mode="eval").body, n
+                        ast.parse(bindings[n.id], mode="eval").body, n
                     )
                 return n
 

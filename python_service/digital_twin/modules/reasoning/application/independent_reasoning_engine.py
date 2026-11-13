@@ -2051,6 +2051,7 @@ class IndependentReasoningJobRunner:
         market_observation_completion_reconciler=None,
         comparison_reconciler=None,
         realtime_activity=None,
+        source_refresher=None,
     ):
         import os
         import socket
@@ -2070,6 +2071,8 @@ class IndependentReasoningJobRunner:
         self.market_observation_completion_reconciler = market_observation_completion_reconciler
         self.comparison_reconciler = comparison_reconciler
         self.realtime_activity = realtime_activity
+        self.source_refresher = source_refresher
+        self.last_source_refresh = {"status": "not-configured"}
         self.background_graph_tasks = [
             {
                 **dict(task or {}),
@@ -2307,7 +2310,18 @@ class IndependentReasoningJobRunner:
         return dict(self._last_comparison_reconciliation)
 
     def run_once(self) -> Dict[str, object]:
+        if callable(self.source_refresher):
+            try:
+                self.last_source_refresh = self.source_refresher()
+            except Exception as error:
+                # Durable quotes remain available for retry. Existing committed
+                # work must keep progressing if source preparation fails.
+                self.last_source_refresh = {"status": "retry", "reason": str(error)[:240]}
+            if self.last_source_refresh.get("status") in {"committed", "retry"}:
+                import logging
+                logging.getLogger(__name__).warning("market-source-refresh %s", self.last_source_refresh)
         preparation = self.prepare_queue_turn()
+        preparation["marketSourceRefresh"] = dict(self.last_source_refresh)
         if preparation.get("status") != "ready":
             if getattr(self, "_queued_candidate_wait_started", None) is not None:
                 self.release_graph_writer_ownership()

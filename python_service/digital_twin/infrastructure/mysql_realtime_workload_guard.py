@@ -39,7 +39,23 @@ class MySQLRealtimeWorkloadGuard:
 
         with self._acquire(role="monitor-demand", blocking=True, path=self.monitor_demand), ExitStack() as held:
             with self._acquire(role="admission", blocking=True, path=self.turnstile):
-                lease = held.enter_context(self._acquire(role="monitor", blocking=True))
+                lease = held.enter_context(self._acquire(role="monitor", blocking=True, shared=True))
+            with RealtimeActivity(self.path.parent / "realtime-activity.lock").turn():
+                yield lease
+
+    @contextmanager
+    def market_source_turn(self):
+        """Overlap collection, but never cleanup. Skip a busy turn without waiting.
+
+        Admission's nonblocking probe respects an overdue maintenance waiter.
+        The monitor/account row lock serializes only the final atomic write.
+        """
+        with ExitStack() as held:
+            with self._acquire(role="admission", blocking=False, path=self.turnstile) as gate:
+                if not gate.acquired:
+                    yield MySQLWorkloadLease(False, "market-source")
+                    return
+                lease = held.enter_context(self._acquire(role="market-source", blocking=False, shared=True))
             with RealtimeActivity(self.path.parent / "realtime-activity.lock").turn():
                 yield lease
 
@@ -81,14 +97,14 @@ class MySQLRealtimeWorkloadGuard:
                                     checkpoint if lease.acquired else None)
 
     @contextmanager
-    def _acquire(self, *, role: str, blocking: bool, path=None, wait_seconds=0) -> Iterator[MySQLWorkloadLease]:
+    def _acquire(self, *, role: str, blocking: bool, path=None, wait_seconds=0, shared=False) -> Iterator[MySQLWorkloadLease]:
         target = Path(path or self.path)
         target.parent.mkdir(parents=True, exist_ok=True)
         descriptor = os.open(str(target), os.O_CREAT | os.O_RDWR, 0o600)
         started = time.monotonic()
         acquired = False
         try:
-            flags = fcntl.LOCK_EX | (0 if blocking else fcntl.LOCK_NB)
+            flags = (fcntl.LOCK_SH if shared else fcntl.LOCK_EX) | (0 if blocking else fcntl.LOCK_NB)
             while True:
                 try:
                     fcntl.flock(descriptor, flags)

@@ -5,6 +5,7 @@ from digital_twin.modules._exports import resolve_export
 
 _EXPORTS = {'ActiveDeploymentWorldProjectionSink': ('digital_twin.infrastructure.composition.reasoning_shadow',
                                          'ActiveDeploymentWorldProjectionSink'),
+ 'build_market_source_refresh': ('digital_twin.infrastructure.composition.market_source', 'build_market_source_refresh'),
  'FrozenReasoningSnapshotSource': ('digital_twin.infrastructure.composition.reasoning_shadow',
                                    'FrozenReasoningSnapshotSource'),
  'ShadowNotificationSink': ('digital_twin.infrastructure.composition.reasoning_shadow',

@@ -52,6 +52,7 @@ _EXPORTS = {'verified_bls_statistics': ('digital_twin.modules.market_data.domain
                      'setting_enabled'),
  'truthy': ('digital_twin.modules.market_data.application.time_series_platform', 'truthy')}
 
+_EXPORTS['MarketSourceRefreshService'] = ('digital_twin.modules.market_data.application.market_source_refresh_service', 'MarketSourceRefreshService')
 __all__ = list(_EXPORTS)
 
 

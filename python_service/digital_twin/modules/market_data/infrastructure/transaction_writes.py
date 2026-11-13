@@ -107,6 +107,7 @@ def upsert_monitor_snapshot_history(
     updated_at: Any,
     *,
     payload_json: str = None,
+    references=False,
 ):
     return connection.execute(
         """
@@ -124,7 +125,7 @@ def upsert_monitor_snapshot_history(
             account_id,
             generated_at,
             payload_json if payload_json is not None else snapshot_json_dumps(state),
-            snapshot_json_dumps(temporal_projection),
+            snapshot_json_dumps(temporal_projection, references=references),
             updated_at,
             json_dumps(compact_monitor_history_state(temporal_projection)),
             TEMPORAL_HISTORY_PROJECTION_VERSION,

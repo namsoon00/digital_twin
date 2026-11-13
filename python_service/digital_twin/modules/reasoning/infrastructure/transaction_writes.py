@@ -13,6 +13,7 @@ def insert_verified_source_snapshot(
     connection: BoundWriteConnection,
     source_snapshot: Any,
     updated_at: Any,
+    *, references=False,
 ):
     return connection.execute(
         """
@@ -33,7 +34,7 @@ def insert_verified_source_snapshot(
             source_snapshot["contractVersion"],
             source_snapshot["fingerprint"],
             json_dumps(source_snapshot["symbols"]),
-            snapshot_json_dumps(source_snapshot["payload"]),
+            snapshot_json_dumps(source_snapshot["payload"], references=references),
             updated_at,
             updated_at,
         ),

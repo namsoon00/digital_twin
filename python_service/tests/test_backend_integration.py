@@ -295,6 +295,7 @@ class BackendIntegrationTests(unittest.TestCase):
 
     def test_integrated_repository_contracts_have_one_owner(self):
         changes = json.loads((FIXTURES / "closed_loop_semantic_changes.json").read_text()).get("ports", {})
+        changes.update(json.loads((FIXTURES / "compiled_rulebox_semantic_changes.json").read_text()).get("ports", {}))
         checked_changes = set()
         for name, entry in STORAGE["ports"].items():
             path = Path(entry["path"])

@@ -253,6 +253,9 @@ class KISRealtimeWebSocketRunner:
             # continuously outrunning the snapshot and starving alerts.
             result["investmentReasoningScheduling"] = "verified-monitor-snapshot-barrier"
             result["reasoningDispatch"] = "next-verified-monitor-snapshot"
+            if str(self.settings.get("marketSourceRefreshEnabled", "0")) == "1":
+                result["investmentReasoningScheduling"] = "durable-quote-source"
+                result["reasoningDispatch"] = "independent-verified-source-refresh"
             result["backgroundMaterialSymbolCount"] = len([symbol for symbol in material_symbols if symbol not in focus_set])
             result["backgroundBootstrapSymbolCount"] = len([symbol for symbol in bootstrap_symbols if symbol not in focus_set])
             result["backgroundFactRevisionSymbolCount"] = len([

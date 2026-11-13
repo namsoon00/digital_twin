@@ -1166,6 +1166,8 @@ class TossProvider:
             "quoteMessage": position.quote_message,
             "dataQuality": position.data_quality or "actual",
             "marketSignalCoverage": dict(position.market_signal_coverage or {}),
+            "indicatorAsOf": position.indicator_as_of,
+            "indicatorFetchedAt": position.indicator_fetched_at,
             "updatedAt": position.updated_at or utc_now_iso(),
             "sourceAsOf": position.source_as_of,
             "sourceFetchedAt": position.source_fetched_at,

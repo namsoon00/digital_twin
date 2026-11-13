@@ -179,7 +179,10 @@ class MonitoringCycleRecorder(Protocol):
         dry_run: bool = False,
         delivery_guard=None,
         source_snapshot_replay: bool = False,
+        expected_previous: Dict[str, str] = None,
+        required_deployment_id: str = "",
     ) -> MonitoringCycleRecordResult:
+        """Commit only if optional account-generation and delivery fences match."""
         ...
 
 

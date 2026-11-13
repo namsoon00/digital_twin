@@ -529,7 +529,9 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # The current HEAD already declares 3131 methods. Thirty compiled
         # RuleBox contracts cover predicate semantics, durable proofs, scope
         # isolation, governed saves and real atomic release rollback/races.
-        self.assertLessEqual(total, 3131 + 30)
+        # Two managed-runtime regressions protect compiled candidate ownership
+        # and preserve the authoring database during physical rotation.
+        self.assertLessEqual(total, 3131 + 32)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

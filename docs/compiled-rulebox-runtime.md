@@ -48,6 +48,13 @@ released without changing the delivery owner, so the next correction can be save
 Direct database edits that bypass the governed save/restore
 API do not automatically create a runtime release.
 
+Admission checks every account and symbol and can take minutes on this machine;
+the save screen keeps the operation visible instead of abandoning the response
+at the general 30-second API timeout. This is release validation time, separate
+from realtime symbol processing. Managed maintenance does not order compiled
+releases by legacy numeric suffixes. TypeDB rotation preserves the artifact's
+authoring database and never treats its compiled-program binding as a database.
+
 ## Initial migration and validation
 
 Run the pure/compiler, projection/delivery and release-isolation tests:

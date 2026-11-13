@@ -327,6 +327,40 @@ class TypeDBServiceManagerTests(unittest.TestCase):
         self.assertEqual("candidate-current", result["status"])
         self.assertEqual([], result["retiredDeploymentIds"])
 
+    def test_compiled_candidate_is_not_retired_by_native_revision_number(self):
+        from unittest.mock import Mock
+        registry = Mock()
+        registry.control.return_value = SimpleNamespace(
+            active_deployment_id="native-r88", delivery_deployment_id="native-r88",
+            candidate_deployment_id="compiled-r1", version=12)
+        registry.get.side_effect = lambda deployment_id: {
+            "releaseBundle": {"source_contract_versions": ["compiled-rulebox-v1"]}
+        } if deployment_id == "compiled-r1" else {}
+        saved = []
+        result = service_manager.retire_stale_reasoning_candidate(
+            {}, registry_factory=lambda _: registry, settings_saver=saved.append)
+        self.assertEqual("candidate-current", result["status"])
+        registry.set_control.assert_not_called()
+        registry.retire_unselected.assert_not_called()
+        self.assertEqual([], saved)
+
+    def test_compiled_rotation_preserves_authoring_and_never_creates_program_database(self):
+        from unittest.mock import Mock
+        registry = Mock()
+        registry.control.return_value = SimpleNamespace(active_deployment_id="compiled-r1",
+            delivery_deployment_id="compiled-r1", candidate_deployment_id="")
+        registry.get.return_value = {"graphStoreBinding": "compiled_program",
+            "releaseBundle": {"source_contract_versions": ["compiled-rulebox-v1"]}}
+        registry.release_artifact.return_value = {"valid": True,
+            "artifact": {"ruleboxAuthoringDatabase": "authored_rules"}}
+        spec = {"typedbDatabase": "authored_rules", "managedTypeDbDatabases": ["compiled_program"]}
+        result = service_manager.typedb_rotation_database_inventory(spec, {}, lambda _: registry)
+        self.assertTrue(result["ready"])
+        self.assertEqual(["authored_rules"], result["databases"])
+        self.assertEqual(["authored_rules"], result["protectedDatabases"])
+        registry.release_artifact.return_value = {"valid": False}
+        self.assertFalse(service_manager.typedb_rotation_database_inventory(spec, {}, lambda _: registry)["ready"])
+
     def test_candidate_seed_fails_closed_without_parent_maintenance_token(self):
         with tempfile.TemporaryDirectory() as temp:
             spec = {

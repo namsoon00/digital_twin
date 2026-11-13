@@ -169,6 +169,7 @@ function renderTypeDBRuleboxPanel() {
     lastRun.status ? '<span><strong>last run</strong>' + escapeHtml(lastRun.status + (lastRun.reason ? " · " + lastRun.reason : "")) + '</span>' : '',
     '</div>',
     ontologyState.ontologyRuleboxLoading ? '<p class="lab-message">TypeDB 네이티브 규칙을 읽는 중입니다.</p>' : '',
+    ontologyState.ontologyRuleboxSaving ? '<p class="lab-message">저장한 규칙을 계좌 자료로 검증하고 있습니다. 수분이 걸릴 수 있으며 완료 전까지 기존 규칙으로 운영합니다.</p>' : '',
     ontologyState.ontologyRuleboxError ? '<p class="form-error">' + escapeHtml(ontologyState.ontologyRuleboxError) + '</p>' : '',
     payload.reason ? '<p class="lab-message caution">' + escapeHtml(payload.reason) + '</p>' : '',
     '<label class="setting-field wide"><span>변경 이유</span><input data-ontology-rulebox-change-reason type="text" autocomplete="off" placeholder="예: 피어 뉴스 후보 검토, 판단 단계 정책 보강" value="' + escapeHtml(ontologyState.ontologyRuleboxChangeReason || "") + '"></label>',

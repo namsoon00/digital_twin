@@ -497,6 +497,12 @@ def typedb_worker_spec(settings: Dict[str, object]) -> Dict[str, object]:
     }
 
 
+def compiled_rulebox_deployment(deployment: Dict[str, object]) -> bool:
+    bundle = dict((deployment or {}).get("releaseBundle") or {})
+    versions = bundle.get("source_contract_versions") or bundle.get("sourceContractVersions") or []
+    return "compiled-rulebox-v1" in versions
+
+
 def typedb_rotation_database_inventory(
     spec: Dict[str, object],
     settings: Dict[str, object] = None,
@@ -556,6 +562,16 @@ def typedb_rotation_database_inventory(
                 or deployment.get("graph_store_binding")
                 or ""
             ).strip()
+            if compiled_rulebox_deployment(deployment):
+                # The compiled binding names an immutable program, not a
+                # physical database. Preserve its authoring source instead.
+                artifact_record = registry.release_artifact(deployment_id)
+                if not artifact_record.get("valid"):
+                    unresolved.append(deployment_id)
+                    continue
+                if binding in names:
+                    names.remove(binding)
+                binding = str((artifact_record.get("artifact") or {}).get("ruleboxAuthoringDatabase") or "").strip()
             if not deployment or not binding:
                 unresolved.append(deployment_id)
                 continue
@@ -949,6 +965,15 @@ def retire_stale_reasoning_candidate(
                 "candidateDeploymentId": candidate_id,
                 "retiredDeploymentIds": [],
             }
+        candidate = dict(registry.get(candidate_id) or {})
+        active = dict(registry.get(active_id) or {})
+        if compiled_rulebox_deployment(candidate) or compiled_rulebox_deployment(active):
+            # Numeric suffixes from native releases have no ordering meaning
+            # for content-addressed RuleBox releases. Their validator owns
+            # retirement and atomically selects the successor.
+            return {"status": "candidate-current", "activeDeploymentId": active_id,
+                    "candidateDeploymentId": candidate_id, "retiredDeploymentIds": [],
+                    "reason": "compiled-rulebox-validation-owns-release-order"}
         restored_control = registry.set_control(
             active_id,
             delivery_id,

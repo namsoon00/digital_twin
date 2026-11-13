@@ -708,7 +708,7 @@ function saveOntologyRulebox(seedDefaults) {
     rules: rules,
     clearInference: true,
     changeReason: ontologyState.ontologyRuleboxChangeReason || "RuleBox 관리 화면 저장"
-  })
+  }, { timeoutMs: 600000 })
     .then(function (payload) {
       if (!payload.saved) throw new Error(payload.reason || "룰박스를 저장하지 못했습니다.");
       applyOntologyRuleboxPayload(payload);

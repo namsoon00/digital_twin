@@ -92,9 +92,14 @@ def build_compiled_release_service(settings, native_parity=None):
         from digital_twin.infrastructure.settings import save_runtime_settings
         # Keep the authoring TypeDB binding. The control plane chooses the
         # realtime execution artifact independently of this authoring database.
+        selected_artifact = platform.registry.release_artifact(control.active_deployment_id)
+        authoring = (selected_artifact.get('artifact') or {}).get('ruleboxAuthoringDatabase')
+        if not selected_artifact.get('valid') or not authoring:
+            raise ValueError('The selected compiled release has no preserved authoring database')
         save_runtime_settings({'reasoningEngineActiveDeploymentId':control.active_deployment_id,
             'reasoningEngineDeliveryDeploymentId':control.delivery_deployment_id,
             'reasoningEngineV2DeploymentId':control.active_deployment_id,
+            'reasoningEngineV2TypeDbDatabase':authoring,
             'reasoningEngineCandidateDeploymentId':'', 'reasoningEngineCandidateReleaseId':'',
             'reasoningEngineActiveVersion':'v2'})
     return CompiledRuleboxReleaseService(platform,

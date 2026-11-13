@@ -264,8 +264,15 @@ def operational_storage_inventory(
     disk_usage_provider: Callable = None,
     size_provider: Callable[[Path], int] = None,
     mysql_metadata_provider: Callable[[Mapping[str, object]], Mapping[str, object]] = None,
+    include_archive_size: bool = False,
 ) -> Dict[str, object]:
-    """Return bounded component sizes for capacity alerts and maintenance decisions."""
+    """Read capacity admission inputs without traversing the cold archive.
+
+    Archive bytes do not determine admission: fresh filesystem free space does.
+    The dedicated filesystem observer measures that potentially huge tree.
+    Explicit diagnostics may opt in, but cleanup/monitor guards must not wait
+    for every historical chunk to be stat'ed before allowing live work.
+    """
 
     configured = dict(settings or {})
     root = Path(data_path) if data_path is not None else data_dir()
@@ -364,7 +371,9 @@ def operational_storage_inventory(
         "typedbCheckpointReferencedMb": round(typedb_checkpoint / 1024 / 1024, 1),
         "typedbLimitMb": _integer(configured.get("typedbDataMaxSizeMb"), 8192, 256),
         "mysqlSizeMb": mysql_size_mb,
-        "historyArchiveMb": round(physical_size(root / "history-archive") / 1024 / 1024, 1),
+        "historyArchiveMb": (round(physical_size(root / "history-archive") / 1024 / 1024, 1)
+                             if include_archive_size else None),
+        "historyArchiveMeasurementStatus": "measured" if include_archive_size else "deferred-to-filesystem-observer",
         **mysql_metadata,
         "mysqlLimitMb": mysql_limit_mb,
         "mysqlUsagePercent": mysql_usage_percent,

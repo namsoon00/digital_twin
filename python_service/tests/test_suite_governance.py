@@ -539,7 +539,8 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # Five storage-admission contracts preserve lossless evidence, corrupt
         # input rejection, immutable replay, scoped rollback and yielding locks.
         # One concurrently landed BLS unpublished-comparison-period contract.
-        self.assertLessEqual(total, 3131 + 33 + 8 + 5 + 1)
+        # Two exact field-selection/cache-restart contracts retain source authority.
+        self.assertLessEqual(total, 3131 + 33 + 8 + 5 + 1 + 2)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

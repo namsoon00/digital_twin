@@ -15,6 +15,10 @@ from typing import Dict, Iterable, List, Mapping
 
 
 HISTORICAL_MULTIPLE_EVIDENCE_VERSION = "historical-forward-per-evidence-v1"
+HISTORICAL_MULTIPLE_PAYLOAD_FIELDS = {
+    "companyOverviews": ("currentPrice", "currency", "securityLine", "earningsEstimates"),
+    "yfinanceData": ("querySymbol",),
+}
 
 
 def _text(value: object) -> str:
@@ -78,7 +82,7 @@ def historical_multiple_fact_projection(row: Mapping[str, object]) -> Dict[str, 
         "payload": {
             "companyOverviews": {symbol: {
                 key: overview[key]
-                for key in ("currentPrice", "currency", "securityLine", "earningsEstimates")
+                for key in HISTORICAL_MULTIPLE_PAYLOAD_FIELDS["companyOverviews"]
                 if key in overview
             }},
             "yfinanceData": {symbol: {"querySymbol": yfinance.get("querySymbol")}},

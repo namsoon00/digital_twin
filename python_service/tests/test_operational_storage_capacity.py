@@ -353,6 +353,8 @@ class OperationalStorageCapacityTests(unittest.TestCase):
             (root / "mysql-runtime").mkdir()
 
             def size(path):
+                if Path(path).name == "history-archive":
+                    raise AssertionError("Capacity admission must not walk cold archive files")
                 return 16 * 1024 * 1024 * 1024 if Path(path).name == "mysql-runtime" else 0
 
             inventory = operational_storage_inventory(
@@ -369,6 +371,21 @@ class OperationalStorageCapacityTests(unittest.TestCase):
         self.assertTrue(inventory["coreWritesOnly"])
         self.assertFalse(inventory["nonEssentialWritesAllowed"])
         self.assertTrue(inventory["ready"])
+        self.assertIsNone(inventory["historyArchiveMb"])
+        self.assertEqual("deferred-to-filesystem-observer", inventory["historyArchiveMeasurementStatus"])
+
+        # Explicit diagnostics still expose archive bytes, without changing
+        # the same fresh free-space and MySQL capacity admission decision.
+        with tempfile.TemporaryDirectory() as temp:
+            diagnostic = operational_storage_inventory(
+                {"operationalMySqlDataMaxSizeMb": "16384"}, data_path=Path(temp),
+                disk_usage_provider=lambda _: SimpleNamespace(free=80 * 1024**3, total=100 * 1024**3),
+                size_provider=lambda path: 3 * 1024**3 if path.name == "history-archive" else size(path),
+                mysql_metadata_provider=lambda _: {}, include_archive_size=True)
+        self.assertEqual(3072, diagnostic["historyArchiveMb"])
+        self.assertEqual("measured", diagnostic["historyArchiveMeasurementStatus"])
+        self.assertEqual(inventory["mysqlCapacityStage"], diagnostic["mysqlCapacityStage"])
+        self.assertEqual(inventory["freeMb"], diagnostic["freeMb"])
 
 
 if __name__ == "__main__":

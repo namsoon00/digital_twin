@@ -48,7 +48,7 @@ class MemoryReadStore(MySQLExternalDataStore):
                 raise TimeoutError("isolated database read timeout")
             rows = []
             if "operation:external-revision-ids" in sql:
-                rows = [{"revision_id": row["revision_id"], "fetched_at": row["fetched_at"]}
+                rows = [{key: row[key] for key in ("revision_id", "fetched_at", "subject_key", "payload_hash")}
                         for row in snapshot[:params[-1]]]
             elif "operation:external-revision-page" in sql:
                 if self.fail_revision in params:

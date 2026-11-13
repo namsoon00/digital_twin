@@ -164,3 +164,23 @@ before resuming. It never releases a live SQL transaction, cancels another
 process, or drops pending work. An individual slow SQL statement can still delay
 the next boundary; this is not a hard deadline guarantee. `guardWaitMs` now
 separates that wait from collection and commit time in monitor timing logs.
+
+Historical multiple enrichment declares the five payload fields it consumes.
+Cold reads select those JSON fields and exact original revision metadata in the
+existing bounded read transaction. Missing paths and explicit JSON null remain
+distinct. A disposable local field cache (4 MiB per namespace, at most five
+files) survives worker restarts; it is keyed by database/principal, field
+contract, revision ID, fetched clock and payload hash. Every call re-reads the
+retained IDs and hashes from MySQL before using cached fields. Deleted/corrected
+revisions cannot acquire authority from the cache. A corrupt/unavailable cache
+requires another source read; DB failures still propagate. No extra database
+instance or physical split is introduced. Original provider payloads and
+historical source references remain unchanged.
+
+Capacity admission no longer recursively measures `history-archive` inside the
+monitor/cleanup exclusion lock. The live process was spending roughly two
+minutes traversing archive chunk files at each preflight/refresh. Fresh free
+space and existing MySQL/TypeDB capacity checks remain; archive size is explicitly
+unmeasured in this fast observation, never reported as zero. The independent
+filesystem observer retains detailed archive measurements, and explicit
+diagnostics can request `include_archive_size=True` outside the live guard.

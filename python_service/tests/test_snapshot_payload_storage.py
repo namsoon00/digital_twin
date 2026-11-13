@@ -96,6 +96,85 @@ class SnapshotPayloadCodecTests(TestCase):
 
 
 class SnapshotPayloadStorageTests(StabilizationDatabaseCase):
+    def test_selected_revision_fields_match_full_history_and_survive_restart_without_archive_reads(self):
+        from digital_twin.infrastructure.external_api.mysql_stores import MySQLExternalDataStore
+        from digital_twin.infrastructure.external_api.revision_field_cache import RevisionFieldCache
+        from digital_twin.infrastructure.external_api.revision_projection_cache import RevisionProjectionCache
+        from digital_twin.infrastructure.external_api.revision_field_projection import payload_field_paths
+        from digital_twin.modules.portfolio.domain.valuation.historical_multiples import (
+            historical_multiple_fact_projection as project, HISTORICAL_MULTIPLE_PAYLOAD_FIELDS as fields,
+        )
+        from test_external_fact_bounded_reads import database_row
+        from test_historical_multiple_evidence import fact
+        import hashlib
+        subject = 'TE"ST\\X-' + self.deployment.upper()
+        ids = []
+        for index in range(18):
+            value = fact("yfinance.fundamental", self.deployment + str(index),
+                         "2026-09-15T10:00:%02dZ" % index, price=100 + index)
+            value["subjectKey"] = subject
+            for group, entries in value["payload"].items():
+                entries[subject] = entries.pop("TEST")
+            value["payload"]["companyOverviews"][subject].update({"currency": None, "earningsEstimates": []})
+            value["payload"]["yfinanceData"][subject]["unusedReport"] = "原文 " * 30000
+            row = database_row(value)
+            row["created_at"] = row["fetched_at"]
+            row["payload_hash"] = hashlib.sha256(row["payload_json"].encode()).hexdigest()
+            self.sql("INSERT INTO external_fact_revision (" + ",".join(row) + ") VALUES ("
+                     + ",".join(["%s"] * len(row)) + ")", tuple(row.values()))
+            ids.append(row["revision_id"])
+        with tempfile.TemporaryDirectory() as root:
+            def store():
+                result = MySQLExternalDataStore(self.settings)
+                result._revision_projection_cache = RevisionProjectionCache()
+                result._revision_field_cache = RevisionFieldCache(root, [self.deployment], payload_field_paths(fields))
+                return result
+            args = {"dataset_ids": ["yfinance.fundamental"], "subject_keys": [subject], "limit": 100,
+                    "projector": project, "payload_fields": fields}
+            first = store()
+            raw = first.list_revisions(args["dataset_ids"], args["subject_keys"], 100)
+            expected = [project(row) for row in raw]
+            self.assertEqual(expected, first.list_revision_projections(**args))
+            self.assertTrue(first._revision_field_cache.path.exists())
+            self.assertLess(first._revision_field_cache.path.stat().st_size, 50000)
+            with patch("digital_twin.infrastructure.external_api.mysql_stores.revision_page_query",
+                       side_effect=AssertionError("full archive reread after restart")):
+                self.assertEqual(expected, store().list_revision_projections(**args))
+                self.sql("DELETE FROM external_fact_revision WHERE revision_id=%s", (ids[0],))
+                self.assertEqual([row for row in expected if row["revisionId"] != ids[0]],
+                                 store().list_revision_projections(**args))
+            # Same ID with corrected contents must invalidate process and disk caches.
+            corrected = raw[1]
+            corrected["payload"]["companyOverviews"][subject]["currentPrice"] = 777
+            payload = json.dumps(corrected["payload"])
+            self.sql("UPDATE external_fact_revision SET payload_json=%s,payload_hash=%s WHERE revision_id=%s",
+                     (payload, hashlib.sha256(payload.encode()).hexdigest(), corrected["revisionId"]))
+            actual = store().list_revision_projections(**args)
+            self.assertEqual(777, next(row for row in actual if row["revisionId"] == corrected["revisionId"])
+                             ["payload"]["companyOverviews"][subject]["currentPrice"])
+            first._revision_field_cache.path.write_text("corrupt cache")
+            self.assertEqual(actual, store().list_revision_projections(**args))
+            unavailable = store()
+            with patch.object(unavailable, "transaction", side_effect=TimeoutError("DB unavailable")), self.assertRaises(TimeoutError):
+                unavailable.list_revision_projections(**args)
+
+    def test_revision_field_cache_is_bounded_namespaced_and_never_becomes_authority(self):
+        from digital_twin.infrastructure.external_api.revision_field_cache import RevisionFieldCache
+        with tempfile.TemporaryDirectory() as root:
+            cache = RevisionFieldCache(root, ["database", "principal"], [("group", "field")])
+            cache.MAX_BYTES = 1024
+            cache.save({str(i): {"small": "value " * 10} for i in range(100)})
+            self.assertLessEqual(cache.path.stat().st_size, 1024)
+            self.assertTrue(cache.load())
+            for namespace, paths in [(["other", "principal"], [("group", "field")]),
+                                     (["database", "other"], [("group", "field")]),
+                                     (["database", "principal"], [("group", "other")])]:
+                self.assertEqual({}, RevisionFieldCache(root, namespace, paths).load())
+            cache.path.write_text(cache.path.read_text().replace("value", "WRONG", 1))
+            self.assertEqual({}, cache.load())
+            cache.path.write_text("x" * 2048)
+            self.assertEqual({}, cache.load())
+
     def test_restart_history_fingerprint_and_asof_evidence_are_exact_and_account_scoped(self):
         state = evidence_state()
         state["accountId"] = self.deployment

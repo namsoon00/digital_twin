@@ -15,6 +15,8 @@ from ..mysql_operational_events import insert_domain_event_with_connection
 from ..mysql_operational_helpers import _json_loads
 from ..operational_common import json_dumps
 from .revision_projection_cache import process_revision_projection_cache
+from .revision_field_projection import payload_field_paths, revision_page_query, restore_projected_payload
+from .revision_field_cache import RevisionFieldCache
 
 
 def utc_now() -> datetime:
@@ -1273,7 +1275,7 @@ class MySQLExternalDataStore(MySQLOperationalConnection):
         return [self._revision_fact_row(row) for row in rows]
 
     def list_revision_projections(
-        self, *, dataset_ids, subject_keys, limit, projector,
+        self, *, dataset_ids, subject_keys, limit, projector, payload_fields=None,
     ) -> List[Dict[str, object]]:
         """Read exact retained history, loading uncached bodies in small pages.
 
@@ -1285,6 +1287,7 @@ class MySQLExternalDataStore(MySQLOperationalConnection):
         subjects = sorted({str(item or "").upper().strip() for item in subject_keys or [] if str(item or "").strip()})
         if not datasets or not subjects:
             return []
+        paths = payload_field_paths(payload_fields)
         cache = getattr(self, "_revision_projection_cache", None)
         if cache is None:
             cache = process_revision_projection_cache()
@@ -1294,35 +1297,60 @@ class MySQLExternalDataStore(MySQLOperationalConnection):
         namespace = tuple(str(self.mysql_config.get(key) or "") for key in (
             "host", "port", "database", "user", "unix_socket",
         ))
+        disk_cache = None
+        if paths:
+            from digital_twin.infrastructure.settings import data_dir
+            disk_cache = getattr(self, "_revision_field_cache", None) or RevisionFieldCache(
+                data_dir() / "derived-revision-fields", namespace, paths)
+        disk_rows = disk_cache.load() if disk_cache else {}
+        additions = {}
         with self.transaction() as connection:
             connection.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")
             connection.execute("START TRANSACTION READ ONLY")
             identities = connection.execute(
-                "SELECT /* operation:external-revision-ids */ revision_id, fetched_at FROM external_fact_revision "
+                "SELECT /* operation:external-revision-ids */ revision_id, fetched_at, subject_key, payload_hash FROM external_fact_revision "
                 "WHERE dataset_id IN (" + ", ".join(["%s"] * len(datasets)) + ") "
                 "AND subject_key IN (" + ", ".join(["%s"] * len(subjects)) + ") "
                 "ORDER BY subject_key, dataset_id, fetched_at ASC LIMIT %s",
                 tuple(datasets + subjects + [max(1, min(10000, int(limit or 1000)))]),
             ).fetchall()
             revision_ids = [row["revision_id"] for row in identities]
-            cache_keys = {row["revision_id"]: (namespace, projector, row["revision_id"], row["fetched_at"])
+            cache_keys = {row["revision_id"]: (namespace, projector, paths, row["revision_id"], row["fetched_at"], row["payload_hash"])
                           for row in identities}
+            by_id = {row["revision_id"]: row for row in identities}
             projected = {revision_id: cache.get(cache_keys[revision_id]) for revision_id in revision_ids}
+            if disk_cache:
+                for revision_id in revision_ids:
+                    row = disk_rows.get(disk_cache.key(by_id[revision_id]))
+                    if projected[revision_id] is None and isinstance(row, dict):
+                        # Identity columns are read in this DB snapshot before
+                        # cached fields gain authority, including after restart.
+                        if any(row.get(key) != by_id[revision_id][key] for key in
+                               ("revision_id", "fetched_at", "subject_key", "payload_hash")):
+                            continue
+                        try:
+                            restored = restore_projected_payload(row, paths)
+                        except (ValueError, TypeError, KeyError):
+                            continue  # A damaged optional cache is rebuilt from the source row.
+                        value = projector(self._revision_fact_row(restored))
+                        projected[revision_id] = value
+                        cache.put(cache_keys[revision_id], value)
             missing = [revision_id for revision_id in revision_ids if projected[revision_id] is None]
             for offset in range(0, len(missing), 16):
                 batch = missing[offset:offset + 16]
-                rows = connection.execute(
-                    "SELECT /* operation:external-revision-page */ * FROM external_fact_revision "
-                    "WHERE revision_id IN (" + ", ".join(["%s"] * len(batch)) + ")",
-                    tuple(batch),
-                ).fetchall()
+                sql, params = revision_page_query(batch, by_id, paths)
+                rows = connection.execute(sql, params).fetchall()
                 if {row["revision_id"] for row in rows} != set(batch):
                     raise RuntimeError("Immutable fact revision missing from its read snapshot")
                 for row in rows:
                     revision_id = row["revision_id"]
-                    value = projector(self._revision_fact_row(row))
+                    if disk_cache:
+                        additions[disk_cache.key(by_id[revision_id])] = row
+                    value = projector(self._revision_fact_row(restore_projected_payload(row, paths)))
                     cache.put(cache_keys[revision_id], value)
                     projected[revision_id] = value
+        if disk_cache:
+            disk_cache.save(additions)
         return [projected[revision_id] for revision_id in revision_ids]
 
     def fact_fitness_rows(self, subject_keys: Iterable[str] = None) -> List[Dict[str, object]]:

@@ -14,6 +14,7 @@ from digital_twin.modules.portfolio.domain.valuation.dcf_inputs import build_dri
 from digital_twin.modules.portfolio.domain.valuation.historical_multiples import (
     build_historical_forward_multiple_observations,
     historical_multiple_fact_projection,
+    HISTORICAL_MULTIPLE_PAYLOAD_FIELDS,
     normalize_current_consensus_contract,
 )
 
@@ -43,7 +44,8 @@ class HistoricalMultipleEvidenceService:
             "limit": max(100, len(requested) * 240),
         }
         if callable(projected_reader):
-            revisions = projected_reader(**read_args, projector=historical_multiple_fact_projection)
+            revisions = projected_reader(**read_args, projector=historical_multiple_fact_projection,
+                                         payload_fields=HISTORICAL_MULTIPLE_PAYLOAD_FIELDS)
         else:
             revisions = revision_reader(**read_args)
         grouped = {}

@@ -492,6 +492,15 @@ class DeliveryHistoryDatabaseTests(StabilizationDatabaseCase):
         self.assertEqual({own_key: max(clocks)}, scoped)
         self.assertEqual(self.notifications.delivered_cadence_timestamps([own_key]), scoped)
         self.assertEqual({}, self.notifications.delivered_cadence_timestamps([own_key], account_symbols=[("other-account", "AAA")]))
+        # The inclusive delivery boundary, not creation/queue time, owns the
+        # cooldown. A newer failed attempt must not extend it.
+        with self.notifications.transaction() as connection:
+            connection.execute("UPDATE notification_jobs SET created_at='2000-01-01T00:00:00Z' WHERE account_id=%s", ("fixture:account",))
+        self.assertEqual(scoped, self.notifications.delivered_cadence_timestamps(
+            [own_key], account_symbols=[("fixture:account", "AAA")], delivered_since=max(clocks)))
+        after_delivery = (datetime.fromisoformat(max(clocks).replace('Z', '+00:00')) + timedelta(seconds=1)).isoformat()
+        self.assertEqual({}, self.notifications.delivered_cadence_timestamps(
+            [own_key], account_symbols=[("fixture:account", "AAA")], delivered_since=after_delivery))
 
     def test_receipt_clock_and_scoped_history_survive_other_subject_traffic(self):
         self.assert_scoped_cadence_lookup_matches_exact_delivered_receipts()

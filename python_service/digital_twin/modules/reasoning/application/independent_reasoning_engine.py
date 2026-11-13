@@ -2050,6 +2050,7 @@ class IndependentReasoningJobRunner:
         market_observation_completion_recorder=None,
         market_observation_completion_reconciler=None,
         comparison_reconciler=None,
+        realtime_activity=None,
     ):
         import os
         import socket
@@ -2068,6 +2069,7 @@ class IndependentReasoningJobRunner:
         self.market_observation_completion_recorder = market_observation_completion_recorder
         self.market_observation_completion_reconciler = market_observation_completion_reconciler
         self.comparison_reconciler = comparison_reconciler
+        self.realtime_activity = realtime_activity
         self.background_graph_tasks = [
             {
                 **dict(task or {}),
@@ -2687,10 +2689,12 @@ class IndependentReasoningJobRunner:
                     {"input_assembly_scope": lambda: self.unlocked_input_assembly(job_ids, lease_lost)}
                     if "input_assembly_scope" in parameters else {}
                 )
-                if "progress_callback" in parameters:
-                    result = consume(events, progress_callback=self.record_progress, **preparation_kwargs)
-                else:
-                    result = consume(events, **preparation_kwargs)
+                activity = self.realtime_activity() if callable(self.realtime_activity) else nullcontext()
+                with activity:
+                    if "progress_callback" in parameters:
+                        result = consume(events, progress_callback=self.record_progress, **preparation_kwargs)
+                    else:
+                        result = consume(events, **preparation_kwargs)
             finally:
                 stop_heartbeat.set()
                 heartbeat.join(timeout=max(1, self.heartbeat_seconds() + 1))
@@ -3158,6 +3162,8 @@ class IndependentReasoningJobRunner:
         return FactDelta.from_request(request).lane
 
     def lane_batch_limit(self, lane: str) -> int:
+        if self.settings.get("_ruleExecutionBackend") == "compiled-rulebox-v1":
+            return _int_setting(self.settings, "reasoningEngineCompiledBatchSize", 8, 1, 16)
         key, fallback = {
             "REALTIME": ("reasoningEngineV2RealtimeBatchSize", 2),
             "CONTEXT": ("reasoningEngineV2ContextBatchSize", 3),
@@ -3166,6 +3172,8 @@ class IndependentReasoningJobRunner:
         return _int_setting(self.settings, key, fallback, 1, 20)
 
     def native_target_symbol_limit(self) -> int:
+        if self.settings.get("_ruleExecutionBackend") == "compiled-rulebox-v1":
+            return self.lane_batch_limit("REALTIME")
         return _int_setting(
             self.settings,
             "typedbNativeRuleTargetSymbolLimit",

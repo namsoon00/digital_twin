@@ -822,6 +822,7 @@ def _delete_stale_projection_runs(connection, cutoff_iso: str, batch_size: int) 
     sql = (
         "DELETE FROM `ontology_projection_runs`"
         " WHERE `status` <> 'projecting'"
+        " AND NOT EXISTS (SELECT 1 FROM ontology_projection_trace_outbox d WHERE d.run_id = ontology_projection_runs.run_id)"
         " AND `updated_at` < " + cutoff_sql
         + " ORDER BY `updated_at`, `run_id` LIMIT %s"
     )
@@ -842,6 +843,7 @@ def _delete_projection_runs_over_keep_count(connection, keep_count: int, batch_s
         rows = _execute(
             connection,
             "SELECT run_id FROM `ontology_projection_runs` WHERE status <> 'projecting' AND world_id = %s "
+            "AND NOT EXISTS (SELECT 1 FROM ontology_projection_trace_outbox d WHERE d.run_id = ontology_projection_runs.run_id) "
             "ORDER BY updated_at DESC, run_id DESC LIMIT %s OFFSET %s",
             (world_id, batch_size - len(run_ids), keep_count),
         ).fetchall()
@@ -853,7 +855,8 @@ def _delete_projection_runs_over_keep_count(connection, keep_count: int, batch_s
         connection,
         "DELETE FROM `ontology_projection_runs` WHERE run_id IN ("
         + ", ".join(["%s"] * len(run_ids))
-        + ") AND status <> 'projecting'",
+        + ") AND status <> 'projecting'"
+        " AND NOT EXISTS (SELECT 1 FROM ontology_projection_trace_outbox d WHERE d.run_id = ontology_projection_runs.run_id)",
         tuple(run_ids),
     )
 

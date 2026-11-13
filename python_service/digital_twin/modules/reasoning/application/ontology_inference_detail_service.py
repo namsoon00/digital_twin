@@ -52,6 +52,7 @@ class OntologyInferenceDetailRunner:
         reasoning_queue_probe=None,
         fairness_state_store=None,
         storage_guard=None,
+        compiled_trace_store=None,
     ):
         self.outbox = outbox
         self.ontology_repository = ontology_repository
@@ -60,6 +61,7 @@ class OntologyInferenceDetailRunner:
         self.reasoning_queue_probe = reasoning_queue_probe
         self.fairness_state_store = fairness_state_store
         self.storage_guard = storage_guard
+        self.compiled_trace_store = compiled_trace_store
         self.last_run_details: List[str] = []
         self.last_background_fairness: Dict[str, object] = {}
 
@@ -156,6 +158,10 @@ class OntologyInferenceDetailRunner:
 
     def outbox_summary(self) -> Dict[str, object]:
         try:
+            if self.compiled_trace_store is not None:
+                counts = self.compiled_trace_store.compiled_trace_summary()
+                return {"status": "ok", "pendingCount": counts.get("pending", 0),
+                        "failedCount": counts.get("failed", 0), "backend": "compiled-rulebox-v1"}
             value = self.outbox.summary()
         except Exception:  # noqa: BLE001 - an unavailable audit summary must preserve live priority.
             return {"status": "unavailable"}
@@ -289,6 +295,8 @@ class OntologyInferenceDetailRunner:
         }
 
     def storage_guard_state(self) -> Dict[str, object]:
+        if self.compiled_trace_store is not None:
+            return {"ready": True, "status": "compiled-local-audit"}
         if not callable(self.storage_guard):
             return {"ready": True, "status": "not-configured"}
         try:
@@ -416,6 +424,17 @@ class OntologyInferenceDetailRunner:
 
     def run_once(self, limit: int = 0) -> Dict[str, object]:
         started = time.monotonic()
+        if self.compiled_trace_store is not None:
+            queue = self.reasoning_queue_state()
+            if (queue.get("status") in {"error", "invalid", "unavailable"}
+                    or self.reasoning_pending_count(queue) or self.active_reasoning_count(queue)):
+                return {"status": "deferred-reasoning-queue", "completedCount": 0,
+                        "reasoningQueue": queue, "durationMs": 0}
+            result = self.compiled_trace_store.materialize_compiled_trace()
+            self.last_run_details = ["compiled-trace:" + str(result.get("status"))]
+            return {**result, "claimedCount": int(bool(result.get("runId"))),
+                    "retryCount": int(result.get("status") == "retry"),
+                    "durationMs": int((time.monotonic() - started) * 1000)}
         storage_guard = self.storage_guard_state()
         if not storage_guard.get("ready"):
             self.last_run_details = ["deferred-capacity"]

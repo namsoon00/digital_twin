@@ -81,3 +81,29 @@ class CompiledProjectionTests(unittest.TestCase):
     def test_artifact_mutation_is_rejected(self):
         artifact=deepcopy(self.artifact);artifact['rules'][0]['label']='tampered'
         with self.assertRaises(ValueError): FrozenRuleboxRepository(artifact)
+
+    def test_compiled_input_is_prepared_once_without_native_payload_caches(self):
+        recorder = self.recorder()
+        recorder.runtime_context = Mock(side_effect=AssertionError('duplicate source preparation'))
+        result = recorder.prepare_runtime_context(source_snapshot(), ['005930'])
+        self.assertEqual('inline-once', result['status'])
+        self.assertFalse(recorder.runtime_context_cache_enabled())
+        self.assertFalse(recorder.graph_assembly_cache_enabled())
+        recorder.runtime_context.assert_not_called()
+
+    def test_deferred_detail_uses_local_receipt_and_yields_to_live_work(self):
+        from digital_twin.modules.reasoning.application.ontology_inference_detail_service import OntologyInferenceDetailRunner
+        store = Mock()
+        store.materialize_compiled_trace.return_value = {'status': 'completed', 'completedCount': 1}
+        probe = Mock(return_value={'status': 'ok', 'effectivePendingCount': 0, 'activeLeaseCount': 0})
+        native = Mock(side_effect=AssertionError('compiled detail cannot wait for TypeDB'))
+        runner = OntologyInferenceDetailRunner(None, None, compiled_trace_store=store,
+            storage_guard=native, reasoning_queue_probe=probe)
+        self.assertTrue(runner.storage_guard_state()['ready'])
+        self.assertEqual(1, runner.run_once()['completedCount'])
+        store.materialize_compiled_trace.assert_called_once()
+        for state in ({'status': 'ok', 'effectivePendingCount': 1}, {'status': 'error'}):
+            probe.return_value = state
+            self.assertEqual('deferred-reasoning-queue', runner.run_once()['status'])
+        store.materialize_compiled_trace.assert_called_once()
+        native.assert_not_called()

@@ -2571,6 +2571,18 @@ MYSQL_SCHEMA = [
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     """,
     """
+    CREATE TABLE IF NOT EXISTS ontology_projection_trace_outbox (
+        run_id VARCHAR(191) PRIMARY KEY,
+        status VARCHAR(24) NOT NULL DEFAULT 'pending',
+        attempts INT NOT NULL DEFAULT 0,
+        available_at VARCHAR(40) NOT NULL,
+        last_error VARCHAR(400) NOT NULL DEFAULT '',
+        created_at VARCHAR(40) NOT NULL,
+        updated_at VARCHAR(40) NOT NULL,
+        KEY idx_projection_trace_pending (status, available_at, run_id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
+    """
     CREATE TABLE IF NOT EXISTS ontology_current_state_heads (
         execution_namespace_id VARCHAR(64) NOT NULL DEFAULT '',
         world_id VARCHAR(191) NOT NULL,

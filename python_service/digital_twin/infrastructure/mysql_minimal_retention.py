@@ -1322,6 +1322,7 @@ class MySQLMinimalRetentionRepository:
                    OCTET_LENGTH(source_symbols_json) + OCTET_LENGTH(context_payload_json) + OCTET_LENGTH(result_payload_json) AS payload_bytes
             FROM `ontology_projection_runs`
             WHERE status <> 'projecting' AND updated_at < """ + _cutoff_sql()
+            + " AND NOT EXISTS (SELECT 1 FROM ontology_projection_trace_outbox d WHERE d.run_id = ontology_projection_runs.run_id)"
             + " AND (context_payload_json <> '{}' OR result_payload_json <> '{}' OR source_symbols_json <> '[]')"
             + " ORDER BY updated_at, run_id LIMIT %s",
             (cutoff_iso, policy.batch_size),
@@ -1342,7 +1343,8 @@ class MySQLMinimalRetentionRepository:
                 """
                 UPDATE `ontology_projection_runs`
                 SET source_symbols_json = '[]', context_payload_json = '{}', result_payload_json = '{}'
-                WHERE run_id = %s AND status <> 'projecting' AND updated_at < """ + _cutoff_sql(),
+                WHERE run_id = %s AND status <> 'projecting' AND updated_at < """ + _cutoff_sql()
+                + " AND NOT EXISTS (SELECT 1 FROM ontology_projection_trace_outbox d WHERE d.run_id = ontology_projection_runs.run_id)",
                 (run_id, cutoff_iso),
             )
             if _integer(getattr(cursor, "rowcount", 0)):
@@ -1384,6 +1386,7 @@ class MySQLMinimalRetentionRepository:
                 "SELECT run_id, OCTET_LENGTH(source_symbols_json) + OCTET_LENGTH(context_payload_json) "
                 "+ OCTET_LENGTH(result_payload_json) AS payload_bytes "
                 "FROM `ontology_projection_runs` WHERE status <> 'projecting' AND world_id = %s "
+                "AND NOT EXISTS (SELECT 1 FROM ontology_projection_trace_outbox d WHERE d.run_id = ontology_projection_runs.run_id) "
                 "AND updated_at < "
                 + _cutoff_sql()
                 + " AND (updated_at < %s OR (updated_at = %s AND run_id < %s)) "
@@ -1403,7 +1406,8 @@ class MySQLMinimalRetentionRepository:
             "ontology_projection_runs",
             "run_id",
             candidates,
-            "status <> 'projecting' AND updated_at < " + _cutoff_sql(),
+            "status <> 'projecting' AND updated_at < " + _cutoff_sql()
+            + " AND NOT EXISTS (SELECT 1 FROM ontology_projection_trace_outbox d WHERE d.run_id = ontology_projection_runs.run_id)",
             (cutoff_iso,),
             budget,
         )

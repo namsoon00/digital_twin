@@ -18,6 +18,16 @@
     }
   },
   "storage": {
+    "modules/notifications/infrastructure/mysql_notification_jobs.py::MySQLNotificationJobStore": {
+      "hash": "64d8c55d20f701ba32aaad34af1c5c79d333d03d547c093f3b39a07178261554",
+      "previousHash": "c4856d56f687bfb1859c9ad4a3c1be3a05cfa00f040d80428ab75e9b1afdbfdf",
+      "reason": "Owner-approved realtime latency work: optionally bound cadence receipt history by the caller's longest applicable cooldown before aggregating proof JSON. Preserve inclusive successful transport clocks, account/symbol isolation, failed-attempt exclusion, and unbounded historical callers. Regressions: test_notification_delivery_reliability.test_receipt_clock_and_scoped_history_survive_other_subject_traffic and test_independent_reasoning_engine scoped/legacy cadence assertions; docs/compiled-rulebox-runtime.md."
+    },
+    "modules/reasoning/infrastructure/mysql_ontology_projection_runs.py::MySQLOntologyProjectionRunStore": {
+      "hash": "c9196ac36b70b167ae8e293d1d721f57a65d5b422f151e555e11caf034afa8b3",
+      "previousHash": "bd5237bd047a9021659d00de51252031bf53f9a3cd12701179f42965ab21eb6c",
+      "reason": "Owner-approved same-machine latency work: add the compiled audit mixin while preserving all native SQL methods. Exact facts, completed proof and a diagnostic outbox row commit atomically; the existing detail worker normalizes traces after live reasoning. Failed detail retains its immutable source. Real isolated MySQL rollback, restart, retention and zero-notification regressions: CompiledAuditTransactionTests in test_compiled_rulebox_transactions.py; docs/compiled-rulebox-runtime.md."
+    },
     "modules/reasoning/infrastructure/mysql_engine_runtime.py::MySQLReasoningEngineRegistryStore": {
       "hash": "984ad9586bd806403b1a7e557461466d316219c66b84ecc8d29f13dbd6829e88",
       "previousHash": "670bef0c97f7142c87f98b034e845cf89e1376850dbf78862d96c2450bc570db",

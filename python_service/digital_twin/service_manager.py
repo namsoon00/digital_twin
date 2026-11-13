@@ -2551,7 +2551,7 @@ def status_worker(spec: Dict[str, object]) -> int:
     )
     display_status = "running" if running else "stopped"
     if (not running and (spec.get("env") or {}).get("ORBIT_BACKGROUND_ADMISSION") == "1"
-            and host_memory_pressure() == "critical"):
+            and host_memory_pressure() in {"warning", "critical"}):
         display_status = "deferred-memory-pressure (durable jobs retained)"
     if running and str(spec.get("role") or "") == "typedb" and not health_ready:
         display_status = "unhealthy"
@@ -4254,7 +4254,7 @@ def start_worker(spec: Dict[str, object], wait_for_ready: bool = True) -> int:
     if existing:
         remove_pid(pid_path)
     if ((spec.get("env") or {}).get("ORBIT_BACKGROUND_ADMISSION") == "1"
-            and host_memory_pressure() == "critical"):
+            and host_memory_pressure() in {"warning", "critical"}):
         message = "deferred-memory-pressure; durable jobs remain queued; supervisor will retry"
         append_log(log_path, message)
         print(str(spec["label"]) + " " + message)

@@ -533,7 +533,10 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # and preserve the authoring database during physical rotation.
         # One full-catalog roundtrip preserves authored condition triggers and
         # inherited actions across TypeDB read reconstruction.
-        self.assertLessEqual(total, 3131 + 33)
+        # Eight same-machine latency contracts cover atomic compiled evidence
+        # rollback/restart/retention, one-pass preparation, deferred diagnostics,
+        # live admission, memory recovery and source-compatible batch bounds.
+        self.assertLessEqual(total, 3131 + 33 + 8)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

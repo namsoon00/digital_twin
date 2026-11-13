@@ -280,6 +280,7 @@ class MySQLNotificationJobStore(PriceMetricsStore, DiagnosticThreadStore, Invest
         cadence_keys: Iterable[str],
         *,
         account_symbols: Iterable[Tuple[str, str]] = None,
+        delivered_since: str = "",
     ) -> Dict[str, str]:
         """Return cooldown clocks only for investment insights actually delivered."""
 
@@ -304,6 +305,11 @@ class MySQLNotificationJobStore(PriceMetricsStore, DiagnosticThreadStore, Invest
             ) + ")"
             scope_params = [value for scope in scopes for value in scope]
         timeout_ms = mysql_operation_timeout_seconds(self.runtime_settings) * 1000
+        # Apply the actual receipt clock before grouping or reading JSON.
+        # Unbounded callers keep their historical-query contract; realtime
+        # cadence supplies the longest currently applicable cooldown window.
+        receipt_filter = " AND a.completed_at >= %s" if delivered_since else ""
+        receipt_params = [str(delivered_since)] if delivered_since else []
         with self.connect() as connection:
             rows = connection.execute(
                 "SELECT /*+ MAX_EXECUTION_TIME(" + str(timeout_ms) + ") */ "
@@ -315,7 +321,7 @@ class MySQLNotificationJobStore(PriceMetricsStore, DiagnosticThreadStore, Invest
                     FROM notification_jobs j
                     JOIN notification_delivery_attempts a ON a.job_id = j.job_id AND a.status = 'delivered'
                     WHERE j.message_type = %s
-                """ + scope_filter
+                """ + receipt_filter + scope_filter
                 # Aggregate identical job payloads only after delivered-receipt
                 # membership is known. The aggregate prevents MySQL from
                 # pushing costly JSON inspection ahead of the receipt join.
@@ -323,7 +329,7 @@ class MySQLNotificationJobStore(PriceMetricsStore, DiagnosticThreadStore, Invest
                 "WHERE JSON_UNQUOTE(JSON_EXTRACT(delivered.payload_json, %s)) IN ("
                 + placeholders
                 + ") GROUP BY cadence_key",
-                [cadence_path, INVESTMENT_INSIGHT, *scope_params, cadence_path, *keys],
+                [cadence_path, INVESTMENT_INSIGHT, *receipt_params, *scope_params, cadence_path, *keys],
             ).fetchall()
         return {
             str(row.get("cadence_key") or ""): str(row.get("delivered_at") or "")

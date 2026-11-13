@@ -335,6 +335,8 @@ def build_v2_reasoning_job_runner(
 
     selected_bundle = dict(selected_deployment.get("releaseBundle") or {})
     compiled_backend = "compiled-rulebox-v1" in (selected_bundle.get("source_contract_versions") or selected_bundle.get("sourceContractVersions") or [])
+    if compiled_backend:
+        configured["_ruleExecutionBackend"] = "compiled-rulebox-v1"
     single_writer = ontology_graph_single_writer_enabled(configured) and not compiled_backend
     graph_writer_guard = (
         LocalGraphWriterGuard(
@@ -380,6 +382,7 @@ def build_v2_reasoning_job_runner(
         comparison_store=stores.reasoning_engine_comparison_store(store_settings),
         registry=registry,
     )
+    from digital_twin.infrastructure.realtime_activity import RealtimeActivity
     return IndependentReasoningJobRunner(
         queue=reasoning_job_store,
         engine=build_v2_reasoning_engine(
@@ -409,4 +412,6 @@ def build_v2_reasoning_job_runner(
             )
         ),
         comparison_reconciler=comparison_service.reconcile,
+        realtime_activity=(RealtimeActivity(data_dir() / "realtime-activity.lock").turn
+                           if role in {"delivery", "active"} else None),
     )

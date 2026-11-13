@@ -93,3 +93,50 @@ These checks establish execution and evidence integrity. They do not establish
 profitable trade timing or predictive accuracy. Measure source collection,
 queue wait, input assembly, rule evaluation, durable audit and delivery separately;
 fast rule execution alone is not proof that total alert latency has been removed.
+
+## Realtime work on the existing machine
+
+Compiled projections prepare their source context once during assembly. They do
+not run the native writer's earlier prewarm, or hash/deep-copy the complete source
+through native runtime/graph caches. Revision-checked input preparation inside
+the owning modules still applies. Freshness checks and the enabled RuleBox
+coverage are unchanged.
+
+The realtime cooldown read supplies the longest applicable notification interval
+as an inclusive delivery-receipt cutoff. SQL excludes older receipts before
+aggregating large proof payloads. Enqueue time, failed attempts and other accounts
+cannot substitute for the successful receipt clock. Historical callers without a
+cutoff retain their full-history contract; final dispatch checks are unchanged.
+
+The compiled runner can combine up to eight compatible source jobs by default
+(`reasoningEngineCompiledBatchSize`, bounded to 1–16). Existing account, source,
+lane, ordering and payload-budget compatibility checks still govern every batch;
+this does not drop old transitions or limit the enabled rules. Native releases
+retain their smaller writer limits.
+
+The exact source graph, complete execution proof, rule evaluations and a detail
+outbox entry commit in one MySQL transaction. There is no intermediate native
+`projecting` commit. A failed transaction cannot make the result delivery-eligible.
+The existing inference-detail worker later normalizes the diagnostic stage/rule
+tables from that immutable receipt, one bounded job per turn, while the live
+reasoning queue is idle. It neither queries TypeDB nor reruns rules or delivery.
+Source audit retention protects pending and failed detail jobs. After eight
+failed attempts a job remains visible as failed; use
+`ontology-inference-detail retry-failed` after correcting the cause. The original
+evidence is available before normalized detail tables finish.
+
+Managed research admission also checks a host-local activity lock held during
+monitor collection and live inference. New research turns wait until a 20-second
+quiet interval, and pause at warning or critical memory pressure with a 30-second
+recovery interval. An already-running turn finishes normally. This is cooperative
+admission on the same PC, not physical isolation or a guarantee against resource
+contention from other applications. News collection and maintenance retain their
+own existing scheduling policies. AI remains controlled by its separate off and
+token-budget settings.
+
+Validation includes atomic-write rollback, restart recovery, retention protection,
+account/source isolation, compatible batching and notification deduplication.
+An in-memory replay of preserved inputs proves result parity and isolates input
+assembly/rule work; it does not include collection, SQL durability, queue wait or
+notification transport. Live source-to-completion and delivery timings must be
+reported separately before claiming an end-to-end latency target.

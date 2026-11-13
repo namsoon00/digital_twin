@@ -9,6 +9,7 @@ import fcntl
 import os
 import time
 from typing import Iterator
+from .realtime_activity import RealtimeActivity
 
 
 @dataclass(frozen=True)
@@ -37,7 +38,8 @@ class MySQLRealtimeWorkloadGuard:
         with ExitStack() as held:
             with self._acquire(role="admission", blocking=True, path=self.turnstile):
                 lease = held.enter_context(self._acquire(role="monitor", blocking=True))
-            yield lease
+            with RealtimeActivity(self.path.parent / "realtime-activity.lock").turn():
+                yield lease
 
     @contextmanager
     def maintenance_turn(self, wait_seconds: float = 0) -> Iterator[MySQLWorkloadLease]:

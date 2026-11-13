@@ -772,6 +772,18 @@ class IndependentReasoningEngineTests(unittest.TestCase):
         cadence.delivery_history_store = LegacyHistory()
         self.assertEqual([], cadence.ready([event]))
 
+        class BoundedHistory:
+            def delivered_cadence_timestamps(self, keys, *, account_symbols=None, delivered_since=""):
+                calls.append(delivered_since)
+                return {key: stamp}
+
+        cadence = V2NotificationCadence({"notificationCooldownMinutes": "240"},
+            SimpleNamespace(sent={}), BoundedHistory())
+        self.assertEqual([], cadence.ready([event]))
+        elapsed = (datetime.now(timezone.utc) - datetime.fromisoformat(calls[-1].replace("Z", "+00:00"))).total_seconds()
+        self.assertGreaterEqual(elapsed, 240 * 60)
+        self.assertLess(elapsed, 240 * 60 + 5)
+
     def assert_quiet_first_holding_review_is_recovered_until_delivery_starts(self):
         class DeliveryHistory:
             active = False

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import inspect
 import json
 import time
@@ -94,12 +94,20 @@ class V2NotificationCadence:
                     (_text(event.account_id), _text(event.symbol).upper())
                     for event in candidates
                 })
+                parameters = inspect.signature(provider).parameters
                 kwargs = (
                     {"account_symbols": scopes}
                     if scopes and all(account and symbol for account, symbol in scopes)
-                    and "account_symbols" in inspect.signature(provider).parameters
+                    and "account_symbols" in parameters
                     else {}
                 )
+                if candidates and "delivered_since" in parameters:
+                    # Older receipts cannot block any of these cooldowns. Keep
+                    # the full longest window, including its boundary, rather
+                    # than reading every historical multi-megabyte proof.
+                    since = datetime.now(timezone.utc) - timedelta(
+                        minutes=max(self.minutes(event) for event in candidates), seconds=1)
+                    kwargs["delivered_since"] = since.isoformat().replace("+00:00", "Z")
                 return dict(provider([event.cadence_key() for event in candidates], **kwargs) or {})
             except Exception:  # noqa: BLE001 - retain the conservative legacy gate on storage failure.
                 pass

@@ -10,6 +10,7 @@ from digital_twin.infrastructure.mysql_operational_connection import MySQLOperat
 from digital_twin.infrastructure.mysql_operational_helpers import _json_loads
 from digital_twin.infrastructure.operational_common import json_dumps
 from digital_twin.infrastructure.settings import utc_now
+from .mysql_compiled_projection_audit import MySQLCompiledProjectionAuditMixin
 
 
 def _bounded_count(value: object) -> int:
@@ -57,7 +58,7 @@ def compact_current_state_transition_detail(
     return payload
 
 
-class MySQLOntologyProjectionRunStore(MySQLOperationalConnection):
+class MySQLOntologyProjectionRunStore(MySQLCompiledProjectionAuditMixin, MySQLOperationalConnection):
     """Durable MySQL audit for the source data behind an active ABox generation."""
 
     def projection_audit_stale_after_seconds(self) -> int:

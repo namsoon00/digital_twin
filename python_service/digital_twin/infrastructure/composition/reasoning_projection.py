@@ -98,6 +98,16 @@ def build_ontology_inference_detail_runner(settings=None) -> OntologyInferenceDe
     store_settings = dict(configured_settings)
     store_settings["_skipOperationalHistoryRetention"] = "1"
     store_settings["_skipOperationalSchemaBootstrap"] = "1"
+    registry = stores.reasoning_engine_registry_store(store_settings)
+    active = registry.get(registry.control().active_deployment_id) or {}
+    bundle = active.get("releaseBundle") or {}
+    versions = bundle.get("source_contract_versions") or bundle.get("sourceContractVersions") or []
+    if "compiled-rulebox-v1" in versions:
+        return OntologyInferenceDetailRunner(
+            outbox=None, ontology_repository=None, settings=configured_settings,
+            compiled_trace_store=stores.ontology_projection_run_store(store_settings),
+            reasoning_queue_probe=build_ontology_reasoning_queue_probe(configured_settings),
+        )
     storage_guard = typedb_capacity_guard(
         configured_settings,
         "inference-detail",

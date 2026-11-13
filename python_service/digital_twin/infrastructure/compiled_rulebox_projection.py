@@ -105,6 +105,21 @@ def inference_snapshot(evaluation, *, snapshot_id, source_fingerprint, account_i
 class CompiledPortfolioProjectionRecorder(PortfolioOntologyProjectionRecorder):
     """Reuse source/model assembly; replace physical graph writes and rule reads."""
 
+    def prepare_runtime_context(self, snapshot, target_symbols=None, progress_callback=None):
+        # Native preparation released a scarce writer before the source reads.
+        # This backend has no writer. Preparing the unscoped source and then
+        # the compact graph input produced different cache keys and two reads.
+        return {"status": "inline-once", "sourceAsOf": str(snapshot.generated_at or "")}
+
+    def runtime_context_cache_enabled(self):
+        # Each live request owns one context. Full-payload hash/copy caches cost
+        # more than their reads for distinct observation clocks; dependency
+        # owners still retain their small revision-checked prepared inputs.
+        return False
+
+    def graph_assembly_cache_enabled(self):
+        return False
+
     def active_graph_store_key(self, result=None):
         return "compiled-rulebox"
 
@@ -169,7 +184,9 @@ class CompiledPortfolioProjectionRecorder(PortfolioOntologyProjectionRecorder):
         if self.projection_run_store is None:
             raise RuntimeError("Compiled reasoning requires durable source and execution audit")
         audit_started = time.perf_counter()
-        self.projection_run_store.begin(run)
+        atomic_commit = getattr(self.projection_run_store, "commit_compiled_projection", None)
+        if not callable(atomic_commit):
+            self.projection_run_store.begin(run)
         inference["compiledExecutionProof"]["durable"] = True
         result["projectionAudit"] = {"status": "recorded", "runId": run.run_id, "sourceSnapshotRecorded": True}
         result["runtimeStages"]["totalProjectionMs"] = round((time.perf_counter() - started) * 1000)
@@ -177,7 +194,11 @@ class CompiledPortfolioProjectionRecorder(PortfolioOntologyProjectionRecorder):
         complete = replace(complete, result_payload={**complete.result_payload,
             "compiledInferenceBox": inference,
             "compiledRuleEvaluations": evaluation["evaluations"]})
-        self.projection_run_store.complete_with_execution_trace(complete, result)
+        if callable(atomic_commit):
+            atomic_commit(complete, result)
+            result["projectionAudit"]["traceMaterialization"] = "deferred"
+        else:
+            self.projection_run_store.complete_with_execution_trace(complete, result)
         result["runtimeStages"]["auditPersistenceMs"] = round((time.perf_counter() - audit_started) * 1000)
         result["runtimeStages"]["totalProjectionMs"] = round((time.perf_counter() - started) * 1000)
         if not compiled_rule_execution_completed(inference):

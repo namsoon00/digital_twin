@@ -58,7 +58,7 @@ def host_memory_pressure():
 
 class BackgroundCapacity:
     def __init__(self, directory, slots=1, pressure_reader=None,
-                 clock=time.monotonic, emit=print):
+                 clock=time.monotonic, emit=print, realtime_reader=None):
         self.directory = Path(directory)
         self.slots = max(1, min(4, int(slots)))
         self.pressure_reader, self.clock, self.emit = pressure_reader or host_memory_pressure, clock, emit
@@ -67,6 +67,7 @@ class BackgroundCapacity:
         self.resume_after = 0.0
         self.last_report = None
         self.last_status = ""
+        self.realtime_reader = realtime_reader
 
     def report(self, status, now):
         if status != self.last_status or self.last_report is None or now - self.last_report >= 60:
@@ -79,12 +80,16 @@ class BackgroundCapacity:
     @contextmanager
     def acquire(self):
         now = self.clock()
+        if self.realtime_reader is not None and self.realtime_reader():
+            self.report("deferred-realtime-activity", now)
+            yield False
+            return
         if self.last_pressure_check is None or now - self.last_pressure_check >= 5:
             self.pressure = self.pressure_reader()
             self.last_pressure_check = now
-            if self.pressure == "critical":
+            if self.pressure in {"warning", "critical"}:
                 self.resume_after = now + 30
-        if self.pressure == "critical" or now < self.resume_after:
+        if self.pressure in {"warning", "critical"} or now < self.resume_after:
             self.report("deferred-memory-pressure", now)
             yield False
             return
@@ -123,13 +128,15 @@ def managed_background_call(callback, deferred_result=None):
         return callback()
     if _managed_capacity is None:
         from .settings import data_dir
+        from .realtime_activity import RealtimeActivity
         # Bounded graph I/O must not occupy the model/research execution slot.
         worker = os.environ.get("ORBIT_BACKGROUND_WORKER")
         # Central reasoning must not wait behind an entire historical replay.
         # Each pool admits one turn; memory pressure and the shared model-process
         # limiter still apply. Other research workers retain their shared slot.
         pool = {"ai-evidence": "evidence-capacity", "ai-control": "central-ai-capacity"}.get(worker, "background-capacity")
-        _managed_capacity = BackgroundCapacity(data_dir() / pool)
+        _managed_capacity = BackgroundCapacity(data_dir() / pool,
+            realtime_reader=RealtimeActivity(data_dir() / "realtime-activity.lock").active)
     with _managed_capacity.acquire() as admitted:
         return callback() if admitted else deferred_result
 

@@ -8,6 +8,48 @@ from digital_twin.infrastructure import background_capacity as api
 
 
 class BackgroundCapacityTests(unittest.TestCase):
+    def test_live_activity_and_quiet_period_defer_only_new_background_turns(self):
+        from digital_twin.infrastructure.realtime_activity import RealtimeActivity
+        with tempfile.TemporaryDirectory() as directory:
+            clock = Mock(return_value=1000)
+            live = RealtimeActivity(Path(directory) / 'live.lock', quiet_seconds=20, clock=clock)
+            guard = api.BackgroundCapacity(Path(directory) / 'slots', pressure_reader=lambda: 'normal',
+                realtime_reader=live.active, emit=Mock())
+            with live.turn():
+                with guard.acquire() as admitted:
+                    self.assertFalse(admitted)
+            clock.return_value = 1019
+            with guard.acquire() as admitted:
+                self.assertFalse(admitted)
+            clock.return_value = 1021
+            with guard.acquire() as admitted:
+                self.assertTrue(admitted)
+
+    def test_warning_pressure_defers_before_claim_with_recovery_hysteresis(self):
+        with tempfile.TemporaryDirectory() as directory:
+            clock, pressure = Mock(return_value=0), Mock(return_value='warning')
+            guard = api.BackgroundCapacity(directory, clock=clock, pressure_reader=pressure, emit=Mock())
+            with guard.acquire() as admitted:
+                self.assertFalse(admitted)
+            pressure.return_value = 'normal'
+            clock.return_value = 10
+            with guard.acquire() as admitted:
+                self.assertFalse(admitted)
+            clock.return_value = 31
+            with guard.acquire() as admitted:
+                self.assertTrue(admitted)
+
+    def test_compiled_batch_is_bounded_independently_of_native_writer_limits(self):
+        from digital_twin.modules.reasoning.application.independent_reasoning_engine import IndependentReasoningJobRunner
+        runner = IndependentReasoningJobRunner(Mock(), Mock(), Mock(), settings={
+            '_ruleExecutionBackend': 'compiled-rulebox-v1', 'typedbNativeRuleTargetSymbolLimit': 1})
+        self.assertEqual(8, runner.lane_batch_limit('REALTIME'))
+        self.assertEqual(8, runner.native_target_symbol_limit())
+        runner.settings['reasoningEngineCompiledBatchSize'] = 500
+        self.assertEqual(16, runner.native_target_symbol_limit())
+        runner.settings = {}
+        self.assertEqual(2, runner.lane_batch_limit('REALTIME'))
+
     def test_long_research_does_not_occupy_central_slot_and_pressure_still_blocks_it(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

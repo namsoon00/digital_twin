@@ -864,11 +864,14 @@ def ontology_inference_detail_command(args) -> int:
         print(json.dumps(runner.status(), ensure_ascii=False))
         return 0
     if args.ontology_inference_detail_action == "retry-failed":
-        requeued = runner.outbox.requeue_failed(limit=limit)
+        if runner.compiled_trace_store is not None:
+            requeued = runner.compiled_trace_store.retry_compiled_traces(limit=limit)
+        else:
+            requeued = runner.outbox.requeue_failed(limit=limit)
         print(json.dumps({
             "status": "ok",
             "requeuedFailedCount": requeued,
-            "outbox": runner.outbox.summary(),
+            "outbox": runner.outbox_summary(),
         }, ensure_ascii=False))
         return 0
     if args.ontology_inference_detail_action == "once":

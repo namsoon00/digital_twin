@@ -1201,6 +1201,8 @@ def compact_monitor_runtime_metadata_for_ontology(value: object) -> Dict[str, ob
     result: Dict[str, object] = {}
     for key in [
         "accountContext",
+        "accountBasisGeneratedAt",
+        "marketSourceRefresh",
         "connectionFailureStreak",
         "lastConnectionFailure",
         "marketObservationBaselines",

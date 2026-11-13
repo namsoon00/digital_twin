@@ -124,6 +124,21 @@
       "hash": "4a3643ed52af6fc5d82a51127e9680143a14fbe4fa3cf0e90bd3cc9781163c2b",
       "previousHash": "82259a65dcd86d2a5e24f2db6b04888b83f2ca8666443a4b12085ce0860618a1",
       "reason": "Owner-approved compiled RuleBox execution, immutable release admission and backend-explicit proof. Native proof flags remain false. Verified by test_compiled_rulebox, test_compiled_rulebox_projection, test_compiled_rulebox_release and real MySQL test_compiled_rulebox_transactions."
+    },
+    "modules/reasoning/domain/ontology_projection_input.py::compact_monitor_runtime_metadata_for_ontology": {
+      "hash": "5f0a117f644a17a20daf8e2cee16a59821d557521a6e005fa9f980bc92fcd139",
+      "previousHash": "1b6bfe2c8b2ddc81bdef51e93fa1ae0bf46ea34879c507543b4877e8f9b048dd",
+      "reason": "Owner-approved same-machine source latency work: reuse exact per-company JSON inputs in bounded 8 MiB construction / 16 MiB merge caches (128 keys each), preserving source clocks, types and mutation isolation. Alias patterns are bounded separately. Same-input rollback comparison and all 128 frozen RuleBox evaluations preserve exact source/results. Tests: test_reasoning_source_preparation, test_market_source_refresh, test_financial_reporting_integrity; docs/compiled-rulebox-runtime.md."
+    },
+    "modules/news_intelligence/domain/company_knowledge.py::build_company_knowledge": {
+      "hash": "b6bddbffea6c9f06b1e53e54ed7569453e3f256c43b1b398f4fec1f687f3aa32",
+      "previousHash": "b6d9770b79e4aefecfaf68d73190d113753ebbf82e769c1f19271a28dd88fdaa",
+      "reason": "Owner-approved same-machine source latency work: reuse exact per-company JSON inputs in bounded 8 MiB construction / 16 MiB merge caches (128 keys each), preserving source clocks, types and mutation isolation. Alias patterns are bounded separately. Same-input rollback comparison and all 128 frozen RuleBox evaluations preserve exact source/results. Tests: test_reasoning_source_preparation, test_market_source_refresh, test_financial_reporting_integrity; docs/compiled-rulebox-runtime.md."
+    },
+    "modules/news_intelligence/domain/company_knowledge.py::merge_company_knowledge_rows": {
+      "hash": "2e4fa98faa3eed6ff625151d20aee48a2fd050a9a7539f3f5cb5f2dfe1d57a59",
+      "previousHash": "fa6728ec4c75c0bfde5a54473e9e31cca43bc07daac67d3449b60a6735c05b42",
+      "reason": "Owner-approved same-machine source latency work: reuse exact per-company JSON inputs in bounded 8 MiB construction / 16 MiB merge caches (128 keys each), preserving source clocks, types and mutation isolation. Alias patterns are bounded separately. Same-input rollback comparison and all 128 frozen RuleBox evaluations preserve exact source/results. Tests: test_reasoning_source_preparation, test_market_source_refresh, test_financial_reporting_integrity; docs/compiled-rulebox-runtime.md."
     }
   },
   "ports": {

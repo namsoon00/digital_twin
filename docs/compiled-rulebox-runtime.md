@@ -239,3 +239,23 @@ from 3,302,479 to 601,518 bytes; this is a transfer/storage representation measu
 not an end-to-end latency claim. `market-source-refresh` logs report independent
 source commit duration and the retained account basis. Live quote-to-inference
 and notification transport times must be checked separately.
+
+Post-cutover profiling found repeated normalization of unchanged company reports
+and repeated news alias compilation inside source commits. Company construction
+and merging now reuse exact JSON inputs per company, with respectively 8 MiB
+and 16 MiB of serialized results, at most 128 input keys each per process.
+Identical result bytes share one allocation. This avoids caching duplicate
+account-wide bundles that evict each other on a small machine. It preserves
+input ordering and source clocks; non-JSON values bypass reuse. Returned objects
+are independently decoded, so a consumer cannot mutate another input. No
+freshness, materiality, RuleBox or delivery decisions are cached. Alias-pattern
+reuse is bounded to 1,024 immutable compiled patterns. A process restart simply
+recomputes these derived values. Frozen source metadata also carries the account
+reconciliation clock and the independent market-source boundary explicitly.
+
+A paired replay of the same live input in an isolated, rolled-back database
+transaction took 9.659 seconds without reuse, 7.158 seconds cold and 5.356
+seconds warm. All three source fingerprints matched. A separate frozen replay
+also preserved all 128 rule evaluations, four matches and the material
+fingerprint. These are preparation/write measurements, not customer delivery
+latency; provider polling and the subsequent inference/transport remain separate.

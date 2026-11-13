@@ -1,4 +1,5 @@
 import re
+from functools import lru_cache
 from dataclasses import dataclass, field
 from typing import Iterable, List
 
@@ -48,6 +49,11 @@ LEGAL_ENTITY_MARKERS = (
 
 def alias_pattern(alias: object) -> re.Pattern:
     term = str(alias or "").strip()
+    return _compiled_alias_pattern(term)
+
+
+@lru_cache(maxsize=1024)
+def _compiled_alias_pattern(term: str) -> re.Pattern:
     if re.search(r"[가-힣]", term):
         # Korean company names are commonly followed by a grammatical particle.
         # Permit those particles while rejecting another corporate-name token,

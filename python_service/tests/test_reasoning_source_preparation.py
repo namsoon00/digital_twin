@@ -54,6 +54,78 @@ def context(identity, account='acct', symbol='AAPL'):
 
 
 class ReasoningSourcePreparationTests(TestCase):
+    def test_json_memo_is_bounded_exact_mutation_safe_and_preserves_non_json_types(self):
+        from decimal import Decimal
+        from digital_twin.shared_kernel.json_memo import json_memoized
+        calls = []
+        @json_memoized(max_bytes=80, max_entries=2)
+        def normalize(value):
+            calls.append(deepcopy(value))
+            return deepcopy(value)
+        value = {"scope": "A", "at": "original", "value": [0, False, None]}
+        result = normalize(value); result["value"][0] = 100
+        self.assertEqual(value, normalize(value))
+        self.assertEqual(1, len(calls))
+        for mutation in ({"scope": "B"}, {"at": "new"}, {"value": [0.0, False, None]}):
+            changed = {**value, **mutation}
+            self.assertEqual(changed, normalize(changed))
+        before = len(calls)
+        self.assertEqual(value, normalize(value))  # Old entry was evicted.
+        self.assertEqual(before + 1, len(calls))
+        for unsupported in ({"value": Decimal("1.2")}, {"value": (1, 2)}):
+            before = len(calls)
+            self.assertEqual(unsupported, normalize(unsupported))
+            self.assertEqual(unsupported, normalize(unsupported))
+            self.assertEqual(before + 2, len(calls))
+        shared_calls = []
+        @json_memoized(max_bytes=80, max_entries=4)
+        def same_result(key):
+            shared_calls.append(key)
+            return {"value": "x" * 60}
+        for key in range(4):
+            same_result(key)
+        for key in range(4):
+            same_result(key)
+        self.assertEqual(list(range(4)), shared_calls)
+        same_result(4)  # Removing one key must retain its shared payload.
+        same_result(1)
+        self.assertEqual([0, 1, 2, 3, 4], shared_calls)
+        same_result(0)
+        self.assertEqual([0, 1, 2, 3, 4, 0], shared_calls)
+
+    def test_symbol_normalization_reuse_preserves_scope_source_changes_and_uncached_result(self):
+        from digital_twin.modules.news_intelligence.domain import company_knowledge as company
+        build, merge = company.build_company_knowledge, company.merge_company_knowledge_rows
+        for prepare in (build, merge):
+            prepare.cache_clear(); self.addCleanup(prepare.cache_clear)
+        source = {"name": "Apple", "peRatio": 30, "provider": "fixture", "fetchedAt": "2026-11-12T00:00:00Z"}
+        with patch.object(company, "enrich_financial_periods", wraps=company.enrich_financial_periods) as reader:
+            result = build("AAPL", overview=source)
+            expected = deepcopy(result); result["valuation"].clear()
+            count = reader.call_count
+            self.assertEqual(expected, build("AAPL", overview=source))
+            self.assertEqual(count, reader.call_count)
+            self.assertEqual(expected, build.__wrapped__("AAPL", overview=source))
+            self.assertEqual("MSFT", build("MSFT", overview=source)["symbol"])
+            for field, value in (("peRatio", 31), ("fetchedAt", "2026-11-13T00:00:00Z")):
+                source[field] = value
+                count = reader.call_count
+                changed = build("AAPL", overview=source)
+                self.assertGreater(reader.call_count, count)
+                self.assertNotEqual(expected, changed)
+                self.assertEqual(build.__wrapped__("AAPL", overview=source), changed)
+                expected = deepcopy(changed)
+        with patch.object(company, "_normalize_company_knowledge_row", wraps=company._normalize_company_knowledge_row) as reader:
+            merged = merge(expected, expected)
+            expected_merge = deepcopy(merged); merged["valuation"].clear()
+            count = reader.call_count
+            self.assertEqual(expected_merge, merge(expected, expected))
+            self.assertEqual(count, reader.call_count)
+            self.assertEqual(expected_merge, merge.__wrapped__(expected, expected))
+            changed = deepcopy(expected); changed["valuation"]["peRatio"] = 99
+            self.assertEqual(merge.__wrapped__(expected, changed), merge(expected, changed))
+            self.assertNotEqual(expected_merge, merge(expected, changed))
+
     def test_preparation_preserves_all_sql_bytes_and_canonical_delta_inputs(self):
         current = monitor_state()
         current['externalSignals'] = {'corporateActions': {'AAPL': {

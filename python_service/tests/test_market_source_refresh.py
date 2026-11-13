@@ -140,6 +140,8 @@ class MarketSourceRefreshStorageTests(StabilizationDatabaseCase):
         restarted = monitoring.MySQLMonitorStore(self.config)
         actual = restarted.reasoning_source_snapshot_state(source["snapshotId"])
         self.assertEqual(source["payload"], actual)
+        self.assertEqual(self.base.generated_at, actual["metadata"]["accountBasisGeneratedAt"])
+        self.assertEqual(state["metadata"]["marketSourceRefresh"], actual["metadata"]["marketSourceRefresh"])
         self.assertEqual({}, restarted.reasoning_snapshot_state_at("other-account", state["generatedAt"]))
         self.assertEqual(source["fingerprint"], self.sql("SELECT fingerprint FROM verified_reasoning_source_snapshots WHERE snapshot_id=%s", (source["snapshotId"],))["fingerprint"])
         events = self.sql("SELECT event_id, payload_json FROM domain_events WHERE name='ontology.reasoning_requested' AND occurred_at >= %s", (state["generatedAt"],), all_rows=True)

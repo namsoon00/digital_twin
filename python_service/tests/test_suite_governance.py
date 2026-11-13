@@ -542,7 +542,9 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # Two exact field-selection/cache-restart contracts retain source authority.
         # Nine quote-source/data-reference regressions cover concurrent account
         # changes, exact evidence, restart, rollback, clocks and delivery scope.
-        self.assertLessEqual(total, 3131 + 33 + 8 + 5 + 1 + 2 + 9)
+        # Two bounded normalization-cache contracts preserve clocks, subject
+        # scope, types, mutation isolation and uncached calculation parity.
+        self.assertLessEqual(total, 3131 + 33 + 8 + 5 + 1 + 2 + 9 + 2)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

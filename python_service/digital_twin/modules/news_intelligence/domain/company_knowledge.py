@@ -14,6 +14,7 @@ import json
 import re
 from typing import Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
+from digital_twin.shared_kernel.json_memo import json_memoized
 from digital_twin.modules.portfolio.contracts import normalize_dividend_yield
 from digital_twin.modules.news_intelligence.domain.financial_reporting import (
     FINANCIAL_PERIOD_SELECTION_VERSION, FINANCIAL_REPORTING_VERSION, GROWTH_FIELDS, current_financial_state,
@@ -1195,6 +1196,7 @@ def _current_valuation_fragment(external_signals: Mapping[str, object], symbol: 
     }
 
 
+@json_memoized(max_bytes=8 * 1024 * 1024, max_entries=128)
 def build_company_knowledge(
     symbol: object,
     *,
@@ -1501,6 +1503,7 @@ def _material_section_revisions(payload: Mapping[str, object]) -> Dict[str, str]
     }
 
 
+@json_memoized(max_bytes=16 * 1024 * 1024, max_entries=128)
 def merge_company_knowledge_rows(*rows: Mapping[str, object]) -> Dict[str, object]:
     """Merge account-independent company facts without losing fresh ratios."""
 

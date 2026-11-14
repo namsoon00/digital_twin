@@ -242,11 +242,11 @@ class MySQLMinimalRetentionTests(unittest.TestCase):
         def budget(**overrides):
             return {'started': time.monotonic(), 'maxSeconds': 30,
                     'remainingBytes': 1000000, 'deletedBytes': 0, **overrides}
-        def insert(key, account='account-a', created=old):
+        def insert(key, account='account-a', created=old, body='x' * 2048):
             execute('INSERT INTO verified_reasoning_source_snapshots '
                 '(snapshot_id,account_id,generated_at,fingerprint,symbols_json,payload_json,created_at,updated_at) '
                 'VALUES (%s,%s,%s,%s,%s,%s,%s,%s)',
-                (key, account, key, 'a' * 64, '[]', json.dumps({'source': key, 'body': 'x' * 2048}), created, created))
+                (key, account, key, 'a' * 64, '[]', json.dumps({'source': key, 'body': body}, ensure_ascii=False), created, created))
         def remaining():
             return {r['snapshot_id'] for r in execute('SELECT snapshot_id FROM verified_reasoning_source_snapshots').fetchall()}
         def position():
@@ -256,8 +256,10 @@ class MySQLMinimalRetentionTests(unittest.TestCase):
             for table in tables:
                 execute('DELETE FROM ' + table)
         def trace(sql, params=()):
-            if sql.startswith('SELECT') and 'verified_reasoning_source_snapshots' in sql and ('OCTET_LENGTH' in sql or 'SELECT snapshot_id, created_at' in sql or '*/ snapshot_id, created_at' in sql):
+            if sql.startswith('SELECT') and 'verified_reasoning_source_snapshots' in sql:
                 reads.append((sql, params))
+                if 'OCTET_LENGTH(payload_json)' in sql:
+                    raise OperationalError(3024, 'cold payload sizing exceeded candidate deadline')
             return execute(sql, params)
         def turn(turn_budget=None):
             with patch.object(connection, 'execute', side_effect=trace):
@@ -278,12 +280,15 @@ class MySQLMinimalRetentionTests(unittest.TestCase):
                         (key, key, ('pending', 'direct-pending')[index % 2]))
             originals = {}
             for key, account in (('z-expired-a', 'account-a'), ('z-expired-b', 'account-b')):
-                insert(key, account)
+                insert(key, account, body='원문🙂' * 1024)
                 originals[key] = execute('SELECT * FROM verified_reasoning_source_snapshots WHERE snapshot_id=%s', (key,)).fetchone()
             insert('recent', created=cutoff)
             self.assertEqual(0, turn()['deleted'])
             self.assertEqual('protected-07', position()['after_id'])
-            self.assertEqual(2, turn()['deleted'])
+            retained = turn()
+            self.assertEqual(2, retained['deleted'])
+            self.assertEqual(sum(len(row['payload_json'].encode('utf-8')) for row in originals.values()),
+                             retained['estimatedBytes'])
             self.assertEqual(protected | {'recent'}, remaining())
             self.assertEqual(0, turn()['deleted'])
             self.assertEqual('', position()['after_id'])
@@ -291,9 +296,15 @@ class MySQLMinimalRetentionTests(unittest.TestCase):
                 self.assertEqual(original, read_archived_row(connection, 'verified_reasoning_source_snapshots',
                                                             {'snapshot_id': key}, archive=archive))
             self.assertEqual(2, execute('SELECT COUNT(*) AS n FROM storage_archive_records WHERE evicted=1').fetchone()['n'])
+            archive_reads = [sql for sql, _ in reads if 'AS archive_row_hash' in sql]
+            self.assertEqual(2, len(archive_reads))
             for sql, params in reads:
-                if 'OCTET_LENGTH' in sql:
+                self.assertNotIn('OCTET_LENGTH(payload_json)', sql)
+                if 'AS archive_row_hash' in sql:
+                    self.assertIn('WHERE `snapshot_id` = %s', sql)
+                elif 'WHERE snapshot_id = %s' in sql:
                     self.assertIn('WHERE snapshot_id = %s', sql)
+                    self.assertNotIn('payload_json', sql)
                     self.assertEqual(2, len(params))
                 else:
                     self.assertNotIn('payload_json', sql)
@@ -324,15 +335,18 @@ class MySQLMinimalRetentionTests(unittest.TestCase):
             self.assertEqual({'claim-job', 'claim-mailbox', 'renewed'}, remaining())
             self.assertEqual(0, execute('SELECT COUNT(*) AS n FROM storage_archive_records WHERE evicted=1').fetchone()['n'])
 
-        for failure in ('byte-budget', 'time-budget', 'read-deadline', 'partial-delete'):
+        for failure in ('byte-budget', 'time-budget', 'read-deadline', 'archive-read-deadline', 'partial-delete'):
             with self.subTest(case=failure):
                 reset()
                 insert('expired-a'); insert('expired-b')
                 turn_budget = budget(remainingBytes=1, deletedBytes=20) if failure == 'byte-budget' else budget()
                 def fail(sql, params=()):
-                    if sql.startswith('SELECT') and 'OCTET_LENGTH(payload_json)' in sql:
+                    if sql.startswith('SELECT') and 'WHERE snapshot_id = %s' in sql:
                         if failure == 'read-deadline':
                             raise OperationalError(3024, 'server deadline')
+                    if sql.startswith('SELECT') and 'AS archive_row_hash' in sql:
+                        if failure == 'archive-read-deadline':
+                            raise OperationalError(3024, 'archive read deadline')
                         if failure == 'time-budget':
                             turn_budget['started'] -= 100
                     if failure == 'partial-delete' and sql.startswith('DELETE FROM `verified_reasoning_source_snapshots`') and params[0] == 'expired-b':
@@ -340,7 +354,7 @@ class MySQLMinimalRetentionTests(unittest.TestCase):
                     return execute(sql, params)
                 with patch.object(connection, 'execute', side_effect=fail):
                     repo = MySQLMinimalRetentionRepository(connection, candidate_query_timeout_ms=1500)
-                    if failure in ('read-deadline', 'partial-delete'):
+                    if failure in ('read-deadline', 'archive-read-deadline', 'partial-delete'):
                         with self.assertRaises(OperationalError):
                             repo._delete_reasoning_source_snapshots(policy, turn_budget, cutoff)
                     else:
@@ -351,8 +365,22 @@ class MySQLMinimalRetentionTests(unittest.TestCase):
                 else:
                     self.assertIsNone(position())
                     self.assertEqual({'expired-a', 'expired-b'}, remaining())
+                    self.assertEqual(0, execute('SELECT COUNT(*) AS n FROM storage_archive_records').fetchone()['n'])
                 self.assertEqual(len(remaining()), turn()['deleted'])
                 self.assertEqual(set(), remaining())
+
+        with self.subTest(case='one oversized packet makes progress without overrunning a second packet'):
+            reset()
+            insert('oversized-a', body='원문🙂' * 1024)
+            insert('oversized-b', body='원문🙂' * 1024)
+            turn_budget = budget(remainingBytes=1)
+            result = turn(turn_budget)
+            self.assertEqual(1, result['deleted'])
+            self.assertGreater(result['estimatedBytes'], 1)
+            self.assertEqual(result['estimatedBytes'], turn_budget['deletedBytes'])
+            self.assertIsNone(position())
+            self.assertEqual({'oversized-b'}, remaining())
+            self.assertEqual(1, turn()['deleted'])
 
     def _assert_research_audit_expiry_is_rechecked_at_preview_selection_and_delete(self):
         class ResearchConnection(ApplyConnection):

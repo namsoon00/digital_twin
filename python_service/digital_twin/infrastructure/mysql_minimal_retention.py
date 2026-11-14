@@ -999,6 +999,8 @@ class MySQLMinimalRetentionRepository:
         return self._result("reasoning_engine_job_sources", deleted, bytes_deleted)
 
     def _delete_reasoning_source_snapshots(self, policy, budget, cutoff_iso) -> Dict[str, object]:
+        if "verified_reasoning_source_snapshots" in PROTECTED_HISTORY_TABLES:
+            return self._result("verified_reasoning_source_snapshots", 0, 0)
         scan_policy = "reasoningSourceSnapshots:terminal"
         cursors = self._candidate_rows(
             "SELECT after_time, after_id FROM mysql_retention_scan_cursors "
@@ -1028,21 +1030,39 @@ class MySQLMinimalRetentionRepository:
             "AND mailbox.state IN ('pending', 'direct-pending'))")
         deleted = bytes_deleted = 0
         for item in window:
-            # A single source packet can be many megabytes. Do not fetch eight
-            # cold/compressed payloads under one SELECT deadline.
+            # Even OCTET_LENGTH has to read a cold off-page LONGTEXT value.
+            # Keep candidate reads metadata-only; measure the preserved row
+            # during archival instead of loading its body twice beforehand.
             key = str(_row_value(item, "snapshot_id") or "")
             rows = self._candidate_rows(
-                "SELECT snapshot_id, OCTET_LENGTH(payload_json) AS payload_bytes "
+                "SELECT snapshot_id "
                 "FROM `verified_reasoning_source_snapshots` WHERE snapshot_id = %s AND " + guard,
                 (key, cutoff_iso), budget,
             )
-            candidates = self._bounded_candidate_rows(rows, "snapshot_id", policy, budget)
-            count, size = self._delete_candidates(
-                "verified_reasoning_source_snapshots", "snapshot_id", candidates, guard, (cutoff_iso,), budget,
-            )
-            deleted += count
-            bytes_deleted += size
-            if len(candidates) != len(rows) or not self._has_budget(budget):
+            payload_bytes = 0
+            deferred = False
+
+            def admit_source(row):
+                nonlocal payload_bytes, deferred
+                payload_bytes = len(row["payload_json"].encode("utf-8"))
+                candidates = self._bounded_candidate_rows(
+                    [{"snapshot_id": key, "payload_bytes": payload_bytes}], "snapshot_id", policy, budget,
+                )
+                deferred = not candidates or not self._has_budget(budget)
+                return not deferred
+
+            if rows and self._has_budget(budget):
+                count = archive_delete_row(
+                    self.connection, "verified_reasoning_source_snapshots", {"snapshot_id": key},
+                    guard, (cutoff_iso,), may_archive=admit_source,
+                    may_evict=lambda: self._has_budget(budget),
+                )
+                if count:
+                    deleted += count
+                    bytes_deleted += payload_bytes
+                    budget["remainingBytes"] = max(0, _integer(budget.get("remainingBytes")) - payload_bytes)
+                    budget["deletedBytes"] = _integer(budget.get("deletedBytes")) + payload_bytes
+            if deferred or not self._has_budget(budget):
                 break
             # Protected prefixes must not starve later rows. Rewind at the end
             # of each sweep to revisit sources whose consumers finish later.

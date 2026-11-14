@@ -209,8 +209,16 @@ policies, the next policy and remaining policies. Verify actual deleted rows
 and queue age alongside these counters; admission alone is not cleanup proof.
 Snapshot history preserves the newest rows and source boundaries referenced by
 unresolved reasoning jobs or pending mailbox events. These references are
-rechecked at deletion time. Large snapshot candidate reads are capped at eight
-rows so measuring payload lengths does not scan hundreds of megabytes per turn.
+rechecked at deletion time. Large snapshot candidate windows are capped at eight
+rows. Source-snapshot candidate reads use metadata only: even
+`OCTET_LENGTH(payload_json)` can load a cold, compressed, off-page body and exceed
+the candidate deadline. Measure its UTF-8 bytes from the row already fetched
+for exact archival, before writing archive files or receipts. Byte/time budget
+rejection leaves the original and scan cursor for the next turn; the existing
+single-oversized-packet allowance still permits progress. Archive readback,
+concurrent-reference guards and compare-before-delete hashes remain mandatory.
+Read failures still surface, and neither SQL deadlines nor retention thresholds
+are relaxed.
 
 Retention candidate indexes must match the global cleanup scope. Signal snapshot
 history uses `(created_at, snapshot_id)` in addition to its account/model read

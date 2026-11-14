@@ -1,6 +1,7 @@
 """Archive receipt and compare-before-delete boundary for local MySQL history."""
 from datetime import datetime, timezone
 from contextlib import contextmanager
+from types import MappingProxyType
 import hashlib
 import json
 import os
@@ -58,7 +59,8 @@ def eviction_transaction(connection):
         raise
 
 
-def archive_delete_row(connection, table, key_values, guard_sql, guard_params=(), *, archive=None, may_evict=None):
+def archive_delete_row(connection, table, key_values, guard_sql, guard_params=(), *, archive=None,
+                       may_archive=None, may_evict=None):
     """Use the caller's transaction; a concurrent correction prevents deletion.
 
     File persistence/readback precedes both the receipt and the DELETE. The
@@ -84,6 +86,10 @@ def archive_delete_row(connection, table, key_values, guard_sql, guard_params=()
         return 0
     row = dict(row)
     sql_hash = row.pop("archive_row_hash")
+    # Admission can measure the row already needed for exact preservation.
+    # Declining must precede file persistence as well as receipt/row mutation.
+    if may_archive is not None and not may_archive(MappingProxyType(row)):
+        return 0
     receipt = archive.put(row)
     if not receipt.get("restoreVerified"):
         raise ValueError("Unverified history archive")

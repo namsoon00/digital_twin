@@ -104,6 +104,20 @@ class HistoryArchiveTests(unittest.TestCase):
             archive = LocalHistoryArchive(root)
             insert()
             original = connection.execute("SELECT * FROM verified_reasoning_source_snapshots").fetchone()
+            # Budget rejection happens before any archive/receipt write. The
+            # admission hook cannot change the row bound by the SQL hash.
+            with patch.object(archive, "put", wraps=archive.put) as put_spy:
+                self.assertEqual(0, archive_delete_row(connection, "verified_reasoning_source_snapshots", key,
+                    "1=1", archive=archive, may_archive=lambda row: False))
+                def mutating_admission(value):
+                    value["payload_json"] = "{}"
+                    return True
+                with self.assertRaises(TypeError):
+                    archive_delete_row(connection, "verified_reasoning_source_snapshots", key,
+                        "1=1", archive=archive, may_archive=mutating_admission)
+                put_spy.assert_not_called()
+            self.assertEqual(original, connection.execute("SELECT * FROM verified_reasoning_source_snapshots").fetchone())
+            self.assertEqual(0, connection.execute("SELECT COUNT(*) AS n FROM storage_archive_records").fetchone()["n"])
             # A correction after readback must survive compare-before-delete.
             put = archive.put
             def racing_put(value):

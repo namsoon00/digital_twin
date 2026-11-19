@@ -4,6 +4,7 @@ from digital_twin.modules.notifications.domain.observation_market_snapshot impor
 from digital_twin.modules.notifications.domain.relation_change_presentation import FIELDS, OPERATORS, measurement
 from digital_twin.modules.model_registry.contracts import verified_measurement_packet
 from digital_twin.modules.notifications.domain.relation_notice_focus import notice_rule_ids
+from digital_twin.modules.notifications.domain.relation_observation_proof import source_time
 
 
 MEASURES = {
@@ -48,7 +49,7 @@ def _number(field, value, currency):
         return measurement(field, value, currency)
     unit = MEASURES[field][1]
     if unit == "bp":
-        return decimal(value / 100, signed=True) + "%p"
+        return decimal(float(value) / 100, signed=True) + "%p"
     return decimal(value, signed=unit in {"%", "%p", "bp"}) + unit
 
 
@@ -71,15 +72,18 @@ def _display_field(row):
     return field
 
 
-def exact_measurements(current, previous, events, currency, limit=4, *, cause_only=False, rule_labels=None):
+def selected_measurements(current, previous, events, currency, limit=4, *, cause_only=False, rule_labels=None):
+    """Select frozen witnesses once for both prose and structured presentation."""
     now, old = saved_composition(current), saved_composition(previous)
+    if any(old.get(k) != now.get(k) for k in ("accountId", "symbol", "worldId")):
+        old = {}
     causes = {rid for event in events for rid in (notice_rule_ids(event) if cause_only else event.get("sourceRuleIds") or [])}
     strategy_only = bool(events) and all(e.get("strategyPhases") for e in events)
     before = {}
     for group, packet in _groups(old):
         for row in packet.get("measurements") or []:
             before[(group["ruleId"], packet["modelReleaseId"], row["conditionId"],
-                    row["evidenceId"], row["field"], _context(row))] = row
+                    row["evidenceId"], row["field"], _context(row), (row.get("context") or {}).get("currency"))] = (row, packet["knowledgeCutoffAt"])
     choices = []
     for group, packet in _groups(now):
         is_cause = group["ruleId"] in causes or bool(set(group.get("nativeRuleIds") or []) & causes)
@@ -89,8 +93,9 @@ def exact_measurements(current, previous, events, currency, limit=4, *, cause_on
             field, value = _display_field(row), numeric(row.get("observedValue"))
             if field not in MEASURES or value is None:
                 continue
-            prior = before.get((group["ruleId"], packet["modelReleaseId"], row["conditionId"],
-                                row["evidenceId"], row["field"], _context(row)))
+            saved = before.get((group["ruleId"], packet["modelReleaseId"], row["conditionId"],
+                                row["evidenceId"], row["field"], _context(row), (row.get("context") or {}).get("currency")))
+            prior = saved[0] if saved and source_time(saved[1]) <= source_time(packet["knowledgeCutoffAt"]) else None
             changed = prior is not None and numeric(prior.get("observedValue")) != value
             label = MEASURES[field][0]
             text = (_context(row) + " · " if _context(row) else "") + label + " "
@@ -127,8 +132,10 @@ def exact_measurements(current, previous, events, currency, limit=4, *, cause_on
             field_order = list(MEASURES).index(field)
             if strategy_only and field in {"foreignNetVolume", "institutionNetVolume", "smartMoneyNetVolume", "tradeStrength", "bidAskImbalance"}:
                 field_order -= len(MEASURES)
+            selected = {"ruleId": group["ruleId"], "nativeRuleIds": list(group.get("nativeRuleIds") or []),
+                        "field": field, "measurement": row, "previous": prior, "text": text}
             choices.append((not is_cause, not changed, group["ruleId"],
-                            field_order, semantic, text))
+                            field_order, semantic, selected))
     # Give each rule one measurement before taking additional fields from it.
     # No interpretation is based on the number of clauses.
     ordered, seen, used = [], set(), set()
@@ -139,15 +146,20 @@ def exact_measurements(current, previous, events, currency, limit=4, *, cause_on
     # shared with another rule. Changed values and triggering rules stay first.
     choices.sort(key=lambda c: (*c[:3], len(owners[c[4]]), c[3]))
     for first_pass in (True, False):
-        for cause, unchanged, rid, field, semantic, text in choices:
+        for cause, unchanged, rid, field, semantic, selected in choices:
             if semantic in seen or (first_pass and rid in used):
                 continue
-            ordered.append(text)
+            ordered.append(selected)
             seen.add(semantic)
             used.add(rid)
             if len(ordered) == limit:
                 return ordered
     return ordered
+
+
+def exact_measurements(current, previous, events, currency, limit=4, *, cause_only=False, rule_labels=None):
+    return [row["text"] for row in selected_measurements(current, previous, events, currency, limit,
+            cause_only=cause_only, rule_labels=rule_labels)]
 
 
 def composition_explanation(judgment):

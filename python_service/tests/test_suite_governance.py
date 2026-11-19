@@ -544,7 +544,11 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # changes, exact evidence, restart, rollback, clocks and delivery scope.
         # Two bounded normalization-cache contracts preserve clocks, subject
         # scope, types, mutation isolation and uncached calculation parity.
-        self.assertLessEqual(total, 3131 + 33 + 8 + 5 + 1 + 2 + 9 + 2)
+        # Three rule-observation digest contracts preserve scoped witnesses,
+        # multiple thresholds, qualification and the policy/action fallback.
+        # Concurrent 91567f7c9 added ten net observation-delivery, source-age
+        # and durable recheck contracts already present in the manifest.
+        self.assertLessEqual(total, 3131 + 33 + 8 + 5 + 1 + 2 + 9 + 2 + 3 + 10)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

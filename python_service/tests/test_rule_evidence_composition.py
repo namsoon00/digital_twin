@@ -63,6 +63,29 @@ def verify(packet):
         feature_snapshot_id=packet["sourceFeatureSnapshotId"], cutoff=AT)
 
 
+def observation_packet():
+    _, nodes = scored_nodes()
+    composition = native_evidence_composition(IDENTITY, relation(nodes))
+    response = {"ruleId": "rule:policy", "label": "손실 구간의 추가매수를 중단"}
+    judgment = {**IDENTITY, "authority": "typedb-materialized-synthesis", "evidenceComposition": composition,
+                "managementDecision": {"responses": [response]}}
+    current = {**IDENTITY, "market": "US", "proofIdentityVerified": True,
+        "decisionBrief": {"judgment": judgment},
+        "rules": [{"id": rid, "label": label, "nativeProof": False, "compiledProof": True,
+                   "ruleExecutionBackend": "compiled-rulebox-v1", "evidenceUsableForJudgement": True}
+                  for rid, label in ((RATE, "금리 하락과 상대 강세"), (RELATIVE, "교차자산 상대 강세"))],
+        "facts": [{"id": k, "value": v} for k, v in dict(currentPrice=100, priceChangeRate=.5,
+                   profitLossRate=-40, quantity=5, currency="USD").items()]}
+    event = {"eventId": "event:relative", "purpose": "hypothesis-evidence", "changeKind": "support-added",
+        "sourceRuleIds": [RATE, RELATIVE], "ruleComparisons": [{"ruleId": RELATIVE}],
+        "hypothesis": {"id": "hypothesis:relative", "label": "상대 강세 가능성", "qualification": {"status": "shadow"}},
+        "nextCheck": {"condition": "외부 충격이 줄거나 독립적으로 강하게 움직이는지"},
+        "deliveryValue": {"allowed": True, "observationOnly": True, "executionAuthorized": False,
+                          "addedEligibleActions": [], "removedEligibleActions": []}}
+    return {"current": current, "customerEvents": [event], "policyLifecycle": {"decisionImpact": {
+        "status": "maintained", "changedResponses": [], "remainingResponses": [response], "releasedRuleIds": []}}}
+
+
 @lru_cache(maxsize=1)
 def migration_artifacts():
     from digital_twin.modules.reasoning.infrastructure.static_seed.artifact import ontology_release_seed_artifact
@@ -394,3 +417,99 @@ class RuleEvidenceCompositionTests(unittest.TestCase):
             numeric_rows = next(s.rows for s in document.sections if s.key == "decision-impact")
             self.assertEqual(2 if events else 1, len(numeric_rows))
             self.assertEqual(bool(events), any("IEF" in line for line in numeric_rows))
+
+    def test_observation_digest_selects_changed_witnesses_without_repeating_management(self):
+        from digital_twin.modules.notifications.domain.rulebox_notification_summary import compact_rulebox_summary
+        from digital_twin.modules.read_models.contracts import (CustomerInvestmentDocument, CustomerInvestmentSection,
+            normalized_customer_investment_document, customer_investment_document_quality)
+        from digital_twin.modules.notifications.application.customer_investment_message import render_customer_investment_document
+        packet = observation_packet()
+        original = deepcopy(packet)
+        summary = compact_rulebox_summary(packet)
+        self.assertEqual("rule-observation-digest-v1", summary.get("observationDigestVersion"))
+        document = normalized_customer_investment_document(CustomerInvestmentDocument(
+            role="typedb-observation", headline="🔗 관계 변화 · 테스트", lead=summary["lead"], layout="compact-rulebox-v1",
+            sections=tuple(CustomerInvestmentSection(key, title, tuple(rows)) for key, title, rows in summary["sections"])))
+        text = render_customer_investment_document(document)
+        for expected in ("IEF 대비 상대 강세", "종목 +0.5% · IEF -2.5%", "등락률 차이 +3%p / 기준 +2%p 이상",
+                         "이전 비교값 없음", "매매 시점은 아직 검증되지 않음", "IEF와의 등락률 차이 +2%p 이상", "$100"):
+            self.assertIn(expected, text)
+        for unrelated in ("추가매수를 중단", "-40%", "금리 하락", "외부 충격이", "알림 이유:"):
+            self.assertNotIn(unrelated, text)
+        self.assertEqual(1, text.count("추가된 규칙 근거"))
+        self.assertEqual([RELATIVE], [r["ruleId"] for r in summary["focusContract"]["changedRules"]])
+        self.assertEqual("passed", customer_investment_document_quality(document)["status"])
+        self.assertEqual(original, packet)
+        # Native and compiled proof have the same presentation, without relabeling either proof.
+        for rule in packet["current"]["rules"]:
+            rule.update(nativeProof=True, compiledProof=False)
+        self.assertEqual(summary["sections"], compact_rulebox_summary(packet)["sections"])
+
+    def test_observation_digest_preserves_previous_scope_and_separate_multi_rule_boundaries(self):
+        from digital_twin.modules.notifications.domain.rulebox_notification_summary import compact_rulebox_summary
+        packet = observation_packet()
+        old = packet["previous"] = deepcopy(packet["current"])
+        groups = old["decisionBrief"]["judgment"]["evidenceComposition"]["evidenceGroups"]
+        for group in groups:
+            p = group["sourceMeasurements"]
+            for row in p["measurements"]:
+                if row["field"] == "relativeReturnPct":
+                    row["observedValue"] = 2.5
+                    row["context"].update(stockChangeRate=0, relativeReturnPct=2.5)
+            group["sourceMeasurements"] = measurement_packet(p["hypothesisContractId"], p["symbol"],
+                p["modelReleaseId"], p["sourceFeatureSnapshotId"], AT, p["measurements"])
+        self.assertIn("+2.5%p → +3%p", str(compact_rulebox_summary(packet)["sections"]))
+        valid_before = deepcopy(old)
+        for incompatible in ("later-receipt", "other-currency", "other-model"):
+            packet["previous"] = deepcopy(valid_before)
+            for group in packet["previous"]["decisionBrief"]["judgment"]["evidenceComposition"]["evidenceGroups"]:
+                p = group["sourceMeasurements"]
+                if incompatible == "other-currency":
+                    for row in p["measurements"]: row["context"]["currency"] = "KRW"
+                group["sourceMeasurements"] = measurement_packet(p["hypothesisContractId"], p["symbol"],
+                    "other-model" if incompatible == "other-model" else p["modelReleaseId"], p["sourceFeatureSnapshotId"],
+                    "2026-08-11T07:00:00Z" if incompatible == "later-receipt" else AT, p["measurements"])
+            self.assertNotIn("+2.5%p →", str(compact_rulebox_summary(packet)["sections"]), incompatible)
+        packet["previous"] = old
+        old_judgment = old["decisionBrief"]["judgment"]
+        old_judgment["accountId"] = old_judgment["evidenceComposition"]["accountId"] = "another-account"
+        self.assertNotIn("+2.5%p →", str(compact_rulebox_summary(packet)["sections"]))
+        packet["customerEvents"][0]["ruleComparisons"].append({"ruleId": RATE})
+        summary = compact_rulebox_summary(packet)
+        sections = {key: "\n".join(rows) for key, _, rows in summary["sections"]}
+        for expected in ("기준 +1%p 이상", "기준 +2%p 이상", "기준 -0.15%p 이하", "2026-08-07 자료"):
+            self.assertIn(expected, sections["decision-impact"])
+        for expected in ("+1%p 이상", "+2%p 이상", "-0.15%p 이하"):
+            self.assertIn(expected, sections["next-check-contract"])
+        self.assertIn("같은 자료", sections["decision-basis"])
+        relationship = packet["current"]["decisionBrief"]["judgment"]["evidenceComposition"]["relationships"][0]
+        relationship["opposingDirections"] = True
+        self.assertIn("반대 방향", str(compact_rulebox_summary(packet)["sections"]))
+
+    def test_observation_digest_cannot_hide_action_changes_or_upgrade_incomplete_proof(self):
+        from digital_twin.modules.notifications.domain.rulebox_notification_summary import compact_rulebox_summary
+        original = observation_packet()
+        for change in ("scope", "composition-scope", "proof", "stale", "missing-rule", "measurement", "unknown-state",
+                       "quarantined", "action", "policy", "outcome", "removed", "mixed", "uncovered-rule"):
+            packet = deepcopy(original)
+            current, event = packet["current"], packet["customerEvents"][0]
+            judgment = current["decisionBrief"]["judgment"]
+            rule = next(r for r in current["rules"] if r["id"] == RELATIVE)
+            if change == "scope": judgment["accountId"] = "other"
+            elif change == "composition-scope": judgment["evidenceComposition"]["symbol"] = "OTHER"
+            elif change == "proof": rule["compiledProof"] = False
+            elif change == "stale": rule["evidenceUsableForJudgement"] = False
+            elif change == "missing-rule": current["rules"].remove(rule)
+            elif change == "measurement":
+                for g in judgment["evidenceComposition"]["evidenceGroups"]:
+                    if g["ruleId"] == RELATIVE: g["sourceMeasurements"]["measurementFingerprint"] = "corrupt"
+            elif change in {"unknown-state", "quarantined"}: event["hypothesis"]["qualification"]["status"] = change
+            elif change == "action": event["deliveryValue"]["addedEligibleActions"] = ["TRIM"]
+            elif change == "policy": packet["policyLifecycle"]["decisionImpact"]["changedResponses"] = [{"label": "추가매수 제한"}]
+            elif change == "outcome":
+                event.update(changeKind="outcome-confirmed", outcome={"payload": {"horizonMinutes": 60}})
+            elif change == "removed": event["changeKind"] = "support-removed"
+            elif change == "mixed": packet["customerEvents"].append({"purpose": "management-policy", "sourceRuleIds": ["rule:policy"]})
+            elif change == "uncovered-rule": event["ruleComparisons"].append({"ruleId": "rule:unrecorded"})
+            with self.subTest(change=change):
+                self.assertNotIn("observationDigestVersion", compact_rulebox_summary(packet))

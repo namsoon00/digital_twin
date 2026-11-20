@@ -437,6 +437,9 @@ class RuleEvidenceCompositionTests(unittest.TestCase):
         for unrelated in ("추가매수를 중단", "-40%", "금리 하락", "외부 충격이", "알림 이유:"):
             self.assertNotIn(unrelated, text)
         self.assertEqual(1, text.count("추가된 규칙 근거"))
+        self.assertIn("\n\n<b>규칙에 사용된 수치</b>\n• ", text)
+        self.assertIn("\n\n<b>관련 가능한 설명</b>\n• ", text)
+        self.assertIn("\n\n<b>다음 확인</b>\n• 새 자료에서 ", text)
         self.assertEqual([RELATIVE], [r["ruleId"] for r in summary["focusContract"]["changedRules"]])
         self.assertEqual("passed", customer_investment_document_quality(document)["status"])
         self.assertEqual(original, packet)
@@ -481,6 +484,8 @@ class RuleEvidenceCompositionTests(unittest.TestCase):
             self.assertIn(expected, sections["decision-impact"])
         for expected in ("+1%p 이상", "+2%p 이상", "-0.15%p 이하"):
             self.assertIn(expected, sections["next-check-contract"])
+        next_rows = next(rows for key, _, rows in summary["sections"] if key == "next-check-contract")
+        self.assertEqual(4, len(next_rows))
         self.assertIn("같은 자료", sections["decision-basis"])
         relationship = packet["current"]["decisionBrief"]["judgment"]["evidenceComposition"]["relationships"][0]
         relationship["opposingDirections"] = True

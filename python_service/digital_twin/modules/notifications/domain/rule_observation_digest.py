@@ -119,7 +119,7 @@ def observation_digest(packet, judgment, currency, summary_version):
     price = numeric(snapshot_facts(current).get("currentPrice"))
     market = price_money(price, currency) if price is not None else "현재가 미확인"
     next_checks = list(dict.fromkeys(_next(s, currency) for s in selections))
-    next_text = "새 자료에서 " + " · ".join(next_checks) + " 조건의 유지 여부를 확인합니다."
+    next_rows = ["새 자료에서 " + condition + " 조건 유지 여부" for condition in next_checks]
     return {"version": summary_version, "observationDigestVersion": VERSION,
         "lead": lead, "judgment": judgment, "decisionImpact": impact,
         "focusContract": {"version": FOCUS_VERSION, "comparisonBasis": "previous-successful-relation-receipt",
@@ -128,4 +128,4 @@ def observation_digest(packet, judgment, currency, summary_version):
                      ("decision-impact", "규칙에 사용된 수치", values),
                      ("decision-basis", "관련 가설", hypotheses),
                      ("current-snapshot", "참고 시세", [market]),
-                     ("next-check-contract", "다음 확인", [next_text])]}
+                     ("next-check-contract", "다음 확인", next_rows)]}

@@ -13,17 +13,19 @@ def render_customer_investment_document(
     """Render a document that was normalized at its creation boundary."""
 
     if document.layout == "compact-rulebox-v1":
-        parts = ["<b>" + html.escape(document.headline, quote=False) + "</b>", html.escape(document.lead, quote=False)]
+        parts = ["<b>" + html.escape(document.headline, quote=False) + "</b>"]
+        if document.lead:
+            parts.append(html.escape(document.lead, quote=False))
         for section in document.sections:
             if section.rows:
                 if section.key == "notification-purpose" and section.rows == (document.lead,):
                     continue
-                title = "<b>" + html.escape(section.title, quote=False) + ":</b>"
-                if len(section.rows) > 1:
+                title = "<b>" + html.escape(section.title, quote=False) + "</b>"
+                if section.key == "current-snapshot" and len(section.rows) == 1:
+                    parts.append(title + " " + html.escape(section.rows[0], quote=False))
+                else:
                     parts.append(title + "\n" + "\n".join(
                         "• " + html.escape(row, quote=False) for row in section.rows))
-                else:
-                    parts.append(title + " " + html.escape(section.rows[0], quote=False))
         if document.detail_url:
             parts.append('<a href="' + html.escape(document.detail_url, quote=True) + '">전체 판단 근거·현재 데이터 보기</a>')
         footer = " · ".join(v for v in ["기준 " + document.reference_at if document.reference_at else "",
@@ -31,7 +33,7 @@ def render_customer_investment_document(
                                       document.notification_number] if v)
         if footer:
             parts.append("<i>" + html.escape(footer, quote=False) + "</i>")
-        return "\n".join(parts)
+        return "\n\n".join(parts)
     parts = ["<b>" + html.escape(document.headline, quote=False) + "</b>"]
     if document.target:
         parts.append("<code>" + html.escape(document.target, quote=False) + "</code>")

@@ -577,7 +577,7 @@ class CompactRuleBoxJudgmentTests(unittest.TestCase):
         self.assertNotIn('-2% → -18%', body)
         self.assertIn('가격 8,200원', body)
         self.assertIn('보유 수익률 -18%', body)
-        self.assertLessEqual(len([line for line in body.splitlines() if line]), 7)
+        self.assertLessEqual(len([line for line in body.splitlines() if line]), 13)
         self.assertLess(len(body), 850)
         self.assertEqual('passed', ctx['customerInvestmentDocumentQuality']['status'])
         for value in ('외국인: 순매도 500주', '체결강도 120', '매수 대기 500주', '살펴볼 가설'):
@@ -600,7 +600,7 @@ class CompactRuleBoxJudgmentTests(unittest.TestCase):
         template.assert_not_called()
         self.assertNotIn('old queued long body', body)
         self.assertNotIn('관계 판단', body)
-        self.assertLessEqual(len([line for line in body.splitlines() if line]), 9)
+        self.assertLessEqual(len([line for line in body.splitlines() if line]), 15)
         self.assertIn('전체 판단 근거·현재 데이터 보기', body)
         job.context['transportDelivery'] = {'message': body, 'relationChangeEvidence': deepcopy(job.context['relationChangeEvidence'])}
         job.context['ontologyRelationContext']['facts']['currentPrice'] = 999
@@ -833,7 +833,7 @@ class ManagementObservationFlowChecks(unittest.TestCase):
         body = NotificationRenderingService().render(queue.job)
         for phrase in ('계좌 비중을 설정 상한 이내로 조정', '78.45%', '45%', '알림 이유', '변경 근거 수치', '달라진 규칙', '다음 확인'):
             self.assertIn(phrase, body)
-        self.assertLessEqual(len([line for line in body.splitlines() if line.strip()]), 9)
+        self.assertLessEqual(len([line for line in body.splitlines() if line.strip()]), 15)
         self.assertTrue(queue.job.context['relationChangeEvidence']['eligible'])
         damaged = deepcopy(queue.job.context)
         damaged['investmentSubjectDecisionCase']['managementDecision']['responses'][0]['targetValue'] = 40

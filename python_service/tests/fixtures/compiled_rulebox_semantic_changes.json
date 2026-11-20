@@ -139,6 +139,16 @@
       "hash": "2e4fa98faa3eed6ff625151d20aee48a2fd050a9a7539f3f5cb5f2dfe1d57a59",
       "previousHash": "fa6728ec4c75c0bfde5a54473e9e31cca43bc07daac67d3449b60a6735c05b42",
       "reason": "Owner-approved same-machine source latency work: reuse exact per-company JSON inputs in bounded 8 MiB construction / 16 MiB merge caches (128 keys each), preserving source clocks, types and mutation isolation. Alias patterns are bounded separately. Same-input rollback comparison and all 128 frozen RuleBox evaluations preserve exact source/results. Tests: test_reasoning_source_preparation, test_market_source_refresh, test_financial_reporting_integrity; docs/compiled-rulebox-runtime.md."
+    },
+    "modules/model_registry/domain/hypothesis_lifecycle.py::record_for_snapshot": {
+      "hash": "f9e6c10316a2eba761db538cc6c627c2c6f2d67627dd89fc14b50709c9219274",
+      "previousHash": "08bc14019d7c74e3b9bf8144a3b505e09a83558913ed5a1323e7cfc300f9698a",
+      "reason": "Owner-reported 2026-11-21 false model-premise removal: preserve missing evidence as a source hold and bind compiled observations to the exact fresh comparator. Verified by test_hypothesis_lifecycle, test_rule_evidence_composition and test_compiled_rulebox_projection."
+    },
+    "modules/reasoning/domain/portfolio_ontology_statistical_concepts.py::add_position_statistical_signal_concepts": {
+      "hash": "e31238a9ac6e695b1eabc6600e97851c95963f97ec5a77832107b2383723126e",
+      "previousHash": "681ff34d9096b8b7b696380e9cef996e217d4afabed6d17c13a5f25346c279d5",
+      "reason": "Owner-reported 2026-11-21 false model-premise removal: preserve missing evidence as a source hold and bind compiled observations to the exact fresh comparator. Verified by test_hypothesis_lifecycle, test_rule_evidence_composition and test_compiled_rulebox_projection."
     }
   },
   "ports": {

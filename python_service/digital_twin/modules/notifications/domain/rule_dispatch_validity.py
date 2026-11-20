@@ -11,6 +11,13 @@ from digital_twin.modules.market_data.contracts import max_age_minutes_for_messa
 VERSION = "rule-notice-dispatch-validity-v3"
 
 
+def relative_removal_rows(event):
+    for comparison in event.get("ruleComparisons") or []:
+        if comparison.get("comparison") == "verified":
+            for row in comparison.get("relativeRemovalWitnesses") or []:
+                yield comparison.get("ruleId"), row
+
+
 def rule_event_proof(event, current):
     """Check native proof closure without inventing a missing rule or clock."""
     if event.get("outcome"):
@@ -39,6 +46,22 @@ def rule_event_proof(event, current):
                 failed.append({"ruleId": rid, "conditionId": group.get("conditionId"),
                     "status": "missing-group-proof", "reasonCode": "rule_dispatch_group_proof_missing"})
     comparisons = event.get('ruleComparisons') or []
+    verified_relative = {rid for rid, row in relative_removal_rows(event)
+                         if timestamp(row.get("sourceAsOf")) and timestamp(row.get("proxySourceAsOf"))}
+    verified_models = {c.get("ruleId") for c in comparisons if c.get("comparison") == "verified"
+        and c.get("current") and (c.get("ruleId") in verified_relative
+            or not str((c.get("previous") or {}).get("signalType") or c["current"].get("signalType") or ""
+                       ).startswith("cross-asset-residual-"))}
+    removed_models = {
+        evidence["ruleId"] for change in event.get("evidenceChanges") or []
+        if change.get("kind") in {"support-removed", "counter-removed"}
+        for row in change.get("evidence") or []
+        for evidence in [row.get("evidence") or {}]
+        if evidence.get("relationType") == "HAS_MODEL_SIGNAL" and evidence.get("ruleId")
+    }
+    for rid in sorted(removed_models - verified_models):
+        failed.append({"ruleId": rid, "status": "missing-removal-proof",
+                       "reasonCode": "rule_dispatch_model_removal_unverified"})
     # An empty-baseline migration/identity change cannot prove that an
     # actively matching premise was invalidated. Preserve it as an audit
     # conflict, without suppressing independent, well-grounded events.
@@ -47,9 +70,7 @@ def rule_event_proof(event, current):
                     and not c.get('previous') for c in comparisons)):
         failed.append({'status': 'transition-proof-conflict', 'reasonCode': 'rule_dispatch_transition_conflict'})
     return {"allowed": not failed, "checks": failed, "reasonCode": failed[0]["reasonCode"] if failed else "",
-            "reason": ('현재도 성립한 근거와 가설 해제 기록이 일치하지 않아 이 변화는 상세 이력에 남깁니다.'
-                       if any(c['reasonCode'] == 'rule_dispatch_transition_conflict' for c in failed) else
-                       "규칙이 성립한 개별 조건의 원본 근거가 보존되지 않아 이 변화는 상세 이력에 남깁니다.") if failed else ""}
+            "reason": failure_description(failed[0]) if failed else ""}
 
 
 def timestamp(value):
@@ -65,6 +86,8 @@ def failure_description(check):
     code = check.get("reasonCode")
     if code == "rule_dispatch_transition_conflict":
         return "현재도 성립한 규칙 근거와 해제 기록이 서로 달라 변화 내용을 확인해야 합니다."
+    if code == "rule_dispatch_model_removal_unverified":
+        return "이전에 사용한 규칙의 조건이 미충족인지 새 자료로 확인하지 못해 상세 이력에 남깁니다."
     if code in {"rule_dispatch_proof_missing", "rule_dispatch_group_proof_missing"}:
         return "규칙이 성립한 개별 조건의 원본 근거를 확인할 수 없습니다."
     subject = str(check.get("source") or "규칙 근거") + " 자료"
@@ -101,6 +124,22 @@ def rule_dispatch_validity(packet, settings=None, now=None):
     rule_ids = sorted({rid for event in events for rid in event.get("sourceRuleIds", [])})
     rules = {r["id"]: r for r in current.get("rules", [])}
     checks = [check for event in events for check in rule_event_proof(event, current)["checks"]]
+    relative_sources = {(rid, source, row.get(field)) for event in events for rid, row in relative_removal_rows(event)
+                        for source, field in (("종목 시세", "sourceAsOf"), (row.get("proxySymbol") or "비교 자산", "proxySourceAsOf"))}
+    if relative_sources:
+        maximum = max_age_minutes_for_message_type("investmentInsight", settings or {})
+        for rid, source, stamp in sorted(relative_sources, key=lambda row: tuple(str(v) for v in row)):
+            observed = timestamp(stamp)
+            age = (clock - observed).total_seconds() / 60 if observed else None
+            invalid = age is None or age < -1
+            expired = not invalid and age > maximum
+            checks.append({"ruleId": rid, "source": source, "observedAt": stamp, "maxAgeMinutes": maximum,
+                           "ageMinutes": round(age, 2) if age is not None else None,
+                           "status": "unusable" if invalid else "expired" if expired else "fresh",
+                           "failureKind": "missing-source-clock" if age is None else "future-source-clock" if invalid else
+                                          "source-age-exceeded" if expired else "",
+                           "reasonCode": "rule_evidence_unavailable_at_dispatch" if invalid else
+                                         "rule_evidence_expired_at_dispatch" if expired else ""})
     for rid in rule_ids:
         rule = rules.get(rid) or {}
         conditions = rule.get("conditions") or []

@@ -2,7 +2,10 @@
 
 from copy import deepcopy
 from datetime import datetime
+import math
+from operator import ge, gt, le, lt
 from digital_twin.modules.model_registry.domain.statistical_signals.contracts import signal_strength_floor
+from digital_twin.modules.model_registry.domain.statistical_signals.measurements import verified_measurement_packet
 from digital_twin.modules.model_registry.domain.hypothesis_data_readiness import source_check, summary
 
 
@@ -95,24 +98,77 @@ def source_refresh_decision(before, current, rule_ids):
     return summary(checks)
 
 
-def compare_change_basis(before, current, rule_ids, *, removed=False, require_model_proof=False):
+def _relative_removal_witnesses(old, new):
+    """A failed dataState predicate alone cannot prove relative weakness ended."""
+    if (new.get("status") != "not-supported" or not old.get("releaseId")
+            or old["releaseId"] != new.get("releaseId")):
+        return []
+    packet = mapping(old.get("sourceMeasurements"))
+    packet = verified_measurement_packet(packet, rule_id=old.get("hypothesisContractId"),
+        symbol=packet.get("symbol"), release_id=old["releaseId"], feature_snapshot_id=old.get("sourceFeatureSnapshotId"),
+        cutoff=packet.get("knowledgeCutoffAt"))
+    witnesses = [r for r in packet.get("measurements") or []
+                 if r.get("targetKind") == "relative-performance-observation" and r.get("field") in {"relativeReturnPct", "proxyChangeRate"}]
+    if not witnesses:
+        return []
+    proof, checked = [], set()
+    operators = {"<": lt, "<=": le, ">": gt, ">=": ge}
+    for witness in witnesses:
+        context = mapping(witness.get("context"))
+        prior = (clock(mapping(witness.get("provenance")).get("sourceAsOf")), clock(context.get("proxySourceAsOf")))
+        candidates = [r for r in new.get("relativeObservations") or []
+                      if r.get("proxySymbol") == context.get("proxySymbol")
+                      and r.get("comparisonWindow") == context.get("comparisonWindow")]
+        if not context.get("proxySymbol") or not context.get("comparisonWindow") or len(candidates) != 1 or None in prior:
+            return []
+        candidate = candidates[0]
+        clocks = (clock(candidate.get("sourceAsOf")), clock(candidate.get("proxySourceAsOf")))
+        if (candidate.get("dataState") != "sufficient"
+                or not all(candidate.get(k) is True for k in ("judgementEvidenceUsable", "timestampsAligned",
+                                                               "stockEvidenceUsable", "proxyEvidenceUsable"))
+                or None in clocks or clocks == prior or any(a < b for a, b in zip(clocks, prior))
+                or witness.get("conditionId") not in (new.get("failedConditionIds") or [])):
+            return []
+        field = witness["field"]
+        previous, current, target = witness.get("observedValue"), candidate.get(field), witness.get("expectedValue")
+        compare = operators.get(witness.get("operator"))
+        if not compare or any(type(value) not in (int, float) or not math.isfinite(value) for value in (previous, current, target)):
+            return []
+        scope = (context["proxySymbol"], context["comparisonWindow"], witness["conditionId"])
+        checked.add(scope)
+        # Check the scorer's recorded failure against the same authored
+        # comparison and the same proxy; a failure of dataState is not enough.
+        if compare(previous, target) and not compare(current, target):
+            proof.append((scope, {"field": field, "proxySymbol": context["proxySymbol"], "previous": previous,
+                "current": current, "threshold": target, "operator": witness["operator"],
+                "sourceAsOf": candidate["sourceAsOf"], "proxySourceAsOf": candidate["proxySourceAsOf"]}))
+    return [row for _, row in proof] if {scope for scope, _ in proof} == checked else []
+
+
+def compare_change_basis(before, current, rule_ids, *, removed=False, require_model_proof=False, removed_models=()):
     """A negative match requires current input proof, not absence from a graph."""
     before, current = mapping(before), mapping(current)
     previous_models, models = mapping(before.get("models")), mapping(current.get("models"))
     comparisons, missing, revaluations = [], [], []
     for rule_id in sorted(set(rule_ids)):
         old, new = mapping(previous_models.get(rule_id)), mapping(models.get(rule_id))
-        if not old and not new and not require_model_proof:
+        if not old and not new and not require_model_proof and rule_id not in removed_models:
             continue  # Non-model rules keep their native lifecycle contract.
         unavailable = (not new or new.get("status") == "untested"
                        or new.get("freshnessCompatible") is False
                        or new.get("eligibilityStatus") in {"ineligible", "reference-only"}
                        or bool(new.get("unknownConditionIds")))
+        removal_witnesses = []
+        if (removed and (require_model_proof or rule_id in removed_models or (old and not new))
+                and str(old.get("signalType") or new.get("signalType") or "").startswith("cross-asset-residual-")):
+            removal_witnesses = _relative_removal_witnesses(old, new)
+            unavailable = unavailable or not removal_witnesses
         if unavailable:
             missing.append(rule_id)
         new = {**new, **{k: old[k] for k in ("requiredStrengthBand", "minimumScore") if k in old and k not in new}}
         comparisons.append({"ruleId": rule_id, "label": old.get("label") or new.get("label") or rule_id,
                             "previous": deepcopy(old), "current": deepcopy(new),
+                            **({"relativeRemovalWitnesses": removal_witnesses} if removal_witnesses and not unavailable else {}),
                             "comparison": "unavailable" if unavailable else "verified"})
         old_source, new_source = mapping(old.get("sourceObservation")), mapping(new.get("sourceObservation"))
         same_source = (old_source.get("verified") is True and new_source.get("verified") is True

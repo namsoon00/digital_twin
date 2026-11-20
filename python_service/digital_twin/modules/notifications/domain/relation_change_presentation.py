@@ -164,6 +164,19 @@ def model_input_change_rows(comparison):
     """Explain actual stored model inputs, without inventing raw rule thresholds."""
     if comparison.get("comparison") != "verified":
         return []
+    relative = []
+    for row in comparison.get("relativeRemovalWitnesses") or []:
+        field, proxy = row.get("field"), row.get("proxySymbol")
+        unit = "%p" if field == "relativeReturnPct" else "%"
+        label = " 대비 등락률 차이" if field == "relativeReturnPct" else " 등락률"
+        operator = OPERATORS.get(row.get("operator"))
+        if (field in {"relativeReturnPct", "proxyChangeRate"} and proxy and operator
+                and all(numeric(row.get(k)) is not None for k in ("previous", "current", "threshold"))):
+            relative.append(str(proxy) + label + " " + decimal(row["previous"], signed=True) + unit + " → "
+                + decimal(row["current"], signed=True) + unit + " / 기준 "
+                + decimal(row["threshold"], signed=True) + unit + " " + operator)
+    if relative:
+        return relative[:2]
     older, newer = comparison.get("previous") or {}, comparison.get("current") or {}
     before, after = older.get("modelInputWindows") or {}, newer.get("modelInputWindows") or {}
     fields = (("recentReturn", "후반 등락률", "%"), ("priceReturn", "전체 등락률", "%"),

@@ -422,6 +422,7 @@ def add_position_statistical_signal_concepts(
                 "untestedContractIds": status_contracts["untested"][:24],
                 "contractObservations": {
                     item["hypothesisContractId"]: {
+                        "releaseId": item.get("modelReleaseId"),
                         **{key: item[key] for key in ("hypothesisContractId", "signalType", "status",
                             "failedConditionIds", "unknownConditionIds", "sourceFeatureSnapshotId") if key in item},
                         "sourceObservation": {

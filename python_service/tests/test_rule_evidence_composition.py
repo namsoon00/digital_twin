@@ -231,6 +231,46 @@ class RuleEvidenceCompositionTests(unittest.TestCase):
             row["context"]["proxySymbol"], row["context"]["comparisonWindow"],
             row["observedValue"], row["expectedValue"]))
 
+    def test_relative_model_removal_requires_a_fresh_failed_predicate_for_the_same_proxy(self):
+        from digital_twin.modules.model_registry.domain.hypothesis_change_basis import compare_change_basis
+        from digital_twin.modules.notifications.domain.relation_change_presentation import model_input_change_rows
+        from digital_twin.modules.notifications.domain.rule_dispatch_validity import rule_dispatch_validity, rule_event_proof, timestamp
+
+        _, nodes = scored_nodes()
+        old = next(n for n in nodes if n["hypothesisContractId"] == RELATIVE)
+        comparison = {"proxySymbol": "IEF", "comparisonWindow": "session-change",
+                      "sourceAsOf": "2026-08-10T07:02:00Z", "proxySourceAsOf": "2026-08-10T07:01:00Z",
+                      "dataState": "sufficient", "judgementEvidenceUsable": True, "timestampsAligned": True,
+                      "stockEvidenceUsable": True, "proxyEvidenceUsable": True,
+                      "relativeReturnPct": 1, "proxyChangeRate": -2}
+        new = {"status": "not-supported", "releaseId": old["releaseId"], "relativeObservations": [comparison],
+               "failedConditionIds": ["relative-resilience-observation"]}
+        authority = {"rules": [{"id": RATE, "nativeProof": True, "conditions": [
+            {"conditionId": "existing", "freshnessRequired": False}]}]}
+        event = {"eligible": True, "sourceRuleIds": [RATE],
+                 "evidenceChanges": [{"kind": "support-removed", "evidence": [
+                     {"evidence": {"ruleId": RELATIVE, "relationType": "HAS_MODEL_SIGNAL"}}]}]}
+        self.assertEqual("rule_dispatch_model_removal_unverified", rule_event_proof(event, authority)["reasonCode"])
+        for replacement in ({}, {"proxyEvidenceUsable": False}, {"proxySymbol": "TLT"},
+                            {"proxySourceAsOf": "2026-08-10T06:59:00Z"}, {"relativeReturnPct": 2.1},
+                            {"sourceAsOf": AT, "proxySourceAsOf": AT}):
+            changed = {**comparison, **replacement}
+            basis = compare_change_basis({"models": {RELATIVE: old}},
+                {"models": {RELATIVE: {**new, "relativeObservations": [changed]}}},
+                {RELATIVE}, removed=True, removed_models={RELATIVE})
+            verified = not replacement
+            self.assertEqual("market-change" if verified else "data-unavailable", basis["category"], replacement)
+            event["ruleComparisons"] = basis["ruleComparisons"]
+            self.assertEqual(verified, rule_event_proof(event, authority)["allowed"], replacement)
+            values = model_input_change_rows(basis["ruleComparisons"][0])
+            if verified:
+                self.assertEqual(["IEF 대비 등락률 차이 +3%p → +1%p / 기준 +2%p 이상"], values)
+                packet = {"current": authority, "customerEvents": [event]}
+                self.assertTrue(rule_dispatch_validity(packet, now=timestamp("2026-08-10T07:03:00Z"))["allowed"])
+                self.assertFalse(rule_dispatch_validity(packet, now=timestamp("2026-08-10T07:11:30Z"))["allowed"])
+            else:
+                self.assertEqual([], values)
+
     def test_forged_scope_future_partial_and_corrupt_receipts_are_not_current_evidence(self):
         _, nodes = scored_nodes()
         packet = nodes[0]["sourceMeasurements"]

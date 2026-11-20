@@ -17,6 +17,7 @@ from digital_twin.modules.reasoning.domain.ontology_projection_audit import (
     build_ontology_projection_run, complete_ontology_projection_run,
 )
 from digital_twin.modules.reasoning.domain.rule_execution_proof import compiled_rule_execution_completed
+from digital_twin.modules.reasoning.domain.hypothesis_change_observations import attach_model_observations
 
 
 class FrozenRuleboxRepository:
@@ -188,6 +189,7 @@ class CompiledPortfolioProjectionRecorder(PortfolioOntologyProjectionRecorder):
         if not callable(atomic_commit):
             self.projection_run_store.begin(run)
         inference["compiledExecutionProof"]["durable"] = True
+        attach_model_observations(result, graph, symbols)
         result["projectionAudit"] = {"status": "recorded", "runId": run.run_id, "sourceSnapshotRecorded": True}
         result["runtimeStages"]["totalProjectionMs"] = round((time.perf_counter() - started) * 1000)
         complete = complete_ontology_projection_run(run, result)

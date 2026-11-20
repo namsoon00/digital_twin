@@ -1035,9 +1035,24 @@ def record_for_snapshot(
         return _retain_source_judgement(previous, refresh, stamp)
     removed = any(material_delta_values(delta, key) for key in (
         "removedSupportingEvidenceKeys", "removedCounterEvidenceKeys", "removedCausalPathKeys"))
+    removed_models = {
+        evidence["ruleId"] for name in ("removedSupportingEvidenceKeys", "removedCounterEvidenceKeys")
+        for key in material_delta_values(delta, name)
+        for evidence in [before.evidence_details.get(key, {})]
+        if evidence.get("relationType") == "HAS_MODEL_SIGNAL" and evidence.get("ruleId")
+    } if before else set()
     change_basis = compare_change_basis(before.observation_basis if before else {}, snapshot.observation_basis,
-                                        changed_rule_ids, removed=removed) if changed_rule_ids and before else {}
+                                        changed_rule_ids, removed=removed, removed_models=removed_models
+                                        ) if changed_rule_ids and before else {}
     if change_basis.get("category") == "data-unavailable":
+        unresolved_models = removed_models.intersection(change_basis["unavailableRuleIds"])
+        if unresolved_models:
+            held = merge_availability(refresh, {"state": "unavailable", "ruleChecks": [
+                {"ruleId": rid, "ruleLabel": "이전에 사용한 규칙", "status": "unavailable",
+                 "reason": change_basis["reason"]}
+                for rid in sorted(unresolved_models)]})
+            held.update(checkedAt=stamp, inferenceGenerationId=snapshot.inference_generation_id)
+            return _retain_source_judgement(previous, held, stamp)
         snapshot = replace(snapshot, data_availability={"state": "unavailable", "reasons": [change_basis["reason"]]})
     before_availability = ((previous.snapshot.get("judgementRefresh") or {}).get("notificationAvailability")
                            or before.data_availability) if before else {}

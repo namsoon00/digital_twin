@@ -41,6 +41,15 @@ class CompiledProjectionTests(unittest.TestCase):
 
     def test_source_and_result_are_durable_before_eligibility_without_native_flags(self):
         recorder=self.recorder(); snapshot=source_snapshot()
+        graph = recorder.build_graph_assembly.return_value[1]
+        for symbol in ("005930", "OTHER"):
+            graph.entities.append(OntologyEntity("assessment:" + symbol, "relative", "model-hypothesis-assessment", {
+                "symbol": symbol, "notSupportedContractIds": ["fixture"],
+                "contractObservations": {"fixture": {"signalType": "cross-asset-residual-risk", "releaseId": "v1"}},
+            }))
+            graph.entities.append(OntologyEntity("relative:" + symbol, "relative", "relative-performance-observation", {
+                "symbol": symbol, "proxySymbol": "BTC", "dataState": "partial", "proxyEvidenceUsable": False,
+            }))
         result=recorder.record_snapshot(snapshot,['005930'])
         self.assertTrue(projection_inference_identity(result)['verified'])
         inference=result['inferenceBox']
@@ -48,10 +57,16 @@ class CompiledProjectionTests(unittest.TestCase):
         self.assertFalse(inference['nativeTypeDbReasoningCompleted'])
         self.assertFalse(inference['nativeTypeDbReasoningUsed'])
         self.assertEqual(inference,recorder.projection_run_store.completed.result_payload['compiledInferenceBox'])
-        self.assertEqual(1,len(recorder.projection_run_store.run.context_payload['compiledSourceGraph']['entities']))
+        self.assertEqual(5,len(recorder.projection_run_store.run.context_payload['compiledSourceGraph']['entities']))
+        self.assertEqual(["005930"], list(inference["modelEvidenceObservations"]))
+        relative = inference["modelEvidenceObservations"]["005930"]["fixture"]
+        self.assertEqual("not-supported", relative["status"])
+        self.assertEqual([{"proxySymbol": "BTC", "dataState": "partial", "proxyEvidenceUsable": False}],
+                         relative["relativeObservations"])
         self.assertGreater(inference['traceCount'],0)
         contexts=relation_contexts_from_snapshot(snapshot)
         self.assertIn('005930',contexts)
+        self.assertEqual(relative, contexts["005930"]["modelEvidenceObservations"]["fixture"])
         packet=relation_change_snapshot({'ontologyRelationContext':contexts['005930']})
         self.assertTrue(packet['rules'])
         self.assertTrue(all(rule_notice_execution_proven(r) and not r['nativeProof'] for r in packet['rules']))

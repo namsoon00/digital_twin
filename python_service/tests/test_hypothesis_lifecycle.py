@@ -501,15 +501,20 @@ class HypothesisLifecycleTests(unittest.TestCase):
         hypothesis["counterRuleIds"] = ["rule.aapl.trend.v1"]
         context["graphStoreInference"]["traces"][0]["matchedConditions"] = [{
             "conditionId": "counter", "relationId": "assertion:counter", "relationType": "HAS_MODEL_SIGNAL"}]
-        old = replace(lifecycle_snapshots_from_relation_context(context)[0], observation_basis=self.model_basis())
-        previous, _ = record_for_snapshot(None, old)
-        current = replace(old, inference_generation_id="generation-2", counter_evidence_ids=[], counter_evidence_keys=[],
-                          observation_basis={"models": {}}, semantic_fingerprint="changed")
-        held, transition = record_for_snapshot(previous, current)
-        self.assertEqual(previous.state, held.state)
-        self.assertFalse(transition.material_change)
-        self.assertEqual("data-unavailable", relation_lifecycle_transition_contract({"transitions": [transition.to_dict()]})["changeKind"])
-        self.assertEqual(old.counter_evidence_keys, held.snapshot["counterEvidenceKeys"])
+        snapshot = lifecycle_snapshots_from_relation_context(context)[0]
+        # Older compiled receipts can have the exact link but no model table.
+        for basis in ({}, self.model_basis()):
+            with self.subTest(previous_model_table=bool(basis)):
+                old = replace(snapshot, observation_basis=basis)
+                previous, _ = record_for_snapshot(None, old)
+                current = replace(old, inference_generation_id="generation-2", counter_evidence_ids=[], counter_evidence_keys=[],
+                                  observation_basis={"models": {}}, semantic_fingerprint="changed")
+                held, transition = record_for_snapshot(previous, current)
+                self.assertEqual(previous.state, held.state)
+                self.assertEqual(previous.last_observed_at, held.last_observed_at)
+                self.assertFalse(transition.material_change)
+                self.assertEqual("data-unavailable", relation_lifecycle_transition_contract({"transitions": [transition.to_dict()]})["changeKind"])
+                self.assertEqual(old.counter_evidence_keys, held.snapshot["counterEvidenceKeys"])
 
     def test_unknown_evidence_count_changes_never_strengthen_or_weaken(self):
         previous = None

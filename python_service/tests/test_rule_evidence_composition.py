@@ -432,9 +432,9 @@ class RuleEvidenceCompositionTests(unittest.TestCase):
             sections=tuple(CustomerInvestmentSection(key, title, tuple(rows)) for key, title, rows in summary["sections"])))
         text = render_customer_investment_document(document)
         for expected in ("IEF 대비 상대 강세", "종목 +0.5% · IEF -2.5%", "등락률 차이 +3%p / 기준 +2%p 이상",
-                         "이전 비교값 없음", "매매 시점은 아직 검증되지 않음", "IEF와의 등락률 차이 +2%p 이상", "$100"):
+                         "이전 비교값 없음", "IEF와의 등락률 차이 +2%p 이상", "$100"):
             self.assertIn(expected, text)
-        for unrelated in ("추가매수를 중단", "-40%", "금리 하락", "외부 충격이", "알림 이유:"):
+        for unrelated in ("추가매수를 중단", "-40%", "금리 하락", "외부 충격이", "알림 이유", "매매 시점은 아직 검증"):
             self.assertNotIn(unrelated, text)
         self.assertEqual(1, text.count("추가된 규칙 근거"))
         self.assertIn("\n\n<b>규칙에 사용된 수치</b>\n• ", text)

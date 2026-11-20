@@ -23,7 +23,7 @@ class RuleTimingValidationTests(TestCase):
         generic = {"requiredObservationDomains": ["trend"]}
         self.assertIn("trend", observation_domain_status({"ma20Distance": 0, "ma20": 0}, generic)["missingObservationDomains"])
 
-    def test_quarantine_and_observation_are_visible_in_real_customer_event(self):
+    def test_qualification_details_are_preserved_and_compact_notices_avoid_boilerplate(self):
         fingerprints = set()
         for status, expected in [("quarantined", "성과 재검증 중"), ("shadow", "검증 중인 관찰"),
                                  ("observed", "검증 중인 관찰"), ("active", "별도 검증")]:
@@ -36,11 +36,10 @@ class RuleTimingValidationTests(TestCase):
             fingerprints.add(events[0]["fingerprint"])
             self.assertIn(expected, event_conclusion(events[0]))
             self.assertFalse(events[0]["evidenceUse"]["tradeTimingValidated"])
-            summary = compact_rulebox_summary(packet)
-            self.assertIn(expected, summary["lead"] + str(summary["sections"]))
             packet["customerEvents"] = events * 2
             duplicate_summary = compact_rulebox_summary(packet)
-            self.assertEqual(1, duplicate_summary["lead"].count(expected))
+            rendered = " ".join(row for _, _, rows in duplicate_summary["sections"] for row in rows)
+            self.assertEqual(1 if status == "quarantined" else 0, rendered.count(expected))
         # Explaining qualification must not create a new evidence-change push.
         self.assertEqual(1, len(fingerprints))
 

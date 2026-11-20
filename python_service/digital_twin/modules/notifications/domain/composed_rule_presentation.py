@@ -162,19 +162,23 @@ def exact_measurements(current, previous, events, currency, limit=4, *, cause_on
             cause_only=cause_only, rule_labels=rule_labels)]
 
 
-def composition_explanation(judgment):
+def composition_explanation(judgment, *, include_policy=True):
     packet = saved_composition(judgment)
     rows, relationships = packet.get("compositions") or [], packet.get("relationships") or []
     text = []
     policy = [r for r in rows if r.get("policyRuleId")]
     market = [r for r in rows if not r.get("policyRuleId")]
-    text.extend(r["label"] for r in policy)
+    if include_policy:
+        text.extend(r["label"] for r in policy)
+    opposing = any(r.get("opposingDirections") for r in relationships)
+    different_periods = any(r.get("differentHorizons") and r.get("opposingDirections") for r in relationships)
     for row in market:
-        text.append(row["label"])
-    if any(r.get("differentHorizons") and r.get("opposingDirections") for r in relationships):
-        text.append("서로 다른 기간의 조건입니다. 같은 기간의 상승·하락 판단으로 합치지 않습니다.")
-    elif any(r.get("opposingDirections") for r in relationships):
-        text.append("반대 방향의 조건이 함께 있어 한쪽 전망으로 확정하지 않습니다.")
+        if not (opposing and row.get("code") == "OPPOSING_MARKET_EVIDENCE"):
+            text.append(row["label"])
+    if different_periods:
+        text.append("서로 다른 기간에서 상승·하락 조건이 각각 확인됐습니다.")
+    elif opposing:
+        text.append("반대 방향의 조건이 함께 확인돼 방향 판단은 보류합니다.")
     if any(r.get("sharedObservation") for r in relationships):
         text.append("일부 규칙은 같은 관측을 사용하므로 근거가 여러 개라는 이유로 판단을 강화하지 않습니다.")
     return " ".join(dict.fromkeys(text))

@@ -156,22 +156,42 @@ class RuleNoticeDeliveryValueTests(TestCase):
         self.assertEqual('hypothesis_evidence_history_only', job.context['deliverySuppressionReason'])
         runner.request_fresh_data_recheck.assert_not_called()
 
-    def test_summary_keeps_unchanged_management_and_does_not_mix_release_target_into_hypothesis(self):
+    def test_summary_prioritizes_evidence_removal_and_shows_only_changed_decision_impact(self):
         packet = relation_change_evidence(readable_fixture())
         current = packet['current']; judgment = {k: current[k] for k in
             ('accountId', 'symbol', 'worldId', 'inferenceGenerationId', 'sourceAboxSnapshotId')}
         response = {'ruleId': 'policy', 'label': '손실 구간의 추가매수를 중단', 'observedValue': -6.37,
                     'targetValue': 0, 'objective': {'field': 'profitLossRate', 'operator': '>='}}
         composition = {**judgment, 'version': 'native-evidence-composition-v1',
-                       'authority': 'typedb-materialized-synthesis', 'relationships': [{'sharedObservation': True}]}
+                       'authority': 'typedb-materialized-synthesis',
+                       'compositions': [{'code': 'LOSS_POLICY_WITH_SUPPORT', 'policyRuleId': 'policy',
+                                         'label': '추가매수 제한은 유지됩니다.'},
+                                        {'code': 'OPPOSING_MARKET_EVIDENCE',
+                                         'label': '회복·상승 조건과 약화·하락 조건이 함께 확인됐습니다.'}],
+                       'relationships': [{'opposingDirections': True, 'differentHorizons': True}]}
         judgment.update(authority='typedb-materialized-synthesis', managementDecision={'responses': [response]},
                         evidenceComposition=composition)
         current['decisionBrief']['judgment'] = judgment
         packet['policyLifecycle'] = {'decisionImpact': {'status': 'maintained', 'remainingResponses': [response]}}
+        change = {**event('counter-removed'), 'hypothesis': {'qualification': {'status': 'shadow'}}}
+        change['decisionImpact'] = {'status': 'unchanged'}
+        packet['customerEvents'] = [change]
         result = compact_rulebox_summary(packet)
         sections = {key: ' '.join(rows) for key, _, rows in result['sections']}
-        self.assertIn('이번 근거 변화로 관리 대응이 바뀌지는 않았습니다', sections['decision-basis'])
-        self.assertIn('같은 관측', sections['decision-basis'])
+        self.assertIn('반대되던 근거 일부가 해제', result['lead'])
+        self.assertEqual(result['lead'], sections['notification-purpose'])
+        self.assertEqual('서로 다른 기간에서 상승·하락 조건이 각각 확인됐습니다.', sections['decision-basis'])
+        for repeated in ('검증 중인 관찰', '추가매수를 중단', '추가매수 제한은 유지', '회복·상승 조건과 약화·하락'):
+            self.assertNotIn(repeated, ' '.join(sections.values()))
         self.assertNotIn('0%', sections['next-check-contract'])
         self.assertNotIn('해제 기준', sections['decision-impact'])
         self.assertNotIn('계좌 관리:', sections['decision-impact'])
+
+        change['decisionImpact'] = {'status': 'changed',
+            'previous': {'blockedActions': ['ADD'], 'candidateActions': ['BUY', 'HOLD']},
+            'current': {'blockedActions': ['ADD'], 'candidateActions': ['BUY']}}
+        result = compact_rulebox_summary(packet)
+        basis = next(rows[0] for key, _, rows in result['sections'] if key == 'decision-basis')
+        self.assertIn('검토 후보 제외 — 보유 유지', basis)
+        self.assertNotIn('신규 매수', basis)
+        self.assertNotIn('추가매수', basis)

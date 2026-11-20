@@ -16,10 +16,7 @@ from .relation_observation_language import hypothesis_words
 VERSION = "rule-observation-digest-v1"
 STATES = {"support-added": "추가된 규칙 근거", "counter-added": "추가된 반대 근거",
           "observed": "처음 확인한 규칙", "reactivated": "다시 확인한 규칙"}
-QUALIFICATIONS = {"shadow": "매매 시점은 아직 검증되지 않음",
-                  "observed": "매매 시점은 아직 검증되지 않음",
-                  "limited-active": "매매 시점은 아직 검증되지 않음",
-                  "active": "가설 검증 기준 충족 · 매매 시점은 별도 검증 필요"}
+OBSERVATION_STATES = {"shadow", "observed", "limited-active", "active"}
 
 
 def _observation_only(event):
@@ -27,7 +24,7 @@ def _observation_only(event):
     state = ((event.get("hypothesis") or {}).get("qualification") or {}).get("status")
     return (event.get("purpose") == "hypothesis-evidence" and event.get("changeKind") in STATES
             and not any(event.get(k) for k in ("strategyPhases", "outcome", "contextState", "managementResponseChanged"))
-            and state in QUALIFICATIONS and value.get("allowed") is True
+            and state in OBSERVATION_STATES and value.get("allowed") is True
             and value.get("observationOnly") is True and value.get("executionAuthorized") is False
             and not value.get("addedEligibleActions") and not value.get("removedEligibleActions"))
 
@@ -105,8 +102,7 @@ def observation_digest(packet, judgment, currency, summary_version):
     names = list(dict.fromkeys(_name(s, rules) for s in selections))
     lead = (states[0] if len(states) == 1 else "달라진 규칙 근거") + ": " + " · ".join(names) + "."
     values = [line for s in selections for line in _values(s, currency, len(causes) > 1, rules)]
-    hypotheses = list(dict.fromkeys(hypothesis_words(e.get("hypothesis") or {})[0] + " · "
-        + QUALIFICATIONS[e["hypothesis"]["qualification"]["status"]] for e in events))
+    hypotheses = list(dict.fromkeys(hypothesis_words(e.get("hypothesis") or {})[0] for e in events))
     # Keep material opposing evidence visible even when the other rule did not change.
     composition = saved_composition(judgment)
     group_ids = {g["id"] for g in composition.get("evidenceGroups") or [] if g.get("id")

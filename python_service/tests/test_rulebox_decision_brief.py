@@ -576,7 +576,7 @@ class CompactRuleBoxJudgmentTests(unittest.TestCase):
         self.assertIn('평가 수익률 -16% → -18% / 기준 -15% 이하', body)
         self.assertNotIn('-2% → -18%', body)
         self.assertIn('가격 8,200원', body)
-        self.assertIn('보유 수익률 -18%', body)
+        self.assertNotIn('보유 수익률 -18%', body)
         self.assertLessEqual(len([line for line in body.splitlines() if line]), 13)
         self.assertLess(len(body), 850)
         self.assertEqual('passed', ctx['customerInvestmentDocumentQuality']['status'])

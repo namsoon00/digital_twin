@@ -18,13 +18,13 @@ def qualification_notice(event):
         topic, claim = hypothesis_words(event.get("hypothesis") or {})
         return "성과 재검증 중: ‘" + (topic if topic != "관찰 가설" else claim) + "’은 과거 검증 결과가 기준에 미달해 매매 판단 근거에서 제외됐습니다."
     if state in {"shadow", "observed", "limited-active"}:
-        return "검증 중인 관찰: 아직 매수·매도 시점을 판단할 만큼 검증되지 않았습니다."
+        return "검증 중인 관찰."
     if state == "active":
         return "가설 검증 기준 충족: 알림 수신 후의 매매 타이밍과 수익성은 별도 검증이 필요합니다."
     return "검증 상태 미확인: 이 알림으로 매수·매도 시점을 판단할 수 없습니다."
 
 
-def event_conclusion(event):
+def event_conclusion(event, *, include_qualification=True):
     value = event.get("deliveryValue") or {}
     if value.get("allowed") and value.get("reasonCode") == "eligible-response-changed":
         added = "·".join(ACTION_LABELS[a] for a in value.get("addedEligibleActions") or [] if a in ACTION_LABELS)
@@ -68,11 +68,11 @@ def event_conclusion(event):
         roles = {c.get("kind", "").split("-", 1)[0] for c in event.get("evidenceChanges") or []}
         if len(roles) == 1:
             meanings["mixed-evidence"] = "의 " + ("지지" if "support" in roles else "반대") + " 근거 구성이 달라져 기존 가설을 다시 점검합니다."
-    return " ".join(filter(None, [qualification_notice(event),
+    return " ".join(filter(None, [qualification_notice(event) if include_qualification else "",
         "‘" + name + "’" + meanings.get(event.get("changeKind"), "의 근거를 다시 점검합니다.")]))
 
 
-def event_impact(event, brief=None):
+def event_impact(event, brief=None, *, changes_only=False):
     if event.get('contextState'):
         return '관측된 시장 상태를 안내합니다. 이 규칙은 매수·매도나 보유 유지 판단을 정하지 않습니다.'
     impact = event.get("decisionImpact") or {}
@@ -91,7 +91,13 @@ def event_impact(event, brief=None):
         if before.get("candidateActions") != after.get("candidateActions"):
             removed = set(before.get("candidateActions") or []) - set(after.get("candidateActions") or [])
             unavailable = {row.get("action") for row in (brief or {}).get("unavailableCandidates", [])}
-            if removed:
+            if changes_only:
+                added = set(after.get("candidateActions") or []) - set(before.get("candidateActions") or [])
+                for label, changed in (("검토 후보 추가", added), ("검토 후보 제외", removed)):
+                    names = "·".join(name for action, name in ACTION_LABELS.items() if action in changed)
+                    if names:
+                        parts.append(label + " — " + names)
+            elif removed:
                 names = "·".join(ACTION_LABELS[a] for a in before.get("candidateActions", []) if a in removed and a in ACTION_LABELS)
                 parts.append("이전 ‘" + names + "’ 후보는 이번 판단에 사용할 수 없습니다. "
                              + ("제외 이유는 대응 판단 설명에 표시했습니다." if removed.issubset(unavailable) else "제외 사유는 이번 기록에서 확인되지 않습니다.")
@@ -104,7 +110,7 @@ def event_impact(event, brief=None):
             parts.append("후보 가설의 검증 상태가 달라져 사용 가능 범위를 다시 확인합니다.")
         if event.get("managementResponseChanged"):
             parts.append("이번에는 이 규칙이 요구하는 관리 대응 또는 목표가 새로 정해졌습니다.")
-        elif not parts and after.get("blockedActions"):
+        elif not changes_only and not parts and after.get("blockedActions"):
             parts.append("관리 제한은 계속 적용됩니다. 이번에는 제한을 뒷받침하는 규칙 조건이 바뀌었습니다.")
         return " · ".join(parts)
     if after.get("blockedActions"):

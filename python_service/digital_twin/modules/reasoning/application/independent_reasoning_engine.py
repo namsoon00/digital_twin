@@ -2073,6 +2073,7 @@ class IndependentReasoningJobRunner:
         self.realtime_activity = realtime_activity
         self.source_refresher = source_refresher
         self.last_source_refresh = {"status": "not-configured"}
+        self._consecutive_source_refresh_deferrals = 0
         self.background_graph_tasks = [
             {
                 **dict(task or {}),
@@ -2309,19 +2310,31 @@ class IndependentReasoningJobRunner:
             }
         return dict(self._last_comparison_reconciliation)
 
+    def refresh_market_source(self, lane_hint: str) -> bool:
+        """Prioritize ready realtime work while reserving a turn for new quotes."""
+        if lane_hint == "REALTIME" and self._consecutive_source_refresh_deferrals < 2:
+            self._consecutive_source_refresh_deferrals += 1
+            self.last_source_refresh = {"status": "deferred-ready-realtime"}
+            return False
+        deferred_turns = self._consecutive_source_refresh_deferrals
+        self._consecutive_source_refresh_deferrals = 0
+        try:
+            self.last_source_refresh = self.source_refresher()
+        except Exception as error:
+            # Durable quotes remain available for retry, and current claims
+            # can progress even when preparing the next snapshot fails.
+            self.last_source_refresh = {"status": "retry", "reason": str(error)[:240]}
+        status = self.last_source_refresh.get("status")
+        if status in {"committed", "retry"}:
+            import logging
+            logging.getLogger(__name__).warning(
+                "market-source-refresh %s",
+                {**self.last_source_refresh, "deferredRealtimeTurns": deferred_turns},
+            )
+        return status != "not-due"
+
     def run_once(self) -> Dict[str, object]:
-        if callable(self.source_refresher):
-            try:
-                self.last_source_refresh = self.source_refresher()
-            except Exception as error:
-                # Durable quotes remain available for retry. Existing committed
-                # work must keep progressing if source preparation fails.
-                self.last_source_refresh = {"status": "retry", "reason": str(error)[:240]}
-            if self.last_source_refresh.get("status") in {"committed", "retry"}:
-                import logging
-                logging.getLogger(__name__).warning("market-source-refresh %s", self.last_source_refresh)
         preparation = self.prepare_queue_turn()
-        preparation["marketSourceRefresh"] = dict(self.last_source_refresh)
         if preparation.get("status") != "ready":
             if getattr(self, "_queued_candidate_wait_started", None) is not None:
                 self.release_graph_writer_ownership()
@@ -2339,6 +2352,8 @@ class IndependentReasoningJobRunner:
             self._queued_candidate_wait_started = None
             self._input_preparation_released_writer = False
             result = self._run_once(preparation)
+            if callable(self.source_refresher):
+                result["marketSourceRefresh"] = dict(self.last_source_refresh)
             if not self._input_preparation_released_writer:
                 self.record_graph_writer_result(result)
             return result
@@ -2542,6 +2557,19 @@ class IndependentReasoningJobRunner:
             }
         lane_provider = getattr(self.queue, "next_lane", None)
         lane_hint = str(lane_provider(descriptor.deployment_id) or "") if callable(lane_provider) else ""
+        if callable(self.source_refresher) and self.refresh_market_source(lane_hint):
+            # The refresh can commit new work or race a release cutover.
+            control_binding = self.control_binding_status(descriptor.deployment_id)
+            if not control_binding.get("selected"):
+                return {
+                    "status": "inactive-control-binding",
+                    "processedCount": 0,
+                    "deploymentId": descriptor.deployment_id,
+                    "workerRole": self.deployment_role,
+                    "controlBinding": control_binding,
+                }
+            if callable(lane_provider):
+                lane_hint = str(lane_provider(descriptor.deployment_id) or "")
         claim_limit = (
             self.lane_batch_limit(lane_hint)
             if lane_hint

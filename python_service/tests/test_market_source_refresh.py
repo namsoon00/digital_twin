@@ -16,6 +16,7 @@ from digital_twin.modules.market_data.domain.market_source_refresh import (
 )
 from digital_twin.modules.market_data.application.market_source_refresh_service import MarketSourceRefreshService
 from digital_twin.modules.market_data.contracts import RealtimeMonitor
+from digital_twin.modules.reasoning.application.independent_reasoning_engine import IndependentReasoningJobRunner
 from digital_twin.modules.reasoning.domain.reasoning_source_snapshot import build_reasoning_source_snapshot
 
 
@@ -47,6 +48,64 @@ def snapshot(account, at=None):
 
 
 class MarketSourceRefreshTests(TestCase):
+    def test_ready_realtime_turns_claim_before_refresh_without_starving_new_quotes(self):
+        calls = []
+
+        def claim(_deployment, _worker, *, reasoning_lane, **kwargs):
+            calls.append(("claim", reasoning_lane))
+            return []
+
+        queue = SimpleNamespace(
+            next_lane=lambda _: "REALTIME",
+            claim=claim,
+            summary=lambda _: {},
+        )
+        runner = IndependentReasoningJobRunner(
+            queue, SimpleNamespace(descriptor=lambda: SimpleNamespace(deployment_id="live")),
+            SimpleNamespace(),
+            source_refresher=lambda: calls.append(("refresh",)) or {"status": "committed"},
+        )
+        results = [runner.run_once()["marketSourceRefresh"]["status"] for _ in range(4)]
+        self.assertEqual([("claim", "REALTIME"), ("claim", "REALTIME"), ("refresh",),
+                          ("claim", "REALTIME"), ("claim", "REALTIME")], calls)
+        self.assertEqual(["deferred-ready-realtime", "deferred-ready-realtime",
+                          "committed", "deferred-ready-realtime"], results)
+
+    def test_claim_rechecks_lane_and_delivery_owner_after_source_refresh(self):
+        for status in ("commit", "cutover", "error"):
+            with self.subTest(status=status):
+                control = SimpleNamespace(delivery_deployment_id="live", active_deployment_id="live",
+                                          candidate_deployment_id="")
+                lane = ["CONTEXT"]
+                claimed = []
+
+                def refresh():
+                    if status == "error":
+                        raise RuntimeError("source unavailable")
+                    if status == "cutover":
+                        control.delivery_deployment_id = "replacement"
+                    lane[0] = "REALTIME"
+                    return {"status": "committed"}
+
+                def claim(_deployment, _worker, *, reasoning_lane, **kwargs):
+                    claimed.append(reasoning_lane)
+                    return []
+
+                queue = SimpleNamespace(next_lane=lambda _: lane[0], summary=lambda _: {}, claim=claim)
+                runner = IndependentReasoningJobRunner(
+                    queue, SimpleNamespace(descriptor=lambda: SimpleNamespace(deployment_id="live")),
+                    SimpleNamespace(control=lambda: control), deployment_role="delivery", source_refresher=refresh,
+                )
+                result = runner.run_once()
+                if status == "cutover":
+                    self.assertEqual("inactive-control-binding", result["status"])
+                    self.assertEqual([], claimed)
+                elif status == "error":
+                    self.assertEqual("retry", result["marketSourceRefresh"]["status"])
+                    self.assertEqual(["CONTEXT"], claimed)
+                else:
+                    self.assertEqual(["REALTIME"], claimed)
+
     def test_quote_merge_cannot_change_holdings_or_renew_other_sources(self):
         base = snapshot("scope").positions[0]
         base.indicator_as_of = stamp(-3600)

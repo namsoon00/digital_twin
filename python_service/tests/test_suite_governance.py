@@ -548,7 +548,8 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # multiple thresholds, qualification and the policy/action fallback.
         # Concurrent 91567f7c9 added ten net observation-delivery, source-age
         # and durable recheck contracts already present in the manifest.
-        self.assertLessEqual(total, 3131 + 33 + 8 + 5 + 1 + 2 + 9 + 2 + 3 + 10)
+        # Two live source scheduling contracts cover bounded priority and claim fencing.
+        self.assertLessEqual(total, 3131 + 33 + 8 + 5 + 1 + 2 + 9 + 2 + 3 + 10 + 2)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

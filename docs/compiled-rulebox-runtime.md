@@ -194,6 +194,13 @@ without calling the account provider or external enrichment. Checks are spaced
 by at least two seconds and accounts rotate fairly. Intermediate ticks may be
 coalesced into the latest observation; this is not a tick-by-tick trading feed.
 
+The delivery worker checks the existing claim order before preparing another
+snapshot. A ready realtime job can take up to two consecutive turns before
+the worker gives new quotes a preparation opportunity. After preparation the
+worker rechecks both delivery ownership and the queue because the commit may
+have added work. Preparation stays single threaded and an underway prepare
+can still delay a newly arriving job.
+
 The source producer preserves holdings, cost, cash, broker valuations and their
 original account clock. Quotes, indicators, execution, orderbook and investor
 flow retain separate source clocks. Missing, older or future clocks cannot

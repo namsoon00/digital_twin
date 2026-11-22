@@ -392,6 +392,19 @@ class RuleEvidenceCompositionTests(unittest.TestCase):
         changed = exact_measurements(current, before, [{"sourceRuleIds": [RATE]}], "USD")
         self.assertIn("-0.18%p → -0.21%p", changed[0])
 
+    def test_crypto_evidence_shows_the_recorded_window_and_threshold(self):
+        packet = observation_packet()
+        current = packet["current"]["decisionBrief"]["judgment"]
+        group = next(r for r in current["evidenceComposition"]["evidenceGroups"] if r["ruleId"] == RELATIVE)
+        base = group["sourceMeasurements"]
+        row = {"conditionId": "crypto-7d-downside", "evidenceId": "stock:NVDA|HAS_CRYPTO_EXPOSURE|crypto-exposure:NVDA:BTC",
+               "field": "change7d", "targetKind": "crypto-exposure", "operator": "<=", "observedValue": -8.62,
+               "expectedValue": -8, "role": "any", "provenance": {"sourceAsOf": AT}, "context": {"cryptoSymbol": "BTC"}}
+        group["sourceMeasurements"] = measurement_packet(RELATIVE, "NVDA", base["modelReleaseId"],
+            base["sourceFeatureSnapshotId"], AT, [row])
+        self.assertEqual(["BTC · 가상자산 7일 등락률 -8.62% / 기준 -8% 이하 (이전 비교값 없음)"],
+                         exact_measurements(current, {}, packet["customerEvents"], "USD", cause_only=True))
+
     def test_legacy_or_wrong_subject_proof_cannot_fill_missing_measurements(self):
         _, nodes = scored_nodes()
         for n in nodes:

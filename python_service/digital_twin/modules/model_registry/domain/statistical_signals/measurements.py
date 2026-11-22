@@ -14,7 +14,7 @@ MEASUREMENT_VERSION = "rule-source-measurements-v1"
 CONTEXT_FIELDS = (
     "windowKey", "comparisonWindow", "startAt", "endAt", "sampleCount",
     "hasSufficientHistory", "currency", "proxySymbol", "stockChangeRate",
-    "proxyChangeRate", "relativeReturnPct", "proxySourceAsOf", "timestampsAligned",
+    "proxyChangeRate", "relativeReturnPct", "proxySourceAsOf", "timestampsAligned", "cryptoSymbol",
     "stockEvidenceUsable", "proxyEvidenceUsable", "rateSeriesId", "observationDate",
     "reportingPeriod", "comparisonPeriod", "comparisonBasis", "unit",
     "priceChangePct", "recentPriceChangePct", "drawdownFromPeakPct",

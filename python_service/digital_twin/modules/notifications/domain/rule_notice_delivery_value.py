@@ -1,6 +1,9 @@
 """Delivery value of a proven observation; never choose an investment action."""
 
 
+from digital_twin.modules.model_registry.contracts import rule_notification_intent
+from digital_twin.modules.reasoning.contracts import rule_notice_execution_proven
+
 from .rule_dispatch_validity import rule_event_proof
 
 
@@ -62,6 +65,27 @@ def delivered_predecessor(event, current, previous):
         for row in entries))
 
 
+def already_reported_after_expiry(event, current, previous):
+    """An internal expiry is not a new customer-visible rule transition."""
+    if (event.get("changeKind") != "reactivated" or event.get("previousState") != "expired"
+            or event.get("evidenceChanges") or not previous.get("proofIdentityVerified")
+            or not delivered_baseline(current, previous)):
+        return False
+    intent = event.get("intent") or {}
+    rule_id, claim = intent.get("ruleId"), intent.get("claimFingerprint")
+    if not rule_id or not claim or rule_id not in (event.get("sourceRuleIds") or []):
+        return False
+    for rule in previous.get("rules") or []:
+        if (rule.get("id") != rule_id or rule.get("matched") is not True
+                or rule.get("referenceOnly") or rule.get("evidenceUsableForJudgement") is not True
+                or not rule_notice_execution_proven(rule)):
+            continue
+        saved = rule_notification_intent(rule.get("claimContract")) or {}
+        if saved.get("claimContractId") == intent.get("claimContractId") and saved.get("claimFingerprint") == claim:
+            return True
+    return False
+
+
 def delivery_value(event, current, previous):
     if event.get("purpose") != "hypothesis-evidence" or event.get("outcome") or event.get("strategyPhases"):
         return {"version": VERSION, "allowed": True, "reasonCode": "separate-notice-contract"}
@@ -72,7 +96,8 @@ def delivery_value(event, current, previous):
     added = eligible_actions(current, event) - before
     removed = eligible_actions(previous, event) - after if received else set()
     changed = bool(added or removed)
-    observation = verified_observation(event, current)
+    repeated = already_reported_after_expiry(event, current, previous)
+    observation = not repeated and verified_observation(event, current)
     allowed = changed or (received and correction) or observation
     return {"version": VERSION, "allowed": allowed,
             "previousEligibleActions": sorted(before), "currentEligibleActions": sorted(after),
@@ -81,10 +106,12 @@ def delivery_value(event, current, previous):
             "observationOnly": bool(observation and not changed), "executionAuthorized": False,
             "reasonCode": "eligible-response-changed" if changed else "delivered-premise-correction" if allowed
                           and received and correction else "verified-observation-change" if observation
+                          else "same-reported-rule-after-expiry" if repeated
                           else "hypothesis_evidence_history_only",
             "reason": "검증된 대응 후보가 달라졌습니다." if changed else
                       "앞서 전달한 설명의 반대 근거 또는 해제 조건을 확인했습니다." if received and correction else
                       "검증 중인 관찰: 규칙의 근거 조건이 새로 확인됐습니다. 매매 대응 자격을 부여하지 않습니다." if observation else
+                      "직전 발송에서도 같은 규칙이 성립했습니다. 내부 만료 후 재확인은 상세 이력에 남깁니다." if repeated else
                       "가설 근거는 달라졌지만 새로 사용할 대응이나 앞선 판단의 철회가 없어 상세 이력에 남깁니다."}
 
 

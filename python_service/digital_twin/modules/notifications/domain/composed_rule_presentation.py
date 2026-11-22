@@ -18,6 +18,8 @@ MEASURES = {
     "priceVelocityChangePct": ("앞 구간 대비 후반 등락률 차이", "%p"),
     "drawdownFromPeakPct": ("구간 고점 대비", "%"),
     "reboundFromTroughPct": ("구간 저점 대비", "%"),
+    "change24h": ("가상자산 24시간 등락률", "%"),
+    "change7d": ("가상자산 7일 등락률", "%"),
     **FIELDS,
 }
 
@@ -33,6 +35,8 @@ def saved_composition(judgment):
 def _context(row):
     context = row.get("context") or {}
     window = context.get("windowKey")
+    if row.get("targetKind") == "crypto-exposure" and context.get("cryptoSymbol"):
+        return str(context["cryptoSymbol"])
     if context.get("comparisonWindow") == "session-change":
         return "전일 종가 대비 · " + str(context.get("proxySymbol") or "비교 자산")
     if context.get("rateSeriesId"):

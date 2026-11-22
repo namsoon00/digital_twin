@@ -27,6 +27,33 @@ def event(kind='support-added'):
 
 
 class RuleNoticeDeliveryValueTests(TestCase):
+    def test_internal_expiry_of_a_still_reported_rule_does_not_create_a_new_alert(self):
+        context = readable_fixture()
+        relation = context["ontologyRelationContext"]
+        relation["graphStoreInference"]["traces"][0]["claimContract"] = deepcopy(
+            relation["hypothesisSet"]["hypotheses"][0]["claimContract"]
+        )
+        original = rule_delivery_comparison(context, {})["relationChangeEvidence"]
+        receipt = deepcopy(original["current"])
+        receipt.update(receiptJobId="original", deliveredAt="2026-11-22T04:00:00Z")
+        rule = next(r for r in receipt["rules"] if r["id"] == "rule:linked")
+        rule["evidenceUsableForJudgement"] = True
+        transition = relation["hypothesisLifecycle"]["transitions"][0]
+        transition.update(previousState="expired", transitionId="internal-reactivation")
+        for stage in ("publication", "admission", "dispatch-receipt-lock"):
+            result = rule_delivery_comparison(context, receipt, stage=stage)["relationChangeEvidence"]
+            self.assertFalse(result["eligible"], stage)
+            self.assertEqual("same-reported-rule-after-expiry",
+                             result["historyOnlyEvents"][0]["deliveryValue"]["reasonCode"])
+
+        for changed in ({"matched": False}, {"referenceOnly": True}, {"nativeProof": False},
+                        {"claimContract": {}}, {"id": "another-rule"}):
+            with self.subTest(changed=changed):
+                prior = {**receipt, "rules": [{**rule, **changed}]}
+                self.assertTrue(rule_delivery_comparison(context, prior)["relationChangeEvidence"]["eligible"])
+        transition["previousState"] = "invalidated"
+        self.assertTrue(rule_delivery_comparison(context, receipt)["relationChangeEvidence"]["eligible"])
+
     def test_successful_observation_receipt_consumes_meaning_not_polling_clock(self):
         from digital_twin.modules.notifications.domain.relation_follow_up import delivery_snapshot
         context = readable_fixture()

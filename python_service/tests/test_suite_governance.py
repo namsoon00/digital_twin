@@ -550,7 +550,8 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # and durable recheck contracts already present in the manifest.
         # Two live source scheduling contracts cover bounded priority and claim fencing.
         # One receipt contract verifies a negative relative-performance witness.
-        self.assertLessEqual(total, 3131 + 33 + 8 + 5 + 1 + 2 + 9 + 2 + 3 + 10 + 2 + 1)
+        # Two contracts cover deduplication after internal expiry and crypto evidence display.
+        self.assertLessEqual(total, 3131 + 33 + 8 + 5 + 1 + 2 + 9 + 2 + 3 + 10 + 2 + 1 + 2)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

@@ -2,7 +2,7 @@
   "version": 1,
   "status": "available",
   "provider": "cloudflared",
-  "baseUrl": "https://biodiversity-xml-consequences-goto.trycloudflare.com",
+  "baseUrl": "https://ins-char-sunny-emails.trycloudflare.com",
   "revision": "ea8f15c28511",
-  "updatedAt": "2026-11-24T06:29:33.410Z"
+  "updatedAt": "2026-11-24T06:31:12.987Z"
 }

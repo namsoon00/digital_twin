@@ -10,6 +10,14 @@ ACTION_LABELS = {"BUY": "신규 매수", "ADD": "추가매수", "HOLD": "보유 
                  "TRIM": "일부 축소", "SELL": "전량 매도", "AVOID": "매수 회피"}
 
 
+def scoped_response_plan(judgment):
+    plan = judgment.get("responsePlan") or {}
+    return plan if (plan.get("version") in {"native-response-plan-v1", "native-response-plan-v2"}
+                    and plan.get("authority") == "typedb-materialized-synthesis"
+                    and all(plan.get(k) == judgment.get(k) for k in
+                            ("accountId", "symbol", "worldId", "inferenceGenerationId", "sourceAboxSnapshotId"))) else {}
+
+
 def qualification_notice(event):
     if event.get("purpose") != "hypothesis-evidence" or event.get("outcome") or event.get("contextState"):
         return ""

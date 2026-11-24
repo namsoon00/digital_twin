@@ -7,7 +7,9 @@ from digital_twin.modules.notifications.domain.relation_change_presentation impo
 )
 from digital_twin.modules.notifications.domain.relation_observation_language import hypothesis_words, next_check_words
 from digital_twin.modules.notifications.domain.relation_observation_proof import window_limitation, window_name, source_time
-from digital_twin.modules.notifications.domain.rule_event_presentation import ACTION_LABELS, event_conclusion, event_impact, qualification_notice
+from digital_twin.modules.notifications.domain.rule_event_presentation import (
+    ACTION_LABELS, event_conclusion, event_impact, qualification_notice, scoped_response_plan,
+)
 from digital_twin.modules.notifications.domain.rule_policy_lifecycle import release_conclusion
 from digital_twin.modules.notifications.domain.rule_notice_evidence import bind_policy_notice
 from digital_twin.modules.notifications.domain.relation_notice_focus import focus_relation_notice, notice_rule_ids
@@ -19,23 +21,15 @@ from digital_twin.modules.notifications.domain.composed_rule_presentation import
 )
 
 
-VERSION = "compact-rulebox-v9"
+VERSION = "compact-rulebox-v10"
 
 
 def _unique(values):
     return list(dict.fromkeys(v for v in values if v))
 
 
-def _response_plan(judgment):
-    plan = judgment.get('responsePlan') or {}
-    return plan if (plan.get('version') in {'native-response-plan-v1', 'native-response-plan-v2'}
-                    and plan.get('authority') == 'typedb-materialized-synthesis'
-                    and all(plan.get(k) == judgment.get(k) for k in
-                            ('accountId', 'symbol', 'worldId', 'inferenceGenerationId', 'sourceAboxSnapshotId'))) else {}
-
-
 def _conclusion(judgment, events):
-    plan = _response_plan(judgment)
+    plan = scoped_response_plan(judgment)
     management = {'responses': plan.get('policyResponses') or []} if plan else judgment.get("managementDecision") or {}
     if management.get("responses"):
         return " · ".join(_unique(r.get("label") for r in management["responses"])) + "."
@@ -209,7 +203,7 @@ def _measurements(current, previous, judgment, events, currency, transitions):
 
 
 def _comparison(judgment, current, events):
-    plan = _response_plan(judgment)
+    plan = scoped_response_plan(judgment)
     groups = [*plan.get('reviewCandidates', []), *plan.get('pendingCandidates', [])] if plan else judgment.get("candidateGroups") or []
     if groups and not any(g.get('executionEligible') for g in groups):
         return '연결된 가설의 예측 검증이 충분하지 않아 매매 대응은 아직 검토 단계입니다.'

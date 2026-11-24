@@ -479,7 +479,7 @@ class RuleEvidenceCompositionTests(unittest.TestCase):
         packet = observation_packet()
         original = deepcopy(packet)
         summary = compact_rulebox_summary(packet)
-        self.assertEqual("rule-observation-digest-v1", summary.get("observationDigestVersion"))
+        self.assertEqual("rule-observation-digest-v2", summary.get("observationDigestVersion"))
         document = normalized_customer_investment_document(CustomerInvestmentDocument(
             role="typedb-observation", headline="🔗 관계 변화 · 테스트", lead=summary["lead"], layout="compact-rulebox-v1",
             sections=tuple(CustomerInvestmentSection(key, title, tuple(rows)) for key, title, rows in summary["sections"])))
@@ -489,7 +489,8 @@ class RuleEvidenceCompositionTests(unittest.TestCase):
             self.assertIn(expected, text)
         for unrelated in ("추가매수를 중단", "-40%", "금리 하락", "외부 충격이", "알림 이유", "매매 시점은 아직 검증"):
             self.assertNotIn(unrelated, text)
-        self.assertEqual(1, text.count("추가된 규칙 근거"))
+        self.assertEqual(1, text.count("지지 근거 추가"))
+        self.assertLess(text.index("관찰 계속"), text.index("달라진 규칙"))
         self.assertIn("\n\n<b>규칙에 사용된 수치</b>\n• ", text)
         self.assertIn("\n\n<b>관련 가능한 설명</b>\n• ", text)
         self.assertIn("\n\n<b>다음 확인</b>\n• 새 자료에서 ", text)
@@ -500,6 +501,31 @@ class RuleEvidenceCompositionTests(unittest.TestCase):
         for rule in packet["current"]["rules"]:
             rule.update(nativeProof=True, compiledProof=False)
         self.assertEqual(summary["sections"], compact_rulebox_summary(packet)["sections"])
+
+    def test_observation_digest_leads_with_the_scoped_response_plan(self):
+        from digital_twin.modules.notifications.domain.rulebox_notification_summary import compact_rulebox_summary
+        packet = observation_packet()
+        current = packet["current"]
+        quantity = next(row for row in current["facts"] if row["id"] == "quantity")
+        judgment = current["decisionBrief"]["judgment"]
+        pending = {"action": "HOLD", "supportingRuleIds": [RELATIVE], "executionEligible": False}
+        plan = judgment["responsePlan"] = {
+            **IDENTITY, "authority": "typedb-materialized-synthesis", "version": "native-response-plan-v2",
+            "pendingCandidates": [pending],
+            "activeRestrictions": [{"action": "ADD", "ruleId": RELATIVE}, {"action": "SELL", "ruleId": RATE}],
+        }
+        quantity["value"] = 0
+        self.assertEqual("관찰 계속. 현재 신규 매수 검토 후보가 없습니다.", compact_rulebox_summary(packet)["lead"])
+        pending["action"] = "BUY"
+        self.assertIn("신규 매수 후보는 근거 검증", compact_rulebox_summary(packet)["lead"])
+        plan["reviewCandidates"] = [{"action": "BUY", "executionEligible": True, "supportingRuleIds": [RELATIVE]}]
+        self.assertTrue(compact_rulebox_summary(packet)["lead"].startswith("신규 매수 검토 중"))
+        quantity["value"] = 5
+        lead = compact_rulebox_summary(packet)["lead"]
+        self.assertIn("추가매수 제한", lead)
+        self.assertNotIn("전량 매도", lead)
+        plan["worldId"] = "another-world"
+        self.assertEqual("관찰 계속. 이번 근거로 새로 검토할 매매 대응은 없습니다.", compact_rulebox_summary(packet)["lead"])
 
     def test_observation_digest_preserves_previous_scope_and_separate_multi_rule_boundaries(self):
         from digital_twin.modules.notifications.domain.rulebox_notification_summary import compact_rulebox_summary
@@ -542,13 +568,13 @@ class RuleEvidenceCompositionTests(unittest.TestCase):
         self.assertIn("같은 자료", sections["decision-basis"])
         relationship = packet["current"]["decisionBrief"]["judgment"]["evidenceComposition"]["relationships"][0]
         relationship["opposingDirections"] = True
-        self.assertIn("반대 방향", str(compact_rulebox_summary(packet)["sections"]))
+        self.assertIn("반대 방향", compact_rulebox_summary(packet)["lead"])
 
     def test_observation_digest_cannot_hide_action_changes_or_upgrade_incomplete_proof(self):
         from digital_twin.modules.notifications.domain.rulebox_notification_summary import compact_rulebox_summary
         original = observation_packet()
         for change in ("scope", "composition-scope", "proof", "stale", "missing-rule", "measurement", "unknown-state",
-                       "quarantined", "action", "policy", "outcome", "removed", "mixed", "uncovered-rule"):
+                       "quarantined", "action", "candidate-removed", "policy", "outcome", "removed", "mixed", "uncovered-rule"):
             packet = deepcopy(original)
             current, event = packet["current"], packet["customerEvents"][0]
             judgment = current["decisionBrief"]["judgment"]
@@ -563,6 +589,9 @@ class RuleEvidenceCompositionTests(unittest.TestCase):
                     if g["ruleId"] == RELATIVE: g["sourceMeasurements"]["measurementFingerprint"] = "corrupt"
             elif change in {"unknown-state", "quarantined"}: event["hypothesis"]["qualification"]["status"] = change
             elif change == "action": event["deliveryValue"]["addedEligibleActions"] = ["TRIM"]
+            elif change == "candidate-removed":
+                event["decisionImpact"] = {"status": "changed", "previous": {"candidateActions": ["BUY"]},
+                                           "current": {"candidateActions": []}}
             elif change == "policy": packet["policyLifecycle"]["decisionImpact"]["changedResponses"] = [{"label": "추가매수 제한"}]
             elif change == "outcome":
                 event.update(changeKind="outcome-confirmed", outcome={"payload": {"horizonMinutes": 60}})

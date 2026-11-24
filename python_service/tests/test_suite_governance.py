@@ -551,7 +551,8 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # Two live source scheduling contracts cover bounded priority and claim fencing.
         # One receipt contract verifies a negative relative-performance witness.
         # Two contracts cover deduplication after internal expiry and crypto evidence display.
-        self.assertLessEqual(total, 3131 + 33 + 8 + 5 + 1 + 2 + 9 + 2 + 3 + 10 + 2 + 1 + 2)
+        # One contract checks the response-plan conclusion at the top of observation notices.
+        self.assertLessEqual(total, 3131 + 33 + 8 + 5 + 1 + 2 + 9 + 2 + 3 + 10 + 2 + 1 + 2 + 1)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

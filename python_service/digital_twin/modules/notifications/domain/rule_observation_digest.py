@@ -42,24 +42,24 @@ def _judgment_line(plan, quantity, causes, opposing):
     pending = plan.get("pendingCandidates") or []
     if plan and quantity == 0:
         if any(row.get("action") == "BUY" for row in restrictions):
-            return "관찰 계속. 신규 매수 제한이 적용 중입니다."
+            return "현재 신규 매수가 제한돼 있습니다."
         if any(row.get("action") == "BUY" for row in reviews):
-            return "신규 매수 검토 중. 이번 알림으로 검토 상태는 달라지지 않았습니다."
+            return "신규 매수는 계속 검토 중입니다."
         if any(row.get("action") == "BUY" for row in pending):
-            return "관찰 계속. 신규 매수 후보는 근거 검증을 기다리고 있습니다."
-        return "관찰 계속. 현재 신규 매수 검토 후보가 없습니다."
+            return "신규 매수를 검토하려면 근거가 더 필요합니다."
+        return "지금은 흐름을 더 지켜볼 단계입니다. 신규 매수를 검토할 조건은 아직 확인되지 않았습니다."
     if quantity is not None and quantity > 0:
         blocked = {row.get("action") for row in restrictions if row.get("ruleId") in causes}
         labels = [label for action, label in ACTION_LABELS.items() if action in blocked]
         if labels:
-            return "관찰 계속. " + "·".join(labels) + " 제한이 적용 중입니다."
-    for rows, message in ((reviews, " 검토 중. 이번 알림으로 검토 상태는 달라지지 않았습니다."),
-                          (pending, " 후보는 근거 검증을 기다리고 있습니다.")):
+            return "·".join(labels) + " 제한이 적용돼 있습니다."
+    for rows, message in ((reviews, " 검토를 이어갑니다."),
+                          (pending, " 검토에는 근거가 더 필요합니다.")):
         actions = {row.get("action") for row in rows if causes.intersection(row.get("supportingRuleIds") or [])}
         labels = [label for action, label in ACTION_LABELS.items() if action in actions]
         if labels:
             return "·".join(labels) + message
-    return "관찰 계속. 이번 근거로 새로 검토할 매매 대응은 없습니다."
+    return "지금은 흐름을 더 지켜볼 단계입니다."
 
 
 def _name(selected, rules):

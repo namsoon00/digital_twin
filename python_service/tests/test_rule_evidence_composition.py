@@ -490,7 +490,7 @@ class RuleEvidenceCompositionTests(unittest.TestCase):
         for unrelated in ("추가매수를 중단", "-40%", "금리 하락", "외부 충격이", "알림 이유", "매매 시점은 아직 검증"):
             self.assertNotIn(unrelated, text)
         self.assertEqual(1, text.count("지지 근거 추가"))
-        self.assertLess(text.index("관찰 계속"), text.index("달라진 규칙"))
+        self.assertLess(text.index("지금은 흐름을 더 지켜볼 단계입니다"), text.index("달라진 규칙"))
         self.assertIn("\n\n<b>규칙에 사용된 수치</b>\n• ", text)
         self.assertIn("\n\n<b>관련 가능한 설명</b>\n• ", text)
         self.assertIn("\n\n<b>다음 확인</b>\n• 새 자료에서 ", text)
@@ -515,17 +515,18 @@ class RuleEvidenceCompositionTests(unittest.TestCase):
             "activeRestrictions": [{"action": "ADD", "ruleId": RELATIVE}, {"action": "SELL", "ruleId": RATE}],
         }
         quantity["value"] = 0
-        self.assertEqual("관찰 계속. 현재 신규 매수 검토 후보가 없습니다.", compact_rulebox_summary(packet)["lead"])
+        self.assertEqual("지금은 흐름을 더 지켜볼 단계입니다. 신규 매수를 검토할 조건은 아직 확인되지 않았습니다.",
+                         compact_rulebox_summary(packet)["lead"])
         pending["action"] = "BUY"
-        self.assertIn("신규 매수 후보는 근거 검증", compact_rulebox_summary(packet)["lead"])
+        self.assertEqual("신규 매수를 검토하려면 근거가 더 필요합니다.", compact_rulebox_summary(packet)["lead"])
         plan["reviewCandidates"] = [{"action": "BUY", "executionEligible": True, "supportingRuleIds": [RELATIVE]}]
-        self.assertTrue(compact_rulebox_summary(packet)["lead"].startswith("신규 매수 검토 중"))
+        self.assertEqual("신규 매수는 계속 검토 중입니다.", compact_rulebox_summary(packet)["lead"])
         quantity["value"] = 5
         lead = compact_rulebox_summary(packet)["lead"]
         self.assertIn("추가매수 제한", lead)
         self.assertNotIn("전량 매도", lead)
         plan["worldId"] = "another-world"
-        self.assertEqual("관찰 계속. 이번 근거로 새로 검토할 매매 대응은 없습니다.", compact_rulebox_summary(packet)["lead"])
+        self.assertEqual("지금은 흐름을 더 지켜볼 단계입니다.", compact_rulebox_summary(packet)["lead"])
 
     def test_observation_digest_preserves_previous_scope_and_separate_multi_rule_boundaries(self):
         from digital_twin.modules.notifications.domain.rulebox_notification_summary import compact_rulebox_summary

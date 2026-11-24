@@ -6,6 +6,7 @@ import shutil
 import socket
 import subprocess
 import sys
+import tempfile
 import time
 import json
 import calendar
@@ -1257,6 +1258,50 @@ def recover_project_questdb_pid(spec: Dict[str, object]) -> int:
             continue
         candidates.append((0 if pid == process_group else 1, pid))
     return sorted(candidates)[0][1] if candidates else 0
+
+
+def adopt_project_mysql(spec: Dict[str, object]) -> int:
+    """Recover a missing manager PID only for the verified local database."""
+    data_path = Path(spec["dataPath"])
+    server_pid_path = data_path / "mysqld.pid"
+    pid_path = spec["pid"]
+    pid = read_pid(server_pid_path)
+    host, port = str(spec["healthAddress"]).rsplit(":", 1)
+    command = " " + command_for_pid(pid) + " "
+    expected = ("--datadir=" + str(data_path), "--pid-file=" + str(server_pid_path), "--port=" + port)
+    if pid <= 1 or not is_worker_command(command, spec) or not all(" " + arg + " " in command for arg in expected):
+        return 0
+
+    settings = {**(spec.get("operationalSettings") or {}), "_skipOperationalSchemaBootstrap": "1",
+                "_skipOperationalHistoryRetention": "1", "mysqlOperationTimeoutSeconds": "5"}
+    try:
+        database = MySQLOperationalConnection(settings)
+        # Identify the actual TCP listener, even if ordinary clients use a Unix socket.
+        database.mysql_config.update(host=host, port=int(port), unix_socket="", database=None)
+        with database.raw_connection() as connection, connection.cursor() as cursor:
+            cursor.execute("SELECT @@datadir AS data_dir, @@pid_file AS pid_file, @@port AS port")
+            identity = cursor.fetchone() or {}
+        if (not identity.get("data_dir") or not identity.get("pid_file")
+                or Path(identity["data_dir"]).resolve() != data_path.resolve()
+                or Path(identity["pid_file"]).resolve() != server_pid_path.resolve()
+                or str(identity.get("port")) != port
+                or read_pid(server_pid_path) != pid or not is_running(pid, spec)):
+            return 0
+    except Exception:  # Startup and identity failures must leave the listener unmanaged.
+        return 0
+
+    try:
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=pid_path.parent) as registration:
+            registration.write(str(pid) + "\n")
+            registration.flush()
+            os.link(registration.name, pid_path)
+    except FileExistsError:
+        return pid if read_pid(pid_path) == pid else 0
+    except OSError:
+        return 0
+    append_log(spec["log"], "adopt orphaned project MySQL pid=" + str(pid))
+    print(str(spec["label"]) + " adopted existing project process. pid=" + str(pid))
+    return pid
 
 
 def process_group_exists(process_group: int) -> bool:
@@ -4268,6 +4313,8 @@ def start_worker(spec: Dict[str, object], wait_for_ready: bool = True) -> int:
             print(str(spec["label"]) + " adopted existing project process. pid=" + str(recovered))
             return status_worker(spec)
     if role in {"mysql", "questdb", "web"} and tcp_ready(spec.get("healthAddress")):
+        if role == "mysql" and adopt_project_mysql(spec):
+            return status_worker(spec) if ensure_mysql_operational_schema(spec) else 1
         print(str(spec["label"]) + " not started. Canonical address is already owned by an unmanaged process: " + str(spec.get("healthAddress") or ""))
         return 1
     fresh_mysql_data_path = False

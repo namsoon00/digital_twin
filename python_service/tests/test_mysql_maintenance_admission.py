@@ -7,6 +7,47 @@ from digital_twin.infrastructure.mysql_realtime_workload_guard import MySQLRealt
 
 
 class MySQLMaintenanceAdmissionTests(unittest.TestCase):
+    def test_start_recovers_only_the_verified_project_mysql_listener(self):
+        from unittest.mock import patch
+        from digital_twin import service_manager as manager
+
+        with TemporaryDirectory() as root:
+            base = Path(root)
+            data = base / "mysql-runtime"
+            data.mkdir()
+            server_pid = data / "mysqld.pid"
+            server_pid.write_text("12345\n", encoding="utf-8")
+            spec = {"role": "mysql", "label": "MySQL operational store", "command": ["mysqld"],
+                    "needle": "mysqld --no-defaults", "healthAddress": "127.0.0.1:3306",
+                    "dataPath": data, "pid": base / "mysql-service.pid", "log": base / "mysql.log"}
+            command = f"/usr/local/bin/mysqld --no-defaults --datadir={data} --pid-file={server_pid} --port=3306"
+            identity = {"data_dir": str(data) + "/", "pid_file": str(server_pid), "port": 3306}
+            with patch.object(manager, "tcp_ready", return_value=True), \
+                 patch.object(manager, "command_for_pid", return_value=command) as lookup, \
+                 patch.object(manager, "is_running", side_effect=lambda pid, _: pid == 12345), \
+                 patch.object(manager, "MySQLOperationalConnection") as database, \
+                 patch.object(manager, "ensure_mysql_operational_schema", return_value=True) as schema, \
+                 patch.object(manager, "status_worker", return_value=0), \
+                 patch.object(manager.subprocess, "Popen") as spawn:
+                cursor = database.return_value.raw_connection.return_value.__enter__.return_value.cursor.return_value.__enter__.return_value
+                cursor.fetchone.return_value = {**identity, "data_dir": str(base / "other")}
+                self.assertEqual(1, manager.start_worker(spec))
+                self.assertFalse(spec["pid"].exists())
+                schema.assert_not_called()
+                database.reset_mock()
+                lookup.return_value = command.replace("--port=3306", "--port=33060")
+                self.assertEqual(1, manager.start_worker(spec))
+                database.assert_not_called()
+
+                lookup.return_value = command
+                cursor.fetchone.return_value = identity
+                self.assertEqual(0, manager.start_worker(spec))
+                self.assertEqual(12345, manager.read_pid(spec["pid"]))
+                schema.assert_called_once_with(spec)
+                spawn.assert_not_called()
+                database.return_value.mysql_config.update.assert_called_once_with(
+                    host="127.0.0.1", port=3306, unix_socket="", database=None)
+
     def _assert_capacity_turn_never_alerts_from_fallback_limits(self):
         from types import SimpleNamespace
         from unittest.mock import Mock, patch

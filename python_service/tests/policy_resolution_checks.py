@@ -22,6 +22,7 @@ def resolution_fixture(rule_id='graph.position.concentration.guard.v1'):
         facts['profitLossRate'] = 0
     subject = OntologyEntity('stock:MSTR', '스트래티지', 'stock', {**facts, 'symbol': 'MSTR'})
     graph = PortfolioOntology('test-policy-clearance')
+    graph.worldview['evidenceEvaluationAsOf'] = '2026-10-02T01:10:00Z'
     graph.entities = [subject]
     queries = []
     def read(query, columns, **_kwargs):
@@ -75,7 +76,8 @@ def assert_policy_resolution_flow(test, checks):
     from digital_twin.modules.portfolio.contracts import Position, PortfolioSummary
     rel = ctx['ontologyRelationContext']
     box = {**rel['graphStoreInference'], 'status': 'ok', 'graphStore': 'typedb',
-           'nativeTypeDbReasoningUsed': True, 'generationAligned': True, 'worldId': rel['worldId']}
+           'nativeTypeDbReasoningUsed': True, 'generationAligned': True, 'worldId': rel['worldId'],
+           'inferenceGenerationAt': '2026-10-02T01:10:00Z'}
     position = Position('MSTR', '스트래티지', market='US', currency='USD', quantity=44,
                         current_price=100, market_value_krw=4400, source_as_of='2026-10-02T01:10:00Z')
     assembled = relation_context_from_inferencebox(position, PortfolioSummary(10000,4400,5600,[],[],44),
@@ -91,12 +93,13 @@ def assert_policy_resolution_flow(test, checks):
     test.assertEqual('original-policy', packet['followUp']['parentJobId'])
     test.assertTrue(rule_dispatch_validity(packet, now=datetime(2026,10,2,1,11,tzinfo=timezone.utc))['allowed'])
     body = NotificationRenderingService().render(queue.job)
-    test.assertIn('비중 조정 요구 해제', body)
+    test.assertIn('비중 조정 요구가 해제됐습니다', body)
     test.assertIn('78.45%', body)
     test.assertIn('44%', body)
     test.assertIn('해제 기준 45% 이하', body)
-    test.assertIn('비중 조정 요구 해제', queue.job.context['customerInvestmentDetailDocument']['lead'])
-    test.assertLessEqual(len([line for line in body.splitlines() if line.strip()]), 9)
+    test.assertIn('비중 조정 요구', queue.job.context['customerInvestmentDetailDocument']['lead'])
+    test.assertLessEqual(len(body), 650)
+    test.assertEqual(1, body.count('비중 조정 요구가 해제됐습니다'))
     ai.enqueue.assert_not_called()
     checks.assert_policy_only_candidate_survives_worker_gates_and_records_transport_receipt(context=ctx, baseline=baseline)
     delivered = delivery_snapshot(packet, 'release-policy', queue.job.account_id)
@@ -156,7 +159,7 @@ def assert_policy_resolution_flow(test, checks):
     _, left, _, _ = checks.engine_run(context=partial, baseline=both_baseline)
     test.assertTrue(left.admission.accepted)
     body = NotificationRenderingService().render(left.job)
-    test.assertIn('비중 조정 요구 해제', body)
+    test.assertIn('비중 조정 요구가 해제됐습니다', body)
     test.assertIn('손실 구간 추가매수 제한은 계속 적용', body)
     test.assertEqual(1, len(left.job.context['relationChangeEvidence']['policyLifecycle']['remainingRestrictions']))
     test.assertEqual(['ADD'], left.job.context['relationChangeEvidence']['current']['decisionBrief']['blockedActions'])
@@ -181,7 +184,7 @@ def assert_policy_resolution_flow(test, checks):
     _, recovered, _, _ = checks.engine_run(context=recovery, baseline=loss_baseline)
     test.assertTrue(recovered.admission.accepted)
     text = NotificationRenderingService().render(recovered.job)
-    test.assertIn('손실 구간 추가매수 제한 해제', text)
+    test.assertIn('손실 구간 추가매수 제한이 해제됐습니다', text)
     test.assertIn('해제 기준 0% 이상', text)
     from rule_notice_evidence_checks import assert_policy_cause_survives_composition
     assert_policy_cause_survives_composition(test, recovered.job.context['relationChangeEvidence'],

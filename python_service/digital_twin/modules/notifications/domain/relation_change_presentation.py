@@ -9,7 +9,7 @@ from digital_twin.modules.notifications.domain.relation_observation_proof import
 from digital_twin.modules.notifications.domain.rulebox_decision_presentation import decision_brief_presentation, threshold
 
 
-PRESENTATION_VERSION = "readable-relation-change-v26"
+PRESENTATION_VERSION = "readable-relation-change-v27"
 
 CHANGE = {
     "observed": "조건이 새로 확인됐습니다.",
@@ -461,13 +461,23 @@ def readable_relation_change(packet):
         for event in events:
             for criterion in items((event["outcome"].get("payload") or {}).get("criterionAssessments")):
                 field = criterion.get("metric") or ""
+                if field not in FIELDS:
+                    continue
                 result_rows.append(condition_clause(field, criterion.get("operator"), criterion.get("threshold"), currency)
                     + " · 실제 " + measurement(field, criterion.get("observedValue"), currency)
                     + " · " + {"passed": "충족", "failed": "미충족", "unknown": "확인 불가"}.get(criterion.get("state"), "상태 미기록"))
-        return {"lead": event_summary["lead"], "title": "가설 확인 결과", "compactFollowUp": True,
-                "sections": [("previous-alert", "이전 알림의 확인 결과", ["원본 알림 N-" + parent[:8].upper()]),
-                             *event_summary["sections"], ("outcome-evidence", "기준과 확인된 결과", result_rows),
-                             ("next-update", "이후 확인", ["정해진 다른 구간의 결과가 남아 있으면 확인 후 이어서 안내합니다. 이번 결과만으로 원인·결과 관계가 입증되지는 않습니다."])]}
+        kinds = {e.get("changeKind") for e in events}
+        lead = {
+            frozenset({"outcome-confirmed"}): "앞선 알림에서 확인하기로 한 결과가 기준을 충족했습니다.",
+            frozenset({"outcome-contradicted"}): "앞선 판단을 다시 살펴봐야 할 결과가 나왔습니다.",
+            frozenset({"outcome-inconclusive"}): "이번 확인에서는 결과 판단을 보류합니다.",
+        }.get(frozenset(kinds), "확인한 구간에 따라 결과가 달랐습니다.")
+        return {"lead": lead, "title": "가설 확인 결과", "compactFollowUp": True,
+                "sections": [("previous-alert", "앞선 알림", ["원본 알림 N-" + parent[:8].upper()] if parent else []),
+                             ("notification-purpose", "확인 결과", event_summary["sections"][0][2][:3]),
+                             ("decision-impact", "기준과 실제 수치", unique(result_rows)[:4] or ["비교 수치가 기록되지 않았습니다."]),
+                             ("next-check-contract", "다음 확인", ["남은 확인 구간의 결과를 함께 봅니다."]),
+                             ("next-update", "판단의 범위", ["이번 결과는 확인한 구간의 기록입니다."])]}
     causes = delivery_cause_rows(packet, currency)
     if decision:
         headline = causes[0] if causes and causes[0].startswith("‘") else " ".join(changes[:2])

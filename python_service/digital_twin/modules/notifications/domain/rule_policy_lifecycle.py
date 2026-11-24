@@ -70,7 +70,8 @@ def release_conclusion(packet):
         return ''
     names = {'RESTORE_POSITION_LIMIT': '비중 조정 요구', 'PAUSE_AVERAGING_DOWN': '손실 구간 추가매수 제한'}
     released = list(dict.fromkeys(names[r['code']] for e in events for r in e.get('previousManagementResponses') or [] if r.get('code') in names))
-    lead = '·'.join(released) + ' 해제.' if released else '앞서 알린 관리 조건이 해제됐습니다.'
+    lead = ('·'.join(released) + ('가' if released[-1].endswith('요구') else '이') + ' 해제됐습니다.'
+            if released else '앞서 알린 관리 제한이 해제됐습니다.')
     current = packet.get('current') or {}
     remaining = ((current.get('decisionBrief') or {}).get('managementDecision') or {}).get('responses') or []
     labels = list(dict.fromkeys(names[r['code']] for r in remaining if r.get('code') in names))

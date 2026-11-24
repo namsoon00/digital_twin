@@ -205,9 +205,9 @@ class RuleNoticeDeliveryValueTests(TestCase):
         packet['customerEvents'] = [change]
         result = compact_rulebox_summary(packet)
         sections = {key: ' '.join(rows) for key, _, rows in result['sections']}
-        self.assertIn('반대되던 근거 일부가 해제', result['lead'])
-        self.assertEqual(result['lead'], sections['notification-purpose'])
-        self.assertEqual('서로 다른 기간에서 상승·하락 조건이 각각 확인됐습니다.', sections['decision-basis'])
+        self.assertIn('판단 보류', result['lead'])
+        self.assertIn('반대하던 근거가 줄었습니다', sections['notification-purpose'])
+        self.assertIn('새로 정해진 매매 대응은 없습니다', sections['decision-basis'])
         for repeated in ('검증 중인 관찰', '추가매수를 중단', '추가매수 제한은 유지', '회복·상승 조건과 약화·하락'):
             self.assertNotIn(repeated, ' '.join(sections.values()))
         self.assertNotIn('0%', sections['next-check-contract'])

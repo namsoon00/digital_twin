@@ -156,20 +156,20 @@ def bind_policy_notice(summary, packet):
             summary.get("judgment") or {}, previous, other_events, evidence["currency"], cause_only=True)]
     # Keep every cause and remaining restriction, even when several use the
     # same field. A reference measurement is never a substitute for a cause.
-    sections["decision-impact"] = ("핵심 수치", required or ["판정에 사용한 비교값과 기준이 보존되지 않아 확인이 필요합니다."])
+    sections["decision-impact"] = ("핵심 수치", required or ["판정에 쓴 값이나 기준을 확인할 수 없습니다."])
     if remaining:
         sections["remaining-policy"] = ("계속 적용되는 조건", remaining)
     if evidence["status"] != "complete":
-        result["lead"] = "관리 조건 변경의 근거를 확인해야 합니다."
-        sections["notification-purpose"] = ("알림 이유", ["저장된 판정과 직접 비교 근거를 함께 확인할 수 없어 변경 내용을 확정해서 안내할 수 없습니다."])
-        sections["decision-basis"] = ("함께 보면", ["자료 누락을 제한 해제나 추가매수 허용으로 해석하지 않습니다."])
-        sections["next-check-contract"] = ("다음 확인", ["해당 관리 조건의 원본 비교값·기준·적용 상태를 상세 근거에서 확인합니다."])
+        result["lead"] = "관리 제한이 달라졌는지 판단을 보류합니다."
+        sections["notification-purpose"] = ("알림 이유", ["판정과 실제 수치를 함께 확인할 자료가 부족합니다."])
+        sections["decision-basis"] = ("함께 보면", ["앞서 적용되던 제한을 기준으로 확인합니다."])
+        sections["next-check-contract"] = ("다음 확인", ["새 자료의 수치와 설정한 기준을 다시 비교합니다."])
     else:
         released = any(e["policyState"] == "released" for e in evidence["events"])
         if any(r.get("previousThreshold") is not None and r["previousThreshold"] != r["threshold"]
                for r in evidence["measurements"] if r["role"] == "cause"):
-            sections["notification-purpose"] = ("알림 이유", ["설정된 관리 기준이 바뀌었습니다. 새 기준에 따른 적용 상태를 안내하며 시장 개선을 뜻하지 않습니다."])
+            sections["notification-purpose"] = ("알림 이유", ["설정한 관리 기준이 바뀌어 새 기준으로 판단했습니다."])
         if released and "ADD" in evidence["blockedActions"]:
-            sections["decision-basis"] = ("함께 보면", ["다른 관리 조건에 따른 추가매수 제한은 계속 적용됩니다. 이번 해제는 추가매수 허용을 뜻하지 않습니다."])
+            sections["decision-basis"] = ("함께 보면", ["다른 조건에 따른 추가매수 제한은 계속 적용됩니다."])
     result["sections"] = [(key, title, rows) for key, (title, rows) in sections.items()]
     return result

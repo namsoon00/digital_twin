@@ -256,7 +256,7 @@ class CurrentFlowRuleTests(TestCase):
                                                   "현재 105원", "외국인 -1,000주\n기관 -500주"))
         self.assertEqual(before, packet)
         text = str(summary)
-        for value in ("가격 회복 전략", "수급 확인 전략", "합산 순매도", "추가매수 제한", "-1,000주", "독립된 근거 수로 세지"):
+        for value in ("가격 회복 전략", "수급 확인 전략", "진입을 검토할 단계", "진입 검토를 중단", "-1,000주"):
             self.assertIn(value, text)
         self.assertLess(len(text), 1800)
         # The actual scorer receipts must reach strategy summaries; previously

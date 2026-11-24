@@ -49,6 +49,7 @@ def assert_native_group_proof(test, packet):
         "investmentStrategyProfile": "growth", "sourceAsOf": "2026-10-02T01:10:00Z",
         "freshnessStatus": "fresh", "freshnessAgeMinutes": 0, "judgementEvidenceUsable": True, "maxAgeMinutes": 10})
     graph = PortfolioOntology("fixture", entities=[stock])
+    graph.worldview["evidenceEvaluationAsOf"] = "2026-10-02T01:10:00Z"
     context = grounded_inference_context(graph, rule, stock, context)
     unindexed_store = SimpleNamespace(condition_detail_queries_enabled=lambda: False, read_rows=Mock())
     deferred = typedb_rule_condition_context(unindexed_store, rule, 'stock:TEST', {},
@@ -162,10 +163,9 @@ def assert_notice_cause_and_response(test, flow):
     original = deepcopy(packet)
     summary = compact_rulebox_summary(packet)
     test.assertEqual('maintained', summary['decisionImpact']['status'])
-    test.assertIn('규칙 조건이 더 이상 성립하지 않습니다', summary['lead'])
-    test.assertNotIn('추가매수', summary['lead'])
     rows = {key: lines for key, _, lines in summary['sections']}
-    test.assertIn('유지 중인 관리 기준', rows['decision-basis'][0])
+    test.assertIn('규칙 조건이 더 이상 성립하지 않습니다', rows['notification-purpose'][0])
+    test.assertIn('추가매수 제한이 적용돼 있습니다', summary['lead'])
     test.assertIn('회복 가격대', rows['next-check-contract'][0])
     test.assertEqual(original, packet, 'presentation cannot mutate receipt or judgment')
     # Without a delivered baseline, report only current policy, never claim
@@ -174,4 +174,4 @@ def assert_notice_cause_and_response(test, flow):
     packet['policyLifecycle'] = policy_lifecycle(packet['current'], {}, [event])
     summary = compact_rulebox_summary(packet)
     test.assertEqual('current-only', summary['decisionImpact']['status'])
-    test.assertIn('현재 적용 중인 관리 기준', dict((key, lines) for key, _, lines in summary['sections'])['decision-basis'][0])
+    test.assertIn('추가매수 제한이 적용돼 있습니다', summary['lead'])

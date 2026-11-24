@@ -231,7 +231,8 @@ class StrategyScenarioTests(TestCase):
         prior.update(receiptJobId="receipt", deliveredAt="2026-10-23T01:02:30Z")
         self.assertEqual([], strategy_phase_events(packet(repeated), prior))
         summary = strategy_summary({"current": packet(repeated), "customerEvents": [event]}, "가격 100원", "회복 +1%")
-        self.assertIn("추가로", summary["lead"])
+        self.assertIn("진입을 검토할 단계", summary["lead"])
+        self.assertIn("추가로", str(summary["sections"]))
         self.assertLess(len(str(summary)), 1200)
 
     def test_successor_suppresses_old_notice_without_durable_history_fallback(self):

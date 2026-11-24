@@ -32,7 +32,7 @@ def _observation_only(event):
                      and event_impact(event, changes_only=True)))
 
 
-def _judgment_line(plan, quantity, causes, opposing):
+def observation_judgment(plan, quantity, causes, opposing):
     if opposing:
         return "판단 보류. 반대 방향의 근거도 함께 확인됐습니다."
     if plan.get("comparisonRequired") is True:
@@ -60,6 +60,36 @@ def _judgment_line(plan, quantity, causes, opposing):
         if labels:
             return "·".join(labels) + message
     return "지금은 흐름을 더 지켜볼 단계입니다."
+
+
+def current_policy_lead(current, plan):
+    """Read the currently proven account policy from this snapshot."""
+    quantity = numeric(snapshot_facts(current).get("quantity"))
+    if current.get("proofIdentityVerified") is not True or quantity is None or quantity <= 0:
+        return ""
+    rules = {row.get("id"): row for row in current.get("rules") or []}
+    responses = []
+    for response in plan.get("policyResponses") or []:
+        rule = rules.get(response.get("ruleId")) or {}
+        if (response.get("authority") == "account-policy" and rule.get("matched") is True
+                and rule.get("evidenceUsableForJudgement") is True and not rule.get("referenceOnly")
+                and rule_notice_execution_proven(rule)):
+            responses.append(response)
+    lead = []
+    if any(r.get("code") == "PAUSE_AVERAGING_DOWN" for r in responses):
+        lead.append("추가매수는 제한돼 있습니다.")
+    for response in responses:
+        objective = response.get("objective") or {}
+        actual, target = numeric(response.get("observedValue")), numeric(response.get("targetValue"))
+        if (response.get("code") == "RESTORE_POSITION_LIMIT"
+                and objective.get("field") == "positionAccountWeight" and objective.get("operator") == "<="
+                and actual is not None and target is not None and actual > target):
+            if not lead and any(row.get("action") == "ADD" for row in plan.get("activeRestrictions") or []):
+                lead.append("추가매수는 제한돼 있습니다.")
+            lead.append("이 종목의 계좌 비중은 " + decimal(actual) + "%입니다. 설정한 관리 목표는 "
+                        + decimal(target) + "% 이하입니다.")
+            break
+    return " ".join(lead)
 
 
 def _name(selected, rules):
@@ -138,7 +168,7 @@ def _measured_changes(current, previous, events, judgment, currency):
     return causes, rules, selections
 
 
-def _correction_values(selections, currency):
+def compact_market_values(selections, currency):
     rows, relative = [], {}
     for selected in selections:
         row, field = selected["measurement"], selected["field"]
@@ -183,30 +213,16 @@ def correction_digest(packet, judgment, currency, summary_version):
     if not selections or any(rules[rid].get("evidenceUsableForJudgement") is not True for rid in causes):
         return None
 
-    values, relative = _correction_values(selections, currency)
+    values, relative = compact_market_values(selections, currency)
     proxies = sorted({name for name, _ in relative})
     mixed_proxies = len(proxies) > 1 and len({positive for _, positive in relative}) > 1
     facts = snapshot_facts(current)
     quantity = numeric(facts.get("quantity"))
     opposing = any(link.get("opposingDirections") for link in saved_composition(judgment).get("relationships") or [])
-    lead = _judgment_line(plan, quantity, causes, opposing)
-    decision = "이번 근거 변화로 매매 판단을 바꾸지 않았습니다."
-    policies = (plan.get("policyResponses") or []) if quantity is not None and quantity > 0 else []
-    for response in policies:
-        objective = response.get("objective") or {}
-        rule = rules.get(response.get("ruleId")) or {}
-        actual, target = numeric(response.get("observedValue")), numeric(response.get("targetValue"))
-        if (response.get("code") == "RESTORE_POSITION_LIMIT" and response.get("authority") == "account-policy"
-                and rule.get("matched") is True and rule.get("evidenceUsableForJudgement") is True
-                and not rule.get("referenceOnly") and rule_notice_execution_proven(rule)
-                and objective.get("field") == "positionAccountWeight" and objective.get("operator") == "<="
-                and actual is not None and target is not None and actual > target):
-            lead = ("이 종목의 계좌 비중은 " + decimal(actual) + "%입니다. 설정한 관리 목표는 "
-                    + decimal(target) + "% 이하입니다.")
-            if any(row.get("action") == "ADD" for row in plan.get("activeRestrictions") or []):
-                lead = "추가매수 제한은 계속 적용됩니다. " + lead
-            decision = "매도 시점과 수량은 아직 정해지지 않았습니다."
-            break
+    policy = current_policy_lead(current, plan)
+    lead = policy or observation_judgment(plan, quantity, causes, opposing)
+    decision = ("매도 시점과 수량은 아직 정해지지 않았습니다." if policy
+                else "이번 근거 변화로 매매 판단을 바꾸지 않았습니다.")
     purpose = ("비교 대상에 따라 주가 흐름이 다르게 나타났습니다." if mixed_proxies
                else "기존 판단을 다시 살펴볼 근거가 추가됐습니다.")
     price, daily = numeric(facts.get("currentPrice")), numeric(facts.get("priceChangeRate"))
@@ -249,7 +265,11 @@ def observation_digest(packet, judgment, currency, summary_version):
     if not opposing and len(causes) > 1 and any(r.get("sharedObservation") and {r.get("left"), r.get("right")} <= group_ids for r in related):
         hypotheses.append("같은 자료를 쓰는 규칙은 별개의 확인 근거로 합산하지 않음")
     facts = snapshot_facts(current)
-    lead = _judgment_line(scoped_response_plan(judgment), numeric(facts.get("quantity")), causes, opposing)
+    plan = scoped_response_plan(judgment)
+    policy = current_policy_lead(current, plan)
+    lead = policy or observation_judgment(plan, numeric(facts.get("quantity")), causes, opposing)
+    if policy and opposing:
+        hypotheses.append("서로 반대되는 근거가 있어 매매 방향은 판단을 보류합니다.")
     price = numeric(facts.get("currentPrice"))
     market = price_money(price, currency) if price is not None else "현재가 미확인"
     next_checks = list(dict.fromkeys(_next(s, currency) for s in selections))

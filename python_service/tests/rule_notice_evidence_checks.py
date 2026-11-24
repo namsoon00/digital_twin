@@ -132,7 +132,7 @@ def assert_policy_evidence_variants(test, packet):
     next(c for c in target['customerEvents'][0]['previousConditions'] if c.get('field') == 'profitLossRate')['resolvedThreshold']['value'] = -1
     result = compact_rulebox_summary(target)
     test.assertIn('기준 변경 -1% → 0%', str(result['sections']))
-    test.assertIn('시장 개선을 뜻하지 않습니다', str(result['sections']))
+    test.assertIn('새 기준으로 판단했습니다', str(result['sections']))
     # Tiny signed movements and a literal zero must survive presentation.
     for value in (0, 0.0001):
         changed = deepcopy(packet)

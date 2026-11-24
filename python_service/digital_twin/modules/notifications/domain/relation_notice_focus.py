@@ -61,15 +61,15 @@ def focus_relation_notice(summary, packet):
         if key == "notification-purpose":
             sections.append((key, title, rows))
             if transitions:
-                selected = [row["text"] for row in transitions[:4]]
-                if len(transitions) > 4:
-                    selected.append("외 " + str(len(transitions) - 4) + "개 변경 조건은 상세 근거에 표시")
-                sections.append(("changed-rules", "달라진 규칙", [" / ".join(selected)]))
+                selected = [row["text"] for row in transitions[:2]]
+                if len(transitions) > 2:
+                    selected.append("나머지 " + str(len(transitions) - 2) + "개 규칙은 상세에서 확인")
+                sections.append(("changed-rules", "달라진 규칙", selected))
             continue
         if key == "decision-impact":
-            title = "변경 근거 수치"
+            title = "판단에 쓰인 수치"
         elif key == "decision-basis":
-            title = "종합 판단과 남은 제한"
+            title = "판단의 범위"
         elif key == "current-snapshot":
             title = "참고 시세"
         sections.append((key, title, rows))

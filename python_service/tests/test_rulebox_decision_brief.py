@@ -9,6 +9,16 @@ from digital_twin.modules.notifications.domain.relation_change import relation_c
 from digital_twin.modules.notifications.application.typedb_observation_message import typedb_observation_telegram_message
 
 
+def apply_historical_admission(policy, job, decision):
+    from datetime import datetime, timezone
+    from unittest.mock import patch
+    from digital_twin.modules.notifications.domain.rule_dispatch_validity import rule_dispatch_validity
+    clock = datetime(2026, 10, 2, 1, 11, tzinfo=timezone.utc)
+    with patch('digital_twin.modules.notifications.application.notification.admission.rule_dispatch_validity',
+               side_effect=lambda packet, settings: rule_dispatch_validity(packet, settings, now=clock)):
+        return policy.apply_result(job, decision)
+
+
 def fixture():
     context = readable_fixture()
     relation = context["ontologyRelationContext"]
@@ -560,7 +570,7 @@ class CompactRuleBoxJudgmentTests(unittest.TestCase):
         self.assertEqual(['HOLD', 'TRIM'], [g['action'] for g in judgment['candidateGroups']])
         self.assertTrue(judgment['comparisonRequired'])
         self.assertFalse(judgment['finalMarketActionSelected'])
-        self.assertIn('근거가 엇갈려 최종 판단을 확정하지 않았습니다', body)
+        self.assertIn('여러 대응 후보의 근거를 비교 중입니다', body)
         self.assertNotIn('살펴볼 가설', body)
 
     def test_compact_measurements_use_same_rule_comparison_and_keep_full_data_in_detail(self):
@@ -719,7 +729,7 @@ class ManagementObservationFlowChecks(unittest.TestCase):
                 rule = default_notification_rule('investmentInsight')
                 job.context['_relationDeliveredSnapshot'] = baseline or {}
                 decision = policy.evaluate(job, rule, policy.prepare(job, rule))
-                self.admission = policy.apply_result(job, decision)
+                self.admission = apply_historical_admission(policy, job, decision)
                 self.job = job
                 return super().enqueue(job) if self.admission.accepted else False
 
@@ -831,7 +841,7 @@ class ManagementObservationFlowChecks(unittest.TestCase):
         self.assertIsNone(case.final_decision)
         self.assertEqual((), case.candidate_set.eligible_hypothesis_ids)
         body = NotificationRenderingService().render(queue.job)
-        for phrase in ('계좌 비중을 설정 상한 이내로 조정', '78.45%', '45%', '알림 이유', '변경 근거 수치', '달라진 규칙', '다음 확인'):
+        for phrase in ('78.45%', '45%', '알림 이유', '판단에 쓰인 수치', '달라진 규칙', '다음 확인'):
             self.assertIn(phrase, body)
         self.assertLessEqual(len([line for line in body.splitlines() if line.strip()]), 15)
         self.assertTrue(queue.job.context['relationChangeEvidence']['eligible'])
@@ -878,7 +888,7 @@ class ManagementObservationFlowChecks(unittest.TestCase):
         self.assertEqual(1, runner.run_once())
         self.assertEqual('done', job.status, (job.last_error, runner.last_run_details))
         self.assertEqual(1, len(sent))
-        self.assertIn('비중 조정 요구 해제' if baseline else '계좌 비중을 설정 상한 이내로 조정', sent[0])
+        self.assertIn('비중 조정 요구가 해제됐습니다' if baseline else '45%', sent[0])
         self.assertTrue(receipts[0]['delivered'])
         self.assertTrue(receipts[0]['metadata']['receiptVerified'])
         self.assertTrue(receipts[0]['metadata']['destinationVerified'])
@@ -929,7 +939,7 @@ class ManagementObservationFlowChecks(unittest.TestCase):
         job.context['_relationDeliveredSnapshot'] = previous
         policy, rule = NotificationAdmissionPolicy(), default_notification_rule('investmentInsight')
         decision = policy.evaluate(job, rule, policy.prepare(job, rule))
-        self.assertTrue(policy.apply_result(job, decision).accepted, job.last_error)
+        self.assertTrue(apply_historical_admission(policy, job, decision).accepted, job.last_error)
         self.assertTrue(any(e.get('managementResponseChanged') for e in job.context['relationChangeEvidence']['customerEvents']))
         # Current numeric drift with the same objective is not a new policy.
         ctx = management_only_fixture()

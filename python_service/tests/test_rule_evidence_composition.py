@@ -600,7 +600,7 @@ class RuleEvidenceCompositionTests(unittest.TestCase):
         original = deepcopy(packet)
         summary = compact_rulebox_summary(packet)
         sections = {key: rows for key, _, rows in summary["sections"]}
-        self.assertIn("추가매수 제한은 계속 적용됩니다.", summary["lead"])
+        self.assertIn("추가매수는 제한돼 있습니다.", summary["lead"])
         self.assertIn("계좌 비중은 100%입니다. 설정한 관리 목표는 45% 이하입니다.", summary["lead"])
         self.assertEqual(["매도 시점과 수량은 아직 정해지지 않았습니다."], sections["decision-basis"])
         lines = [line for line in sections["decision-impact"] if "%p 높았습니다" in line]

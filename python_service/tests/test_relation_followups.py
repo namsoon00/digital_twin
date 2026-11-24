@@ -191,8 +191,8 @@ class RelationFollowUpTests(unittest.TestCase):
         self.context["relationChangeEvidence"] = packet
         text = typedb_observation_telegram_message(self.context)
         self.assertIn("매수·매도 흐름 회복 확인", text)
-        self.assertIn("허용 시간 5분", text)
-        self.assertIn("재확인:", text)
+        self.assertIn("허용 경과 시간 5분", text)
+        self.assertIn("판단을 보류", text)
         self.assertIn("10/13 10:20 KST", text)
         self.assertNotIn("다른 규칙의 시세 지연", text)
         self.assertFalse(relation_change_evidence(self.context)["eligible"], "source failure still needs a delivered parent")
@@ -355,10 +355,10 @@ class RelationFollowUpTests(unittest.TestCase):
         self.context["relationChangeEvidence"] = relation_change_evidence(self.context, interrupted)
         text = typedb_observation_telegram_message(self.context)
         self.assertIn("체결·매수·매도 흐름 확인 재개", text)
-        self.assertIn("자료를 다시 사용할 수 있어", text)
+        self.assertIn("새 자료로 앞선 신호를 다시 확인할 수 있습니다", text)
         self.assertIn("새 자료에서 다시 확인한 수치", text)
         self.assertIn("체결강도 120", text)
-        self.assertIn("새로운 강화·약화 판정은 없습니다", text)
+        self.assertIn("자료가 다시 들어왔는지 확인", text)
         self.assertNotIn("근거가 이전 분석보다 강해졌습니다", text)
         coverage["ccnl"]["tradeStrengthDecisionUsable"] = False
         self.context["relationChangeEvidence"] = relation_change_evidence(self.context, interrupted)

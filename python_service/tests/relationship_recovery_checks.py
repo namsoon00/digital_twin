@@ -162,6 +162,7 @@ def assert_native_match_assembly(test, checks):
                   "judgementEvidenceUsable": True, "symbol": "MSTR"}
     subject = OntologyEntity("stock:MSTR", "Fixture", "stock", properties)
     graph = PortfolioOntology("fixture:source-clock-policy", entities=[subject])
+    graph.worldview["evidenceEvaluationAsOf"] = "2026-10-02T01:10:00Z"
     rule = next(r for r in default_graph_inference_rules() if r.rule_id == "graph.position.concentration.guard.v1")
     materialize_rule_inference(graph, rule, subject, {"matchedConditions": [{"conditionId": c.condition_id,
         "matchedByTypeDB": True, "operator": c.operator, "value": c.value} for c in rule.conditions]})

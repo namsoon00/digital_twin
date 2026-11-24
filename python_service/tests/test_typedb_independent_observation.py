@@ -175,7 +175,7 @@ class IndependentTypeDBTests(unittest.TestCase):
         self.assertIn("원천 확인 후 20분", text)
         self.assertNotIn("현재 전체 데이터", text)
         self.assertNotIn("근거가 이전 분석보다", text)
-        self.assertIn("이번 알림이 온 이유", text)
+        self.assertIn("자료 기준", text)
 
     def test_data_restoration_requires_a_delivered_unavailability_baseline(self):
         result, queue, handoff, _ = independent_fixture(data_change="restored")
@@ -257,7 +257,7 @@ class IndependentTypeDBTests(unittest.TestCase):
         previous = context["relationChangeEvidence"]["previous"]
         context["relationChangeEvidence"] = relation_change_evidence(context, previous)
         text = typedb_observation_telegram_message(context)
-        self.assertIn("변경 근거 수치", text)
+        self.assertIn("판단에 쓰인 수치", text)
         self.assertIn("20일 평균 가격 대비 현재 +0.8% / 기준 0% 초과", text)
         self.assertNotIn('-1.25% →', text, 'an ambient prior value is not a preserved condition comparison')
         self.assertIn("이전 알림 -1.25% → 이번 +0.8%", context['customerInvestmentDetailText'])
@@ -326,7 +326,7 @@ class IndependentTypeDBTests(unittest.TestCase):
         from digital_twin.modules.notifications.domain.notification_templates import NotificationTemplate, render_notification
         renderer = NotificationRenderingService(template_renderer=lambda job: render_notification(NotificationTemplate.default("investmentInsight"), job.context))
         first = renderer.render(job)
-        self.assertIn("변경 근거 수치", first, "the transport template must not rewrite the normalized document")
+        self.assertIn("판단에 쓰인 수치", first, "the transport template must not rewrite the normalized document")
         self.assertNotIn("살펴볼 가설", first)
         previous_price = next(row for row in job.context["relationChangeEvidence"]["previous"]["facts"] if row["id"] == "currentPrice")
         previous_price["value"] = 10500

@@ -101,7 +101,7 @@ class RuleNotificationIntentTests(unittest.TestCase):
         self.assertIn('반대되는 근거가 추가', purpose)
         self.assertNotIn('상대 강세', purpose)
         self.assertIn('관리 제한·대응 후보는 같습니다', ctx['customerInvestmentDetailText'])
-        self.assertIn('추가매수 제한 적용', text)
+        self.assertIn('추가매수 제한이 적용돼 있습니다', text)
         self.assertFalse(packet['current']['decisionBrief']['finalActionSelected'])
         self.assertEqual('passed', ctx['customerInvestmentDocumentQuality']['status'])
 

@@ -3,7 +3,7 @@
 from digital_twin.modules.notifications.domain.observation_market_snapshot import clock, decimal, numeric, snapshot_facts
 from digital_twin.modules.notifications.domain.alert_formatting import price_money
 from digital_twin.modules.notifications.domain.relation_change_presentation import (
-    FIELDS, condition_clause, current_input_rows, measurement, model_input_change_rows,
+    FIELDS, OPERATORS, condition_clause, current_input_rows, measurement, model_input_change_rows,
 )
 from digital_twin.modules.notifications.domain.relation_observation_language import hypothesis_words, next_check_words
 from digital_twin.modules.notifications.domain.relation_observation_proof import window_limitation, window_name, source_time
@@ -13,15 +13,28 @@ from digital_twin.modules.notifications.domain.rule_event_presentation import (
 from digital_twin.modules.notifications.domain.rule_policy_lifecycle import release_conclusion
 from digital_twin.modules.notifications.domain.rule_notice_evidence import bind_policy_notice
 from digital_twin.modules.notifications.domain.relation_notice_focus import focus_relation_notice, notice_rule_ids
-from digital_twin.modules.notifications.domain.rule_observation_digest import correction_digest, observation_digest
-
-
-from digital_twin.modules.notifications.domain.composed_rule_presentation import (
-    exact_measurements, composition_explanation, composition_next,
+from digital_twin.modules.notifications.domain.rule_observation_digest import (
+    compact_market_values, correction_digest, current_policy_lead, observation_digest, observation_judgment,
 )
 
 
-VERSION = "compact-rulebox-v11"
+from digital_twin.modules.notifications.domain.composed_rule_presentation import (
+    selected_measurements, composition_explanation, composition_next, saved_composition,
+)
+
+
+VERSION = "compact-rulebox-v12"
+
+MARKET_CHANGES = {
+    "observed": "주가 흐름을 살펴볼 조건이 처음 확인됐습니다.",
+    "reactivated": "전에 확인했던 주가 조건이 다시 성립했습니다.",
+    "support-added": "앞선 판단을 뒷받침하는 근거가 추가됐습니다.",
+    "support-removed": "앞선 판단을 뒷받침하던 근거가 약해졌습니다.",
+    "counter-added": "앞선 판단에 반대되는 근거가 추가됐습니다.",
+    "counter-removed": "앞선 판단에 반대하던 근거가 줄었습니다.",
+    "invalidated": "앞선 판단에 쓰인 규칙 조건이 더 이상 성립하지 않습니다.",
+    "expired": "앞선 판단에 쓰인 근거의 확인 기한이 지났습니다.",
+}
 
 
 def _unique(values):
@@ -37,19 +50,18 @@ def _conclusion(judgment, events):
     actions = [ACTION_LABELS[r["action"]] for r in groups if r["action"] in ACTION_LABELS]
     blocked_codes = _unique(r.get('action') for r in plan.get('activeRestrictions') or []) if plan else judgment.get('blockedActions') or []
     blocked = [ACTION_LABELS[a] for a in blocked_codes if a in ACTION_LABELS]
-    restriction = "·".join(blocked) + " 제한 적용." if blocked else ""
+    restriction = "·".join(blocked) + " 제한이 적용돼 있습니다." if blocked else ""
+    if restriction:
+        return restriction
     if len(actions) > 1:
-        return " ".join(v for v in (restriction, "·".join(actions) + " 후보의 근거가 엇갈려 최종 판단을 확정하지 않았습니다.") if v)
+        return "여러 대응 후보를 비교하고 있습니다."
     if actions:
         pending = any(not r.get("executionEligible") for r in groups)
-        return " ".join(v for v in (restriction, actions[0] + ("에 연결된 가설은 확인됐지만, 이후 가격 흐름에 대한 검증이 부족해 매매 판단은 보류합니다." if pending
-                                            else " 검토 조건이 확인됐습니다. 최종 매매 판단은 아직 확정 전입니다.")) if v)
-    if restriction:
-        return restriction + " 보유분의 유지·매도 판단은 아직 확정되지 않았습니다."
+        return actions[0] + " 검토에는 근거가 더 필요합니다." if pending else "다음 검토 대상은 " + actions[0] + "입니다."
     released = [e for e in events if e.get("policyState") == "released"]
     if released:
         return event_conclusion(released[0])
-    return "확인된 근거 변화가 있어 기존 설명을 다시 점검합니다. 이번 자료로 매매 방향을 정하지 않았습니다."
+    return "지금은 흐름을 더 지켜볼 단계입니다."
 
 
 def _window_measurement(window, older, condition, old_condition, symbol):
@@ -91,7 +103,40 @@ def _purpose(events):
     return "기존 설명을 지지하거나 반박하는 근거가 함께 달라져 다시 점검합니다."
 
 
-def _measurements(current, previous, judgment, events, currency, transitions):
+def _market_purpose(events):
+    if all(event.get("contextState") for event in events):
+        names = _unique(e.get("ruleLabel") for e in events if e.get("ruleLabel") not in (e.get("sourceRuleIds") or []))
+        return (" · ".join(names[:2]) + "에서 새 변화가 확인됐습니다."
+                if names else "시장 흐름에 새 변화가 확인됐습니다.")
+    kinds = {e.get("changeKind") for e in events}
+    if len(kinds) != 1:
+        return "앞선 판단에 쓰인 여러 근거가 달라졌습니다."
+    kind = next(iter(kinds))
+    topics = _unique(hypothesis_words(e.get("hypothesis") or {})[0] for e in events)
+    if len(topics) == 1 and topics[0] != "관찰 가설" and kind in {"counter-added", "counter-removed", "support-added", "support-removed"}:
+        prefix = "‘" + topics[0] + "’"
+        return (prefix + "에 " + MARKET_CHANGES[kind].removeprefix("앞선 판단에 ") if kind.startswith("counter-")
+                else prefix + "을 " + MARKET_CHANGES[kind].removeprefix("앞선 판단을 "))
+    return MARKET_CHANGES.get(kind, "판단에 쓰인 근거가 달라졌습니다.")
+
+
+def _new_action_line(events):
+    changes = [e["deliveryValue"] for e in events if (e.get("deliveryValue") or {}).get("allowed") is True
+               and e["deliveryValue"].get("reasonCode") == "eligible-response-changed"]
+    added = {action for row in changes for action in row.get("addedEligibleActions") or []}
+    removed = {action for row in changes for action in row.get("removedEligibleActions") or []}
+    if added & removed:
+        return ""
+    parts = []
+    for actions, suffix in ((added, " 검토 조건이 새로 충족됐습니다."),
+                            (removed, " 검토 대상에서 빠졌습니다.")):
+        labels = [label for action, label in ACTION_LABELS.items() if action in actions]
+        if labels:
+            parts.append("·".join(labels) + suffix)
+    return " ".join(parts)
+
+
+def _measurements(current, previous, judgment, events, currency, transitions, *, plain_market=False):
     before_rules = {r.get("id"): r for r in previous.get("rules", [])}
     for event in events:
         for rid in event.get('sourceRuleIds') or []:
@@ -193,13 +238,18 @@ def _measurements(current, previous, judgment, events, currency, transitions):
             policy_values.append("계좌 관리: " + FIELDS[field][0] + " " + value_text(field, response["observedValue"])
                 + " / 해제 기준 " + value_text(field, response["targetValue"]) + " "
                 + {"<=": "이하", ">=": "이상", "<": "미만", ">": "초과"}.get(objective.get("operator"), ""))
-    exact = exact_measurements(judgment, (previous.get("decisionBrief") or {}).get("judgment") or {},
+    exact = selected_measurements(judgment, (previous.get("decisionBrief") or {}).get("judgment") or {},
                                events, currency, limit=max(2, 4 - len(policy_values)), cause_only=True,
                                rule_labels={r.get("id"): r.get("label") for r in current.get("rules") or []})
     if exact:
-        return "\n".join(exact + policy_values[:2])
+        if plain_market and all(numeric(row["measurement"].get("expectedValue")) is not None
+                and row["measurement"].get("operator") in OPERATORS for row in exact):
+            values, _ = compact_market_values(exact, currency)
+        else:
+            values = [row["text"] for row in exact]
+        return "\n".join(values + policy_values[:2])
     result = _unique(changed + unchanged + reference)
-    return "\n".join(result[:3]) if result else "직접 비교할 수치가 보존되지 않았습니다."
+    return "\n".join(result[:3]) if result else "이번 변화의 비교 수치를 확인할 자료가 부족합니다."
 
 
 def _comparison(judgment, current, events):
@@ -248,7 +298,9 @@ def _next(judgment, events, currency):
         return (" · ".join(targets[:2]) + "인지 새 자료에서 각각 확인합니다. 다른 제한 조건도 함께 재검사합니다."
                 + (" 가설 확인: " + hypothesis_next if hypothesis_next else ""))
     if any(e.get('policyState') == 'released' for e in events):
-        boundaries = [condition_clause(c['field'], c['operator'], c['resolvedThreshold']['value'], currency)
+        boundaries = [condition_clause(c['field'], c['operator'], c['resolvedThreshold']['value'], currency).replace("+", "")
+                      if c['field'] in {'positionAccountWeight', 'positionWeight'}
+                      else condition_clause(c['field'], c['operator'], c['resolvedThreshold']['value'], currency)
                       for e in events if e.get('policyState') == 'released' for c in e.get('conditions') or []
                       if c.get('resolutionMatchedByTypeDB') is True and c.get('field') in FIELDS
                       and numeric((c.get('resolvedThreshold') or {}).get('value')) is not None]
@@ -294,24 +346,40 @@ def compact_rulebox_summary(packet):
         market += " · 보유 수익률 " + decimal(profit, signed=True) + "%"
     from .rule_strategy_event import strategy_summary
     strategy_events = [e for e in events if e.get("strategyPhases")]
+    plan = scoped_response_plan(judgment)
+    policy_lead = current_policy_lead(current, plan)
     strategy = strategy_summary(packet, market, _measurements(current, previous, judgment, strategy_events, currency, packet.get("transitions") or [])) if strategy_events else None
     if strategy:
+        strategy["judgment"] = judgment
+        if any(e.get("policyState") for e in events):
+            strategy["lead"] = release_conclusion(packet) or policy_lead or _conclusion(judgment, events)
+        elif policy_lead:
+            strategy["lead"] = policy_lead + " " + strategy["lead"]
         return focus_relation_notice(bind_policy_notice(strategy, packet), packet)
     observation = observation_digest(packet, judgment, currency, VERSION) or correction_digest(packet, judgment, currency, VERSION)
     if observation:
         return observation
     released_lead = release_conclusion(packet)
-    lead = released_lead or _conclusion(judgment, events)
+    lead = released_lead or policy_lead or _conclusion(judgment, events)
     impact = ((packet.get('policyLifecycle') or {}).get('decisionImpact') or {}) if judgment else {}
     hypothesis_change = bool(events) and all(e.get('purpose') in {'hypothesis-evidence', 'context-evidence'} for e in events)
     evidence_only = hypothesis_change and not (impact.get('changedResponses') or impact.get('releasedRuleIds')
         or any(e.get("managementResponseChanged") for e in events))
+    action = _new_action_line(events)
     if hypothesis_change:
-        lead = " ".join(_unique(event_conclusion(e, include_qualification=False) for e in events)[:2])
-    elif impact.get('changedResponses') and not released_lead:
+        opposing = any(r.get("opposingDirections") for r in saved_composition(judgment).get("relationships") or [])
+        rule_ids = {rid for event in events for rid in notice_rule_ids(event)}
+        quantity = numeric(facts.get("quantity"))
+        if quantity is not None and quantity > 0 and current.get("proofIdentityVerified") is True and not policy_lead:
+            scoped_restrictions = {r.get("action") for r in plan.get("activeRestrictions") or []}
+            names = [label for code, label in ACTION_LABELS.items() if code in scoped_restrictions]
+            if names:
+                policy_lead = "·".join(names) + " 제한이 적용돼 있습니다."
+        lead = action or policy_lead or observation_judgment(plan, quantity, rule_ids, opposing)
+    elif impact.get('changedResponses') and not released_lead and not policy_lead:
         lead = ' · '.join(_unique(r.get('label') for r in impact['changedResponses'])) + '.'
     prior_judgment = (previous.get("decisionBrief") or {}).get("judgment") or {}
-    if (not released_lead and not hypothesis_change and judgment.get("conclusionFingerprint") and judgment.get("conclusionFingerprint") == prior_judgment.get("conclusionFingerprint")
+    if (not released_lead and not policy_lead and not hypothesis_change and judgment.get("conclusionFingerprint") and judgment.get("conclusionFingerprint") == prior_judgment.get("conclusionFingerprint")
             and judgment.get("status") in {"management-response", "restriction-only"}):
         lead = "기존 관리 대응 유지: " + lead
     lifecycle = packet.get('policyLifecycle') or {}
@@ -325,24 +393,28 @@ def compact_rulebox_summary(packet):
                '설정된 관리 목표가 바뀌었습니다. 시장이 새로 악화됐다는 뜻은 아닙니다.' if causes == {'policy-target-changed'} else
                '해제됐던 관리 조건이 다시 성립해 해당 대응을 재적용합니다.' if causes == {'policy-reapplied'} else
                '현재 자료에서 이 관리 대응의 적용을 처음 확인해 알려드립니다.' if causes == {'first-delivered-confirmation'} else
-               lead if evidence_only else _purpose(events))
-    together = ('해제된 조건에 대한 후속 안내입니다. 추가매수 허용이나 매수·매도 권유를 뜻하지 않습니다.' if released_lead
+               _market_purpose(events) if hypothesis_change else _purpose(events))
+    together = ('해제된 관리 조건의 범위를 확인합니다. 매매 판단은 별도로 검토합니다.' if released_lead
                 else _comparison(judgment, current, events))
     remaining = _unique(r.get('label') for r in impact.get('remainingResponses') or [])
     if evidence_only:
         changes = _unique(event_impact(e, brief, changes_only=True) for e in events
                           if (e.get("decisionImpact") or {}).get("status") == "changed")
-        combined = composition_explanation(judgment, include_policy=False)
-        if not combined and judgment.get("comparisonRequired") is True:
-            combined = "대응 후보의 근거가 엇갈려 최종 판단을 확정하지 않았습니다."
         exclusions = _unique(qualification_notice(e) for e in events
                              if ((e.get("hypothesis") or {}).get("qualification") or {}).get("status") == "quarantined")
-        if changes or combined or exclusions:
-            together = " ".join(_unique([*changes, combined, *exclusions]))
+        if action:
+            together = " ".join(filter(None, [policy_lead, "매매 시점과 수량은 아직 정해지지 않았습니다."]))
+        elif changes or exclusions:
+            together = " ".join(_unique([*changes, *exclusions]))
+        elif policy_lead:
+            together = "매매 시점과 수량은 아직 정해지지 않았습니다."
         elif all((e.get("decisionImpact") or {}).get("status") == "unchanged" for e in events):
-            together = "이전 알림과 관리 기준·대응 후보가 같습니다."
+            together = "이번 변화로 새로 정해진 매매 대응은 없습니다."
         else:
-            together = "웹 상세에서 현재 판단을 확인할 수 있습니다."
+            together = "다음 자료에서 이 변화가 이어지는지 살펴봅니다."
+        comparison = "여러 대응 후보의 근거를 비교 중입니다."
+        if judgment.get("comparisonRequired") is True and comparison not in lead and not action:
+            together = comparison if not (changes or exclusions) else together + " " + comparison
     elif remaining and not released_lead:
         together = ('유지 중인 관리 기준: ' if impact.get('status') == 'maintained' else '현재 적용 중인 관리 기준: ') + ' · '.join(remaining) + '.'
         if hypothesis_change:
@@ -356,7 +428,8 @@ def compact_rulebox_summary(packet):
             together = together + " " + combined
     next_text = _next(judgment, events, currency) if hypothesis_change else (
         composition_next(judgment, events, currency) or _next(judgment, events, currency))
-    measurements = _measurements(current, previous, judgment, events, currency, packet.get("transitions") or [])
+    measurements = _measurements(current, previous, judgment, events, currency, packet.get("transitions") or [],
+                                 plain_market=evidence_only)
     # Separate rows survive the shared customer-language normalizer, which
     # deliberately folds whitespace inside a single prose row.
     measurement_rows = ([target_text] if target_text else []) + measurements.splitlines()

@@ -2,7 +2,7 @@
   "version": 1,
   "status": "available",
   "provider": "cloudflared",
-  "baseUrl": "https://live-auction-sign-arabic.trycloudflare.com",
+  "baseUrl": "https://soc-grams-mortality-scheduled.trycloudflare.com",
   "revision": "ea8f15c28511",
-  "updatedAt": "2026-11-24T09:16:58.674Z"
+  "updatedAt": "2026-11-24T09:18:45.940Z"
 }

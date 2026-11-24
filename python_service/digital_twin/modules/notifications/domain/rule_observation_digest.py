@@ -112,6 +112,118 @@ def _next(selected, currency):
     return label + " " + _number(field, row["expectedValue"], currency) + " " + OPERATORS[row["operator"]]
 
 
+def _correction_only(event):
+    value = event.get("deliveryValue") or {}
+    return (event.get("purpose") == "hypothesis-evidence" and event.get("changeKind") == "counter-added"
+            and value.get("allowed") is True and value.get("deliveredPredecessor") is True
+            and value.get("reasonCode") == "delivered-premise-correction"
+            and not any(value.get(k) for k in ("addedEligibleActions", "removedEligibleActions", "executionAuthorized"))
+            and ((event.get("hypothesis") or {}).get("qualification") or {}).get("status") != "quarantined"
+            and (event.get("decisionImpact") or {}).get("status") == "unchanged"
+            and not any(event.get(k) for k in ("strategyPhases", "outcome", "managementResponseChanged")))
+
+
+def _measured_changes(current, previous, events, judgment, currency):
+    rules = {r.get("id"): r for r in current.get("rules") or []}
+    causes = {rid for event in events for rid in notice_rule_ids(event)}
+    if not causes or len(causes) > 4 or any(not rule_notice_execution_proven(rules.get(rid) or {})
+            or rules[rid].get("referenceOnly") or rules[rid].get("evidenceUsableForJudgement") is False for rid in causes):
+        return causes, rules, []
+    selections = selected_measurements(judgment, (previous.get("decisionBrief") or {}).get("judgment") or {},
+        events, currency, cause_only=True, rule_labels={rid: r.get("label") for rid, r in rules.items()})
+    covered = {rid for selected in selections for rid in [selected["ruleId"], *selected["nativeRuleIds"]]}
+    if not causes.issubset(covered) or any(numeric(s["measurement"].get("expectedValue")) is None
+            or s["measurement"].get("operator") not in OPERATORS for s in selections):
+        return causes, rules, []
+    return causes, rules, selections
+
+
+def _correction_values(selections, currency):
+    rows, relative = [], {}
+    for selected in selections:
+        row, field = selected["measurement"], selected["field"]
+        prior = numeric((selected.get("previous") or {}).get("observedValue"))
+        value = numeric(row["observedValue"])
+        context = row.get("context") or {}
+        proxy = context.get("proxySymbol")
+        if field != "relativeReturnPct" or context.get("comparisonWindow") != "session-change" or not proxy or not value:
+            rows.extend(_values(selected, currency, False, {}))
+            continue
+        stock, comparison = numeric(context.get("stockChangeRate")), numeric(context.get("proxyChangeRate"))
+        both_down = stock is not None and comparison is not None and stock < 0 and comparison < 0
+        key = (str(proxy), row.get("evidenceId"), value, prior, both_down, (row.get("provenance") or {}).get("sourceAsOf"))
+        thresholds = relative.setdefault(key, [])
+        boundary = _number(field, row["expectedValue"], currency) + " " + OPERATORS[row["operator"]]
+        if boundary not in thresholds:
+            thresholds.append(boundary)
+    facts = []
+    for (proxy, _, value, prior, both_down, _clock), thresholds in relative.items():
+        if both_down:
+            line = proxy + "보다 " + decimal(abs(value)) + "%p " + ("덜 하락했습니다." if value > 0 else "더 하락했습니다.")
+        else:
+            line = proxy + "보다 수익률이 " + decimal(abs(value)) + "%p " + ("높았습니다." if value > 0 else "낮았습니다.")
+        if prior is not None and prior != value:
+            line += " 이전 차이 " + _number("relativeReturnPct", prior, currency) + "."
+        facts.append(line + " 기준 " + " / ".join(thresholds))
+    return facts + rows, {(key[0], key[2] > 0) for key in relative}
+
+
+def correction_digest(packet, judgment, currency, summary_version):
+    """Lead a delivered counter-evidence update with its frozen response."""
+    current, previous = packet.get("current") or {}, packet.get("previous") or {}
+    events = packet.get("customerEvents") or []
+    impact = (packet.get("policyLifecycle") or {}).get("decisionImpact") or {}
+    plan = scoped_response_plan(judgment)
+    if (not plan or current.get("proofIdentityVerified") is not True or not events
+            or not all(_correction_only(event) for event in events)
+            or impact.get("changedResponses") or impact.get("releasedRuleIds")
+            or plan.get("selectedMarketAction") or judgment.get("finalMarketActionSelected")):
+        return None
+    causes, rules, selections = _measured_changes(current, previous, events, judgment, currency)
+    if not selections or any(rules[rid].get("evidenceUsableForJudgement") is not True for rid in causes):
+        return None
+
+    values, relative = _correction_values(selections, currency)
+    proxies = sorted({name for name, _ in relative})
+    mixed_proxies = len(proxies) > 1 and len({positive for _, positive in relative}) > 1
+    facts = snapshot_facts(current)
+    quantity = numeric(facts.get("quantity"))
+    opposing = any(link.get("opposingDirections") for link in saved_composition(judgment).get("relationships") or [])
+    lead = _judgment_line(plan, quantity, causes, opposing)
+    decision = "이번 근거 변화로 매매 판단을 바꾸지 않았습니다."
+    policies = (plan.get("policyResponses") or []) if quantity is not None and quantity > 0 else []
+    for response in policies:
+        objective = response.get("objective") or {}
+        rule = rules.get(response.get("ruleId")) or {}
+        actual, target = numeric(response.get("observedValue")), numeric(response.get("targetValue"))
+        if (response.get("code") == "RESTORE_POSITION_LIMIT" and response.get("authority") == "account-policy"
+                and rule.get("matched") is True and rule.get("evidenceUsableForJudgement") is True
+                and not rule.get("referenceOnly") and rule_notice_execution_proven(rule)
+                and objective.get("field") == "positionAccountWeight" and objective.get("operator") == "<="
+                and actual is not None and target is not None and actual > target):
+            lead = ("이 종목의 계좌 비중은 " + decimal(actual) + "%입니다. 설정한 관리 목표는 "
+                    + decimal(target) + "% 이하입니다.")
+            if any(row.get("action") == "ADD" for row in plan.get("activeRestrictions") or []):
+                lead = "추가매수 제한은 계속 적용됩니다. " + lead
+            decision = "매도 시점과 수량은 아직 정해지지 않았습니다."
+            break
+    purpose = ("비교 대상에 따라 주가 흐름이 다르게 나타났습니다." if mixed_proxies
+               else "기존 판단을 다시 살펴볼 근거가 추가됐습니다.")
+    price, daily = numeric(facts.get("currentPrice")), numeric(facts.get("priceChangeRate"))
+    market = (price_money(price, currency) + (" (전일 " + decimal(daily, signed=True) + "%)" if daily is not None else "")
+              if price is not None else "현재가 미확인")
+    next_rows = (["다음 시세에서 " + "·".join(proxies) + "와의 등락률 차이가 이어지는지 확인합니다."] if mixed_proxies
+                 else ["새 자료에서 " + _next(selected, currency) + " 조건이 이어지는지 확인합니다." for selected in selections[:2]])
+    return {"version": summary_version, "lead": lead, "judgment": judgment, "decisionImpact": impact,
+            "focusContract": {"version": FOCUS_VERSION, "comparisonBasis": "previous-successful-relation-receipt",
+                              "changedRules": changed_rule_rows(packet), "marketSnapshotRole": "reference-only"},
+            "sections": [("notification-purpose", "알림 이유", [purpose]),
+                         ("decision-impact", "규칙에 사용된 수치", values),
+                         ("decision-basis", "현재 판단", [decision]),
+                         ("current-snapshot", "참고 시세", [market]),
+                         ("next-check-contract", "다음 확인", next_rows)]}
+
+
 def observation_digest(packet, judgment, currency, summary_version):
     current, previous = packet.get("current") or {}, packet.get("previous") or {}
     events = packet.get("customerEvents") or []
@@ -120,16 +232,8 @@ def observation_digest(packet, judgment, currency, summary_version):
             or not all(_observation_only(e) for e in events)
             or impact.get("changedResponses") or impact.get("releasedRuleIds")):
         return None
-    rules = {r.get("id"): r for r in current.get("rules") or []}
-    causes = {rid for event in events for rid in notice_rule_ids(event)}
-    if not causes or len(causes) > 4 or any(not rule_notice_execution_proven(rules.get(rid) or {})
-            or rules[rid].get("referenceOnly") or rules[rid].get("evidenceUsableForJudgement") is False for rid in causes):
-        return None
-    selections = selected_measurements(judgment, (previous.get("decisionBrief") or {}).get("judgment") or {},
-        events, currency, cause_only=True, rule_labels={rid: r.get("label") for rid, r in rules.items()})
-    covered = {rid for selected in selections for rid in [selected["ruleId"], *selected["nativeRuleIds"]]}
-    if not causes.issubset(covered) or any(numeric(s["measurement"].get("expectedValue")) is None
-            or s["measurement"].get("operator") not in OPERATORS for s in selections):
+    causes, rules, selections = _measured_changes(current, previous, events, judgment, currency)
+    if not selections:
         return None
     states = list(dict.fromkeys(STATES[e["changeKind"]] for e in events))
     names = list(dict.fromkeys(_name(s, rules) for s in selections))

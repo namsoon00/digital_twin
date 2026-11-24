@@ -554,7 +554,8 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # One contract checks the response-plan conclusion at the top of observation notices.
         # Two storage-warning contracts landed in ea8f15c28 with its operational diagnostics.
         # One startup contract checks ownership before adopting a surviving MySQL listener.
-        self.assertLessEqual(total, 3131 + 33 + 8 + 5 + 1 + 2 + 9 + 2 + 3 + 10 + 2 + 1 + 2 + 1 + 2 + 1)
+        # One contract covers concise counter-evidence and a verified account response.
+        self.assertLessEqual(total, 3131 + 33 + 8 + 5 + 1 + 2 + 9 + 2 + 3 + 10 + 2 + 1 + 2 + 1 + 2 + 1 + 1)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

@@ -13,7 +13,7 @@ from digital_twin.modules.notifications.domain.rule_event_presentation import (
 from digital_twin.modules.notifications.domain.rule_policy_lifecycle import release_conclusion
 from digital_twin.modules.notifications.domain.rule_notice_evidence import bind_policy_notice
 from digital_twin.modules.notifications.domain.relation_notice_focus import focus_relation_notice, notice_rule_ids
-from digital_twin.modules.notifications.domain.rule_observation_digest import observation_digest
+from digital_twin.modules.notifications.domain.rule_observation_digest import correction_digest, observation_digest
 
 
 from digital_twin.modules.notifications.domain.composed_rule_presentation import (
@@ -21,7 +21,7 @@ from digital_twin.modules.notifications.domain.composed_rule_presentation import
 )
 
 
-VERSION = "compact-rulebox-v10"
+VERSION = "compact-rulebox-v11"
 
 
 def _unique(values):
@@ -297,7 +297,7 @@ def compact_rulebox_summary(packet):
     strategy = strategy_summary(packet, market, _measurements(current, previous, judgment, strategy_events, currency, packet.get("transitions") or [])) if strategy_events else None
     if strategy:
         return focus_relation_notice(bind_policy_notice(strategy, packet), packet)
-    observation = observation_digest(packet, judgment, currency, VERSION)
+    observation = observation_digest(packet, judgment, currency, VERSION) or correction_digest(packet, judgment, currency, VERSION)
     if observation:
         return observation
     released_lead = release_conclusion(packet)

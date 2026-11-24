@@ -571,6 +571,54 @@ class RuleEvidenceCompositionTests(unittest.TestCase):
         relationship["opposingDirections"] = True
         self.assertIn("반대 방향", compact_rulebox_summary(packet)["lead"])
 
+    def test_counter_evidence_leads_with_account_limits_and_groups_shared_measurements(self):
+        from digital_twin.modules.notifications.domain.rulebox_notification_summary import compact_rulebox_summary
+        packet = observation_packet()
+        current = packet["current"]
+        judgment = current["decisionBrief"]["judgment"]
+        policy = {**judgment["managementDecision"]["responses"][0], "code": "RESTORE_POSITION_LIMIT",
+                  "authority": "account-policy", "observedValue": 100, "targetValue": 45,
+                  "objective": {"field": "positionAccountWeight", "operator": "<="}}
+        policy_rule = {**current["rules"][0], "id": policy["ruleId"], "matched": True}
+        current["rules"].append(policy_rule)
+        judgment["responsePlan"] = {
+            **IDENTITY, "authority": "typedb-materialized-synthesis", "version": "native-response-plan-v2",
+            "policyResponses": [policy], "activeRestrictions": [{"action": "ADD", "ruleId": policy["ruleId"]}],
+        }
+        groups = judgment["evidenceComposition"]["evidenceGroups"]
+        shared = next(g["sourceMeasurements"] for g in groups if g["ruleId"] == RELATIVE)
+        row = deepcopy(next(row for row in shared["measurements"] if row["field"] == "relativeReturnPct"))
+        row["expectedValue"] = 1
+        next(g for g in groups if g["ruleId"] == RATE)["sourceMeasurements"] = measurement_packet(
+            RATE, "NVDA", shared["modelReleaseId"], shared["sourceFeatureSnapshotId"], AT, [row])
+        event = packet["customerEvents"][0]
+        event.update(changeKind="counter-added", decisionImpact={"status": "unchanged"})
+        event["ruleComparisons"].append({"ruleId": RATE})
+        event["deliveryValue"].update(deliveredPredecessor=True, reasonCode="delivered-premise-correction",
+                                      observationOnly=False)
+
+        original = deepcopy(packet)
+        summary = compact_rulebox_summary(packet)
+        sections = {key: rows for key, _, rows in summary["sections"]}
+        self.assertIn("추가매수 제한은 계속 적용됩니다.", summary["lead"])
+        self.assertIn("계좌 비중은 100%입니다. 설정한 관리 목표는 45% 이하입니다.", summary["lead"])
+        self.assertEqual(["매도 시점과 수량은 아직 정해지지 않았습니다."], sections["decision-basis"])
+        lines = [line for line in sections["decision-impact"] if "%p 높았습니다" in line]
+        self.assertEqual(1, len(lines))
+        self.assertIn("+1%p 이상", lines[0])
+        self.assertIn("+2%p 이상", lines[0])
+        self.assertEqual({RATE, RELATIVE}, {r["ruleId"] for r in summary["focusContract"]["changedRules"]})
+        self.assertEqual(original, packet)
+
+        policy_rule["evidenceUsableForJudgement"] = False
+        self.assertNotIn("45%", compact_rulebox_summary(packet)["lead"])
+        judgment["responsePlan"]["worldId"] = "another-world"
+        self.assertNotIn("규칙에 사용된 수치", [title for _, title, _ in compact_rulebox_summary(packet)["sections"]])
+        judgment["responsePlan"]["worldId"] = IDENTITY["worldId"]
+        event["decisionImpact"] = {"status": "changed", "previous": {"candidateActions": ["TRIM"]},
+                                   "current": {"candidateActions": []}}
+        self.assertIn("검토 후보 제외 — 일부 축소", str(compact_rulebox_summary(packet)["sections"]))
+
     def test_observation_digest_cannot_hide_action_changes_or_upgrade_incomplete_proof(self):
         from digital_twin.modules.notifications.domain.rulebox_notification_summary import compact_rulebox_summary
         original = observation_packet()

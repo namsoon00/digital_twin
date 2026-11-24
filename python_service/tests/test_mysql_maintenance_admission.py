@@ -351,7 +351,7 @@ class MySQLMaintenanceAdmissionTests(unittest.TestCase):
             scheduler.run_forever.side_effect = lambda: factory.call_args.args[0]()
             cli.maintenance_command(SimpleNamespace(maintenance_action='watch', interval='60'))
         inventory.assert_called_once()
-        observe.assert_called_once_with({}, snapshot={'freeMb': 8000})
+        observe.assert_called_once_with({}, snapshot={'freeMb': 8000}, sample_maintenance=True)
         cleanup.assert_not_called()
 
     def test_realtime_queue_defers_cleanup_until_maximum_deferral(self):

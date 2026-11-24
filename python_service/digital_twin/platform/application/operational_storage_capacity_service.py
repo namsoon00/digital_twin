@@ -19,7 +19,8 @@ class OperationalStorageCapacityService:
 
     state_key = "operationalStorageCapacity"
 
-    def __init__(self, store=None, settings: Mapping[str, object] = None, now_provider=None):
+    def __init__(self, store=None, settings: Mapping[str, object] = None, now_provider=None, maintenance_diagnostics=None):
+        self.maintenance_diagnostics = maintenance_diagnostics
         self.store = store
         self.settings = dict(settings or {})
         self.now_provider = now_provider or (lambda: datetime.now(timezone.utc))
@@ -57,12 +58,20 @@ class OperationalStorageCapacityService:
         if current.tzinfo is None:
             current = current.replace(tzinfo=timezone.utc)
         previous = self.previous()
+        diagnostics = previous.get("maintenanceDiagnostics") or {}
+        if self.maintenance_diagnostics:
+            try:
+                diagnostics = self.maintenance_diagnostics(snapshot, diagnostics, current)
+            except (OSError, ValueError, TypeError, KeyError) as error:
+                diagnostics = {"errorType": type(error).__name__}
         health = evaluate_operational_storage_capacity(
-            snapshot,
+            {**snapshot, "maintenanceDiagnostics": diagnostics},
             previous=previous,
             settings=self.settings,
             now=current,
         )
+        if diagnostics:
+            health["maintenanceDiagnostics"] = diagnostics
         # An ENOSPC-style write failure is independent evidence that the
         # normal sampler was too late. It bypasses the long human reminder
         # window, while a short dedicated cooldown avoids one alert per
@@ -198,6 +207,8 @@ class OperationalStorageCapacityNotificationEnqueuer:
             title = "운영 저장공간 소진 예상"
         elif kind == "reminder" and values.get("forecastAlertActive") and not components:
             title = "운영 저장공간 소진 예상 지속"
+        elif kind == "directory-growth":
+            title = "공용 디스크 여유 급감"
         elif kind == "material-worsening":
             title = "운영 저장공간 제한 악화"
         if recovered and values.get("previousForecastAlertActive") and previous == "healthy":
@@ -294,6 +305,7 @@ class OperationalStorageCapacityNotificationEnqueuer:
             )
             if names:
                 lines.insert(3, "• 제한 대상: " + names)
+        lines.extend(self._maintenance_lines(values))
         text = "\n".join(lines)
         signal = "recovered" if recovered else (
             "capacityRotation" if kind == "typedb-auto-rotation" else
@@ -318,6 +330,42 @@ class OperationalStorageCapacityNotificationEnqueuer:
             "notificationSignals": ["operations", "storageCapacity", signal],
             "criteria": ["공용 디스크 여유", "TypeDB 저장·WAL·checkpoint 크기", "MySQL·로그 저장공간 한도"],
         }
+
+    @staticmethod
+    def _maintenance_lines(values):
+        diagnostics = values.get("maintenanceDiagnostics") or {}
+        checked = parse_datetime(values.get("checkedAt"))
+        sampled = parse_datetime(diagnostics.get("sampledAt"))
+        lines = []
+        if sampled and checked and 0 <= (checked - sampled).total_seconds() <= 3600:
+            growth = [(row["changeMb"], label, row) for label, row in diagnostics.get("directories", {}).items()
+                      if row.get("available") and row.get("changeMb", 0) > 0]
+            for delta, label, row in sorted(growth, reverse=True)[:3]:
+                since = parse_datetime(row.get("since"))
+                if not since:
+                    continue
+                elapsed = (sampled - since).total_seconds() / 60
+                lines.append(f"• 경로 증가: {label} +{delta:.1f}MiB (측정 간격 {elapsed:.0f}분)")
+            missing = [label for label, row in diagnostics.get("directories", {}).items() if not row.get("available")]
+            if missing:
+                lines.append("• 경로 측정 미완료: " + ", ".join(missing))
+        if values.get("mysqlCapacityStage") in {"warning", "restricted", "critical", "core-only"}:
+            plan = diagnostics.get("mysqlPlan", {})
+            measured = parse_datetime(plan.get("checkedAt"))
+            if not (checked and measured and 0 <= (checked - measured).total_seconds() <= 3600) or plan.get("errorType"):
+                lines.append("• MySQL 물리 정리 후보: 최근 메타데이터 측정 대기")
+            elif not plan.get("candidates"):
+                lines.append("• MySQL 물리 정리 후보: 이번 측정에서 기준을 충족한 테이블 없음")
+            else:
+                for item in plan["candidates"][:3]:
+                    reclaim = item["reclaimableBytes"] / 2**30
+                    work = item["temporaryHeadroomBytes"] / 2**30
+                    lines.append(f"• {item['table']}: 예상 회수 {reclaim:.2f}GiB · 재작성 임시 공간 {work:.2f}GiB")
+                reserve = float(values.get("minimumFreeMb") or 0) / 1024
+                if values.get("mysqlCapacityStage") == "warning":
+                    lines.append(f"• 예방 정비: 비필수 쓰기 제한 기준 {values.get('componentAlertPercent', 90)}%에 도달하기 전에 정비 시간을 잡으세요.")
+                lines.append(f"• 정비 준비: 예비 공간 {reserve:.1f}GiB와 백업 공간을 별도로 확보하고 쓰기 중지·복원 검증 일정을 잡으세요.")
+        return lines
 
     @staticmethod
     def _mysql_metadata_line(values: Mapping[str, object]) -> str:

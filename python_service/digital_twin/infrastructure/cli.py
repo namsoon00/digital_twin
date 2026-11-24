@@ -2227,7 +2227,8 @@ def maintenance_command(args) -> int:
             # for hours precisely while inference is blocked by disk pressure.
             stage = "capacity-admission"
             try:
-                observe_operational_storage_capacity(settings, snapshot=operational_storage_inventory(settings))
+                observe_operational_storage_capacity(settings, snapshot=operational_storage_inventory(settings),
+                                                     sample_maintenance=True)
                 stage = "queue-admission"
                 queue_state = dict(reasoning_queue_probe() or {})
             except Exception as error:

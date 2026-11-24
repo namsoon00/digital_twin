@@ -466,7 +466,7 @@ def evaluate_operational_storage_capacity(
                 "limitMb": round(limit_mb, 1),
                 "ratioPercent": round(ratio * 100, 1),
                 "direction": "maximum-size",
-                "alertThresholdReached": ratio >= component_alert_percent / 100.0,
+                "alertThresholdReached": component == "mysql" or ratio >= component_alert_percent / 100.0,
             })
 
     recent_samples = _recent_free_samples(prior, current, free_mb, forecast_lookback_minutes)
@@ -516,8 +516,15 @@ def evaluate_operational_storage_capacity(
     # notification recovery only, never the live capacity/write-admission state.
     recovery_margin_mb = _integer(configured.get("operationalStorageRecoveryMarginMb"), 2048, 0)
     recovery_margin_percent = _integer(configured.get("operationalStorageRecoveryMarginPercent"), 5, 0, 20)
+    mysql_warning = any(item["component"] == "mysql" for item in limiting_components)
+    prior_mysql_warning = prior.get("mysqlMaintenanceWarningActive", any(
+        item.get("component") == "mysql" for item in prior.get("limitingComponents", [])
+    ))
+    mysql_limit = _number(values.get("mysqlLimitMb"))
+    mysql_warning_active = mysql_warning or (prior_mysql_warning and mysql_limit > 0 and
+        _number(values.get("mysqlSizeMb")) / mysql_limit > (component_warning_percent - recovery_margin_percent) / 100)
     recovery_pending = forecast_recovery_pending or (previous_alert_eligible and not alert_eligible and (
-        free_mb < alert_free_mb + recovery_margin_mb
+        free_mb < alert_free_mb + recovery_margin_mb or mysql_warning_active
         or any(
             _number(values.get(limit_key)) > 0
             and _number(values.get(size_key)) / _number(values.get(limit_key))
@@ -560,12 +567,28 @@ def evaluate_operational_storage_capacity(
         alert_kind = "forecast" if forecast_detected and not (disk_alert_reached or component_alert_reached) else "threshold-crossed"
     elif alert_eligible and worsened_state:
         alert_kind = "state-changed"
+    elif mysql_warning and not prior_mysql_warning:
+        alert_kind = "threshold-crossed"
     elif materially_worsened:
         alert_kind = "material-worsening"
     elif forecast_eta_worsened:
         alert_kind = "forecast-eta-worsened"
     elif reminder_due:
         alert_kind = "reminder"
+
+    # A component already in critical state can mask a new cache growth incident.
+    diagnostics = values.get("maintenanceDiagnostics") or {}
+    sample_at = parse_datetime(diagnostics.get("sampledAt"))
+    last_growth_alert = parse_datetime(prior.get("lastDirectoryGrowthAlertAt"))
+    fresh_growth = bool(
+        sample_at and 0 <= (current - _utc(sample_at)).total_seconds() <= 900
+        and free_mb < cleanup_free_mb and _number(diagnostics.get("freeChangeMb")) <= -2048
+        and any(row.get("available") and _number(row.get("changeMb")) >= 2048
+                for row in diagnostics.get("directories", {}).values())
+        and (not last_growth_alert or (_utc(sample_at) - _utc(last_growth_alert)) >= timedelta(hours=2))
+    )
+    if fresh_growth and not alert_kind:
+        alert_kind = "directory-growth"
 
     component_names = {str(item.get("component") or "") for item in limiting_components}
     suggested_action = "정상 보존 정책으로 운영 중입니다."
@@ -622,6 +645,7 @@ def evaluate_operational_storage_capacity(
             1,
         ),
         "mysqlCapacityStage": str(values.get("mysqlCapacityStage") or "normal"),
+        "mysqlMaintenanceWarningActive": mysql_warning_active,
         "mysqlMetadataStatus": str(values.get("mysqlMetadataStatus") or "unavailable"),
         "mysqlMetadataReason": str(values.get("mysqlMetadataReason") or "")[:180],
         "mysqlLiveDataMb": round(_number(values.get("mysqlLiveDataMb")), 1),
@@ -652,6 +676,7 @@ def evaluate_operational_storage_capacity(
         "alertReminderMinutes": reminder_minutes,
         "materialWorseningPercent": material_worsening_percent,
         "recentFreeSamples": recent_samples,
+        "lastDirectoryGrowthAlertAt": diagnostics["sampledAt"] if fresh_growth else prior.get("lastDirectoryGrowthAlertAt", ""),
         "forecastEnabled": forecast_enabled,
         "forecastAvailable": bool(forecast.get("available")),
         "forecastMethod": "sustained-median-slopes-v1",

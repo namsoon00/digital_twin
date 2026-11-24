@@ -261,6 +261,64 @@ class OperationalStorageCapacityTests(unittest.TestCase):
         self.assertEqual("state-changed", critical_state["alertKind"])
         self.assertIsNotNone(critical_event)
 
+    def test_mysql_early_warning_keeps_writes_and_uses_maintenance_sample(self):
+        from unittest.mock import patch
+        from digital_twin.infrastructure import storage_maintenance_diagnostics as diagnostics
+
+        current = [datetime(2026, 11, 24, tzinfo=timezone.utc)]
+        snapshot = {**self.disk_snapshot(60 * 1024), "mysqlLimitMb": 1000,
+                    "mysqlSizeMb": 790, "mysqlCapacityStage": "maintenance"}
+        candidate = {"table": "domain_events", "reclaimableBytes": 2**30, "temporaryHeadroomBytes": 2**29}
+        with tempfile.TemporaryDirectory() as temp, patch.object(diagnostics, "_allocated_mb", return_value=100) as size, patch.object(
+                diagnostics, "_candidate_plan", return_value=[candidate]) as plan:
+            service = OperationalStorageCapacityService(store=StateStore(), now_provider=lambda: current[0],
+                maintenance_diagnostics=lambda sample, old, now: diagnostics.collect_maintenance_diagnostics(
+                    {}, sample, old, now, root=Path(temp)))
+            self.assertIsNone(service.record(snapshot)[1])
+            plan.assert_not_called()
+            current[0] += timedelta(minutes=16)
+            snapshot.update(mysqlSizeMb=800, mysqlCapacityStage="warning")
+            size.return_value = 400
+            health, event = service.record(snapshot)
+            self.assertTrue(health["nonEssentialWritesAllowed"])
+            message = OperationalStorageCapacityNotificationEnqueuer(Queue()).context(event.payload, event)["readableMessage"]
+            self.assertIn("예상 회수 1.00GiB", message)
+            self.assertIn("재작성 임시 공간 0.50GiB", message)
+            self.assertIn("+300.0MiB", message)
+            current[0] += timedelta(minutes=1)
+            self.assertIsNone(service.record(snapshot)[1])
+            plan.assert_called_once()
+            snapshot.update(mysqlSizeMb=790, mysqlCapacityStage="maintenance")
+            self.assertIsNone(service.record(snapshot)[1])
+            snapshot.update(mysqlSizeMb=801, mysqlCapacityStage="warning")
+            self.assertIsNone(service.record(snapshot)[1])
+            current[0] += timedelta(hours=2)
+            size.side_effect = TimeoutError
+            plan.side_effect = TimeoutError
+            health, _ = service.record(snapshot)
+            entry = health["maintenanceDiagnostics"]["directories"]["Xcode DerivedData"]
+            self.assertFalse(entry["available"])
+            self.assertEqual(400, entry["sizeMb"])
+            lines = OperationalStorageCapacityNotificationEnqueuer._maintenance_lines(health)
+            self.assertFalse(any("경로 증가" in line for line in lines))
+            self.assertTrue(any("측정 대기" in line for line in lines))
+
+    def test_cache_growth_alerts_once_during_an_open_mysql_incident(self):
+        now = [datetime(2026, 11, 24, tzinfo=timezone.utc)]
+        sample = {}
+        service = OperationalStorageCapacityService(store=StateStore(), now_provider=lambda: now[0],
+            maintenance_diagnostics=lambda *_: sample)
+        snapshot = {**self.disk_snapshot(30 * 1024), "mysqlLimitMb": 1000, "mysqlSizeMb": 965}
+        service.record(snapshot)
+        now[0] += timedelta(minutes=15)
+        sample.update(sampledAt=now[0].isoformat(), freeChangeMb=-3000,
+                      directories={"Gradle caches": {"available": True, "changeMb": 2900}})
+        snapshot["freeMb"] -= 3000
+        health, event = service.record(snapshot)
+        self.assertEqual("directory-growth", health["alertKind"])
+        self.assertIsNotNone(event)
+        self.assertIsNone(service.record(snapshot)[1])
+
     def test_queue_failure_uses_direct_operations_notifier(self):
         notifier = Notifier()
         payload = {

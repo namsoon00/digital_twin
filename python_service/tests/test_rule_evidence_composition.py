@@ -518,7 +518,7 @@ class RuleEvidenceCompositionTests(unittest.TestCase):
         self.assertEqual("지금은 흐름을 더 지켜볼 단계입니다. 신규 매수를 검토할 조건은 아직 확인되지 않았습니다.",
                          compact_rulebox_summary(packet)["lead"])
         pending["action"] = "BUY"
-        self.assertEqual("신규 매수를 검토하려면 근거가 더 필요합니다.", compact_rulebox_summary(packet)["lead"])
+        self.assertEqual("신규 매수 판단은 보류합니다. 근거를 더 확인할 단계입니다.", compact_rulebox_summary(packet)["lead"])
         plan["reviewCandidates"] = [{"action": "BUY", "executionEligible": True, "supportingRuleIds": [RELATIVE]}]
         self.assertEqual("신규 매수는 계속 검토 중입니다.", compact_rulebox_summary(packet)["lead"])
         quantity["value"] = 5
@@ -527,6 +527,38 @@ class RuleEvidenceCompositionTests(unittest.TestCase):
         self.assertNotIn("전량 매도", lead)
         plan["worldId"] = "another-world"
         self.assertEqual("지금은 흐름을 더 지켜볼 단계입니다.", compact_rulebox_summary(packet)["lead"])
+
+    def test_rule_alert_separates_failed_conditions_from_current_confirmations(self):
+        from digital_twin.modules.notifications.domain.rulebox_notification_summary import compact_rulebox_summary
+        packet = observation_packet()
+        current, event = packet["current"], packet["customerEvents"][0]
+        group = next(g for g in current["decisionBrief"]["judgment"]["evidenceComposition"]["evidenceGroups"]
+                     if g["ruleId"] == RELATIVE)
+        rows = [{"conditionId": "level-retest", "evidenceId": "stock:NVDA#ma5", "field": "ma5Distance",
+                 "observedValue": 1.34, "operator": op, "expectedValue": boundary,
+                 "provenance": {"sourceAsOf": AT}} for op, boundary in ((">=", -1), ("<=", 1.5))]
+        source = measurement_packet(RELATIVE, "NVDA", "model", "feature", AT, rows)
+        group["sourceMeasurements"] = source
+        first = compact_rulebox_summary(packet)
+        purposes = dict((key, values) for key, _, values in first["sections"])
+        self.assertIn("+1.34%", purposes["notification-purpose"][0])
+        self.assertEqual(["관찰 범위 -1% 이상이고 +1.5% 이하"], purposes["decision-impact"])
+
+        event.update(changeKind="support-removed", evidenceChanges=[
+            {"kind": "support-removed", "evidence": [{"evidence": {"ruleId": RELATIVE}}]}])
+        event["ruleComparisons"] = [{"ruleId": RELATIVE, "comparison": "verified", "previous": {
+            "contractMatched": True, "releaseId": "model", "sourceFeatureSnapshotId": "feature", "sourceMeasurements": source},
+            "current": {"status": "not-supported", "failedConditionIds": ["level-retest"]}},
+            {"ruleId": RATE, "comparison": "verified", "current": {"contractMatched": True}}]
+        current["decisionBrief"]["judgment"]["evidenceComposition"]["evidenceGroups"].remove(group)
+        saved = deepcopy(packet)
+        summary = compact_rulebox_summary(packet)
+        sections = {key: rows for key, _, rows in summary["sections"]}
+        self.assertIn("5일 평균 가격 대비 조건이 성립하지 않았습니다.", sections["notification-purpose"][0])
+        self.assertNotIn("금리", " ".join(sections["decision-impact"]))
+        self.assertNotIn("+1.34%", " ".join(sections["decision-impact"]))
+        self.assertEqual([RELATIVE], [r["ruleId"] for r in summary["focusContract"]["changedRules"]])
+        self.assertEqual(saved, packet)
 
     def test_observation_digest_preserves_previous_scope_and_separate_multi_rule_boundaries(self):
         from digital_twin.modules.notifications.domain.rulebox_notification_summary import compact_rulebox_summary
@@ -569,7 +601,7 @@ class RuleEvidenceCompositionTests(unittest.TestCase):
         self.assertIn("같은 자료", sections["decision-basis"])
         relationship = packet["current"]["decisionBrief"]["judgment"]["evidenceComposition"]["relationships"][0]
         relationship["opposingDirections"] = True
-        self.assertIn("반대 방향", compact_rulebox_summary(packet)["lead"])
+        self.assertIn("서로 반대되는 근거", compact_rulebox_summary(packet)["lead"])
 
     def test_counter_evidence_leads_with_account_limits_and_groups_shared_measurements(self):
         from digital_twin.modules.notifications.domain.rulebox_notification_summary import compact_rulebox_summary

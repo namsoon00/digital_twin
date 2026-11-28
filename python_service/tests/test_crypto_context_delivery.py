@@ -168,7 +168,9 @@ class CryptoContextDeliveryTests(unittest.TestCase):
         self.assertEqual('send', context_observation_delivery_decision(context)['decision'])
         text = typedb_observation_telegram_message(context)
         detail = context['customerInvestmentDetailText']
-        self.assertIn('투자 행동 판단은 포함하지 않습니다', text)
+        self.assertIn('시장 흐름 관찰 알림입니다', text)
+        self.assertIn('7일 가격 변동률이 관찰 기준에 도달했습니다', text)
+        self.assertIn('이번 관찰로 새로 정해진 매매 대응은 없습니다', text)
         self.assertIn('이더리움', text)
         self.assertIn('-4.74%', text)
         self.assertIn('-4%', text)

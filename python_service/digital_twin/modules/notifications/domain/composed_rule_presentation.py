@@ -76,6 +76,32 @@ def _display_field(row):
     return field
 
 
+def failed_measurement_names(events, symbol):
+    """Name a failed condition from its prior witness, without quoting it as current."""
+    names = []
+    for event in events:
+        if event.get("changeKind") not in {"support-removed", "counter-removed", "invalidated", "mixed-evidence"}:
+            continue
+        causes = set(notice_rule_ids(event))
+        for comparison in event.get("ruleComparisons") or []:
+            rule = comparison.get("ruleId")
+            before, after = comparison.get("previous") or {}, comparison.get("current") or {}
+            if (rule not in causes or comparison.get("comparison") != "verified"
+                    or before.get("contractMatched") is not True or after.get("status") != "not-supported"
+                    or after.get("sourceMeasurements")):
+                continue
+            failed = set(after.get("failedConditionIds") or []) - set(after.get("unknownConditionIds") or [])
+            packet = before.get("sourceMeasurements") or {}
+            verified = verified_measurement_packet(packet, rule_id=rule, symbol=symbol,
+                release_id=before.get("releaseId"), feature_snapshot_id=before.get("sourceFeatureSnapshotId"),
+                cutoff=packet.get("knowledgeCutoffAt"))
+            for row in verified.get("measurements") or []:
+                field = _display_field(row)
+                if row.get("conditionId") in failed and field in MEASURES and numeric(row.get("observedValue")) is not None:
+                    names.append(MEASURES[field][0])
+    return list(dict.fromkeys(names))[:2]
+
+
 def selected_measurements(current, previous, events, currency, limit=4, *, cause_only=False, rule_labels=None):
     """Select frozen witnesses once for both prose and structured presentation."""
     now, old = saved_composition(current), saved_composition(previous)

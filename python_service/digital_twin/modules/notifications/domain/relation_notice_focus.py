@@ -12,10 +12,13 @@ CHANGES = {"support-added": "지지 근거 추가", "support-removed": "지지 �
 
 def notice_rule_ids(event):
     """A lifecycle can contain unchanged rules; prefer the exact changed links."""
-    changes = [r.get("ruleId") for r in event.get("ruleComparisons") or []]
-    changes += [(r.get("evidence") or {}).get("ruleId")
-                for change in event.get("evidenceChanges") or [] for r in change.get("evidence") or []]
-    return list(dict.fromkeys(rid for rid in changes if rid)) or list(event.get("sourceRuleIds") or [])
+    changes = [(r.get("evidence") or {}).get("ruleId")
+               for change in event.get("evidenceChanges") or [] for r in change.get("evidence") or []]
+    exact = list(dict.fromkeys(rid for rid in changes if rid))
+    if exact:
+        return exact
+    comparisons = [r.get("ruleId") for r in event.get("ruleComparisons") or [] if r.get("ruleId")]
+    return list(dict.fromkeys(comparisons)) or list(event.get("sourceRuleIds") or [])
 
 
 def changed_rule_rows(packet):
@@ -57,10 +60,12 @@ def focus_relation_notice(summary, packet):
     result["focusContract"] = {"version": VERSION, "comparisonBasis": "previous-successful-relation-receipt",
                                "changedRules": transitions, "marketSnapshotRole": "reference-only"}
     sections = []
+    events = packet.get("customerEvents") or []
+    context_only = bool(events) and all(event.get("contextState") for event in events)
     for key, title, rows in result["sections"]:
         if key == "notification-purpose":
             sections.append((key, title, rows))
-            if transitions:
+            if transitions and not context_only:
                 selected = [row["text"] for row in transitions[:2]]
                 if len(transitions) > 2:
                     selected.append("나머지 " + str(len(transitions) - 2) + "개 규칙은 상세에서 확인")

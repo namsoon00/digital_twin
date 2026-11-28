@@ -33,21 +33,26 @@ def _observation_only(event):
 
 
 def observation_judgment(plan, quantity, causes, opposing):
-    if opposing:
-        return "판단 보류. 반대 방향의 근거도 함께 확인됐습니다."
-    if plan.get("comparisonRequired") is True:
-        return "판단 보류. 여러 대응 후보의 근거를 비교 중입니다."
     restrictions = plan.get("activeRestrictions") or []
     reviews = plan.get("reviewCandidates") or []
     pending = plan.get("pendingCandidates") or []
     if plan and quantity == 0:
         if any(row.get("action") == "BUY" for row in restrictions):
             return "현재 신규 매수가 제한돼 있습니다."
+        if any(row.get("action") == "BUY" for row in pending) and not any(row.get("action") == "BUY" for row in reviews):
+            return "신규 매수 판단은 보류합니다. 근거를 더 확인할 단계입니다."
+        if opposing:
+            return "신규 매수 판단은 보류합니다. 서로 반대되는 근거가 확인됐습니다."
         if any(row.get("action") == "BUY" for row in reviews):
             return "신규 매수는 계속 검토 중입니다."
-        if any(row.get("action") == "BUY" for row in pending):
-            return "신규 매수를 검토하려면 근거가 더 필요합니다."
         return "지금은 흐름을 더 지켜볼 단계입니다. 신규 매수를 검토할 조건은 아직 확인되지 않았습니다."
+    if opposing:
+        return "매매 판단을 보류합니다. 서로 반대되는 근거가 확인됐습니다."
+    if plan.get("comparisonRequired") is True:
+        actions = {row.get("action") for row in [*reviews, *pending]}
+        labels = [label for action, label in ACTION_LABELS.items() if action in actions]
+        return ("매매 판단을 보류합니다. 비교 중인 대응은 " + "·".join(labels) + "입니다."
+                if labels else "판단 보류. 여러 대응 후보의 근거를 비교 중입니다.")
     if quantity is not None and quantity > 0:
         blocked = {row.get("action") for row in restrictions if row.get("ruleId") in causes}
         labels = [label for action, label in ACTION_LABELS.items() if action in blocked]
@@ -132,7 +137,7 @@ def _values(selected, currency, include_name, rules):
     return lines
 
 
-def _next(selected, currency):
+def measurement_predicate(selected, currency):
     row, field = selected["measurement"], selected["field"]
     context = row.get("context") or {}
     label = ((_context(row) + " · ") if _context(row) else "") + MEASURES[field][0]
@@ -140,6 +145,27 @@ def _next(selected, currency):
         label = "전일 종가 대비 " + str(context["proxySymbol"]) + "와의 등락률 차이"
     # Recheck the authored predicate, never invent its inverse as a buy/release rule.
     return label + " " + _number(field, row["expectedValue"], currency) + " " + OPERATORS[row["operator"]]
+
+
+def measured_band(selections, currency):
+    """Two bounds can describe one measured condition, provided their witness is identical."""
+    if len(selections) != 2:
+        return {}
+    first, second = selections
+    lower, upper = first["measurement"], second["measurement"]
+    if lower.get("operator") in {"<", "<="}:
+        lower, upper = upper, lower
+    if (first["ruleId"] != second["ruleId"] or first["field"] != second["field"]
+            or lower.get("operator") not in {">", ">="} or upper.get("operator") not in {"<", "<="}
+            or any(lower.get(k) != upper.get(k)
+                   for k in ("evidenceId", "conditionId", "observedValue", "provenance", "context"))):
+        return {}
+    field = first["field"]
+    label = MEASURES[field][0]
+    lo = _number(field, lower["expectedValue"], currency) + " " + OPERATORS[lower["operator"]]
+    hi = _number(field, upper["expectedValue"], currency) + " " + OPERATORS[upper["operator"]]
+    actual = _number(field, lower["observedValue"], currency)
+    return {"label": label, "actual": actual, "bounds": lo + "이고 " + hi}
 
 
 def _correction_only(event):
@@ -229,7 +255,8 @@ def correction_digest(packet, judgment, currency, summary_version):
     market = (price_money(price, currency) + (" (전일 " + decimal(daily, signed=True) + "%)" if daily is not None else "")
               if price is not None else "현재가 미확인")
     next_rows = (["다음 시세에서 " + "·".join(proxies) + "와의 등락률 차이가 이어지는지 확인합니다."] if mixed_proxies
-                 else ["새 자료에서 " + _next(selected, currency) + " 조건이 이어지는지 확인합니다." for selected in selections[:2]])
+                 else ["새 자료에서 " + measurement_predicate(selected, currency) + " 조건이 이어지는지 확인합니다."
+                       for selected in selections[:2]])
     return {"version": summary_version, "lead": lead, "judgment": judgment, "decisionImpact": impact,
             "focusContract": {"version": FOCUS_VERSION, "comparisonBasis": "previous-successful-relation-receipt",
                               "changedRules": changed_rule_rows(packet), "marketSnapshotRole": "reference-only"},
@@ -255,6 +282,11 @@ def observation_digest(packet, judgment, currency, summary_version):
     names = list(dict.fromkeys(_name(s, rules) for s in selections))
     change = " · ".join(names + states)
     values = [line for s in selections for line in _values(s, currency, len(causes) > 1, rules)]
+    band = measured_band(selections, currency)
+    if band:
+        observed = band["label"] + " " + band["actual"]
+        change = observed + "입니다. 이 값이 관찰 범위에 해당합니다."
+        values = ["관찰 범위 " + band["bounds"]]
     hypotheses = list(dict.fromkeys(hypothesis_words(e.get("hypothesis") or {})[0] for e in events))
     # Keep material opposing evidence visible even when the other rule did not change.
     composition = saved_composition(judgment)
@@ -272,13 +304,15 @@ def observation_digest(packet, judgment, currency, summary_version):
         hypotheses.append("서로 반대되는 근거가 있어 매매 방향은 판단을 보류합니다.")
     price = numeric(facts.get("currentPrice"))
     market = price_money(price, currency) if price is not None else "현재가 미확인"
-    next_checks = list(dict.fromkeys(_next(s, currency) for s in selections))
+    next_checks = list(dict.fromkeys(measurement_predicate(s, currency) for s in selections))
     next_rows = ["새 자료에서 " + condition + " 조건 유지 여부" for condition in next_checks]
+    if band:
+        next_rows = ["다음 시세에서도 같은 범위에 머무는지 확인합니다."]
     return {"version": summary_version, "observationDigestVersion": VERSION,
         "lead": lead, "judgment": judgment, "decisionImpact": impact,
         "focusContract": {"version": FOCUS_VERSION, "comparisonBasis": "previous-successful-relation-receipt",
             "changedRules": changed_rule_rows(packet), "marketSnapshotRole": "reference-only"},
-        "sections": [("notification-purpose", "달라진 규칙", [change]),
+        "sections": [("notification-purpose", "알림 이유" if band else "달라진 규칙", [change]),
                      ("decision-impact", "규칙에 사용된 수치", values),
                      ("decision-basis", "관련 가설", hypotheses),
                      ("current-snapshot", "참고 시세", [market]),

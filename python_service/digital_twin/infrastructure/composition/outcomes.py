@@ -62,7 +62,8 @@ def build_historical_replay_job_service(
     from digital_twin.infrastructure import operational_store as stores
     from digital_twin.infrastructure.composition.decisions import build_investment_brain_service
     from digital_twin.infrastructure.settings import runtime_settings
-    from digital_twin.modules.outcomes.public import HistoricalReplayJobService
+    from digital_twin.modules.decisions.infrastructure.mysql_strategy_scenarios import MySQLStrategyScenarioStore
+    from digital_twin.modules.outcomes.public import HistoricalReplayJobService, PriceRecoveryPaperService
 
     configured_settings = settings or runtime_settings()
     brain = build_investment_brain_service(configured_settings) if execution_enabled else None
@@ -74,5 +75,10 @@ def build_historical_replay_job_service(
         ),
         hypothesis_replay_service=(
             brain.hypothesis_outcome_replay_service if brain else None
+        ),
+        paper_service=PriceRecoveryPaperService(
+            releases=stores.reasoning_engine_registry_store(configured_settings),
+            scenarios=MySQLStrategyScenarioStore(configured_settings) if execution_enabled else None,
+            quotes=stores.raw_mysql_market_time_series_store(configured_settings) if execution_enabled else None,
         ),
     )

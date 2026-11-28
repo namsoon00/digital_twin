@@ -556,7 +556,8 @@ class TestSuiteGovernanceTests(unittest.TestCase):
         # One startup contract checks ownership before adopting a surviving MySQL listener.
         # One contract covers concise counter-evidence and a verified account response.
         # One notification contract distinguishes a failed range from another rule's current measurements.
-        self.assertLessEqual(total, 3131 + 33 + 8 + 5 + 1 + 2 + 9 + 2 + 3 + 10 + 2 + 1 + 2 + 1 + 2 + 1 + 1 + 1)
+        # Four paper-study contracts cover scope, net returns, missing quotes, durable scheduling and owner access.
+        self.assertLessEqual(total, 3131 + 33 + 8 + 5 + 1 + 2 + 9 + 2 + 3 + 10 + 2 + 1 + 2 + 1 + 2 + 1 + 1 + 1 + 4)
 
     def test_no_single_module_recreates_a_monolithic_regression_suite(self):
         counts = {

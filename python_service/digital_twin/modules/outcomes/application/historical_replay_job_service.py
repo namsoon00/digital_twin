@@ -4,15 +4,22 @@ import time
 from typing import Dict
 
 from digital_twin.modules.outcomes.domain.historical_replay import HistoricalReplayJob
+from digital_twin.modules.outcomes.domain.price_recovery_paper import KIND, study_identity
 
 
 class HistoricalReplayJobService:
-    def __init__(self, store, decision_replay_service, hypothesis_replay_service):
+    def __init__(self, store, decision_replay_service, hypothesis_replay_service, paper_service=None):
         self.store = store
         self.decision_replay_service = decision_replay_service
         self.hypothesis_replay_service = hypothesis_replay_service
+        self.paper_service = paper_service
 
     def enqueue(self, replay_kind: str, request: Dict[str, object]) -> Dict[str, object]:
+        if replay_kind == KIND:
+            study = self.paper_service.prepare(request)
+            job = HistoricalReplayJob.create(replay_kind, study)
+            job.job_id = study_identity(study)
+            return self.store.enqueue_paper_study(job).to_dict()
         job = HistoricalReplayJob.create(replay_kind, request)
         self.store.enqueue(job)
         return job.to_dict()
@@ -49,6 +56,8 @@ class HistoricalReplayJobService:
 
     def execute(self, job: HistoricalReplayJob) -> Dict[str, object]:
         request = dict(job.request or {})
+        if job.replay_kind == KIND:
+            return self.paper_service.run(request, job.created_at)
         if job.replay_kind == "decision":
             if not self.decision_replay_service:
                 raise RuntimeError("decision replay executor is not configured")

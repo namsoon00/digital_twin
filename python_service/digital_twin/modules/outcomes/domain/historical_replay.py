@@ -5,9 +5,10 @@ from typing import Dict
 import uuid
 
 from digital_twin.modules.portfolio.contracts import utc_now_iso
+from .price_recovery_paper import KIND
 
 
-REPLAY_KINDS = {"decision", "hypothesis"}
+REPLAY_KINDS = {"decision", "hypothesis", KIND}
 TERMINAL_REPLAY_STATUSES = {"completed", "failed"}
 
 

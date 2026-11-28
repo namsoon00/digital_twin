@@ -416,7 +416,31 @@ def model_review_command(args) -> int:
 
 
 def historical_replay_command(args) -> int:
-    service = build_historical_replay_job_service()
+    action = args.historical_replay_action
+    service = build_historical_replay_job_service(execution_enabled=action in {"once", "watch"})
+    if action == "paper":
+        try:
+            job = service.enqueue("price-recovery-paper", {
+                "accountId": args.account_id, "symbol": args.symbol, "market": args.market,
+                "startDate": args.start_date, "endDate": args.end_date, "mode": args.mode,
+                "costBpsPerSide": args.cost_bps_per_side, "deploymentId": args.deployment_id,
+                "worldId": args.world_id,
+            })
+        except ValueError as error:
+            print(str(error), file=sys.stderr)
+            return 2
+        print(json.dumps(job, ensure_ascii=False))
+        return 0
+    if action == "paper-results":
+        if not args.job_id:
+            print(json.dumps(service.list(replay_kind="price-recovery-paper"), ensure_ascii=False))
+            return 0
+        job = service.get(args.job_id)
+        if job.get("replayKind") != "price-recovery-paper":
+            print("Paper study not found.", file=sys.stderr)
+            return 1
+        print(json.dumps(job, ensure_ascii=False))
+        return 0
     if args.historical_replay_action == "status":
         print(json.dumps(service.list(limit=20), ensure_ascii=False))
         return 0
@@ -2682,6 +2706,18 @@ def build_parser() -> argparse.ArgumentParser:
     historical_replay_watch = historical_replay_actions.add_parser("watch")
     historical_replay_watch.add_argument("--limit", default="1")
     historical_replay_actions.add_parser("status")
+    paper_study = historical_replay_actions.add_parser("paper", help="Register a price-recovery paper comparison")
+    paper_study.add_argument("--account-id", required=True)
+    paper_study.add_argument("--symbol", required=True)
+    paper_study.add_argument("--market", choices=("KR", "US"), required=True)
+    paper_study.add_argument("--start-date", required=True)
+    paper_study.add_argument("--end-date", required=True)
+    paper_study.add_argument("--cost-bps-per-side", type=int, required=True)
+    paper_study.add_argument("--mode", choices=("historical", "forward"), default="historical")
+    paper_study.add_argument("--deployment-id", default="")
+    paper_study.add_argument("--world-id", default="")
+    paper_results = historical_replay_actions.add_parser("paper-results", help="Inspect saved price-recovery paper comparisons")
+    paper_results.add_argument("job_id", nargs="?", default="")
     historical_replay.set_defaults(func=historical_replay_command)
 
     notifications = subparsers.add_parser("notifications", help="Run queued notification delivery")

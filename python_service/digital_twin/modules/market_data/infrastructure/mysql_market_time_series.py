@@ -912,6 +912,19 @@ class MySQLMarketTimeSeriesStore(MySQLOperationalConnection):
             return account_rows
         return global_rows or account_rows
 
+    def load_paper_quote_window(self, account_id, symbol, start, end):
+        """Read one short window of account snapshot quotes with capture provenance."""
+        if not self.enabled():
+            return []
+        with self.connect() as connection:
+            rows = connection.execute(
+                "SELECT * FROM market_time_series_observations "
+                "WHERE account_id = %s AND symbol = %s AND granularity = '3m' "
+                "AND observed_at >= %s AND observed_at <= %s AND current_price > 0 "
+                "ORDER BY observed_at, bucket_at LIMIT 32",
+                (account_id, symbol, iso_utc(start), iso_utc(end))).fetchall()
+        return [self.observation_payload(row) for row in rows]
+
     def load_outcome_observations(
         self,
         account_id: str,

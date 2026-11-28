@@ -51,6 +51,8 @@ class OutcomesRoutes:
                 self.operational_read_settings(), execution_enabled=False,
             )
             job = replay_service.get(urllib.parse.unquote(replay_job_match.group(1)))
+            if job.get("replayKind") == "price-recovery-paper" and not request.ensure_writable("모의 투자 원장은 소유자만 조회할 수 있습니다."):
+                return
             return request.send_payload(200 if job else 404, {
                 "status": str(job.get("status") or "not-found") if job else "not-found",
                 "job": job,
@@ -75,6 +77,23 @@ class OutcomesRoutes:
                 "limit": max(1, min(2000, limit)),
             })
             return request.send_payload(202, {"status": "queued", "job": job})
+
+        if path == "/api/investment-brain/price-recovery-paper" and request.command in {"GET", "POST"}:
+            if not request.ensure_writable("모의 투자 비교는 소유자만 사용할 수 있습니다."):
+                return
+            replay_service = self.build_historical_replay_job_service(
+                self.operational_read_settings(), execution_enabled=False,
+            )
+            if request.command == "GET":
+                return request.send_payload(200, replay_service.list(replay_kind="price-recovery-paper", limit=20))
+            try:
+                body = request.read_json_body()
+                if not isinstance(body, dict):
+                    raise ValueError("Supply a JSON object.")
+                job = replay_service.enqueue("price-recovery-paper", body)
+            except ValueError as error:
+                return request.send_payload(400, {"status": "invalid-study", "error": str(error)})
+            return request.send_payload(202, {"status": job["status"], "job": job})
 
         if path == "/api/investment-brain/decision-replay" and request.command in {"GET", "POST"}:
             replay_service = self.build_historical_replay_job_service(

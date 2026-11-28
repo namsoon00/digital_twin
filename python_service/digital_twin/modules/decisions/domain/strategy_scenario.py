@@ -21,6 +21,10 @@ def digest(value):
         separators=(",", ":"), allow_nan=False).encode()).hexdigest()
 
 
+def strategy_scenario_key(identity):
+    return "scenario:" + digest({k: identity[k] for k in SCOPE})
+
+
 def timestamp(value):
     try:
         parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
@@ -68,7 +72,7 @@ def observation_input(contract, identity, native, assessed_at):
         return None
     scope = {k: identity[k] for k in SCOPE[:-1]}
     scope["contractFingerprint"] = contract["contractFingerprint"]
-    key = "scenario:" + digest(scope)
+    key = strategy_scenario_key(scope)
     phases_set = set(phases)
     signals = phases_set | ({"conflict"} if "entry" in phases_set and phases_set & {"exit", "invalidation"} else set())
     signal = next(s for s in contract["scenarioContract"]["signalPriority"] if s in signals)

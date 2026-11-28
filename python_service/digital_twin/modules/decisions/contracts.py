@@ -144,6 +144,7 @@ _EXPORTS.update({
 })
 
 _EXPORTS['narrative_presentation_errors'] = ('digital_twin.modules.decisions.domain.investment_narrative_policy', 'narrative_presentation_errors')
+_EXPORTS['strategy_scenario_key'] = ('digital_twin.modules.decisions.domain.strategy_scenario', 'strategy_scenario_key')
 
 __all__ = list(_EXPORTS)
 

@@ -47,3 +47,12 @@ class MySQLStrategyScenarioStore(MySQLOperationalConnection):
                 "WHERE scenario_key = %s ORDER BY source_observed_at DESC, created_at DESC LIMIT %s",
                 (scenario_key, max(1, min(200, int(limit))))).fetchall()
         return [_json_loads(row["payload_json"], {}) for row in rows]
+
+    def study_observations(self, scenario_key, start, end, limit):
+        with self.connect() as connection:
+            rows = connection.execute(
+                "SELECT payload_json, created_at FROM investment_strategy_scenario_observations "
+                "WHERE scenario_key = %s AND source_observed_at >= %s AND source_observed_at < %s "
+                "ORDER BY source_observed_at, created_at, observation_id LIMIT %s",
+                (scenario_key, start.isoformat(), end.isoformat(), limit)).fetchall()
+        return [{**_json_loads(row["payload_json"], {}), "recordedAt": row["created_at"]} for row in rows]

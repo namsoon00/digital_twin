@@ -291,6 +291,27 @@ class WebRouterPayloadTests(unittest.TestCase):
         service.enqueue.assert_called_once_with("decision", {"accountId": "demo", "symbol": "", "limit": 2000, "includeCases": True, "caseLimit": 1, "replayMode": "strict-replay"})
         send.assert_called_once_with(202, {"status": "queued", "job": job})
 
+    def test_paper_replay_http_handoff_only_exposes_the_ledger_to_owners(self):
+        routes = WebRoutes()
+        body = {"accountId": "demo", "symbol": "TEST", "market": "KR"}
+        job = {"jobId": "paper-1", "replayKind": "price-recovery-paper", "status": "pending"}
+        service = SimpleNamespace(enqueue=Mock(return_value=job), get=Mock(return_value=job))
+        routes = replace(routes, outcomes=replace(routes.outcomes,
+            build_historical_replay_job_service=Mock(return_value=service), operational_read_settings=lambda: {}))
+        router = build_api_router(routes)
+        send = Mock()
+        request = SimpleNamespace(command="POST", read_json_body=lambda: body,
+                                  ensure_writable=Mock(return_value=True), send_payload=send)
+        router.dispatch(request, "/api/investment-brain/price-recovery-paper", {})
+        service.enqueue.assert_called_once_with("price-recovery-paper", body)
+        send.assert_called_once_with(202, {"status": "pending", "job": job})
+        request.command = "GET"
+        request.ensure_writable.return_value = False
+        send.reset_mock()
+        router.dispatch(request, "/api/investment-brain/price-recovery-paper", {})
+        router.dispatch(request, "/api/investment-brain/replay-jobs/paper-1", {})
+        send.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()

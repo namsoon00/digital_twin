@@ -405,6 +405,14 @@ class InvestmentMeaningTests(unittest.TestCase):
         self.assertNotIn("priceInvestigationPolicy", captured[0]["current"])
         self.assertEqual(meaning.VERSION, captured[0]["current"]["investmentMeaningPolicy"])
         validate_execution_input(captured[0])
+        routing_outcome = deepcopy(store.complete.call_args.args[1]['processingOutcome'])
+        self.assertTrue(routing_outcome['companyRoutingWait']['key'])
+        # Even if the ordinary packet identity changes, a saved source-dated
+        # defer can reuse the unchanged inventory without routing again.
+        routing_outcome['retryKey'] = 'different-ordinary-key'
+        store.last_processing_outcome.return_value = routing_outcome
+        self.assertEqual('unchanged-wait', service.run_once()['status'])
+        self.assertEqual(1, service.read_planner.call_count)
         # A stored source-dated company gap is not renewed by read-view hashes.
         from digital_twin.modules.ai_orchestration.domain import company_evidence_wait
         snapshot = captured[0]['current']
@@ -433,6 +441,21 @@ class InvestmentMeaningTests(unittest.TestCase):
         store.last_processing_outcome.return_value = previous
         self.assertEqual('unchanged-wait', service.run_once()['status'])
         self.assertEqual(reads + 1, service.read_planner.call_count)
+        self.assert_company_routing_wait_cannot_hide_an_execution_limit_or_a_quote_wait()
+
+    def assert_company_routing_wait_cannot_hide_an_execution_limit_or_a_quote_wait(self):
+        from digital_twin.modules.ai_orchestration.domain import company_evidence_wait
+        outcome = {'status': 'data-wait', 'reasonCode': 'required-source'}
+        step = {'status': 'valid', 'decision': {'action': 'defer', 'purpose': 'source-dated',
+                                              'missingEvidence': ['official filing']}}
+        wait = company_evidence_wait.routing_wait(outcome, [step], 'original')
+        self.assertTrue(company_evidence_wait.routing_waiting({**outcome, 'companyRoutingWait': wait}, 'original'))
+        self.assertFalse(company_evidence_wait.routing_waiting({**outcome, 'companyRoutingWait': wait}, 'new-source'))
+        self.assertEqual({}, company_evidence_wait.routing_wait({**outcome, 'status': 'retrieval-blocked'}, [step], 'original'))
+        self.assertEqual({}, company_evidence_wait.routing_wait(outcome, [{**step, 'status': 'context-budget'}], 'original'))
+        self.assertEqual({}, company_evidence_wait.routing_wait(outcome, [
+            {**step, 'decision': {**step['decision'], 'purpose': 'current-state'}}
+        ], 'original'))
 
     def test_company_source_can_be_authored_and_independently_reviewed_without_a_price_anchor(self):
         from ai_insight_fixtures import review

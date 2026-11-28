@@ -2,12 +2,22 @@
 import json
 
 
+CENTRAL_AI_MODEL = "gpt-6.2-sol"
+
+
 def call_observation_model(envelope, configured):
     from digital_twin.modules.model_registry.infrastructure.model_reviewer import codex_process_arguments, background_ai_runtime_dir, run_background_ai_prompt
     from digital_twin.infrastructure.news_ai_analyzer import first_json_object
     from digital_twin.modules.ai_orchestration.infrastructure.observation_model import StructuredObservationModel
+    from digital_twin.modules.ai_orchestration.domain.token_budget import execution_pool
+
+    # Routing chooses IDs and read operations against a server-validated schema.
+    # Reserve deeper reasoning for writing, independent review and repair.
+    pool = execution_pool("independent-observation", envelope["promptVersion"])
+    effort = {"retrieval": "low", "preparation": "medium", "completion": "high"}[pool]
     adapter = StructuredObservationModel(
-        lambda schema: codex_process_arguments("high", background_ai_runtime_dir(), output_schema_path=schema),
+        lambda schema: codex_process_arguments(effort, background_ai_runtime_dir(), output_schema_path=schema,
+                                              model=CENTRAL_AI_MODEL, structured_only=True),
         run_background_ai_prompt, first_json_object)
     return adapter(envelope, configured)
 
@@ -145,7 +155,8 @@ def build_ai_control_service(settings=None, *, store=None):
         token = CURRENT_TASK.set(job["taskId"])
         try:
             return execute_research(job, research_store,
-                lambda: build_investment_research_orchestrator(configured, research_store))
+                lambda: build_investment_research_orchestrator(configured, research_store,
+                    central_model=CENTRAL_AI_MODEL))
         finally:
             CURRENT_TASK.reset(token)
 

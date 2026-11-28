@@ -22,7 +22,7 @@ def _source_execution_deferrals():
     return (LocalAICapacityUnavailable, AIControlBudgetWait, AIExecutionDeferred)
 
 
-def build_investment_research_orchestrator(settings=None, research_store=None) -> InvestmentResearchOrchestrationService:
+def build_investment_research_orchestrator(settings=None, research_store=None, *, central_model="") -> InvestmentResearchOrchestrationService:
     from digital_twin.infrastructure import operational_store as stores
     from digital_twin.infrastructure.event_bus import default_event_bus
     from digital_twin.infrastructure.investment_research_gateway import (
@@ -51,17 +51,18 @@ def build_investment_research_orchestrator(settings=None, research_store=None) -
         research_store=research_store or stores.investment_research_store(configured_settings),
         event_publisher=default_event_bus(),
         article_analysis_service=NewsAiAnalysisService(
-            news_ai_analyzer_from_settings(configured_settings),
+            news_ai_analyzer_from_settings({**configured_settings, "newsAiAnalysisUseCodex": "false"}
+                                           if central_model else configured_settings),
             configured_settings,
         ),
-        hypothesis_research_planner=build_hypothesis_research_planning_service(configured_settings),
-        source_exploration=build_source_exploration_service(configured_settings),
+        hypothesis_research_planner=build_hypothesis_research_planning_service(configured_settings, central_model=central_model),
+        source_exploration=build_source_exploration_service(configured_settings, central_model=central_model),
         deferred_errors=_source_execution_deferrals(),
         settings=configured_settings,
     )
 
 
-def build_source_exploration_service(settings=None):
+def build_source_exploration_service(settings=None, *, central_model=""):
     from digital_twin.modules.news_intelligence.application.source_exploration_service import SourceExplorationService
     from digital_twin.modules.news_intelligence.infrastructure.source_document_tools import SourceDocumentTools
     from digital_twin.modules.news_intelligence.infrastructure.source_exploration_ai import (
@@ -72,7 +73,10 @@ def build_source_exploration_service(settings=None):
     )
     configured = dict(settings or {})
     def invoke(prompt, timeout, search):
-        command = source_command(background_codex_process_arguments(), search)
+        base = (background_codex_process_arguments("medium" if search else "low",
+                    model=central_model, structured_only=True)
+                if central_model else background_codex_process_arguments())
+        command = source_command(base, search)
         if not command:
             raise ValueError("exploration-model-unavailable")
         return run_background_ai_prompt(command, prompt, max(1, int(timeout)),
@@ -104,14 +108,15 @@ def build_investment_research_queue_runner(settings=None) -> InvestmentResearchQ
     )
 
 
-def build_hypothesis_research_planning_service(settings=None) -> HypothesisResearchPlanningService:
+def build_hypothesis_research_planning_service(settings=None, *, central_model="") -> HypothesisResearchPlanningService:
     from digital_twin.infrastructure.hypothesis_research_planner_ai import hypothesis_research_planning_advisor_from_settings
     from digital_twin.infrastructure.settings import runtime_settings
     from digital_twin.modules.news_intelligence.public import HypothesisResearchPlanningService
 
     configured_settings = settings or runtime_settings()
     return HypothesisResearchPlanningService(
-        advisor=hypothesis_research_planning_advisor_from_settings(configured_settings),
+        advisor=hypothesis_research_planning_advisor_from_settings(configured_settings,
+            **({"central_model": central_model} if central_model else {})),
         settings=configured_settings,
         deferred_errors=_source_execution_deferrals(),
     )

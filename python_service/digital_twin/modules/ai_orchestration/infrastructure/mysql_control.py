@@ -579,6 +579,11 @@ class MySQLAIControlStore(RejectionFeedbackPersistence, ReadContinuationPersiste
                 safe = {key: metrics[key] for key in ("stage", "configuredTimeoutSeconds", "promptBytes",
                     "capacityWaitMs", "modelProcessMs", "totalMs", "returnCode", "terminationReason", "failure", "usage", "usageStatus",
                     "tokenReservation", "tokenPool", "promptVersion") if key in metrics}
+                model = metrics.get("model")
+                if isinstance(model, str) and model.isascii() and 0 < len(model) <= 48 and model.replace("-", "").replace(".", "").isalnum():
+                    safe["model"] = model
+                if metrics.get("reasoningEffort") in ("low", "medium", "high", "max"):
+                    safe["reasoningEffort"] = metrics["reasoningEffort"]
                 if "failure" in safe:
                     safe["failure"] = safe_diagnostic(safe["failure"])
                 proof = metrics.get("usageEvidence") or {}

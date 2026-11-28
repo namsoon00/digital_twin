@@ -106,7 +106,7 @@ def planning_payload_from_text(text: str) -> Dict[str, object]:
     }
 
 
-def hypothesis_research_planning_advisor_from_settings(settings: Dict[str, object] = None):
+def hypothesis_research_planning_advisor_from_settings(settings: Dict[str, object] = None, *, central_model=""):
     settings = settings or runtime_settings()
     enabled = str(settings.get("investmentBrainHypothesisResearchPlannerAiEnabled", "1")).strip().lower()
     if enabled in {"0", "false", "off", "disabled"}:
@@ -115,7 +115,8 @@ def hypothesis_research_planning_advisor_from_settings(settings: Dict[str, objec
         timeout = int(settings.get("investmentBrainHypothesisResearchPlannerAiTimeoutSeconds") or 120)
     except (TypeError, ValueError):
         timeout = 120
-    command = background_codex_process_arguments()
+    command = (background_codex_process_arguments(model=central_model, structured_only=True)
+               if central_model else background_codex_process_arguments())
     if command:
         return CommandHypothesisResearchPlanningAdvisor(command, timeout, settings)
     return LocalHypothesisResearchPlanningAdvisor()

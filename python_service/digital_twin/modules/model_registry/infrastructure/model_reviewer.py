@@ -101,12 +101,12 @@ def healthy_codex_executable() -> str:
     return executable if healthy else ""
 
 
-def codex_cli_arguments(reasoning_effort: str = "") -> list:
+def codex_cli_arguments(reasoning_effort: str = "", *, model: str = ENFORCED_CODEX_MODEL) -> list:
     """Return the fixed model and the bounded effort selected for a workload."""
 
     return [
         "--model",
-        ENFORCED_CODEX_MODEL,
+        model,
         "--config",
         'model_reasoning_effort="' + normalized_codex_reasoning_effort(reasoning_effort) + '"',
     ]
@@ -135,6 +135,9 @@ def codex_process_arguments(
     working_directory: Path = None,
     output_schema_path: Path = None,
     json_events: bool = False,
+    *,
+    model: str = ENFORCED_CODEX_MODEL,
+    structured_only: bool = False,
 ) -> list:
     """Build direct Codex argv without the cross-process guard wrapper."""
 
@@ -144,7 +147,8 @@ def codex_process_arguments(
     runtime_dir = Path(working_directory or ROOT_DIR)
     arguments = [
         executable,
-        *codex_cli_arguments(reasoning_effort),
+        *codex_cli_arguments(reasoning_effort, model=model),
+        *(["--disable", "shell_tool", "--disable", "apps", "--config", 'web_search="disabled"'] if structured_only else []),
         "-a",
         "never",
         "--sandbox",
@@ -155,6 +159,8 @@ def codex_process_arguments(
         "--skip-git-repo-check",
         "--ephemeral",
     ]
+    if structured_only:
+        arguments.append("--ignore-user-config")
     if output_schema_path:
         arguments.extend(["--output-schema", str(Path(output_schema_path))])
     if json_events:
@@ -163,8 +169,10 @@ def codex_process_arguments(
     return arguments
 
 
-def background_codex_process_arguments(reasoning_effort: str = "high") -> list:
-    return codex_process_arguments(reasoning_effort, background_ai_runtime_dir())
+def background_codex_process_arguments(reasoning_effort: str = "high", *, model: str = ENFORCED_CODEX_MODEL,
+                                       structured_only: bool = False) -> list:
+    return codex_process_arguments(reasoning_effort, background_ai_runtime_dir(),
+                                   model=model, structured_only=structured_only)
 
 
 def _bounded_int(value: object, fallback: int, minimum: int, maximum: int) -> int:
@@ -183,8 +191,9 @@ def run_background_ai_prompt(
     configured = settings or runtime_settings()
     # Keep existing callers' final-text contract, while the shared gateway
     # receives Codex's JSONL usage before that output is decoded.
-    decode_events = (isinstance(command, (list, tuple)) and "exec" in command
-                     and "--skip-git-repo-check" in command and "--json" not in command)
+    codex_events = (isinstance(command, (list, tuple)) and "exec" in command
+                    and "--skip-git-repo-check" in command)
+    decode_events = codex_events and "--json" not in command
     if decode_events:
         command = list(command)
         command.insert(command.index("exec") + 1, "--json")
@@ -207,19 +216,30 @@ def run_background_ai_prompt(
         900,
     )
     from digital_twin.modules.ai_orchestration.public import execute_ai_work, current_execution_metrics
-    completed = execute_ai_work(str(configured.get("aiWorkload") or "background"), prompt, lambda: run_ai_prompt_command(
-        command,
-        prompt,
-        lock_dir=data_dir() / "local-ai-capacity",
-        max_concurrent=maximum,
-        wait_seconds=wait_seconds,
-        lane="background",
-        reserved_priority_slots=reserved,
-        timeout_seconds=timeout_seconds,
-        cwd=background_ai_runtime_dir(),
-        env=dict(os.environ),
-        execution_metrics=current_execution_metrics(),
-    ), configured)
+    def invoke():
+        metrics = current_execution_metrics()
+        if codex_events and metrics is not None and "--model" in command:
+            model_index = command.index("--model") + 1
+            if model_index < len(command):
+                metrics["model"] = command[model_index]
+            for effort in VALID_CODEX_REASONING_EFFORTS:
+                if 'model_reasoning_effort="' + effort + '"' in command:
+                    metrics["reasoningEffort"] = effort
+                    break
+        return run_ai_prompt_command(
+            command,
+            prompt,
+            lock_dir=data_dir() / "local-ai-capacity",
+            max_concurrent=maximum,
+            wait_seconds=wait_seconds,
+            lane="background",
+            reserved_priority_slots=reserved,
+            timeout_seconds=timeout_seconds,
+            cwd=background_ai_runtime_dir(),
+            env=dict(os.environ),
+            execution_metrics=metrics,
+        )
+    completed = execute_ai_work(str(configured.get("aiWorkload") or "background"), prompt, invoke, configured)
     if decode_events:
         from digital_twin.infrastructure.codex_execution_output import codex_execution_output
         output, diagnostics = codex_execution_output(completed.stdout)

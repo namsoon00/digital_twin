@@ -21,6 +21,23 @@ def waiting(previous, key):
             and wait.get("version") == VERSION and wait.get("key") == key)
 
 
+def routing_wait(outcome, trace, key):
+    """Record a proven source defer, never a round limit or a capacity failure."""
+    final = trace[-1] if trace else {}
+    decision = final.get("decision") or {}
+    if (key and outcome.get("status") == "data-wait" and outcome.get("reasonCode") == "required-source"
+            and final.get("status") == "valid" and decision.get("action") == "defer"
+            and decision.get("purpose") == "source-dated" and decision.get("missingEvidence")):
+        return {"version": VERSION, "key": key, "authority": "source-wait-only"}
+    return {}
+
+
+def routing_waiting(previous, key):
+    wait = previous.get("companyRoutingWait") or {}
+    return (bool(key) and previous.get("status") == "data-wait" and previous.get("reasonCode") == "required-source"
+            and wait.get("version") == VERSION and wait.get("key") == key)
+
+
 def handoff(subject, result, research, now):
     """Revisit only captured, due source questions; no future-source guessing."""
     from .research_work import needs_research_plan, PRIORITY

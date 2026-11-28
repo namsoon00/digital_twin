@@ -570,8 +570,9 @@ class CentralPublicationStorageTests(unittest.TestCase):
         from test_typedb_independent_observation import independent_fixture
         from digital_twin.modules.notifications.application.notification.workflow import NotificationQueueRunner
         from digital_twin.modules.notifications.domain.typedb_publication import independent_typedb_publication
+        source_now = datetime.now(timezone.utc)
         result, _, handoff, _ = independent_fixture(queue=self.queue, account_id=SUBJECT["accountId"],
-                                                   source_clock="2026-10-01T00:00:00Z")
+                                                   source_clock=source_now.isoformat())
         self.assertEqual(1, result["typedbPublishedCount"], result)
         self.assertEqual([], handoff.events)
         self.assertEqual(0, self.publication.retire_legacy_work()["notifications"])
@@ -586,7 +587,7 @@ class CentralPublicationStorageTests(unittest.TestCase):
         runner = NotificationQueueRunner(self.queue, SimpleNamespace(load_all=lambda: [account]), lambda _: notifier,
             settings=self.settings, include_message_types=["investmentInsight"], ai_request_enqueuer=old_ai,
             delivery_guard=self.publication.delivery_guard,
-            now_provider=lambda: datetime(2026, 10, 1, 0, 1, tzinfo=timezone.utc))
+            now_provider=lambda: datetime.now(timezone.utc))
         self.assertEqual(1, runner.run_once(), runner.last_run_details)
         old_ai.enqueue.assert_not_called()
         notifier.send.assert_called_once()

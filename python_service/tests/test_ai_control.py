@@ -606,11 +606,13 @@ class AIControlStorageTests(unittest.TestCase):
         self.assertEqual("2026-10-02T00:00:00Z", reset)
         self.store.seed(SUBJECT)
         call = self.store.begin_call("research", "hash", "task")
-        self.store.finish_call(call, "TimeoutError", metrics={"modelProcessMs": 240001, "terminationReason": "timeout", "stderr": "private"})
+        self.store.finish_call(call, "TimeoutError", metrics={"modelProcessMs": 240001, "terminationReason": "timeout",
+            "model": "gpt-6.2-sol", "reasoningEffort": "low", "stderr": "private"})
         with self.store.connect() as connection:
             import json
             metrics = json.loads(connection.execute("SELECT metrics_json FROM ai_control_call_metrics WHERE call_id=%s", (call,)).fetchone()["metrics_json"])
         self.assertEqual({"modelProcessMs": 240001, "terminationReason": "timeout", "usage": None, "usageStatus": "unknown",
+                          "model": "gpt-6.2-sol", "reasoningEffort": "low",
                           "tokenReservation":100000, "tokenPool":"preparation", "promptVersion":""}, metrics)
         # One call remains, but a draft must leave room for its critique. The
         # wait must not claim work, use task budget or exhaust failure retries.

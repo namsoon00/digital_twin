@@ -259,7 +259,8 @@ class AIControlService:
                         and previous_outcome["quoteWaitKey"] == evidence_purpose.quote_wait_key(packet, research))
                     due_thesis_review = (previous_outcome.get("reasonCode") == "insight-source-gaps"
                         and any(row.get("reviewDue") for row in research if row.get("kind") == "business-thesis"))
-                    company_waiting = (company_wait.waiting(previous_outcome, company_wait_key)
+                    company_waiting = ((company_wait.waiting(previous_outcome, company_wait_key)
+                        or company_wait.routing_waiting(previous_outcome, company_wait_key))
                         and not any(row.get("reviewDue") for row in research if row.get("kind") == "business-thesis"))
                     if ((unchanged_wait(previous_outcome, retry_identity) or same_quote_wait or company_waiting) and not due_thesis_review
                             and not retrieval_budget.retry_allowed(previous_outcome, packet)
@@ -343,6 +344,9 @@ class AIControlService:
                                 missing or [blocked_by.get("reason", "조회 범위 또는 호출 한도 안에서 필요한 근거를 선택하지 못했습니다.")])
                             state.update(evidence_purpose.waiting_metadata(waiting_source_packet, retrieval_trace, waiting_source_research))
                             state.update({key: value for key, value in blocked_by.items() if key != "reason"})
+                            routing_wait = company_wait.routing_wait(state, retrieval_trace, company_wait_key)
+                            if routing_wait:
+                                state["companyRoutingWait"] = routing_wait
                             return self.complete_wait(job, packet, state, retrieval_trace)
                     source_progress = insight_progress.assessment(packet, previous, research)
                     if source_progress.get("skipAuthor"):

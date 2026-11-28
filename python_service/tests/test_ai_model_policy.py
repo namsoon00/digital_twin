@@ -42,6 +42,29 @@ from digital_twin.infrastructure.codex_execution_output import codex_execution_o
 
 
 class AiModelPolicyTests(unittest.TestCase):
+    def assert_central_calls_isolate_6_2_sol_and_match_effort_to_the_stage(self):
+        from digital_twin.infrastructure.composition.ai_orchestration import call_observation_model
+
+        with patch("digital_twin.modules.model_registry.infrastructure.model_reviewer.healthy_codex_executable",
+                   return_value="codex"), patch(
+            "digital_twin.modules.ai_orchestration.infrastructure.observation_model.StructuredObservationModel"
+        ) as model:
+            for version, effort in (
+                ("independent-observation-retrieval-v26-read-continuation", "low"),
+                ("independent-research-plan-v4-existing-company-gap", "medium"),
+                ("independent-observation-v39-investment-argument-quality", "high"),
+                ("research-assessment-review-v8", "high"),
+            ):
+                with self.subTest(version=version):
+                    call_observation_model({"promptVersion": version}, {})
+                    command = model.call_args.args[0](Path("schema.json"))
+                    self.assertEqual("gpt-6.2-sol", command[command.index("--model") + 1])
+                    self.assertIn('model_reasoning_effort="' + effort + '"', command)
+                    self.assertIn("--ignore-user-config", command)
+                    self.assertIn('web_search="disabled"', command)
+                    self.assertIn("shell_tool", command)
+                    self.assertIn("--output-schema", command)
+
     def setUp(self):
         # These tests exercise subprocess/schema policy, not MySQL admission.
         # Keep standalone runs independent of live quota state and storage.
@@ -151,6 +174,7 @@ class AiModelPolicyTests(unittest.TestCase):
                         validate.assert_not_called()
 
     def test_all_application_ai_factories_ignore_custom_commands_and_use_the_fixed_codex_policy(self):
+        self.assert_central_calls_isolate_6_2_sol_and_match_effort_to_the_stage()
         self.assertEqual("gpt-6.1-sol", DEFAULT_STRATEGY_SETTINGS["notificationAiModel"])
         with patch("digital_twin.modules.model_registry.infrastructure.model_reviewer.healthy_codex_executable", return_value="codex"):
             for effort in ("low", "medium", "high", "max"):
